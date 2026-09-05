@@ -1,5 +1,5 @@
 """
-MathGuide 后端骨架(演示环境)
+MathGuide 后端(RAG 检索增强生成骨架)
 启动:python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 接口一览(契约详见各模块注释与 backend/README.md):
@@ -8,6 +8,8 @@ MathGuide 后端骨架(演示环境)
     POST /api/auth/login                     登录(password / code / wechat / qq)
     POST /api/auth/logout                    登出(需 token)
     POST /api/chat/stream                    聊天流式回复(需 token,OpenAI 兼容 SSE)
+
+知识库:knowledge/*.md → rag 切片索引 → 检索 → LLM(未配置则直答)。
 """
 import store
 from starlette.applications import Starlette
@@ -18,6 +20,7 @@ from starlette.routing import Route
 
 import auth
 import chat
+import rag
 
 
 async def health(request) -> JSONResponse:
@@ -45,5 +48,6 @@ app = Starlette(
     ],
 )
 
-# 新版 starlette 无 on_startup 参数:进程启动即装载数据文件(演示单进程足够)
+# 新版 starlette 无 on_startup 参数:进程启动即装载数据文件与知识库索引(演示单进程足够)
 store.init()
+rag.init()
