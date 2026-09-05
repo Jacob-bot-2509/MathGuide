@@ -6,6 +6,9 @@ __pycache__/
 # 后端运行时数据(演示账号,勿入库)
 backend/data/
 
+# embedding 向量缓存(按 chunk id 落盘,可重算,勿入库)
+backend/knowledge/.embeddings.json
+
 # Node
 node_modules/
 dist/

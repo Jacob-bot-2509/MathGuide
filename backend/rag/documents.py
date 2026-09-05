@@ -1,7 +1,12 @@
 """
 知识文档加载与切片。
 
-文档格式(backend/knowledge/*.md):
+支持的文档格式(backend/knowledge/):
+- *.md:带 frontmatter 的结构化文档(推荐),见下;
+- *.txt:纯文本讲义/笔记,无 frontmatter 也能直接入库
+  (title 取文件名,按空行分段,默认 category=other)。
+
+md 格式:
     ---
     title: 函数极限
     title_en: Limits
@@ -12,7 +17,8 @@
     ## 章节标题
     正文(行内公式 $...$,块级公式 $$...$$,与前端 MathText 渲染约定一致)
 
-切片规则:按 ## 标题切段;单节超过 MAX_SECTION_CHARS 时按段落拆分,保持公式块不被切断。
+切片规则:md 按 ## 标题切段;单节超过 MAX_SECTION_CHARS 时按段落拆分,
+保持公式块不被切断。PDF 等二进制格式解析见 backend/README.md(预留扩展)。
 """
 import json
 import re
@@ -20,6 +26,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 MAX_SECTION_CHARS = 900
+
+# chunk id 全局计数:保证同一文档同一节的多个切片 id 唯一(embedding 缓存以 id 为键)
+_chunk_seq = 0
 
 _FRONT_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 _SECTION_RE = re.compile(r"^##\s+(.+)$", re.MULTILINE)
@@ -74,26 +83,49 @@ def _split_section(text: str, limit: int) -> list[str]:
     return parts
 
 
+def _load_md(path: Path, chunks: list[Chunk]) -> None:
+    meta, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
+    title = str(meta.get("title", path.stem))
+    title_en = str(meta.get("title_en", title))
+    keywords = [str(k).lower() for k in meta.get("keywords", [])]
+    category = str(meta.get("category", "other"))
+    level = str(meta.get("level", "advance"))
+    sections = _SECTION_RE.split(body)
+    # 首个元素为引言(无 ## 标题),后续按 [标题, 正文] 成对出现
+    if sections[0].strip():
+        for text in _split_section(sections[0].strip(), MAX_SECTION_CHARS):
+            chunks.append(Chunk(_next_id(), title, title_en, "概述", text, keywords, category, level))
+    for i in range(1, len(sections), 2):
+        head = sections[i].strip()
+        text = sections[i + 1].strip() if i + 1 < len(sections) else ""
+        if not text:
+            continue
+        for piece in _split_section(text, MAX_SECTION_CHARS):
+            chunks.append(Chunk(_next_id(), title, title_en, head, piece, keywords, category, level))
+
+
+def _load_txt(path: Path, chunks: list[Chunk]) -> None:
+    """纯文本讲义:文件名作标题,按空行分段直接入库(无需 frontmatter)"""
+    title = path.stem
+    body = path.read_text(encoding="utf-8").strip()
+    if not body:
+        return
+    keywords = [title.lower()]
+    for i, piece in enumerate(_split_section(body, MAX_SECTION_CHARS), 1):
+        chunks.append(Chunk(_next_id(), title, title, f"段落{i}", piece, keywords, "other", "advance"))
+
+
+def _next_id() -> str:
+    global _chunk_seq
+    _chunk_seq += 1
+    return f"c{_chunk_seq}"
+
+
 def load_knowledge(base: Path) -> list[Chunk]:
-    """装载知识目录下全部 md 文档并切片"""
+    """装载知识目录下全部 md/txt 文档并切片(新增文档无需改代码)"""
     chunks: list[Chunk] = []
     for path in sorted(base.glob("*.md")):
-        meta, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
-        title = str(meta.get("title", path.stem))
-        title_en = str(meta.get("title_en", title))
-        keywords = [str(k).lower() for k in meta.get("keywords", [])]
-        category = str(meta.get("category", "other"))
-        level = str(meta.get("level", "advance"))
-        sections = _SECTION_RE.split(body)
-        # 首个元素为引言(无 ## 标题),后续按 [标题, 正文] 成对出现
-        if sections[0].strip():
-            for text in _split_section(sections[0].strip(), MAX_SECTION_CHARS):
-                chunks.append(Chunk(f"{path.stem}:intro", title, title_en, "概述", text, keywords, category, level))
-        for i in range(1, len(sections), 2):
-            head = sections[i].strip()
-            text = sections[i + 1].strip() if i + 1 < len(sections) else ""
-            if not text:
-                continue
-            for piece in _split_section(text, MAX_SECTION_CHARS):
-                chunks.append(Chunk(f"{path.stem}:{i}", title, title_en, head, piece, keywords, category, level))
+        _load_md(path, chunks)
+    for path in sorted(base.glob("*.txt")):
+        _load_txt(path, chunks)
     return chunks

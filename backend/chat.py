@@ -149,7 +149,8 @@ def _stream_text(text: str) -> StreamingResponse:
 async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]]):
     """LLM 流式:模型增量原样转发;调用失败自动降级为直答,不让前端假死"""
     try:
-        async for delta in rag.llm.stream_chat(rag.build_system(chunks, cmd), prompt):
+        system = rag.build_system(chunks, cmd, zh=_is_chinese(prompt))
+        async for delta in rag.llm.stream_chat(system, prompt):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型侧错误不区分类型,统一降级
         print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")

@@ -37,7 +37,8 @@ backend/
 
 ## 知识库文档格式
 
-往 `knowledge/` 增加 `.md` 文件即自动进入知识库(重启后端生效),无需改代码:
+往 `knowledge/` 增加 `.md` / `.txt` 文件即自动进入知识库,**无需重启后端**
+(下次提问时自动重建索引),无需改代码:
 
 ```markdown
 ---
@@ -64,6 +65,25 @@ $\lim_{x\to 0}\frac{\sin x}{x}=1$ 是一切等价无穷小替换的根基。
 - `level`:基础 basic / 进阶 advance / 竞赛 competition;
 - 正文按 `##` 标题切片,单节过长自动按段落再切(公式块不切断);
   公式统一 LaTeX(行内 `$...$`、块级 `$$...$$`),前端 KaTeX 直接渲染。
+
+纯文本资料(讲义 / 笔记)可直接存为 `.txt`:文件名作标题、按空行分段入库,
+无需 frontmatter(此时 category 为 other,建议重要资料仍用 md 格式标好板块与关键词)。
+PDF / Word 等二进制格式:先转成 md/txt(或后续在 `rag/documents.py` 挂载解析器),格式同上。
+
+## 检索升级(可选):embedding 向量混合
+
+知识量大或需要"换一种说法也能命中"的语义检索时,配置环境变量启用向量混合打分:
+
+```bash
+set MG_EMBED_BASE_URL=https://api.deepseek.com/v1
+set MG_EMBED_API_KEY=sk-xxxx        # 缺省沿用 MG_LLM_API_KEY
+set MG_EMBED_MODEL=text-embedding-3-small
+```
+
+- 启用后片段在装载时批量向量化,结果缓存于 `knowledge/.embeddings.json`
+  (chunk id 为键,文档改动自动重算),重启不重复计费;
+- 检索按「关键词命中 + 向量相似度」混合排序,未配置时行为与纯关键词模式一致;
+- 缓存文件请勿入库(已在 .gitignore 排除规则 `*.json` 覆盖范围外时手动排除)。
 
 ## 接入真实 LLM
 
