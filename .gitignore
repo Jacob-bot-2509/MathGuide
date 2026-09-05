@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 后端运行时数据(演示账号,勿入库)
+backend/data/
+
+# Node
+node_modules/
+dist/
+
+# 本地环境变量
+*.local
+.env.local

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#05060a" />
+    <title>MathGuide · 高等数学学习与科研智能助手</title>
+    <script>
+      // 主题预加载:CSS 加载前就确定背景,避免开机闪白/闪黑
+      try {
+        var t = JSON.parse(localStorage.getItem('mg-settings') || '{}').theme === 'light' ? 'light' : 'dark'
+        document.documentElement.dataset.theme = t
+        document.documentElement.style.background = t === 'light' ? '#f5f7fa' : '#05060a'
+      } catch (e) {
+        document.documentElement.style.background = '#05060a'
+      }
+    </script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
