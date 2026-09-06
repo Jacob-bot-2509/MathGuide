@@ -409,14 +409,20 @@ function fmtSize(bytes?: number): string {
 
 /* ---------- 语音输入(浏览器本地识别,Chrome / Edge 可用) ---------- */
 
+/* Web Speech API:results 里的每一项(SpeechRecognitionResult)只有 isFinal,
+   识别文本在首个候选上(r[0].transcript)——项本身没有 transcript 属性,
+   直接读会得到 undefined 拼进输入框 */
 interface SRResult {
-  transcript: string
   isFinal: boolean
+  length: number
+  [i: number]: { transcript: string } | undefined
 }
 
 interface ISpeechRecognition {
   lang: string
   interimResults: boolean
+  /** 持续听写:一句话说完不自动停止,由用户点麦克风结束(长段口述更稳) */
+  continuous: boolean
   onresult: ((e: { results: ArrayLike<SRResult> }) => void) | null
   onend: (() => void) | null
   onerror: ((e: { error: string }) => void) | null
@@ -452,14 +458,18 @@ function toggleMic() {
   sr = new Ctor()
   sr.lang = settingsState.language === 'en' ? 'en-US' : 'zh-CN'
   sr.interimResults = true
+  sr.continuous = true
   srBaseText = input.value
   sr.onresult = (e) => {
     let final = ''
     let interim = ''
     for (let i = 0; i < e.results.length; i++) {
       const r = e.results[i]
-      if (r.isFinal) final += r.transcript
-      else interim += r.transcript
+      // 识别文本在首个候选 r[0].transcript 上
+      const text = r[0]?.transcript ?? ''
+      if (!text) continue
+      if (r.isFinal) final += text
+      else interim += text
     }
     input.value = srBaseText + final + interim
     autoGrow()
@@ -470,6 +480,11 @@ function toggleMic() {
   sr.onerror = (e) => {
     listening.value = false
     if (e.error === 'aborted') return
+    // 麦克风权限被拒(not-allowed / service-not-allowed)单独提示
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      showToast(t('learn.toastMicDenied'), 3600)
+      return
+    }
     // 安卓设备的识别走 Google 语音服务,国内网络不通时上报 network
     showToast(e.error === 'network' ? t('learn.toastVoiceNetwork') : t('learn.toastNoVoice'))
   }
