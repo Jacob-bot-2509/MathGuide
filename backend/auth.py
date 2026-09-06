@@ -127,7 +127,7 @@ async def login(request: Request) -> JSONResponse:
                         str(body.get("nickname", "")).strip() or None,
                         str(body.get("avatar", "")).strip() or None)
         store.create_user(rec)
-        return JSONResponse({"token": store.issue_token(uid), "user": user_dto(uid, rec)})
+        return JSONResponse({"token": store.issue_token(uid), "user": user_dto(rec)})
 
     raise HTTPException(400, "unknown method")
 
