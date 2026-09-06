@@ -103,6 +103,42 @@ def _is_chinese(text: str) -> bool:
     return any("一" <= ch <= "鿿" for ch in text)
 
 
+# 提问意图标记:命中即视为"在问问题"(即使检索没命中,也走答题框架)
+_QUESTION_RE = re.compile(
+    r"[吗呢?？]|怎么|如何|什么|为何|为什么|多少|能否|是否|是不是|求|证明|计算|求解|解释|说明|帮我|这道|这题|例题"
+    r"|how|what|why|which|explain|solve|prove|compute|evaluate|find|help|show that",
+    re.IGNORECASE,
+)
+
+# 闲聊应答(寒暄 / 感谢 / 告别 / 一般陈述):就着语句对话,不套解题框架、不判难度
+CHITCHAT_ZH = {
+    "greet": "你好呀!我是 MG,你的高等数学学习与研究助手。有什么数学问题想一起讨论?",
+    "thanks": "不客气!有数学问题随时来找我。",
+    "bye": "再见!下次遇到数学问题,随时回来。",
+    "chat": "收到~ 闲聊也欢迎!我是数学助手,不过陪你聊两句完全没问题;"
+    "想解题的时候,直接把题目发给我就行。",
+}
+CHITCHAT_EN = {
+    "greet": "Hi there! I'm MG, your advanced-math learning assistant. What would you like to explore today?",
+    "thanks": "You're welcome! I'm here whenever a math question comes up.",
+    "bye": "See you! Come back any time with a math problem.",
+    "chat": "Noted! I'm a math assistant, but happy to chat too. "
+    "Whenever you have a question, just send it over.",
+}
+
+
+def _chitchat_kind(text: str) -> str | None:
+    """识别寒暄/感谢/告别(优先于提问标记判断:如 'How are you' 里的 how)"""
+    t = text.lower().strip()
+    if re.search(r"^(喂|你好|您好|嗨|哈喽|在吗|在不在)|(hi|hello|hey|hiya|how are you)\b", t):
+        return "greet"
+    if re.search(r"谢谢|感谢|thanks|thank you|thx", t):
+        return "thanks"
+    if re.search(r"再见|拜拜|bye", t):
+        return "bye"
+    return None
+
+
 def _strip_meta(prompt: str, cmd: str | None) -> str:
     """剥离前端可能遗留的 [cmd] 前缀,仅留原始问题"""
     text = re.sub(r"^\[[^\]]*\]\s*", "", prompt)
@@ -185,11 +221,28 @@ async def chat_stream(request: Request) -> StreamingResponse:
 
     # RAG:检索知识片段 → LLM 或直答
     question = _strip_meta(prompt, cmd)
+    zh = _is_chinese(question)
     chunks = rag.search(question, top_k=3)
+
     if rag.llm.is_configured():
         return StreamingResponse(
             _gen_llm(question, cmd, chunks),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
-    return _stream_text(_compose_direct(question, chunks))
+    # 直答模式:
+    # ① 检索到相关知识 → 知识直答;
+    # ② 寒暄/感谢/告别 → 对话式应答(优先于提问标记,如 How are you 里的 how);
+    # ③ 未命中但有提问意图 → 方法论框架(含难度判定);
+    # ④ 其余一般陈述 → 就着语句闲聊应答,不检索、不判难度
+    if chunks:
+        return _stream_text(_compose_direct(question, chunks))
+    kind = _chitchat_kind(question)
+    if kind:
+        d = CHITCHAT_ZH if zh else CHITCHAT_EN
+        return _stream_text(d[kind])
+    if _QUESTION_RE.search(question):
+        level = judge_level(question)
+        return _stream_text(FALLBACK_ZH.format(level=LEVEL_ZH[level]) if zh
+                           else FALLBACK_EN.format(level=LEVEL_EN[level]))
+    return _stream_text(CHITCHAT_ZH["chat"] if zh else CHITCHAT_EN["chat"])

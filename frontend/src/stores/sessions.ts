@@ -21,6 +21,8 @@ export interface ChatMsg {
   cmd?: string
   level?: { key: string; label: string; color: string }
   attachment?: ChatAttachment
+  /** 非问题语句(寒暄/闲聊):不参与问题归纳统计 */
+  chitchat?: boolean
   streaming?: boolean
   thinking?: boolean
 }
@@ -43,6 +45,7 @@ interface PersistedMsg {
   cmd?: string
   level?: ChatMsg['level']
   attachment?: ChatMsg['attachment']
+  chitchat?: boolean
 }
 
 interface Persisted {
@@ -88,7 +91,10 @@ export function persistSessions(): boolean {
         id: s.id,
         cat: s.cat,
         messages: s.messages
-          .map((m) => ({ id: m.id, role: m.role, content: m.content, cmd: m.cmd, level: m.level, attachment: m.attachment }))
+          .map((m) => ({
+            id: m.id, role: m.role, content: m.content, cmd: m.cmd,
+            level: m.level, attachment: m.attachment, chitchat: m.chitchat,
+          }))
           .slice(-120),
       })),
       activeId: sessionsState.activeId,

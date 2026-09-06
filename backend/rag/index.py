@@ -32,6 +32,13 @@ def _bigrams(text: str) -> set[str]:
     return {s[i:i + 2] for i in range(len(s) - 1)}
 
 
+def _overlap(q_grams: set[str], t_grams: set[str]) -> float:
+    """重合二元组计分:只计含 CJK 字符的二元组。
+    纯 ASCII 二元组噪声极大(LaTeX 符号如 \\forall/\\varepsilon 与英文单词频繁撞车),
+    英文相关性完全交给 keywords 词表与 token 匹配承担。"""
+    return float(len({b for b in (q_grams & t_grams) if not b.isascii()}))
+
+
 class KnowledgeIndex:
     def __init__(self, chunks: list[Chunk], embedder: Optional[Embedder] = None):
         # 预计算每个 chunk 的标题/正文 bigram(检索时不再重复切分)
@@ -62,8 +69,8 @@ class KnowledgeIndex:
         for i, (c, title_grams, body_grams) in enumerate(self._entries):
             kw = self._keyword_score(c, q)
             score = kw
-            score += W_TITLE * len(q_grams & title_grams)
-            score += W_BODY * len(q_grams & body_grams)
+            score += W_TITLE * _overlap(q_grams, title_grams)
+            score += W_BODY * _overlap(q_grams, body_grams)
 
             if self._embedder is not None and q_vec is not None and self._vectors[i] is not None:
                 cosine = Embedder.cosine(q_vec, self._vectors[i])

@@ -126,3 +126,28 @@ export function classifyLevel(text: string): LevelInfo {
 
 /** 归纳面板的展示顺序(按教学板块顺序,其他垫底) */
 export const DISPLAY_KEYS = ['analysis', 'algebra', 'geometry', 'ode', 'probability', 'complex', 'topology', 'other'] as const
+
+/* ---------- 闲聊识别(与后端 chat.py _QUESTION_RE 保持同一口径) ---------- */
+
+const QUESTION_MARK_RE =
+  /[吗呢?？]|怎么|如何|什么|为何|为什么|多少|能否|是否|是不是|求|证明|计算|求解|解释|说明|帮我|这道|这题|例题|how|what|why|which|explain|solve|prove|compute|evaluate|find|help|show that/i
+
+// 寒暄/感谢/告别优先于提问标记判断(如 How are you 里的 how)
+const GREET_RE = /^(喂|你好|您好|嗨|哈喽|在吗|在不在)|(hi|hello|hey|hiya|how are you)\b/i
+const THANKS_RE = /谢谢|感谢|thanks|thank you|thx/i
+const BYE_RE = /再见|拜拜|bye/i
+
+/**
+ * 是否为非问题语句(寒暄 / 感谢 / 告别 / 一般陈述):
+ * 这类消息不分类、不定难度、不进问题归纳、不切换或新开会话,
+ * 后端就着语句做对话式应答。
+ */
+export function isChitchat(text: string): boolean {
+  const content = text.replace(/^\s*\[.+?\]\s*/, '').trim()
+  if (!content) return false
+  if (GREET_RE.test(content) || THANKS_RE.test(content) || BYE_RE.test(content)) return true
+  // 有提问意图,或提到了数学主题(分类器能命中板块)→ 按正常问题流程处理
+  if (QUESTION_MARK_RE.test(content)) return false
+  if (classifyQuestion(content).key !== 'other') return false
+  return true
+}

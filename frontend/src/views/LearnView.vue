@@ -22,7 +22,7 @@ import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import { COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, levelName, t } from '@/utils/i18n'
 import { streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
-import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyLevel, classifyQuestion } from '@/utils/classifier'
+import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyLevel, classifyQuestion, isChitchat } from '@/utils/classifier'
 import { settingsState, updateSettings } from '@/stores/settings'
 import {
   MAX_SESSIONS,
@@ -76,7 +76,8 @@ const summary = computed(() => {
     const entry = map.get(s.cat.key)
     if (!entry) continue
     for (const m of s.messages) {
-      if (m.role === 'user') entry.questions.push({ id: m.id, text: m.content })
+      // 寒暄/闲聊等非问题语句不进问题归纳
+      if (m.role === 'user' && !m.chitchat) entry.questions.push({ id: m.id, text: m.content })
     }
   }
   return DISPLAY_KEYS.flatMap((k) => {
@@ -211,24 +212,29 @@ function send(text?: string, cmd?: string) {
   const content = (text ?? input.value).trim()
   if (!content) return
 
-  const cat = classifyQuestion(content)
-  const level = classifyLevel(content)
+  // 寒暄/闲聊:不分类、不定难度、不切换或新开会话,只就话答话
+  const chitchat = isChitchat(content)
+  const catInfo = chitchat ? undefined : classifyQuestion(content)
+  const level = chitchat ? undefined : classifyLevel(content)
 
-  // 会话选择:同类型延续当前会话;不同类型检索同板块旧会话,否则新开
+  // 会话选择:同类型延续当前会话;不同类型检索同板块旧会话,否则新开;
+  // 闲聊沿用当前会话(无会话则开一个未归类会话,不绑定板块、不进归纳面板)
   let session = activeSession.value
-  if (!session) session = createSession(cat)
+  if (!session) session = createSession(catInfo)
 
-  if (!session.cat) {
-    // 新会话首次提问:绑定板块
-    session.cat = cat
-  } else if (session.cat.key !== cat.key) {
-    const current = session
-    const existing = [...sessions.value].reverse().find((s) => s.cat?.key === cat.key && s.id !== current.id)
-    if (existing) {
-      activeId.value = existing.id
-      session = existing
-    } else {
-      session = createSession(cat)
+  if (catInfo) {
+    if (!session.cat) {
+      // 新会话首次提问:绑定板块
+      session.cat = catInfo
+    } else if (session.cat.key !== catInfo.key) {
+      const current = session
+      const existing = [...sessions.value].reverse().find((s) => s.cat?.key === catInfo.key && s.id !== current.id)
+      if (existing) {
+        activeId.value = existing.id
+        session = existing
+      } else {
+        session = createSession(catInfo)
+      }
     }
   }
 
@@ -244,7 +250,7 @@ function send(text?: string, cmd?: string) {
     session.messages.shift()
   }
 
-  session.messages.push({ id: nextMsgId(), role: 'user', content, cmd, level })
+  session.messages.push({ id: nextMsgId(), role: 'user', content, cmd, level, chitchat: chitchat || undefined })
   input.value = ''
   autoGrow()
   scrollBottom()
