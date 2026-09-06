@@ -19,6 +19,7 @@
 """
 import asyncio
 import json
+import random
 import re
 
 from starlette.requests import Request
@@ -103,40 +104,152 @@ def _is_chinese(text: str) -> bool:
     return any("一" <= ch <= "鿿" for ch in text)
 
 
-# 提问意图标记:命中即视为"在问问题"(即使检索没命中,也走答题框架)
-_QUESTION_RE = re.compile(
-    r"[吗呢?？]|怎么|如何|什么|为何|为什么|多少|能否|是否|是不是|求|证明|计算|求解|解释|说明|帮我|这道|这题|例题"
-    r"|how|what|why|which|explain|solve|prove|compute|evaluate|find|help|show that",
-    re.IGNORECASE,
+# 确切数学问题的措辞标记(与知识库触发词共同判定;命中才走答题框架)
+_MATH_EXTRA_WORDS = (
+    "求", "证明", "计算", "求解", "求导", "求证", "这道", "这题", "例题", "题目", "公式", "定理", "数学",
+    "怎么做", "怎么算", "如何求", "如何证",
+    "solve", "prove", "compute", "evaluate", "show that", "theorem", "equation", "problem", "math",
 )
 
-# 闲聊应答(寒暄 / 感谢 / 告别 / 一般陈述):就着语句对话,不套解题框架、不判难度
-CHITCHAT_ZH = {
-    "greet": "你好呀!我是 MG,你的高等数学学习与研究助手。有什么数学问题想一起讨论?",
-    "thanks": "不客气!有数学问题随时来找我。",
-    "bye": "再见!下次遇到数学问题,随时回来。",
-    "chat": "收到~ 闲聊也欢迎!我是数学助手,不过陪你聊两句完全没问题;"
-    "想解题的时候,直接把题目发给我就行。",
+
+def _math_re() -> re.Pattern:
+    """由知识库触发词 + 题目措辞组成数学问题识别正则(CJK 子串匹配,英文按词边界)。
+    裸「求」加否定回溯,排除「请求/要求」这类日常用词。"""
+    terms = set(rag.terms()) | set(_MATH_EXTRA_WORDS)
+    zh = sorted((t for t in terms if not t.isascii()), key=len, reverse=True)
+    en = sorted((t for t in terms if t.isascii() and len(t) >= 3), key=len, reverse=True)
+    zh_parts = [re.escape(t) if t != "求" else r"(?<![请要])求" for t in zh]
+    pattern = "|".join(zh_parts + [r"\b" + re.escape(t) + r"\b" for t in en])
+    return re.compile(pattern, re.IGNORECASE)
+
+
+# 会话大脑:同类多条随机轮换,避免机械重复;语气自然、有温度
+CHITCHAT_SETS_ZH: dict[str, list[str]] = {
+    "greet": [
+        "你好呀!我是 MG。今天想一起攻克哪块数学?",
+        "嗨!很高兴见到你~ 有数学问题尽管说,想闲聊也欢迎。",
+        "你好你好!我在呢,随时可以开始。",
+    ],
+    "thanks": [
+        "不客气!能帮上忙我就很开心。",
+        "应该的!有新的问题随时回来。",
+        "不用谢~ 一起把数学啃下来,就是对我最好的感谢。",
+    ],
+    "bye": [
+        "再见!下次遇到数学问题,我随叫随到。",
+        "拜拜~ 学累了就休息一下,咱们下次再战。",
+        "好,下次见!祝你一切顺利。",
+    ],
+    "praise": [
+        "谢谢夸奖!我继续加油,争取每次解答都让你满意。",
+        "哈哈,被你夸得有点不好意思了。咱们继续?",
+        "过奖啦,真正厉害的是坚持提问的你。",
+    ],
+    "intro": [
+        "我是 MG,MathGuide 的高等数学学习助手。概念讲解、例题精讲、章节导航、错题归纳、公式查询,都是我的拿手活。",
+        "我叫 MG,专攻高等数学的学习与科研辅助。你可以直接丢给我一道题,或者问我某个概念怎么理解。",
+    ],
+    "ability": [
+        "我能帮你做这些:讲概念(带形象理解)、串章节知识、归纳错题、查公式,还能给难题搭解题框架。",
+        "我的主战场是高等数学:概念讲解、例题精讲、错题归纳、公式查询,还能陪你梳理章节脉络。",
+    ],
+    "usage": [
+        "直接在输入框提问就行,比如「什么是泰勒展开」;下面指令栏的按钮可以一键切到例题精讲、公式查询等模式。",
+        "用法很简单:输入问题回车即可。想要例题点「例题精讲」,想查公式点「公式查询手册」。",
+    ],
+    "mood": [
+        "听起来你有点低落?数学解不出来的挫败感我懂。要不先聊两句,或者换一道简单题找回手感?",
+        "抱抱~ 学习压力大的时候,允许自己休息一下。想倾诉我听着,想做题我陪着。",
+    ],
+    "agree": [
+        "好嘞!",
+        "收到~",
+        "嗯嗯,明白。",
+    ],
+    "generic": [
+        "明白你的意思了~ 这个话题我可能不专业,但数学相关的问题我随叫随到。",
+        "哈哈,记下了。闲聊我也挺喜欢的,不过别忘了,我是你身边最能打的数学搭子。",
+        "收到!虽然我的主场是数学,但陪你聊聊天完全没问题。",
+    ],
 }
-CHITCHAT_EN = {
-    "greet": "Hi there! I'm MG, your advanced-math learning assistant. What would you like to explore today?",
-    "thanks": "You're welcome! I'm here whenever a math question comes up.",
-    "bye": "See you! Come back any time with a math problem.",
-    "chat": "Noted! I'm a math assistant, but happy to chat too. "
-    "Whenever you have a question, just send it over.",
+CHITCHAT_SETS_EN: dict[str, list[str]] = {
+    "greet": [
+        "Hi there! I'm MG, your advanced-math study buddy. What shall we tackle today?",
+        "Hey! Great to see you. Got a math question, or just want to chat?",
+        "Hello hello! I'm here — ready whenever you are.",
+    ],
+    "thanks": [
+        "You're very welcome! Glad I could help.",
+        "Anytime! Come back whenever a question pops up.",
+        "No problem at all — tackling math together is the best thanks.",
+    ],
+    "bye": [
+        "See you! I'll be here whenever a math problem shows up.",
+        "Bye! Take a break when you need one — we'll pick it up next time.",
+        "Until next time! Good luck with everything.",
+    ],
+    "praise": [
+        "Thank you! I'll keep it up — aiming to make every answer satisfying.",
+        "Haha, you're making me blush. Shall we keep going?",
+        "You're too kind — the real credit goes to you for asking.",
+    ],
+    "intro": [
+        "I'm MG, MathGuide's assistant for advanced mathematics: concept explanations, worked examples, chapter navigation, mistake reviews, and formula lookup.",
+        "I'm MG — I help with learning and research in higher math. Send me a problem, or ask how to understand a concept.",
+    ],
+    "ability": [
+        "Here's what I do: explain concepts with intuition, walk through chapters, review mistakes, look up formulas, and scaffold solutions for hard problems.",
+        "My home turf is higher mathematics: concept explanations, worked examples, mistake reviews, formula lookup, and chapter navigation.",
+    ],
+    "usage": [
+        "Just type your question and hit Enter — try \"what is Taylor expansion?\". The command bar below switches modes like worked examples or formula lookup.",
+        "Easy: type a question and press Enter. For examples tap \"Worked Examples\", for formulas tap \"Formula Lookup\".",
+    ],
+    "mood": [
+        "Sounds like you're feeling a bit down? I know how frustrating math can be. Want to talk, or maybe switch to an easier problem to get your confidence back?",
+        "Hugs — it's okay to rest when studying gets heavy. I'm here to listen, or to work through problems if you prefer.",
+    ],
+    "agree": [
+        "Sure thing!",
+        "Got it.",
+        "Okay, understood.",
+    ],
+    "generic": [
+        "Got what you mean! This topic might be outside my specialty, but I'm always here for math.",
+        "Haha, noted. I enjoy chatting too — but remember, I'm your toughest math buddy.",
+        "Received! Math is my home turf, but chatting with you is always welcome.",
+    ],
 }
 
 
 def _chitchat_kind(text: str) -> str | None:
-    """识别寒暄/感谢/告别(优先于提问标记判断:如 'How are you' 里的 how)"""
+    """识别会话类型(寒暄/感谢/告别/夸奖/自我介绍/能力/用法/情绪/应和);未识别返回 None"""
     t = text.lower().strip()
     if re.search(r"^(喂|你好|您好|嗨|哈喽|在吗|在不在)|(hi|hello|hey|hiya|how are you)\b", t):
         return "greet"
     if re.search(r"谢谢|感谢|thanks|thank you|thx", t):
         return "thanks"
-    if re.search(r"再见|拜拜|bye", t):
+    if re.search(r"再见|拜拜|byebye|bye", t):
         return "bye"
+    if re.search(r"厉害|真棒|太强了|牛逼|牛啊|不错嘛|干得漂亮|great|awesome|amazing|well done", t):
+        return "praise"
+    if re.search(r"你是谁|你叫什么|介绍一下你|自我介绍|what are you|who are you|about yourself", t):
+        return "intro"
+    if re.search(r"你会什么|能做什么|有什么功能|功能|what can you do", t):
+        return "ability"
+    if re.search(r"怎么用|如何使用|使用说明|帮助|help", t):
+        return "usage"
+    if re.search(r"难过|烦|焦虑|心情|压力|学不会|太难了|不想学|崩溃|tired|stressed|anxious|sad", t):
+        return "mood"
+    if re.fullmatch(r"(好的|好|嗯|哦|行|可以|ok|okay|fine|yes|no)", t):
+        return "agree"
     return None
+
+
+def _conversational_reply(text: str, zh: bool, kind: str | None) -> str:
+    """会话应答:同类多条随机轮换,语气自然"""
+    sets = CHITCHAT_SETS_ZH if zh else CHITCHAT_SETS_EN
+    return random.choice(sets[kind or "generic"])
 
 
 def _strip_meta(prompt: str, cmd: str | None) -> str:
@@ -231,18 +344,13 @@ async def chat_stream(request: Request) -> StreamingResponse:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     # 直答模式:
-    # ① 检索到相关知识 → 知识直答;
-    # ② 寒暄/感谢/告别 → 对话式应答(优先于提问标记,如 How are you 里的 how);
-    # ③ 未命中但有提问意图 → 方法论框架(含难度判定);
-    # ④ 其余一般陈述 → 就着语句闲聊应答,不检索、不判难度
+    # ① 检索到相关知识 → 知识直答(专业问询专业回答);
+    # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架(含难度判定);
+    # ③ 其余(寒暄/感谢/告别/夸奖/介绍/情绪/应和/一般对话)→ 像人一样对话,不检索、不判难度
     if chunks:
         return _stream_text(_compose_direct(question, chunks))
-    kind = _chitchat_kind(question)
-    if kind:
-        d = CHITCHAT_ZH if zh else CHITCHAT_EN
-        return _stream_text(d[kind])
-    if _QUESTION_RE.search(question):
+    if _math_re().search(question):
         level = judge_level(question)
         return _stream_text(FALLBACK_ZH.format(level=LEVEL_ZH[level]) if zh
                            else FALLBACK_EN.format(level=LEVEL_EN[level]))
-    return _stream_text(CHITCHAT_ZH["chat"] if zh else CHITCHAT_EN["chat"])
+    return _stream_text(_conversational_reply(question, zh, _chitchat_kind(question)))

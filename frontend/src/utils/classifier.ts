@@ -129,25 +129,27 @@ export const DISPLAY_KEYS = ['analysis', 'algebra', 'geometry', 'ode', 'probabil
 
 /* ---------- 闲聊识别(与后端 chat.py _QUESTION_RE 保持同一口径) ---------- */
 
-const QUESTION_MARK_RE =
-  /[吗呢?？]|怎么|如何|什么|为何|为什么|多少|能否|是否|是不是|求|证明|计算|求解|解释|说明|帮我|这道|这题|例题|how|what|why|which|explain|solve|prove|compute|evaluate|find|help|show that/i
+// 题目措辞(数学问题的形态标记,与后端 chat.py _MATH_EXTRA_WORDS 同一口径)
+const MATH_STYLE_RE =
+  /(?<![请要])求|证明|计算|求解|求导|求证|这道|这题|例题|题目|公式|定理|数学|怎么做|怎么算|如何求|如何证|solve|prove|compute|evaluate|show that|theorem|equation|problem|math/i
 
-// 寒暄/感谢/告别优先于提问标记判断(如 How are you 里的 how)
+// 寒暄/感谢/告别优先于一切判断(如 How are you 里的 how)
 const GREET_RE = /^(喂|你好|您好|嗨|哈喽|在吗|在不在)|(hi|hello|hey|hiya|how are you)\b/i
 const THANKS_RE = /谢谢|感谢|thanks|thank you|thx/i
 const BYE_RE = /再见|拜拜|bye/i
 
 /**
- * 是否为非问题语句(寒暄 / 感谢 / 告别 / 一般陈述):
+ * 是否为非数学问题(寒暄 / 感谢 / 告别 / 自我介绍 / 情绪 / 一般对话):
  * 这类消息不分类、不定难度、不进问题归纳、不切换或新开会话,
- * 后端就着语句做对话式应答。
+ * 后端会像人一样做对话式应答。只有确切数学题(板块主题词或题目措辞)才走问题流程。
  */
 export function isChitchat(text: string): boolean {
   const content = text.replace(/^\s*\[.+?\]\s*/, '').trim()
   if (!content) return false
   if (GREET_RE.test(content) || THANKS_RE.test(content) || BYE_RE.test(content)) return true
-  // 有提问意图,或提到了数学主题(分类器能命中板块)→ 按正常问题流程处理
-  if (QUESTION_MARK_RE.test(content)) return false
+  // 提到数学主题(分类器能命中板块)或明显题目措辞 → 按数学问题流程处理
   if (classifyQuestion(content).key !== 'other') return false
+  if (MATH_STYLE_RE.test(content)) return false
+  // 其余(自我介绍询问、情绪倾诉、一般对话等)一律正常交际
   return true
 }

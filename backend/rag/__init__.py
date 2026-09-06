@@ -20,6 +20,7 @@ KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"
 _index: KnowledgeIndex | None = None
 _embedder: embed.Embedder | None = None
 _stamp: tuple[int, float] | None = None
+_terms: frozenset[str] = frozenset()
 
 
 def _dir_stamp() -> tuple[int, float]:
@@ -31,20 +32,32 @@ def _dir_stamp() -> tuple[int, float]:
 
 def init() -> None:
     """装载知识库并构建索引(启动时调用)"""
-    global _index, _embedder, _stamp
+    global _index, _embedder, _stamp, _terms
     _embedder = embed.Embedder() if embed.is_configured() else None
     _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
     _stamp = _dir_stamp()
+    _terms = _collect_terms()
 
 
 def search(query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
     """检索相关片段;知识库文件有增删改时自动重建索引后返回"""
-    global _index, _stamp
+    global _index, _stamp, _terms
     assert _index is not None, "rag.init() 未调用"
     if _dir_stamp() != _stamp:
         _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
         _stamp = _dir_stamp()
+        _terms = _collect_terms()
     return _index.search(query, top_k)
+
+
+def terms() -> frozenset[str]:
+    """知识库全部触发词(用于聊天层判断「是否确切数学问题」)"""
+    return _terms
+
+
+def _collect_terms() -> frozenset[str]:
+    chunks = load_knowledge(KNOWLEDGE_DIR)
+    return frozenset(kw for c in chunks for kw in c.keywords)
 
 
 def build_system(chunks: list[tuple[Chunk, float]], cmd: str | None, zh: bool = True) -> str:
@@ -58,11 +71,12 @@ def build_system(chunks: list[tuple[Chunk, float]], cmd: str | None, zh: bool = 
         f"你是 MathGuide,一个高等数学学习与研究助手。{lang},"
         "公式用 LaTeX(行内 $...$,块级 $$...$$)。"
         "难度(基础/进阶/竞赛)由你自己按问题措辞判断,并在开头用一行标明。",
+        "回答要有人的温度:语气自然、亲切、不做作,像一位耐心的学长学姐。"
+        "对寒暄、闲聊、倾诉等一般对话,像正常人一样回应,不要总把话题拽回数学;"
+        "只有用户明确在问数学问题时,才给出专业解答,也不要输出难度判定之外的机械话术。",
         "",
         "以下是从知识库检索到的参考资料,请优先依据它们回答;"
-        "资料不足以回答时,可结合自身数学知识补充,并注明「以下内容超出知识库,仅供参考」。"
-        "如果用户只是寒暄、闲聊或一般陈述(不是数学问题),请自然友好地回应,"
-        "不要套用解题框架,也不要输出难度判定。",
+        "资料不足以回答时,可结合自身数学知识补充,并注明「以下内容超出知识库,仅供参考」。",
         "",
     ]
     if cmd:
