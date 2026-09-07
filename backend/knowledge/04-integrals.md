@@ -1,7 +1,7 @@
 ---
 title: 积分
 title_en: Integrals
-keywords: ["积分", "原函数", "微积分基本定理", "integral", "antiderivative", "fundamental theorem"]
+keywords: ["积分", "原函数", "微积分基本定理", "黎曼", "黎曼和", "integral", "antiderivative", "fundamental theorem", "riemann"]
 category: analysis
 level: advance
 ---

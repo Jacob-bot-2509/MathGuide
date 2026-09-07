@@ -1,7 +1,7 @@
 ---
 title: 复变函数
 title_en: Complex Analysis
-keywords: ["复变", "解析", "留数", "complex analysis", "residue", "analytic", "cauchy"]
+keywords: ["复变", "解析", "留数", "柯西", "柯西-黎曼", "柯西黎曼", "complex analysis", "residue", "analytic", "cauchy", "cauchy-riemann"]
 category: complex
 level: advance
 ---

@@ -150,3 +150,16 @@ data: [DONE]
 
 验证码登录演示码固定 `123456`。注册产生的数据落盘于 `data/`(users.json 存加盐口令摘要,
 tokens.json 存令牌);清空这两个文件即可重置演示环境。
+
+## 质检工具(tools/)
+
+```bash
+python tools/eval_recall.py    # 知识库召回率评测:54 道多语问法批量测,报告落盘 eval_report.txt
+python tools/preflight.py      # 演示前自检:前后端健康 + 登录 + 抽查题端到端,全绿才可演示
+python tools/fetch_knowledge.py --source arxiv --limit 20   # 从 arXiv 拉论文摘要入库
+```
+
+- **eval_recall**:新增文档后必须重跑,未命中项按报告补 keywords,目标封闭集 100% 命中;
+- **preflight**:演示/答辩前 30 秒跑一次,任何环节(服务、账号、知识库、检索)故障立即报红并给出修复提示,
+  保证用户实测不翻车;
+- **fetch_knowledge**:arXiv 已验证可用(经系统代理),维基源需网络可达维基百科。

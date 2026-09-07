@@ -127,8 +127,8 @@ def _math_re() -> re.Pattern:
 CHITCHAT_SETS_ZH: dict[str, list[str]] = {
     "greet": [
         "你好呀!我是 MG。今天想一起攻克哪块数学?",
-        "嗨!很高兴见到你~ 有数学问题尽管说,想闲聊也欢迎。",
-        "你好你好!我在呢,随时可以开始。",
+        "嗨!很高兴见到你~ 我是 MG,有数学问题尽管说,想闲聊也欢迎。",
+        "你好你好!MG 在呢,随时可以开始。",
     ],
     "thanks": [
         "不客气!能帮上忙我就很开心。",
@@ -273,7 +273,9 @@ def _compose_direct(prompt: str, chunks: list[tuple[rag.Chunk, float]]) -> str:
         parts.append(f"**Level:** {LEVEL_EN[level]}. (LLM not configured — showing the most relevant "
                      "knowledge-base entries, currently in Chinese.)")
     for i, (c, _score) in enumerate(chunks, 1):
-        parts.append(f"\n\n**【资料{i}】** {c.title} · {c.section}\n\n{c.text}")
+        # 英文提问用英文标题(正文仍为中文资料时,标题至少可读)
+        title = c.title_en if not zh else c.title
+        parts.append(f"\n\n**【资料{i}】** {title} · {c.section}\n\n{c.text}")
     return "".join(parts)
 
 
