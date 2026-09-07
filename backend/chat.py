@@ -262,20 +262,37 @@ def _compose_direct(prompt: str, chunks: list[tuple[rag.Chunk, float]]) -> str:
     return "".join(parts)
 
 
-def _research_placeholder(question: str, zh: bool, chunks: list[tuple[rag.Chunk, float]]) -> str:
-    """P0 占位分支:研究型提问的跨论文库深度搜索(P1)尚未接入;
-    先给知识库检索结果并如实说明,避免"装作搜过" """
-    if chunks:
-        note = ("这类问题后续会跨论文库做深度检索与比对(建设中)。"
-                "当前先给你知识库中的相关资料:\n\n") if zh else (
-            "For research-style questions I will search across paper databases soon (under construction). "
-            "For now, here is what the local knowledge base has:\n\n")
-        return note + _compose_direct(question, chunks)
+def _research_reply(outcome: rag.research.SearchOutcome, zh: bool) -> str:
+    """研究型回复(P1):按相关度列出高置信来源(标题/作者/年份/摘要/链接),
+    来源统计与失败源如实呈现;接入 LLM 后此函数升级为「综合解答 + 引用」(P2)"""
+    if not outcome.any_hit:
+        if zh:
+            return ("跨论文库检索暂未找到高置信来源(网络或限额),建议稍后再试,"
+                    "或把问题描述得更具体一些。")
+        return ("No high-confidence sources found right now (network or rate limits). "
+                "Try again later or rephrase the question more specifically.")
+
+    stats = " · ".join(f"{name} {n}" for name, n in outcome.sources.items() if n)
+    lines = [f"已检索到 {len(outcome.hits)} 条高置信来源({stats}),按相关度排序:"] if zh else \
+        [f"Found {len(outcome.hits)} relevant sources ({stats}), ranked by relevance:"]
+    for i, h in enumerate(outcome.hits, 1):
+        meta = []
+        if h.authors:
+            meta.append(h.authors)
+        if h.year:
+            meta.append(str(h.year))
+        meta.append(h.source)
+        lines.append(f"\n**{i}. {h.title}** — {' · '.join(meta)}(相关度 {h.score:.1f})")
+        if h.snippet:
+            lines.append(f"{h.snippet[:260]}")
+        lines.append(f"🔗 {h.url}" if h.url else "📚 来源:本地知识库")
+    if outcome.errors:
+        lines.append(f"\n(注:以下来源本次不可达已跳过:{'、'.join(outcome.errors)})")
     if zh:
-        return ("这类问题需要跨论文库检索与比对,该能力正在建设中;"
-                "你可以先换个课本知识点问题问我。")
-    return ("This kind of question needs cross-database search, which is under construction. "
-            "Try a textbook-style question meanwhile.")
+        lines.append("\n(接入 LLM 后将自动综合上述来源生成解答并逐条标注引用,建设中)")
+    else:
+        lines.append("\n(LLM synthesis with per-source citations is under construction)")
+    return "\n".join(lines)
 
 
 async def _frames(text: str):
@@ -338,10 +355,11 @@ async def chat_stream(request: Request) -> StreamingResponse:
     zh = _is_chinese(question)
     chunks = rag.search(question, top_k=3)
 
-    # P0 路由:研究型提问优先于知识直答
-    # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走深度搜索占位分支)
+    # P0/P1 路由:研究型提问优先于知识直答
+    # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走跨论文库深度搜索)
     if rag.route.is_research_intent(question):
-        return _stream_text(_research_placeholder(question, zh, chunks))
+        outcome = await rag.research.deep_search(question, top_k=3)
+        return _stream_text(_research_reply(outcome, zh))
 
     if rag.llm.is_configured():
         return StreamingResponse(

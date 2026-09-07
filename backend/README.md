@@ -30,6 +30,9 @@ backend/
     documents.py  # 知识文档加载与切片(markdown + frontmatter)
     index.py      # 检索索引(关键词 + 标题 + bigram 重合度打分,零依赖)
     llm.py        # LLM 客户端(OpenAI 兼容流式,环境变量配置)
+    route.py      # 问题路由:研究型提问分流(简单应答 vs 深度搜索)
+    research/     # 深度搜索(P1):arXiv / Semantic Scholar / StackExchange
+                  # 适配器 + 查询改写 + 去重打分,≤15s,单源失败不影响整体
     __init__.py   # init / search / build_system(进程内单例)
   knowledge/   # 知识库文档(*.md,公式用 LaTeX),新增文档无需改代码
   data/        # 运行时生成:用户与令牌数据(勿入库)
@@ -153,6 +156,8 @@ tokens.json 存令牌);清空这两个文件即可重置演示环境。
 
 ```bash
 python tools/eval_recall.py    # 知识库召回率评测:54 道多语问法批量测,报告落盘 eval_report.txt
+python tools/eval_route.py     # 路由分流评测:50 用例四路(研究/知识/框架/会话)
+python tools/eval_search.py    # 深度搜索评测:10 道研究型问题(网络依赖,单源失败不影响整体)
 python tools/preflight.py      # 演示前自检:前后端健康 + 登录 + 抽查题端到端,全绿才可演示
 python tools/fetch_knowledge.py --source arxiv --limit 20   # 从 arXiv 拉论文摘要入库
 ```

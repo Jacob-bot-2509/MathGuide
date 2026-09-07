@@ -88,4 +88,6 @@ def build_system(chunks: list[tuple[Chunk, float]], cmd: str | None, zh: bool = 
     return "\n".join(parts).strip()
 
 
-__all__ = ["init", "search", "build_system", "llm", "embed", "route", "Chunk"]
+from . import research  # noqa: E402,F401 深度搜索编排(P1);置于文件末尾,依赖上方 search 等已定义
+
+__all__ = ["init", "search", "build_system", "llm", "embed", "route", "research", "Chunk"]
