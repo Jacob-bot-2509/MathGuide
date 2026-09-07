@@ -17,6 +17,10 @@ interface Seg {
 const katexCache = new Map<string, string>()
 const KATEX_CACHE_MAX = 500
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 function renderKatex(latex: string, display: boolean): string {
   const key = `${display ? 'd' : 'i'}|${latex}`
   const hit = katexCache.get(key)
@@ -25,7 +29,9 @@ function renderKatex(latex: string, display: boolean): string {
   try {
     html = katex.renderToString(latex, { displayMode: display, throwOnError: false })
   } catch {
-    /* 渲染失败返回空,保持正文可读 */
+    // 渲染异常(如 KaTeX 宏展开超限)时不静默丢内容:原样展示 LaTeX 源码,
+    // 保证任何符号都不会"凭空消失"
+    html = `<code class="seg-math-raw">${escapeHtml(latex)}</code>`
   }
   if (katexCache.size >= KATEX_CACHE_MAX) katexCache.clear()
   katexCache.set(key, html)
@@ -121,6 +127,13 @@ export default defineComponent({
 
 .seg-math {
   padding: 0 2px;
+}
+
+/* 渲染失败时的 LaTeX 源码兜底展示 */
+.seg-math-raw {
+  color: var(--text-dim);
+  font-family: var(--font-tech);
+  font-size: 12px;
 }
 
 .seg-mathd {
