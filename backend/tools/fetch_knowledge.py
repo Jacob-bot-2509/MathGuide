@@ -25,6 +25,12 @@ from pathlib import Path
 
 USER_AGENT = "MathGuide-KB-Fetcher/1.0 (competition demo)"
 
+# 英文停用词:不进 keywords(与 rag/index.py STOPWORDS 同口径)
+_STOPWORDS = frozenset(
+    "a an the for of and on in to is are was were be been with some this that these those "
+    "from by or at it its as not no we you they he she i me my our their your can will would".split()
+)
+
 # arXiv 高等数学相关分类
 ARXIV_CATS = [
     "math.CA", "math.AP", "math.AT", "math.CV", "math.DG", "math.FA",
@@ -67,7 +73,7 @@ def write_md(out_dir: Path, title: str, title_en: str, keywords: list[str],
     if path.exists():
         return False
     out_dir.mkdir(parents=True, exist_ok=True)
-    kws = sorted({k.lower() for k in keywords if k and len(k) >= 2})
+    kws = sorted({k.lower() for k in keywords if k and len(k) >= 2 and k.lower() not in _STOPWORDS})
     lines = [
         "---",
         f"title: {title}",

@@ -1,7 +1,7 @@
 ---
 title: Bound sets for a class of $φ$-Laplacian operators
 title_en: Bound sets for a class of $φ$-Laplacian operators
-keywords: ["bound", "class", "for", "laplacian", "math.ca", "operators", "sets"]
+keywords: ["bound", "class", "laplacian", "math.ca", "operators", "sets"]
 category: analysis
 ---
 

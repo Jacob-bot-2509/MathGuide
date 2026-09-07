@@ -1,7 +1,7 @@
 ---
 title: On approximately convex and affine functions
 title_en: On approximately convex and affine functions
-keywords: ["affine", "and", "approximately", "convex", "functions", "math.ca"]
+keywords: ["affine", "approximately", "convex", "functions", "math.ca"]
 category: analysis
 ---
 

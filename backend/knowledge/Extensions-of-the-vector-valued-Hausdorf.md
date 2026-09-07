@@ -1,7 +1,7 @@
 ---
 title: Extensions of the vector-valued Hausdorff-Young inequalities
 title_en: Extensions of the vector-valued Hausdorff-Young inequalities
-keywords: ["extensions", "hausdorff-young", "inequalities", "math.ca", "the", "vector-valued"]
+keywords: ["extensions", "hausdorff-young", "inequalities", "math.ca", "vector-valued"]
 category: analysis
 ---
 

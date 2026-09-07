@@ -262,6 +262,22 @@ def _compose_direct(prompt: str, chunks: list[tuple[rag.Chunk, float]]) -> str:
     return "".join(parts)
 
 
+def _research_placeholder(question: str, zh: bool, chunks: list[tuple[rag.Chunk, float]]) -> str:
+    """P0 占位分支:研究型提问的跨论文库深度搜索(P1)尚未接入;
+    先给知识库检索结果并如实说明,避免"装作搜过" """
+    if chunks:
+        note = ("这类问题后续会跨论文库做深度检索与比对(建设中)。"
+                "当前先给你知识库中的相关资料:\n\n") if zh else (
+            "For research-style questions I will search across paper databases soon (under construction). "
+            "For now, here is what the local knowledge base has:\n\n")
+        return note + _compose_direct(question, chunks)
+    if zh:
+        return ("这类问题需要跨论文库检索与比对,该能力正在建设中;"
+                "你可以先换个课本知识点问题问我。")
+    return ("This kind of question needs cross-database search, which is under construction. "
+            "Try a textbook-style question meanwhile.")
+
+
 async def _frames(text: str):
     """按帧切片流式下发一段完整文本(JSON 字符串包裹,含 [DONE] 收尾)"""
     i = 0
@@ -317,10 +333,15 @@ async def chat_stream(request: Request) -> StreamingResponse:
             text = ATTACH_IMAGE_EN if kind == "image" else ATTACH_FILE_EN
         return _stream_text(text)
 
-    # RAG:检索知识片段 → LLM 或直答
+    # RAG:检索知识片段 → 路由 → LLM 或直答
     question = _strip_meta(prompt, cmd)
     zh = _is_chinese(question)
     chunks = rag.search(question, top_k=3)
+
+    # P0 路由:研究型提问优先于知识直答
+    # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走深度搜索占位分支)
+    if rag.route.is_research_intent(question):
+        return _stream_text(_research_placeholder(question, zh, chunks))
 
     if rag.llm.is_configured():
         return StreamingResponse(

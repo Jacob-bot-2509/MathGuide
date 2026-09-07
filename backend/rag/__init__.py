@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .documents import Chunk, load_knowledge
 from .index import KnowledgeIndex
-from . import embed, llm
+from . import embed, llm, route
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"
 
@@ -88,4 +88,4 @@ def build_system(chunks: list[tuple[Chunk, float]], cmd: str | None, zh: bool = 
     return "\n".join(parts).strip()
 
 
-__all__ = ["init", "search", "build_system", "llm", "embed", "Chunk"]
+__all__ = ["init", "search", "build_system", "llm", "embed", "route", "Chunk"]

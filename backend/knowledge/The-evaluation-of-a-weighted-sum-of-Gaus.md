@@ -1,7 +1,7 @@
 ---
 title: The evaluation of a weighted sum of Gauss hypergeometric functions and its connection with Galton-Watson processes
 title_en: The evaluation of a weighted sum of Gauss hypergeometric functions and its connection with Galton-Watson processes
-keywords: ["and", "evaluation", "functions", "gauss", "hypergeometric", "math.ca", "sum", "the", "weighted"]
+keywords: ["evaluation", "functions", "gauss", "hypergeometric", "math.ca", "sum", "weighted"]
 category: analysis
 ---
 

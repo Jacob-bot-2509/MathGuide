@@ -1,7 +1,7 @@
 ---
 title: Remarks on some properties of special polynomials with exponential distribution
 title_en: Remarks on some properties of special polynomials with exponential distribution
-keywords: ["distribution", "exponential", "math.ca", "polynomials", "properties", "remarks", "some", "special", "with"]
+keywords: ["distribution", "exponential", "math.ca", "polynomials", "properties", "remarks", "special"]
 category: analysis
 ---
 

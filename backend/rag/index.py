@@ -25,6 +25,12 @@ MIN_SCORE = 1.5
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
+# 英文停用词:不得作为检索触发词(arXiv 标题词表会混入 the/for/of 等,造成误命中)
+STOPWORDS = frozenset(
+    "a an the for of and on in to is are was were be been with some this that these those "
+    "from by or at it its as not no we you they he she i me my our their your can will would".split()
+)
+
 
 def _bigrams(text: str) -> set[str]:
     """提取小写字符二元组(中英混排直接按相邻字符切)"""
@@ -53,10 +59,10 @@ class KnowledgeIndex:
     def _keyword_score(self, chunk: Chunk, q: str) -> float:
         score = 0.0
         for kw in chunk.keywords:
-            if kw and kw in q:
+            if kw and kw not in STOPWORDS and kw in q:
                 score += W_KEYWORD
         for tok in _TOKEN_RE.findall(q):
-            if len(tok) >= 3 and tok in chunk.keywords:
+            if len(tok) >= 3 and tok not in STOPWORDS and tok in chunk.keywords:
                 score += W_KEYWORD * 0.5
         return score
 

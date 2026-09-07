@@ -1,7 +1,7 @@
 ---
 title: Spatial and temporal dynamics of an almost periodic reaction-diffusion system for West Nile virus
 title_en: Spatial and temporal dynamics of an almost periodic reaction-diffusion system for West Nile virus
-keywords: ["almost", "and", "dynamics", "math.ap", "periodic", "reaction-diffusion", "spatial", "system", "temporal"]
+keywords: ["almost", "dynamics", "math.ap", "periodic", "reaction-diffusion", "spatial", "system", "temporal"]
 category: ode
 ---
 

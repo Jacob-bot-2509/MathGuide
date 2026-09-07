@@ -1,7 +1,7 @@
 ---
 title: The existence and uniqueness of global admissible conservative weak solution for the periodic single-cycle pulse equation
 title_en: The existence and uniqueness of global admissible conservative weak solution for the periodic single-cycle pulse equation
-keywords: ["admissible", "and", "conservative", "existence", "global", "math.ap", "the", "uniqueness", "weak"]
+keywords: ["admissible", "conservative", "existence", "global", "math.ap", "uniqueness", "weak"]
 category: ode
 ---
 

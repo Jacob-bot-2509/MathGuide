@@ -1,7 +1,7 @@
 ---
 title: Fractional Leibniz integral rules for Riemann-Liouville and Caputo fractional derivatives and their applications
 title_en: Fractional Leibniz integral rules for Riemann-Liouville and Caputo fractional derivatives and their applications
-keywords: ["and", "caputo", "for", "fractional", "integral", "leibniz", "math.ca", "riemann-liouville", "rules"]
+keywords: ["caputo", "fractional", "integral", "leibniz", "math.ca", "riemann-liouville", "rules"]
 category: analysis
 ---
 
