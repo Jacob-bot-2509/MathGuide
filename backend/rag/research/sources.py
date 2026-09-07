@@ -1,17 +1,21 @@
 """
-深度搜索源适配器(执行表 P1):每个源独立实现、独立超时与重试,
+深度搜索源适配器(执行表 P1):每个源独立实现、独立超时与指数退避重试,
 单源失败(网络不通 / 限流 / 超时)只记入 errors,不影响其他源。
 
 网络实现说明:统一用 urllib + 线程池(asyncio.to_thread)。原因:
 urllib 自动读取 Windows 系统代理,而 httpx 只认环境变量——arXiv 等
 外网源在本机必须经系统代理才能到达(与 tools/fetch_knowledge.py 同路径)。
 
-- arXiv:标题 + 摘要 + 作者 + 年份,带一次重试;
-- Semantic Scholar:带引用数(权威性因子);代理出口常被限流(429)→ 静默跳过;
+- arXiv:标题 + 摘要 + 作者 + 年份;
+- Semantic Scholar:带引用数(权威性因子);设 MG_S2_API_KEY 环境变量
+  (semanticscholar.org 免费申请)后走专属配额,否则走公共池(常被限流);
+- OpenAlex:开放学术图谱,免 key;设 MG_CONTACT_MAIL 后进礼貌池;
+  部分网络下代理出口被限流(429)会自动跳过;
 - StackExchange(math 站):评分/回答数为质量信号,可达性最稳;
 - 知识库:由编排层直接调用 rag.search,不走本文件。
 """
 import asyncio
+import os
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -20,12 +24,31 @@ from .types import SearchHit
 
 UA = {"User-Agent": "MathGuide-DeepSearch/1.0"}
 
+S2_API_KEY = os.getenv("MG_S2_API_KEY", "")
+CONTACT_MAIL = os.getenv("MG_CONTACT_MAIL", "")
 
-def _http_get(url: str, timeout: float) -> str:
+RETRIES = 2          # 外部源重试次数
+BACKOFF_BASE = 1.5   # 指数退避基数(秒):1.5, 3, ...
+
+
+def _http_get(url: str, timeout: float, headers: dict | None = None) -> str:
     """同步 GET(线程中运行);经系统代理访问外网"""
-    req = urllib.request.Request(url, headers=UA)
+    req = urllib.request.Request(url, headers={**UA, **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode("utf-8", errors="replace")
+
+
+async def _retry(fn, *args, retries: int = RETRIES):
+    """指数退避重试:最后一次仍失败则抛出"""
+    last: Exception | None = None
+    for i in range(retries + 1):
+        try:
+            return await fn(*args)
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if i < retries:
+                await asyncio.sleep(BACKOFF_BASE * (2 ** i))
+    raise last  # type: ignore[misc]
 
 
 async def search_arxiv(query: str, max_results: int = 8) -> list[SearchHit]:
@@ -37,24 +60,26 @@ async def search_arxiv(query: str, max_results: int = 8) -> list[SearchHit]:
         "sortOrder": "descending",
     })
     ns = "{http://www.w3.org/2005/Atom}"
-    for _ in range(2):  # 代理链路偏慢,重试一次
-        try:
-            text = await asyncio.to_thread(_http_get, url, 15)
-            root = ET.fromstring(text)
-            hits: list[SearchHit] = []
-            for e in root.findall(f"{ns}entry"):
-                title = (e.findtext(f"{ns}title", "") or "").strip().replace("\n", " ")
-                summary = (e.findtext(f"{ns}summary", "") or "").strip().replace("\n", " ")
-                authors = ", ".join(a.text.strip() for a in e.findall(f"{ns}author/{ns}name") if a.text)[:200]
-                year = (e.findtext(f"{ns}published", "") or "")[:4]
-                link = (e.findtext(f"{ns}id", "") or "").strip()
-                if title:
-                    hits.append(SearchHit("arXiv", title, summary[:500], authors,
-                                          int(year) if year.isdigit() else 0, link))
-            return hits
-        except Exception:
-            await asyncio.sleep(1.5)
-    return []
+
+    async def _fetch():
+        text = await asyncio.to_thread(_http_get, url, 15)
+        root = ET.fromstring(text)
+        hits: list[SearchHit] = []
+        for e in root.findall(f"{ns}entry"):
+            title = (e.findtext(f"{ns}title", "") or "").strip().replace("\n", " ")
+            summary = (e.findtext(f"{ns}summary", "") or "").strip().replace("\n", " ")
+            authors = ", ".join(a.text.strip() for a in e.findall(f"{ns}author/{ns}name") if a.text)[:200]
+            year = (e.findtext(f"{ns}published", "") or "")[:4]
+            link = (e.findtext(f"{ns}id", "") or "").strip()
+            if title:
+                hits.append(SearchHit("arXiv", title, summary[:500], authors,
+                                      int(year) if year.isdigit() else 0, link))
+        return hits
+
+    try:
+        return await _retry(_fetch)
+    except Exception:
+        return []
 
 
 async def search_semantic_scholar(query: str, limit: int = 8) -> list[SearchHit]:
@@ -64,10 +89,15 @@ async def search_semantic_scholar(query: str, limit: int = 8) -> list[SearchHit]
         "fields": "title,abstract,year,authors,url,citationCount",
         "limit": limit,
     }))
+    headers = {"x-api-key": S2_API_KEY} if S2_API_KEY else None
+
+    async def _fetch():
+        return json.loads(await asyncio.to_thread(_http_get, url, 10, headers))
+
     try:
-        data = json.loads(await asyncio.to_thread(_http_get, url, 10))
+        data = await _retry(_fetch)
     except Exception:
-        return []  # 429 限流或不可达:静默跳过
+        return []  # 429 限流或不可达:静默跳过(不配 key 时公共池常被限流)
     hits: list[SearchHit] = []
     for p in data.get("data", []):
         title = (p.get("title") or "").strip()
@@ -78,6 +108,53 @@ async def search_semantic_scholar(query: str, limit: int = 8) -> list[SearchHit]
                               (p.get("abstract") or "")[:500], authors,
                               int(p.get("year") or 0), p.get("url") or "",
                               int(p.get("citationCount") or 0)))
+    return hits
+
+
+def _rebuild_abstract(inv_index: dict | None) -> str:
+    """OpenAlex 摘要以倒排索引存储,重建为原文"""
+    if not inv_index:
+        return ""
+    pos: dict[int, str] = {}
+    for word, positions in inv_index.items():
+        for p in positions:
+            pos[p] = word
+    return " ".join(pos[i] for i in sorted(pos))
+
+
+async def search_openalex(query: str, limit: int = 8) -> list[SearchHit]:
+    """OpenAlex:开放学术图谱,免 key;部分网络出口被限流时静默跳过"""
+    import json
+    params = {
+        "search": query,
+        "per-page": limit,
+        "sort": "relevance_score:desc",
+    }
+    if CONTACT_MAIL:
+        params["mailto"] = CONTACT_MAIL
+    url = "https://api.openalex.org/works?" + urllib.parse.urlencode(params)
+
+    async def _fetch():
+        return json.loads(await asyncio.to_thread(_http_get, url, 10))
+
+    try:
+        data = await _retry(_fetch)
+    except Exception:
+        return []
+    hits: list[SearchHit] = []
+    for w in data.get("results", []):
+        title = (w.get("display_name") or "").strip()
+        if not title:
+            continue
+        authors = ", ".join(a.get("author", {}).get("display_name", "")
+                            for a in w.get("authorships", [])[:3] if a.get("author"))
+        url = w.get("doi") or ""
+        if url and not url.startswith("http"):
+            url = f"https://doi.org/{url}"
+        hits.append(SearchHit("OpenAlex", title,
+                              _rebuild_abstract(w.get("abstract_inverted_index"))[:500], authors,
+                              int(w.get("publication_year") or 0), url,
+                              int(w.get("cited_by_count") or 0)))
     return hits
 
 

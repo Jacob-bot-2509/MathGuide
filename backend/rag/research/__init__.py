@@ -6,7 +6,9 @@
         接入 LLM 后此函数替换为模型查询改写,签名不变)
     deep_search(question, top_k) → SearchOutcome(≤15s,单源失败不影响整体)
 
-来源:arXiv / Semantic Scholar / StackExchange(外网,各自超时熔断)+ 内部知识库。
+来源:arXiv / Semantic Scholar / OpenAlex / StackExchange(外网,各自超时熔断)
++ 内部知识库。Semantic Scholar 可配 MG_S2_API_KEY(免费申请)走专属配额;
+OpenAlex 可配 MG_CONTACT_MAIL 进礼貌池;受限网络下被限流的源自动跳过。
 """
 import asyncio
 import re
@@ -86,6 +88,7 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0) -> S
     await asyncio.gather(
         run("arXiv", sources.search_arxiv),
         run("SemanticScholar", sources.search_semantic_scholar),
+        run("OpenAlex", sources.search_openalex),
         run("StackExchange", sources.search_stackexchange),
     )
 

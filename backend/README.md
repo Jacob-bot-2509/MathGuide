@@ -81,6 +81,14 @@ set MG_EMBED_API_KEY=sk-xxxx        # 缺省沿用 MG_LLM_API_KEY
 set MG_EMBED_MODEL=text-embedding-3-small
 ```
 
+深度搜索可选环境变量(不设也可用,设了更稳):
+
+```bash
+set MG_S2_API_KEY=xxx      # Semantic Scholar 免费 API key(semanticscholar.org 申请),
+                           # 走专属配额,告别公共池 429 限流
+set MG_CONTACT_MAIL=xxx@xx.com  # OpenAlex 礼貌池标识(官方建议,提升配额)
+```
+
 - 启用后片段在装载时批量向量化,结果缓存于 `knowledge/.embeddings.json`
   (chunk id 为键,文档改动自动重算),重启不重复计费;
 - 检索按「关键词命中 + 向量相似度」混合排序,未配置时行为与纯关键词模式一致;
