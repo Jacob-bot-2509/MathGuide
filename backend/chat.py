@@ -35,29 +35,13 @@ WELCOME_ZH = (
     "**欢迎回到 MATHGUIDE · 学习辅助**\n\n"
     "我是 MG,你的高等数学学习与研究助手。直接提问即可,或用下方指令:"
     "概念动画演示 / 例题精讲 / 章节知识导航 / 错题归纳 / 公式查询手册。\n\n"
-    "问题的**板块与难度我会自动识别**,先给严谨的专业表述,再给形象化理解,并带上公式推演;"
+    "问题的**板块我会自动识别**,先给严谨的专业表述,再给形象化理解,并带上公式推演;"
     "中文、英文提问都可以。\n\n"
     "(Welcome to MATHGUIDE · Learn. You can also ask in English, e.g. \"explain limits with intuition\".)"
 )
 
-LEVEL_ZH = {"basic": "基础", "advance": "进阶", "competition": "竞赛"}
-LEVEL_EN = {"basic": "basic", "advance": "advanced", "competition": "competition"}
-
-
-def judge_level(text: str) -> str:
-    """按问题措辞自动判断难度(中英文关键词),绝不反问用户。"""
-    t = text.lower()
-    if any(k in t for k in ("竞赛", "奥数", "imo", "cmo", "难题", "挑战", "压轴", "拔尖", "olympiad")):
-        return "competition"
-    if any(k in t for k in ("基础", "入门", "初学", "简单", "是什么", "定义", "概念", "为什么", "怎么理解",
-                            "通俗", "新手", "what is", "definition", "concept", "beginner", "basic",
-                            "introduction", "intuitively")):
-        return "basic"
-    return "advance"
-
-
 FALLBACK_ZH = (
-    "这个问题我已按措辞自动判定难度为**{level}**。\n\n"
+    "这个问题我按通用方法论给你搭分析框架。\n\n"
     "**通用三步走(专业表述):** ① 明确对象与条件,把问题转化为标准型(极限式、方程、积分、模型);"
     "② 选择对应工具求解;③ **回代验算**——MG 的「自我验证工作流」会在解答发布前进行一致性检查与符号复验,"
     "低置信度时会主动标注「该解答需进行人工处理」。\n\n"
@@ -67,7 +51,7 @@ FALLBACK_ZH = (
 )
 
 FALLBACK_EN = (
-    "I've read your question and automatically rate its difficulty as **{level}**.\n\n"
+    "Here is a general framework I can apply to this problem.\n\n"
     "**Approach (3 steps):** 1) Identify the objects and conditions, and rewrite the problem into a canonical form "
     "(a limit, an equation, an integral, or a model); 2) apply the matching tool; 3) **verify by substitution**. "
     "MG's self-verification workflow runs consistency checks and symbolic re-validation before publishing an answer, "
@@ -263,15 +247,14 @@ def _strip_meta(prompt: str, cmd: str | None) -> str:
 def _compose_direct(prompt: str, chunks: list[tuple[rag.Chunk, float]]) -> str:
     """知识库直答模式(未配置 LLM):把检索到的知识片段组装成回复文本"""
     zh = _is_chinese(prompt)
-    level = judge_level(_strip_meta(prompt, None))
     if not chunks:
-        return FALLBACK_ZH.format(level=LEVEL_ZH[level]) if zh else FALLBACK_EN.format(level=LEVEL_EN[level])
+        return FALLBACK_ZH if zh else FALLBACK_EN
     parts = []
     if zh:
-        parts.append(f"**难度判定:** {LEVEL_ZH[level]}。当前未配置 LLM,以下为知识库检索到的最相关资料:")
+        parts.append("以下为知识库检索到的最相关资料:")
     else:
-        parts.append(f"**Level:** {LEVEL_EN[level]}. (LLM not configured — showing the most relevant "
-                     "knowledge-base entries, currently in Chinese.)")
+        parts.append("Here are the most relevant entries from the knowledge base "
+                     "(currently in Chinese):")
     for i, (c, _score) in enumerate(chunks, 1):
         # 英文提问用英文标题(正文仍为中文资料时,标题至少可读)
         title = c.title_en if not zh else c.title
@@ -347,12 +330,10 @@ async def chat_stream(request: Request) -> StreamingResponse:
         )
     # 直答模式:
     # ① 检索到相关知识 → 知识直答(专业问询专业回答);
-    # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架(含难度判定);
-    # ③ 其余(寒暄/感谢/告别/夸奖/介绍/情绪/应和/一般对话)→ 像人一样对话,不检索、不判难度
+    # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架;
+    # ③ 其余(寒暄/感谢/告别/夸奖/介绍/情绪/应和/一般对话)→ 像人一样对话,不检索
     if chunks:
         return _stream_text(_compose_direct(question, chunks))
     if _math_re().search(question):
-        level = judge_level(question)
-        return _stream_text(FALLBACK_ZH.format(level=LEVEL_ZH[level]) if zh
-                           else FALLBACK_EN.format(level=LEVEL_EN[level]))
+        return _stream_text(FALLBACK_ZH if zh else FALLBACK_EN)
     return _stream_text(_conversational_reply(question, zh, _chitchat_kind(question)))

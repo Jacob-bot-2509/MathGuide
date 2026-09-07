@@ -102,28 +102,6 @@ export function classifyQuestion(text: string): CategoryInfo {
   return FALLBACK_CATEGORY
 }
 
-/* ---------- 难度分级:基础 → 进阶 → 竞赛 ---------- */
-
-export interface LevelInfo {
-  key: 'basic' | 'advance' | 'competition'
-  label: string
-  color: string
-}
-
-export const LEVELS = {
-  basic: { key: 'basic', label: '基础', color: '#5eead4' },
-  advance: { key: 'advance', label: '进阶', color: '#60a5fa' },
-  competition: { key: 'competition', label: '竞赛', color: '#f87171' },
-} as const satisfies Record<string, LevelInfo>
-
-/** 按问题措辞判断难度(中英文关键词;后端接入后可替换为模型判断) */
-export function classifyLevel(text: string): LevelInfo {
-  const content = text.replace(/^\s*\[.+?\]\s*/, '')
-  if (/(竞赛|奥数|IMO|CMO|难题|挑战|压轴|拔尖|olympiad|competition|challenge)/i.test(content)) return LEVELS.competition
-  if (/(基础|入门|初学|简单|是什么|定义|概念|为什么|怎么理解|通俗|新手|what is|definition|concept|beginner|basic|introduction|intuitively)/i.test(content)) return LEVELS.basic
-  return LEVELS.advance
-}
-
 /** 归纳面板的展示顺序(按教学板块顺序,其他垫底) */
 export const DISPLAY_KEYS = ['analysis', 'algebra', 'geometry', 'ode', 'probability', 'complex', 'topology', 'other'] as const
 
@@ -140,7 +118,7 @@ const BYE_RE = /再见|拜拜|bye/i
 
 /**
  * 是否为非数学问题(寒暄 / 感谢 / 告别 / 自我介绍 / 情绪 / 一般对话):
- * 这类消息不分类、不定难度、不进问题归纳、不切换或新开会话,
+ * 这类消息不分类、不进问题归纳、不切换或新开会话,
  * 后端会像人一样做对话式应答。只有确切数学题(板块主题词或题目措辞)才走问题流程。
  */
 export function isChitchat(text: string): boolean {

@@ -3,7 +3,6 @@ title: 线性代数
 title_en: Linear Algebra
 keywords: ["矩阵", "行列式", "线性相关", "特征值", "matrix", "determinant", "eigenvalue", "eigenvector", "linear algebra"]
 category: algebra
-level: advance
 ---
 
 ## 专业表述

@@ -3,7 +3,6 @@ title: 级数
 title_en: Series
 keywords: ["级数", "无穷级数", "幂级数", "series", "power series", "infinite series", "summation"]
 category: analysis
-level: advance
 ---
 
 ## 专业表述

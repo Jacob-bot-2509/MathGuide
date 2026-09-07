@@ -3,7 +3,6 @@ title: 函数极限
 title_en: Limits
 keywords: ["极限", "lim", "趋近", "收敛", "converge", "limit"]
 category: analysis
-level: advance
 ---
 
 ## 专业表述

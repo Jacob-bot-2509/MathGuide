@@ -46,7 +46,6 @@ title: 函数极限
 title_en: Limits
 keywords: ["极限", "lim", "趋近", "收敛", "converge", "limit"]
 category: analysis
-level: advance
 ---
 
 ## 专业表述
@@ -62,7 +61,6 @@ $\lim_{x\to 0}\frac{\sin x}{x}=1$ 是一切等价无穷小替换的根基。
 - `keywords`:中英触发词(JSON 数组,统一小写),参与检索打分;
 - `category`:与前端 `utils/classifier.ts` 板块 key 一致
   (analysis / algebra / geometry / ode / probability / complex / topology / other);
-- `level`:基础 basic / 进阶 advance / 竞赛 competition;
 - 正文按 `##` 标题切片,单节过长自动按段落再切(公式块不切断);
   公式统一 LaTeX(行内 `$...$`、块级 `$$...$$`),前端 KaTeX 直接渲染。
 

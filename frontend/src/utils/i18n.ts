@@ -156,7 +156,7 @@ const ZH: Dict = {
   'privacy.voice': '允许语音识别',
   'privacy.voiceDesc': '聊天页麦克风按钮使用浏览器本地语音识别(不经过服务器)',
   'privacy.personal': '个性化学习数据',
-  'privacy.personalDesc': '问题归纳与难度分级在本地进行,用于个性化学习',
+  'privacy.personalDesc': '问题归纳在本地进行,用于个性化学习',
   'privacy.clear': '清除本地聊天记录',
   'privacy.clearDesc': '删除问题归纳中的全部会话数据(不影响账号信息)',
   'privacy.clearBtn': '清除',
@@ -432,7 +432,7 @@ export function t(key: string, params?: Record<string, string | number>): string
   return s
 }
 
-/* ---------- 动态内容:板块 / 指令 / 难度 / 登录方式 ---------- */
+/* ---------- 动态内容:板块 / 指令 / 登录方式 ---------- */
 
 const CAT_NAMES: Record<string, [string, string]> = {
   analysis: ['数学分析', 'Mathematical Analysis'],
@@ -488,16 +488,6 @@ export function cmdHint(key: string): string {
 
 export function cmdDefault(key: string): string {
   return pick(CMD_DEFAULTS[key], key)
-}
-
-const LEVEL_NAMES: Record<string, [string, string]> = {
-  basic: ['基础', 'Basic'],
-  advance: ['进阶', 'Advanced'],
-  competition: ['竞赛', 'Competition'],
-}
-
-export function levelName(key: string): string {
-  return pick(LEVEL_NAMES[key], key)
 }
 
 const AUTH_NAMES: Record<AuthMethod, [string, string]> = {

@@ -3,7 +3,6 @@ title: 微分方程
 title_en: Differential Equations
 keywords: ["微分方程", "ode", "解方程", "可分离", "differential equation", "separable", "initial value"]
 category: ode
-level: advance
 ---
 
 ## 专业表述

@@ -3,7 +3,6 @@ title: 概率统计
 title_en: Probability & Statistics
 keywords: ["概率", "期望", "正态", "分布", "probability", "expectation", "variance", "distribution", "normal"]
 category: probability
-level: advance
 ---
 
 ## 专业表述

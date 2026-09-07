@@ -3,7 +3,6 @@ title: 导数
 title_en: Derivatives
 keywords: ["导数", "求导", "切线", "derivative", "differentiat", "tangent"]
 category: analysis
-level: advance
 ---
 
 ## 专业表述

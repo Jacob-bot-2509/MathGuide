@@ -61,7 +61,7 @@ def slugify(text: str, maxlen: int = 40) -> str:
 
 
 def write_md(out_dir: Path, title: str, title_en: str, keywords: list[str],
-             category: str, level: str, body: str) -> bool:
+             category: str, body: str) -> bool:
     """写入 knowledge/*.md;已存在则跳过(幂等)"""
     path = out_dir / f"{slugify(title)}.md"
     if path.exists():
@@ -74,7 +74,6 @@ def write_md(out_dir: Path, title: str, title_en: str, keywords: list[str],
         f"title_en: {title_en}",
         f"keywords: {kws!r}".replace("'", '"'),
         f"category: {category}",
-        f"level: {level}",
         "---",
         "",
         body.strip(),
@@ -117,7 +116,7 @@ def fetch_arxiv(out_dir: Path, limit: int) -> int:
             if not title or len(summary) < 60:
                 continue
             kws = re.findall(r"[A-Za-z][A-Za-z-]{2,}", title)[:8]
-            if write_md(out_dir, title, title, kws + [cat], _arxiv_category(cat), "advance", summary):
+            if write_md(out_dir, title, title, kws + [cat], _arxiv_category(cat), summary):
                 added += 1
         time.sleep(3)  # arXiv 要求 ≥3s 间隔
     return added
@@ -147,7 +146,7 @@ def fetch_wiki(out_dir: Path, limit: int) -> int:
             continue
         clean = re.sub(r"\n{2,}", "\n\n", text).strip()
         kws = re.findall(r"[A-Za-z][A-Za-z-]{2,}", topic.replace("(mathematics)", ""))[:6]
-        if write_md(out_dir, topic, topic, kws + [topic.lower()], cat, "basic", clean):
+        if write_md(out_dir, topic, topic, kws + [topic.lower()], cat, clean):
             added += 1
         time.sleep(1)
     return added

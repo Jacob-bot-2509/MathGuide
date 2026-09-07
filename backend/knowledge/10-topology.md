@@ -3,7 +3,6 @@ title: 拓扑学
 title_en: Topology
 keywords: ["拓扑", "开集", "连通", "紧致", "同胚", "度量空间", "邻域", "拓扑空间", "topology", "open set", "compact", "connected", "homeomorph"]
 category: topology
-level: advance
 ---
 
 ## 专业表述

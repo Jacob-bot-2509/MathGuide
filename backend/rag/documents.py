@@ -12,7 +12,6 @@ md 格式:
     title_en: Limits
     keywords: ["极限", "lim"]   # JSON 数组,中英触发词(小写)
     category: analysis          # 与前端 classifier 板块 key 一致
-    level: advance              # basic / advance / competition
     ---
     ## 章节标题
     正文(行内公式 $...$,块级公式 $$...$$,与前端 MathText 渲染约定一致)
@@ -43,7 +42,6 @@ class Chunk:
     text: str
     keywords: list[str] = field(default_factory=list)
     category: str = "other"
-    level: str = "advance"
 
 
 def _parse_frontmatter(content: str) -> tuple[dict, str]:
@@ -89,19 +87,18 @@ def _load_md(path: Path, chunks: list[Chunk]) -> None:
     title_en = str(meta.get("title_en", title))
     keywords = [str(k).lower() for k in meta.get("keywords", [])]
     category = str(meta.get("category", "other"))
-    level = str(meta.get("level", "advance"))
     sections = _SECTION_RE.split(body)
     # 首个元素为引言(无 ## 标题),后续按 [标题, 正文] 成对出现
     if sections[0].strip():
         for text in _split_section(sections[0].strip(), MAX_SECTION_CHARS):
-            chunks.append(Chunk(_next_id(), title, title_en, "概述", text, keywords, category, level))
+            chunks.append(Chunk(_next_id(), title, title_en, "概述", text, keywords, category))
     for i in range(1, len(sections), 2):
         head = sections[i].strip()
         text = sections[i + 1].strip() if i + 1 < len(sections) else ""
         if not text:
             continue
         for piece in _split_section(text, MAX_SECTION_CHARS):
-            chunks.append(Chunk(_next_id(), title, title_en, head, piece, keywords, category, level))
+            chunks.append(Chunk(_next_id(), title, title_en, head, piece, keywords, category))
 
 
 def _load_txt(path: Path, chunks: list[Chunk]) -> None:
@@ -112,7 +109,7 @@ def _load_txt(path: Path, chunks: list[Chunk]) -> None:
         return
     keywords = [title.lower()]
     for i, piece in enumerate(_split_section(body, MAX_SECTION_CHARS), 1):
-        chunks.append(Chunk(_next_id(), title, title, f"段落{i}", piece, keywords, "other", "advance"))
+        chunks.append(Chunk(_next_id(), title, title, f"段落{i}", piece, keywords, "other"))
 
 
 def _next_id() -> str:

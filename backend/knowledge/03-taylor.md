@@ -3,7 +3,6 @@ title: 泰勒展开
 title_en: Taylor Expansion
 keywords: ["泰勒", "麦克劳林", "taylor", "maclaurin", "泰勒公式", "泰勒展开", "taylor series", "taylor expansion"]
 category: analysis
-level: advance
 ---
 
 ## 专业表述

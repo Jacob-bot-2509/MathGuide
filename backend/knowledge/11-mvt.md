@@ -3,7 +3,6 @@ title: 微分学应用
 title_en: Applications of Differentiation
 keywords: ["曲率", "拐点", "中值定理", "拉格朗日", "curvature", "mean value theorem", "lagrange", "inflection"]
 category: analysis
-level: advance
 ---
 
 ## 专业表述

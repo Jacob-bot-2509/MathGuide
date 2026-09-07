@@ -3,7 +3,6 @@ title: 傅里叶分析
 title_en: Fourier Analysis
 keywords: ["傅里叶", "周期", "fourier", "periodic"]
 category: analysis
-level: advance
 ---
 
 ## 专业表述

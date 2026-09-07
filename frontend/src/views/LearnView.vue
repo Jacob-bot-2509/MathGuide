@@ -20,9 +20,9 @@ import { useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import { COMMANDS } from '@/utils/commands'
-import { catName, cmdDefault, cmdHint, cmdName, levelName, t } from '@/utils/i18n'
+import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
 import { streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
-import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyLevel, classifyQuestion, isChitchat } from '@/utils/classifier'
+import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyQuestion, isChitchat } from '@/utils/classifier'
 import { settingsState, updateSettings } from '@/stores/settings'
 import {
   MAX_SESSIONS,
@@ -212,10 +212,9 @@ function send(text?: string, cmd?: string) {
   const content = (text ?? input.value).trim()
   if (!content) return
 
-  // 寒暄/闲聊:不分类、不定难度、不切换或新开会话,只就话答话
+  // 寒暄/闲聊:不分类、不切换或新开会话,只就话答话
   const chitchat = isChitchat(content)
   const catInfo = chitchat ? undefined : classifyQuestion(content)
-  const level = chitchat ? undefined : classifyLevel(content)
 
   // 会话选择:同类型延续当前会话;不同类型检索同板块旧会话,否则新开;
   // 闲聊沿用当前会话(无会话则开一个未归类会话,不绑定板块、不进归纳面板)
@@ -250,7 +249,7 @@ function send(text?: string, cmd?: string) {
     session.messages.shift()
   }
 
-  session.messages.push({ id: nextMsgId(), role: 'user', content, cmd, level, chitchat: chitchat || undefined })
+  session.messages.push({ id: nextMsgId(), role: 'user', content, cmd, chitchat: chitchat || undefined })
   input.value = ''
   autoGrow()
   scrollBottom()
@@ -599,12 +598,6 @@ onBeforeUnmount(() => {
             <span v-if="m.role === 'user' && activeSession.cat" class="cat-chip">
               <span class="cat-dot" :style="{ background: activeSession.cat.color }"></span>{{ catName(activeSession.cat.key) }}
             </span>
-            <span
-              v-if="m.role === 'user' && m.level"
-              class="level-chip"
-              :style="{ color: m.level.color, borderColor: m.level.color }"
-            >{{ levelName(m.level.key) }}</span
-            >
             <template v-if="m.role === 'assistant'">
               <span v-if="m.thinking" class="thinking">{{ t('learn.thinking') }}<span class="dots">···</span></span>
               <MathText v-if="m.content" :text="m.content" />
@@ -901,18 +894,6 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   margin-right: 5px;
   vertical-align: 1px;
-}
-
-/* 难度标签:基础 / 进阶 / 竞赛 */
-.level-chip {
-  display: inline-block;
-  font-family: var(--font-tech);
-  font-size: 10px;
-  border: 1px solid;
-  padding: 1px 8px;
-  border-radius: 999px;
-  margin-right: 8px;
-  vertical-align: 2px;
 }
 
 .thinking {
