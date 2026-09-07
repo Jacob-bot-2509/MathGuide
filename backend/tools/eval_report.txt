@@ -1,2 +1,0 @@
-mode=keyword top_k=3
-rate=54/54=100%

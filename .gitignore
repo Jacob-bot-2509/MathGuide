@@ -16,3 +16,4 @@ dist/
 # 本地环境变量
 *.local
 .env.local
+backend/tools/eval_report.txt
