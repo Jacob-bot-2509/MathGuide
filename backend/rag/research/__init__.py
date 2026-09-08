@@ -14,14 +14,15 @@ import asyncio
 import re
 import time
 
-from rag import route
+from rag import llm, route
 from rag import search as kb_search
 from rag.index import STOPWORDS, _bigrams
 
-from . import rank, sources
+from . import rank, rerank, sources, synthesize
 from .types import SearchHit, SearchOutcome
 
-__all__ = ["expand_query", "deep_search", "SearchHit", "SearchOutcome"]
+__all__ = ["expand_query", "deep_search", "rerank", "synthesize",
+           "SearchHit", "SearchOutcome"]
 
 # 中文术语 → 英文检索词(查询改写用;LLM 接入后可由模型改写替换,规则层保持离线可用)
 ZH2EN = {
@@ -77,21 +78,26 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0) -> S
     outcome.sources["知识库"] = len(internal)
     outcome.hits.extend(internal)
 
-    async def run(name: str, fn) -> None:
+    async def run(name: str, fn, budget: float) -> None:
         try:
-            hs = await asyncio.wait_for(fn(query), timeout=max(timeout - 2, 5))
+            hs = await asyncio.wait_for(fn(query), timeout=budget)
             outcome.hits.extend(hs)
             outcome.sources[name] = len(hs)
         except Exception as exc:  # noqa: BLE001 单源失败只记录,不影响其他源
             outcome.errors.append(f"{name}:{type(exc).__name__}")
 
+    # 源搜索预算:LLM 配置时给精排留 6s,总预算仍 ≤ timeout(默认 15s)
+    src_budget = max((timeout - 6) if llm.is_configured() else (timeout - 2), 5)
     await asyncio.gather(
-        run("arXiv", sources.search_arxiv),
-        run("SemanticScholar", sources.search_semantic_scholar),
-        run("OpenAlex", sources.search_openalex),
-        run("StackExchange", sources.search_stackexchange),
+        run("arXiv", sources.search_arxiv, src_budget),
+        run("SemanticScholar", sources.search_semantic_scholar, src_budget),
+        run("OpenAlex", sources.search_openalex, src_budget),
+        run("StackExchange", sources.search_stackexchange, src_budget),
     )
 
-    outcome.elapsed = round(time.perf_counter() - started, 2)
     outcome.hits = rank.rank(outcome.hits, terms, question, top_k)
+    # P2b:LLM 精排(配置了模型时;失败自动回退规则排序)
+    if outcome.hits and llm.is_configured():
+        outcome.hits = await rerank.rerank(question, outcome.hits, timeout=6.0)
+    outcome.elapsed = round(time.perf_counter() - started, 2)
     return outcome

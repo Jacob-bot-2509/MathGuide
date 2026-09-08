@@ -136,8 +136,12 @@ def main() -> int:
             fail(f"抽查题「{question}」请求失败:{e}", "查看后端控制台报错")
 
     # 6. LLM / embedding 配置状态(信息项)
-    from rag import llm, embed
-    print(f"{YELLOW}[i ]{RESET} LLM:{'已配置 ' + llm.MODEL if llm.is_configured() else '未配置(知识库直答模式,可正常演示)'}")
+    from rag import embed, llm
+    roles = []
+    for r in ("main", "backup", "deep", "long"):
+        spec = llm.resolve(r)
+        roles.append(f"{r}:{'✓' if spec else '未配'}")
+    print(f"{YELLOW}[i ]{RESET} LLM 角色: {' | '.join(roles)}")
     print(f"{YELLOW}[i ]{RESET} Embedding:{'已配置 ' + embed.MODEL if embed.is_configured() else '未配置(关键词检索模式,可正常演示)'}")
 
     print("=" * 56)

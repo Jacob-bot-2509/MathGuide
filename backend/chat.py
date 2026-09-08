@@ -288,11 +288,22 @@ def _research_reply(outcome: rag.research.SearchOutcome, zh: bool) -> str:
         lines.append(f"🔗 {h.url}" if h.url else "📚 来源:本地知识库")
     if outcome.errors:
         lines.append(f"\n(注:以下来源本次不可达已跳过:{'、'.join(outcome.errors)})")
-    if zh:
-        lines.append("\n(接入 LLM 后将自动综合上述来源生成解答并逐条标注引用,建设中)")
-    else:
-        lines.append("\n(LLM synthesis with per-source citations is under construction)")
     return "\n".join(lines)
+
+
+async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: bool):
+    """研究型 LLM 综合:正文流式 + 引用区(后端拼装,不经过模型);
+    模型失败自动降级为来源列表"""
+    try:
+        async for delta in rag.research.synthesize.synthesize_stream(question, outcome.hits, zh):
+            yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+    except Exception as exc:  # noqa: BLE001
+        print(f"[chat] 研究综合失败,降级为来源列表: {exc}")
+        async for frame in _frames(_research_reply(outcome, zh)):
+            yield frame
+        return
+    async for frame in _frames(rag.research.synthesize.citations_block(outcome.hits, zh)):
+        yield frame
 
 
 async def _frames(text: str):
@@ -359,6 +370,14 @@ async def chat_stream(request: Request) -> StreamingResponse:
     # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走跨论文库深度搜索)
     if rag.route.is_research_intent(question):
         outcome = await rag.research.deep_search(question, top_k=3)
+        # P2c:LLM 已配置 → 综合解答 + 编号引用 + 后端拼装引用区;
+        # 未配置 → 来源列表(现有行为)
+        if outcome.any_hit and rag.llm.is_configured():
+            return StreamingResponse(
+                _gen_research(question, outcome, zh),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
         return _stream_text(_research_reply(outcome, zh))
 
     if rag.llm.is_configured():

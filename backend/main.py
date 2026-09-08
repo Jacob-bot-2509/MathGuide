@@ -20,6 +20,7 @@ from starlette.routing import Route
 
 import auth
 import chat
+import config
 import rag
 
 
@@ -48,6 +49,7 @@ app = Starlette(
     ],
 )
 
-# 新版 starlette 无 on_startup 参数:进程启动即装载数据文件与知识库索引(演示单进程足够)
+# 先装载本地配置(.env.local,key 不入库),再装载数据与知识库(演示单进程足够)
+config.load_env()
 store.init()
 rag.init()

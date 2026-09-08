@@ -96,17 +96,24 @@ set MG_CONTACT_MAIL=xxx@xx.com  # OpenAlex 礼貌池标识(官方建议,提升�
 
 ## 接入真实 LLM
 
-环境变量(无需改代码):
+复制 `backend/.env.local.example` → `backend/.env.local`(已被 gitignore,key 永不入库),
+填入真实 Key 后重启后端即可,无需改代码:
 
-```bash
-set MG_LLM_BASE_URL=https://api.deepseek.com/v1   # 任意 OpenAI 兼容服务
-set MG_LLM_API_KEY=sk-xxxx
-set MG_LLM_MODEL=deepseek-chat                     # 默认 gpt-4o-mini
+```ini
+MG_ALIYUN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+MG_ALIYUN_API_KEY=sk-xxx            # 阿里云百炼(Qwen 系列)
+MG_ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+MG_ZHIPU_API_KEY=xxx                # 智谱开放平台(GLM 系列)
+MG_ROLE_MAIN=aliyun:qwen3.8-flash   # 主力:日常问答 / 改写 / 精排 / 综合
+MG_ROLE_BACKUP=zhipu:glm-5.2        # 备胎:主力失败自动切换(异平台容灾)
+MG_ROLE_DEEP=aliyun:qwen3-235b-a22b # 深答路由(预留)
+MG_ROLE_LONG=aliyun:qwen-long       # 长文档(预留)
 ```
 
-配置后聊天自动切换:检索知识片段 → 组装 system prompt(含资料 + 指令 + 格式约束)
-→ 模型流式输出;调用失败自动降级为知识库直答。检索能力升级(如向量 embedding)
-只需改 `rag/index.py` 的 `search`,接口不变。
+- 配置后:简单问题 → 检索知识 → 模型流式生成;研究型问题 → 跨论文库搜索 →
+  **LLM 精排** → **综合解答 + 编号引用**,引用区由后端用真实元数据拼装(幻觉防线);
+- 任意角色调用失败自动降级:综合失败 → 来源列表,精排失败 → 规则排序,全部失败 → 知识库直答;
+- 检索能力升级(向量 embedding)只需设 `MG_EMBED_*` 环境变量,接口不变。
 
 ## 接口契约
 
