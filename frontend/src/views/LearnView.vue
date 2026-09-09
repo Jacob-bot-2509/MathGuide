@@ -19,6 +19,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
 import { useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
+import SpeechTips from '@/components/chat/SpeechTips.vue'
 import { COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
 import { streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
@@ -58,6 +59,7 @@ const sessions = toRef(sessionsState, 'sessions')
 const activeId = toRef(sessionsState, 'activeId')
 const input = ref('')
 const panelOpen = ref(false)
+const tipsOpen = ref(false)
 const flashMsgId = ref(0)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const listEl = ref<HTMLDivElement | null>(null)
@@ -931,6 +933,9 @@ onBeforeUnmount(() => {
       @delete="deleteHistory"
     />
 
+    <!-- 念法速查贴士(语音输入中点击麦克风旁的📓打开) -->
+    <SpeechTips v-if="tipsOpen" @close="tipsOpen = false" />
+
     <!-- 对话区(当前会话) -->
     <div ref="listEl" class="chat-list" @scroll="onListScroll" @click="onListClick">
       <template v-if="activeSession">
@@ -1003,18 +1008,30 @@ onBeforeUnmount(() => {
         <input ref="imgInputEl" type="file" accept="image/*" hidden @change="onImage" />
         <input ref="camInputEl" type="file" accept="image/*" capture="environment" hidden @change="onImage" />
         <input ref="fileInputEl" type="file" hidden @change="onFile" />
-        <button
-          class="mic"
-          :class="{ listening }"
-          :title="listening ? t('learn.stopListening') : t('learn.voiceInput')"
-          @click="toggleMic"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3z" />
-            <path d="M19 11a7 7 0 0 1-14 0" />
-            <path d="M12 18v3" />
-          </svg>
-        </button>
+        <!-- 语音输入:点一下开始、再点一下完成;进行中麦克风旁弹出📓念法本子,
+             点开可查念法(不打断输入进程) -->
+        <div class="mic-wrap">
+          <button
+            v-if="listening"
+            class="tips-btn"
+            :title="t('tips.title')"
+            @click="tipsOpen = !tipsOpen"
+          >
+            📓
+          </button>
+          <button
+            class="mic"
+            :class="{ listening }"
+            :title="listening ? t('learn.stopListening') : t('learn.voiceInput')"
+            @click="toggleMic"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3z" />
+              <path d="M19 11a7 7 0 0 1-14 0" />
+              <path d="M12 18v3" />
+            </svg>
+          </button>
+        </div>
         <textarea
           ref="inputEl"
           v-model="input"
@@ -1586,6 +1603,42 @@ onBeforeUnmount(() => {
   place-items: center;
   flex-shrink: 0;
   transition: all var(--dur-fast) var(--ease-out);
+}
+
+/* 语音输入中的麦克风与📓念法本子(本子仅语音中弹出) */
+.mic-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tips-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--line-bright);
+  color: var(--cyan);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+  flex-shrink: 0;
+  transition: all var(--dur-fast) var(--ease-out);
+  animation: tips-pop 0.25s var(--ease-out);
+}
+
+.tips-btn:hover {
+  box-shadow: var(--glow-cyan);
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+}
+
+@keyframes tips-pop {
+  from {
+    transform: scale(0.5);
+    opacity: 0;
+  }
 }
 
 .mic svg {

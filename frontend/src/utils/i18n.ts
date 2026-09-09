@@ -104,6 +104,11 @@ const ZH: Dict = {
   'learn.voiceHint': '大模型语音交流(待开发):开启后模型边交流边文本输出',
   'learn.toastStorage': '本地存储空间不足,图片较多的历史记录可能无法完整保存',
 
+  /* 念法速查贴士 */
+  'tips.title': '念法速查',
+  'tips.hint': '照着念,转写更准:点一下麦克风开始念题,再点一下完成。',
+  'tips.langHint': '切换念法语言',
+
   /* 归纳面板 */
   'panel.title': '问题归纳 · QUESTION ARCHIVE',
   'panel.total': '已归纳 {n} 个问题',
@@ -327,6 +332,10 @@ const EN: Dict = {
   'learn.stopListening': 'Stop listening',
   'learn.voiceHint': 'MG voice replies (in development): text replies are still used',
   'learn.toastStorage': 'Local storage is full; history with many images may not be saved completely',
+
+  'tips.title': 'Pronunciation Guide',
+  'tips.hint': 'Read it aloud like this: tap the mic to start dictating, tap again to finish.',
+  'tips.langHint': 'Switch pronunciation language',
 
   'panel.title': 'QUESTION ARCHIVE',
   'panel.total': '{n} questions archived',
