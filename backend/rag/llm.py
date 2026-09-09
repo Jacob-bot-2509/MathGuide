@@ -61,6 +61,11 @@ def is_configured(role: str = "main") -> bool:
     return resolve(role) is not None
 
 
+def pick(role: str) -> str:
+    """按需路由:请求的角色已配置则用之,否则回退 main(链路永不断)"""
+    return role if resolve(role) is not None else "main"
+
+
 async def _stream_once(base: str, key: str, model: str, system: str, user: str,
                        history: list[dict] | None = None) -> AsyncIterator[str]:
     messages: list[dict] = [{"role": "system", "content": system}]

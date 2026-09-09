@@ -107,6 +107,18 @@ def _math_re() -> re.Pattern:
     return re.compile(pattern, re.IGNORECASE)
 
 
+# 深答路由触发词:证明 / 竞赛类问题交给 deep 强模型(未配置自动回退 main)
+_DEEP_MARKERS = ("证明", "求证", "竞赛", "奥数", "难题", "prove", "proof", "olympiad")
+
+
+def _pick_role(question: str) -> str:
+    """按需路由 LLM 角色:证明/竞赛 → deep,其余 main(节省成本,好钢用在刀刃上)"""
+    q = question.lower()
+    role = rag.llm.pick("deep") if any(m in q for m in _DEEP_MARKERS) else "main"
+    print(f"[chat] 角色路由 {role} | {question[:20]}")
+    return role
+
+
 # 会话大脑:同类多条随机轮换,避免机械重复;语气自然、有温度
 CHITCHAT_SETS_ZH: dict[str, list[str]] = {
     "greet": [
@@ -310,7 +322,8 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
     """研究型 LLM 综合:正文流式 + 引用区(后端拼装,不经过模型);
     模型失败自动降级为来源列表"""
     try:
-        async for delta in rag.research.synthesize.synthesize_stream(question, outcome.hits, zh):
+        async for delta in rag.research.synthesize.synthesize_stream(
+                question, outcome.hits, zh, role=rag.llm.pick("deep")):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
         print(f"[chat] 研究综合失败,降级为来源列表: {exc}")
@@ -342,11 +355,11 @@ def _stream_text(text: str) -> StreamingResponse:
 
 
 async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]],
-                   history: list[dict] | None = None):
+                   history: list[dict] | None = None, role: str = "main"):
     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死"""
     try:
         system = rag.build_system(chunks, cmd, zh=_is_chinese(prompt))
-        async for delta in rag.llm.stream_chat(system, prompt, history=history):
+        async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型侧错误不区分类型,统一降级
         print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
@@ -381,7 +394,7 @@ def _nav_guide_system():
 async def _gen_nav_list(question: str, zh: bool):
     """章节导航:只输出教材章节划分列表(不展示内容);失败时给出明确提示"""
     try:
-        async for delta in rag.llm.stream_chat(_nav_system(), question[:6000]):
+        async for delta in rag.llm.stream_chat(_nav_system(), question[:6000], role=rag.llm.pick("long")):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
         print(f"[chat] 章节导航调用失败: {exc}")
@@ -393,7 +406,7 @@ async def _gen_nav_list(question: str, zh: bool):
 async def _gen_nav_guide(question: str, zh: bool):
     """章节指引:用户点击章节后给出该章大概知识指引,末尾附「返回」按钮行"""
     try:
-        async for delta in rag.llm.stream_chat(_nav_guide_system(), question[:6000]):
+        async for delta in rag.llm.stream_chat(_nav_guide_system(), question[:6000], role=rag.llm.pick("long")):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
         print(f"[chat] 章节指引调用失败: {exc}")
@@ -411,7 +424,7 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
         "不要搜索外部资料,不要编造文件里没有的内容;用与文件内容相同的语言回应。"
     ).format(name=name)
     try:
-        async for delta in rag.llm.stream_chat(system, body[:3000]):
+        async for delta in rag.llm.stream_chat(system, body[:3000], role=rag.llm.pick("long")):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型侧错误统一降级,不让前端假死
         print(f"[chat] 粘贴文本 LLM 调用失败,降级为接收回执: {exc}")
@@ -482,7 +495,8 @@ async def chat_stream(request: Request) -> StreamingResponse:
 
     if rag.llm.is_configured():
         return StreamingResponse(
-            _gen_llm(question, cmd, chunks, history=_validated_history(body.get("history"))),
+            _gen_llm(question, cmd, chunks, history=_validated_history(body.get("history")),
+                     role=_pick_role(question)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
