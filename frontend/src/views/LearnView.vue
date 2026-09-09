@@ -40,6 +40,13 @@ import { showToast } from '@/utils/toast'
 
 const router = useRouter()
 
+/* 文件导入上限(拖拽一次最多 3 个;粘贴文本截断上限,保护本地存储与请求体积) */
+const MAX_DROP_FILES = 3
+const PASTE_TEXT_MAX = 3000
+
+/** 触屏设备判定:手机/平板用「粘贴导入」替代拖拽(拖拽仅限电脑端) */
+const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
+
 /* 会话上下文栈(共享 store:归档与回收站恢复基于同一份数据) */
 const sessions = toRef(sessionsState, 'sessions')
 const activeId = toRef(sessionsState, 'activeId')
@@ -142,13 +149,14 @@ function autoGrow() {
 }
 
 /** 组装最近几轮历史(供模型理解上下文):去掉刚发的本条用户消息
-    (它作为 prompt 单独传递),排除附件与流式中的消息,单条截断 */
+    (它作为 prompt 单独传递),排除流式中的消息,单条截断;
+    粘贴导入的文本文件以正文入历史,后续追问可基于文件内容作答 */
 function buildHistory(session: ChatSession): ChatMeta['history'] {
   return session.messages
     .slice(0, -1)
-    .filter((m) => !m.streaming && !m.attachment && m.content)
+    .filter((m) => !m.streaming && m.content)
     .slice(-8)
-    .map((m) => ({ role: m.role, content: m.content.slice(0, 400) }))
+    .map((m) => ({ role: m.role, content: (m.attachment?.text || m.content).slice(0, 400) }))
 }
 
 /** 让某会话的一条助手消息开始流式接收回复(输出在所属会话内进行,切换界面不中断) */
@@ -390,13 +398,7 @@ async function onImage(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (!file) return
-  try {
-    const url = await compressImage(file, 800)
-    attachMessage({ kind: 'image', name: file.name, url, size: file.size }, file.name)
-  } catch {
-    showToast(t('acc.toastAvatarFail'))
-  }
+  if (file) await importImageFile(file)
 }
 
 function onFile(e: Event) {
@@ -405,6 +407,108 @@ function onFile(e: Event) {
   input.value = ''
   if (!file) return
   attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name)
+}
+
+/** 图片统一入库:压缩为缩略 dataURL 后作为图片附件发送(相册/拍照/拖入/粘贴共用) */
+async function importImageFile(file: File) {
+  try {
+    const url = await compressImage(file, 800)
+    attachMessage({ kind: 'image', name: file.name, url, size: file.size }, file.name)
+  } catch {
+    showToast(t('acc.toastAvatarFail'))
+  }
+}
+
+/* ---------- 拖拽导入(电脑端:从桌面/资源管理器拖文件进对话框) ---------- */
+
+const dragging = ref(false)
+let dragHideTimer: ReturnType<typeof setTimeout> | null = null
+
+function onDragOver(e: DragEvent) {
+  if (isTouchDevice || !e.dataTransfer?.types.includes('Files')) return
+  e.preventDefault()
+  dragging.value = true
+  if (dragHideTimer) {
+    clearTimeout(dragHideTimer)
+    dragHideTimer = null
+  }
+}
+
+/** dragleave 在子元素间穿梭时会频繁触发:延迟收尾,避免遮罩闪烁 */
+function onDragLeave() {
+  if (dragHideTimer) clearTimeout(dragHideTimer)
+  dragHideTimer = setTimeout(() => (dragging.value = false), 120)
+}
+
+async function onDropFiles(e: DragEvent) {
+  if (isTouchDevice) return
+  if (dragHideTimer) clearTimeout(dragHideTimer)
+  dragging.value = false
+  const files = Array.from(e.dataTransfer?.files ?? [])
+  if (!files.length) return
+  e.preventDefault()
+  if (files.length > MAX_DROP_FILES) {
+    showToast(t('learn.toastDropTooMany'))
+    return
+  }
+  for (const f of files) {
+    if (f.type.startsWith('image/')) await importImageFile(f)
+    else attachMessage({ kind: 'file', name: f.name, size: f.size }, f.name)
+  }
+}
+
+/* ---------- 粘贴导入(移动端为主:剪贴板图片/文本 → 附件) ---------- */
+
+/** 输入框粘贴到剪贴板文件(截图/复制图片)时:不进输入框,直接作为附件导入 */
+function onPaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  for (const item of items) {
+    if (item.kind !== 'file') continue
+    const f = item.getAsFile()
+    if (!f) continue
+    e.preventDefault()
+    if (f.type.startsWith('image/')) importImageFile(f)
+    else attachMessage({ kind: 'file', name: f.name, size: f.size }, f.name)
+    return
+  }
+}
+
+/** 移动端「粘贴导入」按钮:优先读剪贴板图片,退而读文本
+    (作为 .txt 附件导入,正文随提示词交给模型阅读理解) */
+async function pasteImport() {
+  attachOpen.value = false
+  // 剪贴板图片(截图/复制的图片)
+  try {
+    if (navigator.clipboard?.read) {
+      const items = await navigator.clipboard.read()
+      for (const item of items) {
+        const imgType = item.types.find((ty) => ty.startsWith('image/'))
+        if (!imgType) continue
+        const blob = await item.getType(imgType)
+        const ext = imgType.split('/')[1] || 'png'
+        await importImageFile(new File([blob], `粘贴图片.${ext}`, { type: imgType }))
+        return
+      }
+    }
+  } catch {
+    /* 无图片或未授权,继续尝试文本 */
+  }
+  // 剪贴板文本(复制的文档/题目/论文片段)
+  try {
+    const text = (await navigator.clipboard.readText()).trim()
+    if (!text) {
+      showToast(t('learn.toastPasteEmpty'))
+      return
+    }
+    const capped = text.slice(0, PASTE_TEXT_MAX)
+    attachMessage(
+      { kind: 'file', name: '粘贴文本.txt', size: new Blob([capped]).size, text: capped },
+      '粘贴文本.txt',
+    )
+  } catch {
+    showToast(t('learn.toastPasteEmpty'))
+  }
 }
 
 /** 附件消息:留在当前会话(未分类会话归入未归类),MG 给出附件接收回复 */
@@ -428,7 +532,9 @@ function attachMessage(attachment: ChatAttachment, content: string) {
   session.messages.push(reply)
   // 同上:流式期间通过响应式代理更新,界面才能实时刷新
   const live = session.messages[session.messages.length - 1]
-  scheduleStream(session, live, `[attach:${attachment.kind}]${attachment.name}`, 450, {
+  // 契约 [attach:image|file]文件名;粘贴导入的文本带正文(空行分隔),后端交 LLM 阅读理解
+  const attachPrompt = `[attach:${attachment.kind}]${attachment.name}${attachment.text ? `\n\n${attachment.text}` : ''}`
+  scheduleStream(session, live, attachPrompt, 450, {
     sessionId: session.id,
     categoryKey: session.cat?.key,
     history: buildHistory(session),
@@ -565,7 +671,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="learn">
+  <div class="learn" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDropFiles">
     <header class="chat-header">
       <button class="back" @click="router.push('/home')">{{ t('common.back') }}</button>
       <div class="title-box">
@@ -616,12 +722,18 @@ onBeforeUnmount(() => {
                 :src="m.attachment.url"
                 :alt="m.attachment.name"
               />
-              <div v-else class="attach-file">
-                <span class="af-icon">📄</span>
-                <span class="af-meta">
-                  <span class="af-name">{{ m.attachment.name }}</span>
-                  <span class="af-size">{{ fmtSize(m.attachment.size) }}</span>
-                </span>
+              <div v-else>
+                <div class="attach-file">
+                  <span class="af-icon">📄</span>
+                  <span class="af-meta">
+                    <span class="af-name">{{ m.attachment.name }}</span>
+                    <span class="af-size">{{ fmtSize(m.attachment.size) }}</span>
+                  </span>
+                </div>
+                <!-- 粘贴导入的文本:气泡内展示正文预览 -->
+                <div v-if="m.attachment.text" class="af-preview">
+                  {{ m.attachment.text.slice(0, 200) }}{{ m.attachment.text.length > 200 ? '…' : '' }}
+                </div>
               </div>
             </div>
             <span v-if="m.role === 'user' && m.cmd" class="cmd-tag">{{ m.cmd }}</span>
@@ -639,6 +751,11 @@ onBeforeUnmount(() => {
       </template>
     </div>
 
+    <!-- 拖拽导入遮罩(电脑端):pointer-events 穿透,事件仍落在 .learn 上 -->
+    <div v-if="dragging" class="drop-mask">
+      <div class="drop-box">📂 {{ t('learn.dropHint') }}</div>
+    </div>
+
     <!-- 输入区:输入行 + 指令栏 -->
     <footer class="input-bar">
       <div class="input-row">
@@ -652,6 +769,8 @@ onBeforeUnmount(() => {
             <button class="attach-btn" @click="pickAlbum()">🖼️ {{ t('learn.attachAlbum') }}</button>
             <button class="attach-btn" @click="pickCamera()">📷 {{ t('learn.attachCamera') }}</button>
             <button class="attach-btn" @click="pickFile()">📄 {{ t('learn.attachFile') }}</button>
+            <!-- 移动端专属:从剪贴板粘贴导入(复制图片/文档 → 一键导入) -->
+            <button v-if="isTouchDevice" class="attach-btn" @click="pasteImport()">📋 {{ t('learn.attachPaste') }}</button>
           </div>
         </div>
         <input ref="imgInputEl" type="file" accept="image/*" hidden @change="onImage" />
@@ -677,6 +796,7 @@ onBeforeUnmount(() => {
           :placeholder="listening ? t('learn.listening') : t('learn.placeholder')"
           @input="autoGrow"
           @keydown.enter.exact.prevent="send()"
+          @paste="onPaste"
         ></textarea>
         <button class="send" :disabled="busy" @click="send()">{{ busy ? t('learn.generating') : t('learn.send') }}</button>
       </div>
@@ -707,6 +827,7 @@ onBeforeUnmount(() => {
   height: 100vh;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .chat-header {
@@ -1149,6 +1270,47 @@ onBeforeUnmount(() => {
   font-size: 11px;
   color: var(--text-dim);
   font-family: var(--font-tech);
+}
+
+.af-preview {
+  margin-top: 6px;
+  max-width: 420px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: var(--bg-void);
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---------- 拖拽导入遮罩 ---------- */
+.drop-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg-void) 72%, transparent);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.drop-box {
+  padding: 34px 56px;
+  border: 2px dashed var(--cyan);
+  border-radius: 14px;
+  color: var(--cyan);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  background: color-mix(in srgb, var(--cyan) 6%, transparent);
+  box-shadow: var(--glow-cyan);
 }
 
 /* ---------- 语音 ---------- */

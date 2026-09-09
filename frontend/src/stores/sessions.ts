@@ -12,6 +12,8 @@ export interface ChatAttachment {
   /** 图片缩略 dataURL(文件仅存元信息) */
   url?: string
   size?: number
+  /** 粘贴导入的文本文件正文(截断保存,随提示词发给模型阅读理解) */
+  text?: string
 }
 
 export interface ChatMsg {

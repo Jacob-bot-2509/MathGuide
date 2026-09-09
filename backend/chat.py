@@ -358,6 +358,24 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
     yield "data: [DONE]\n\n"
 
 
+async def _gen_attach_llm(name: str, body: str, zh: bool):
+    """粘贴导入的文本文件:正文交 LLM 阅读理解,概括主题并引导提问;失败降级为接收回执"""
+    system = (
+        "用户通过复制粘贴导入了一个文本文件「{name}」。请阅读内容后简短回应:"
+        "先用一两句话概括文件主题,再告诉用户可以针对内容提问(如总结、讲解、翻译)。"
+        "不要搜索外部资料,不要编造文件里没有的内容;用与文件内容相同的语言回应。"
+    ).format(name=name)
+    try:
+        async for delta in rag.llm.stream_chat(system, body[:3000]):
+            yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+    except Exception as exc:  # noqa: BLE001 模型侧错误统一降级,不让前端假死
+        print(f"[chat] 粘贴文本 LLM 调用失败,降级为接收回执: {exc}")
+        note = (ATTACH_FILE_ZH if zh else ATTACH_FILE_EN).format(name=name, size="—")
+        yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
+        return
+    yield "data: [DONE]\n\n"
+
+
 async def chat_stream(request: Request) -> StreamingResponse:
     require_auth(request)  # 401: {"detail": "unauthorized"}
 
@@ -369,14 +387,21 @@ async def chat_stream(request: Request) -> StreamingResponse:
     if not prompt:
         return _stream_text(WELCOME_ZH)
 
-    # 附件消息(前缀契约 [attach:image|file]文件名)
-    m = re.match(r"^\[attach:(image|file)\](.+)$", prompt)
+    # 附件消息(前缀契约 [attach:image|file]文件名;粘贴导入的文本文件带正文:
+    # [attach:file]名\n\n内容 —— 正文交给 LLM 阅读理解,旧格式仍走接收回执)
+    m = re.match(r"^\[attach:(image|file)\]([^\n]+)(?:\n\n([\s\S]+))?$", prompt)
     if m:
-        kind, name = m.group(1), m.group(2).strip()
+        kind, name, body = m.group(1), m.group(2).strip(), (m.group(3) or "").strip()
+        if body and rag.llm.is_configured():
+            return StreamingResponse(
+                _gen_attach_llm(name, body, zh=_is_chinese(prompt)),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
         if _is_chinese(prompt):
             text = (ATTACH_IMAGE_ZH if kind == "image" else ATTACH_FILE_ZH).format(name=name, size="—")
         else:
-            text = ATTACH_IMAGE_EN if kind == "image" else ATTACH_FILE_EN
+            text = (ATTACH_IMAGE_EN if kind == "image" else ATTACH_FILE_EN).format(name=name, size="—")
         return _stream_text(text)
 
     # RAG:检索知识片段 → 路由 → LLM 或直答
