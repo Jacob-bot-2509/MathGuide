@@ -358,6 +358,51 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
     yield "data: [DONE]\n\n"
 
 
+# 章节链接契约:[章节名](cmd://chapter/<名称>) —— 前端 MathText 渲染为可点击章节;
+# 「返回」按钮 [返回](cmd://back) 由后端拼装(不经过模型,防止格式漂移)
+def _nav_system():
+    return (
+        "你是教材章节导航助手。用户上传了一本教材,教材内容已随提问给出。"
+        "请只输出该教材的章节划分列表:每一章单独一行,格式严格为 "
+        "[第N章 章节名](cmd://chapter/第N章章节名),链接地址内不要含空格、括号或标点。"
+        "不要展示任何章节内容,不要解释,不要输出列表以外的任何文字。"
+        "若文本不像一本教材,按其内容结构推断章节并同样只输出章节列表。"
+    )
+
+
+def _nav_guide_system():
+    return (
+        "你是教材章节导航助手。教材内容与用户点击的章节已随提问给出。"
+        "请针对该章节输出大概知识指引:该章学什么(核心概念)、重点与难点、"
+        "与前后章节的联系、学习建议。条目式回答,与用户提问同语言,控制在 150 字以内。"
+    )
+
+
+async def _gen_nav_list(question: str, zh: bool):
+    """章节导航:只输出教材章节划分列表(不展示内容);失败时给出明确提示"""
+    try:
+        async for delta in rag.llm.stream_chat(_nav_system(), question[:6000]):
+            yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+    except Exception as exc:  # noqa: BLE001
+        print(f"[chat] 章节导航调用失败: {exc}")
+        yield f"data: {json.dumps('⚠ 章节导航调用失败,请稍后重试。', ensure_ascii=False)}\n\n"
+        return
+    yield "data: [DONE]\n\n"
+
+
+async def _gen_nav_guide(question: str, zh: bool):
+    """章节指引:用户点击章节后给出该章大概知识指引,末尾附「返回」按钮行"""
+    try:
+        async for delta in rag.llm.stream_chat(_nav_guide_system(), question[:6000]):
+            yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+    except Exception as exc:  # noqa: BLE001
+        print(f"[chat] 章节指引调用失败: {exc}")
+        yield f"data: {json.dumps('⚠ 章节指引调用失败,请稍后重试。', ensure_ascii=False)}\n\n"
+        return
+    yield f"data: {json.dumps('\n\n[返回](cmd://back)', ensure_ascii=False)}\n\n"
+    yield "data: [DONE]\n\n"
+
+
 async def _gen_attach_llm(name: str, body: str, zh: bool):
     """粘贴导入的文本文件:正文交 LLM 阅读理解,概括主题并引导提问;失败降级为接收回执"""
     system = (
@@ -407,6 +452,18 @@ async def chat_stream(request: Request) -> StreamingResponse:
     # RAG:检索知识片段 → 路由 → LLM 或直答
     question = _strip_meta(prompt, cmd)
     zh = _is_chinese(question)
+
+    # 章节导航(教材正文随提示词携带):不检索知识库、不走研究路由
+    if cmd in ("章节知识导航", "章节知识指引"):
+        if not rag.llm.is_configured():
+            return _stream_text("章节导航需要已配置 LLM,当前未配置。")
+        gen = _gen_nav_list if cmd == "章节知识导航" else _gen_nav_guide
+        return StreamingResponse(
+            gen(question, zh),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     chunks = rag.search(question, top_k=3)
 
     # P0/P1 路由:研究型提问优先于知识直答

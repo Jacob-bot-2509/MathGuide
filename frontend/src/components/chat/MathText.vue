@@ -65,11 +65,22 @@ function parseInline(src: string): Seg[] {
     last = m.index + m[0].length
   }
   segs.push(...parseBold(src.slice(last)))
-  return segs
+  // 纯文本段再拆行内链接(章节胶囊 / 返回按钮等可点击载体)
+  const out: Seg[] = []
+  for (const s of segs) {
+    if (s.type !== 'text') {
+      out.push(s)
+      continue
+    }
+    out.push(...parseInlineLinks(s.value))
+  }
+  return out
 }
 
-// 行内 markdown 链接:[文字](url);解析失败按纯文本保留
-const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g
+// 行内 markdown 链接:[文字](url);解析失败按纯文本保留。
+// 支持 cmd:// 内部契约链接(章节跳转 / 「返回」按钮),http(s) 为常规外链;
+// cmd 链接允许空格(章节名带空格时仍可点击),http 链接保持常规约束
+const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|cmd:\/\/[^)]+)\)/g
 
 function parseInlineLinks(src: string): Seg[] {
   const segs: Seg[] = []
@@ -131,6 +142,20 @@ function parseBlock(src: string): Seg[] {
   return segs
 }
 
+/** 链接节点:http(s) 外链 → <a> 新窗口打开;cmd:// 内部契约 → 可点击按钮
+    (data-mg-cmd 携带契约地址,点击事件冒泡到对话列表统一处理) */
+function renderLink(key: number | string, value: string, href: string | undefined): VNode {
+  if (href?.startsWith('cmd://')) {
+    if (href === 'cmd://back') {
+      // 「返回」按钮:另起一行、右对齐的醒目黄框
+      return h('div', { key, class: 'back-row' },
+        h('button', { key, class: 'back-btn', type: 'button', 'data-mg-cmd': href }, value))
+    }
+    return h('button', { key, class: 'seg-cmd', type: 'button', 'data-mg-cmd': href }, value)
+  }
+  return h('a', { key, class: 'seg-link', href, target: '_blank', rel: 'noopener' }, value)
+}
+
 function buildNodes(text: string): VNode[] {
   return parse(text).map((s, i) => {
     switch (s.type) {
@@ -145,13 +170,13 @@ function buildNodes(text: string): VNode[] {
       case 'mathd':
         return h('span', { key: i, class: 'seg-mathd', innerHTML: renderKatex(s.value, true) })
       case 'link':
-        return h('a', { key: i, class: 'seg-link', href: s.href, target: '_blank', rel: 'noopener' }, s.value)
+        return renderLink(i, s.value, s.href)
       case 'hr':
         return h('hr', { key: i, class: 'seg-hr' })
       case 'quote':
         return h('div', { key: i, class: 'seg-quote' }, parseInlineLinks(s.value).map((x, j) =>
           x.type === 'link'
-            ? h('a', { key: j, class: 'seg-link', href: x.href, target: '_blank', rel: 'noopener' }, x.value)
+            ? renderLink(j, x.value, x.href)
             : h('span', { key: j }, x.value)))
     }
   })
@@ -206,6 +231,49 @@ export default defineComponent({
 
 .seg-link:hover {
   color: var(--text-hi);
+}
+
+/* 可点击章节胶囊(章节导航列表) */
+.seg-cmd {
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 3px 12px;
+  border: 1px solid var(--line-bright);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cyan) 8%, transparent);
+  color: var(--cyan);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.seg-cmd:hover {
+  background: color-mix(in srgb, var(--cyan) 18%, transparent);
+  box-shadow: var(--glow-cyan);
+}
+
+/* 「返回」按钮行:章节指引末尾右对齐的醒目黄框 */
+.back-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.back-btn {
+  padding: 4px 16px;
+  border: 1px solid #ffd166;
+  border-radius: 6px;
+  background: rgba(255, 209, 102, 0.12);
+  color: #ffd166;
+  font-size: 12px;
+  cursor: pointer;
+  letter-spacing: 0.1em;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.back-btn:hover {
+  background: rgba(255, 209, 102, 0.25);
+  box-shadow: 0 0 10px rgba(255, 209, 102, 0.4);
 }
 
 /* 分隔线(正文与引用区之间) */

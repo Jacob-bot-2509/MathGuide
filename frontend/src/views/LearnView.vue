@@ -47,6 +47,10 @@ const PASTE_TEXT_MAX = 3000
 /** 触屏设备判定:手机/平板用「粘贴导入」替代拖拽(拖拽仅限电脑端) */
 const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
 
+/* 文本类文件:上传时读取正文随附件保存,章节导航等指令可基于教材内容工作 */
+const FILE_TEXT_EXT = /\.(txt|md|markdown)$/i
+const FILE_TEXT_MAX = 6000
+
 /* 会话上下文栈(共享 store:归档与回收站恢复基于同一份数据) */
 const sessions = toRef(sessionsState, 'sessions')
 const activeId = toRef(sessionsState, 'activeId')
@@ -238,7 +242,7 @@ function cancelReply(id: number) {
 }
 
 function send(text?: string, cmd?: string) {
-  const content = (text ?? input.value).trim()
+  let content = (text ?? input.value).trim()
   if (!content) return
 
   // 寒暄/闲聊:不分类、不切换或新开会话,只就话答话
@@ -266,6 +270,12 @@ function send(text?: string, cmd?: string) {
     }
   }
 
+  // 章节知识导航:会话里已有教材文本时随指令携带正文,模型只划分章节列表
+  if (cmd === '章节知识导航') {
+    const tb = latestTextbookText(session)
+    if (tb) content = `${content}\n\n<教材文本>:\n${tb}`
+  }
+
   // 目标会话仍在生成回复时暂不接收新问题(每会话一次一问);
   // 例外:仅剩首条问候流未完成 → 直接打断问候,让位给真实提问。
   // 被打断时给出提示并保留输入内容,避免问题被静默丢弃
@@ -288,7 +298,11 @@ function send(text?: string, cmd?: string) {
   // prompt 原文随流发送;指令与归属随 ChatMeta 传给后端(契约 ChatRequest);
   // 最近几轮历史一并携带,模型可理解上下文
   const history = buildHistory(session)
-  const reply: ChatMsg = { id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true }
+  const reply: ChatMsg = {
+    id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true,
+    // 章节列表回复打标:「返回」按钮跳转的目标
+    nav: cmd === '章节知识导航' ? 'list' : undefined,
+  }
   session.messages.push(reply)
   // 流式回调必须操作响应式代理(数组里读出的那条),而不是 push 进去的裸对象;
   // 裸对象上的修改不触发 Vue 更新 → 界面会"凝固"到下一次交互才刷新
@@ -372,6 +386,67 @@ function jumpTo(id: number) {
   })
 }
 
+/* ---------- 章节导航交互(点击章节 → 知识指引;返回 → 回章节列表) ---------- */
+
+/** 会话内最新的教材文本(粘贴导入或上传的文本文件),供章节导航使用 */
+function latestTextbookText(session: ChatSession): string {
+  for (const m of [...session.messages].reverse()) {
+    if (m.role === 'user' && m.attachment?.text) return m.attachment.text
+  }
+  return ''
+}
+
+/** 对话区点击:承接 MathText 渲染的 cmd:// 契约按钮(章节胶囊 / 返回黄框) */
+function onListClick(e: MouseEvent) {
+  const el = (e.target as HTMLElement).closest<HTMLElement>('[data-mg-cmd]')
+  if (!el) return
+  const url = el.dataset.mgCmd || ''
+  if (url === 'cmd://back') {
+    backToNavList()
+    return
+  }
+  if (url.startsWith('cmd://chapter/')) {
+    onNavChapter(decodeURIComponent(url.slice('cmd://chapter/'.length)))
+  }
+}
+
+/** 点击章节:已讲解过 → 直接跳转到已生成的指引;未讲解 → 请求该章知识指引 */
+function onNavChapter(name: string) {
+  const session = activeSession.value
+  if (!session) return
+  const done = session.messages.find((m) => m.role === 'assistant' && m.navGuideFor === name && m.content)
+  if (done) {
+    jumpTo(done.id)
+    return
+  }
+  if (session.messages.some((m) => m.streaming)) {
+    showToast(t('learn.toastBusy'))
+    return
+  }
+  const tb = latestTextbookText(session)
+  if (!tb) return
+  const reply: ChatMsg = {
+    id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true,
+    navGuideFor: name,
+  }
+  session.messages.push(reply)
+  const live = session.messages[session.messages.length - 1]
+  scheduleStream(session, live, `请给出「${name}」这一章的大概知识指引\n\n<教材文本>:\n${tb}`, 450, {
+    cmd: '章节知识指引',
+    sessionId: session.id,
+    categoryKey: session.cat?.key,
+    history: buildHistory(session),
+  })
+}
+
+/** 「返回」:跳到本会话的章节列表(不重新生成) */
+function backToNavList() {
+  const session = activeSession.value
+  if (!session) return
+  const list = [...session.messages].reverse().find((m) => m.role === 'assistant' && m.nav === 'list')
+  if (list) jumpTo(list.id)
+}
+
 /* ---------- 附件上传(相册 / 拍照 / 文件) ---------- */
 
 const attachOpen = ref(false)
@@ -405,7 +480,21 @@ function onFile(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (!file) return
+  if (file) attachFileItem(file)
+}
+
+/** 文件入库:文本类文件(.txt/.md)读取正文随附件保存,其余仅元信息 */
+async function attachFileItem(file: File) {
+  if (FILE_TEXT_EXT.test(file.name)) {
+    try {
+      const raw = await file.text()
+      const capped = raw.trim().slice(0, FILE_TEXT_MAX)
+      attachMessage({ kind: 'file', name: file.name, size: file.size, text: capped }, file.name)
+      return
+    } catch {
+      /* 读取失败按普通文件处理 */
+    }
+  }
   attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name)
 }
 
@@ -453,7 +542,7 @@ async function onDropFiles(e: DragEvent) {
   }
   for (const f of files) {
     if (f.type.startsWith('image/')) await importImageFile(f)
-    else attachMessage({ kind: 'file', name: f.name, size: f.size }, f.name)
+    else await attachFileItem(f)
   }
 }
 
@@ -469,7 +558,7 @@ function onPaste(e: ClipboardEvent) {
     if (!f) continue
     e.preventDefault()
     if (f.type.startsWith('image/')) importImageFile(f)
-    else attachMessage({ kind: 'file', name: f.name, size: f.size }, f.name)
+    else attachFileItem(f)
     return
   }
 }
@@ -705,7 +794,7 @@ onBeforeUnmount(() => {
     />
 
     <!-- 对话区(当前会话) -->
-    <div ref="listEl" class="chat-list" @scroll="onListScroll">
+    <div ref="listEl" class="chat-list" @scroll="onListScroll" @click="onListClick">
       <template v-if="activeSession">
         <div
           v-for="m in activeSession.messages"

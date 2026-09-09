@@ -26,6 +26,10 @@ export interface ChatMsg {
   chitchat?: boolean
   streaming?: boolean
   thinking?: boolean
+  /** 章节导航:标记该回复为章节列表(「返回」跳转目标) */
+  nav?: 'list'
+  /** 章节指引:记录本回复讲解的章节(重复点击直接跳转,不重新生成) */
+  navGuideFor?: string
 }
 
 export interface ChatSession {
@@ -46,6 +50,8 @@ interface PersistedMsg {
   cmd?: string
   attachment?: ChatMsg['attachment']
   chitchat?: boolean
+  nav?: ChatMsg['nav']
+  navGuideFor?: string
 }
 
 interface Persisted {
@@ -94,6 +100,7 @@ export function persistSessions(): boolean {
           .map((m) => ({
             id: m.id, role: m.role, content: m.content, cmd: m.cmd,
             attachment: m.attachment, chitchat: m.chitchat,
+            nav: m.nav, navGuideFor: m.navGuideFor,
           }))
           .slice(-120),
       })),

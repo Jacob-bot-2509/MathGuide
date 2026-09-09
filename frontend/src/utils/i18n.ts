@@ -469,7 +469,7 @@ const CMD_NAMES: Record<string, [string, string]> = {
 const CMD_HINTS: Record<string, [string, string]> = {
   概念动画演示: ['输入想看的数学概念,演示其几何意义', 'Enter a concept to see its geometric meaning animated'],
   例题精讲: ['输入题目或知识点,给出例题与讲解', 'Enter a topic to get worked examples'],
-  章节知识导航: ['查看高等数学章节知识结构', 'Browse the chapter structure of higher mathematics'],
+  章节知识导航: ['上传或粘贴教材后,一键划分章节;点击章节查看知识指引', 'Upload or paste a textbook to get its chapter list; tap a chapter for guidance'],
   错题归纳: ['粘贴错题,归纳错误原因与易错点', 'Paste a wrong answer to analyze its causes'],
   公式查询手册: ['查询常用公式与定理', 'Look up common formulas and theorems'],
 }
