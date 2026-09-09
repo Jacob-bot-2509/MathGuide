@@ -4,7 +4,7 @@
  * streamReply 签名固定,可额外携带会话元数据(契约 ChatRequest)。
  */
 import type { ChatRequest, ChatStreamHandle, StreamCallbacks } from '@/api/types'
-import { post, postSSE } from '@/api/http'
+import { postSSE } from '@/api/http'
 import { getToken, logout as clearUser } from '@/stores/user'
 import router from '@/router'
 import { showToast } from '@/utils/toast'
@@ -25,15 +25,32 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-/** 语音识别文本 → 数学符号转写(口语念法 → Unicode/LaTeX);失败原样返回,不阻断输入 */
-export async function speechToMath(text: string): Promise<string> {
-  try {
-    const res = await post<{ text: string }>('/api/speech/math', { text }, authHeaders())
-    if (res && res.text && res.text !== text) return res.text
-  } catch {
-    /* 转写失败回退原文 */
-  }
-  return text
+/** 语音识别文本 → 数学符号转写(SSE 流式):首帧即上屏,逐帧回调累计全文;
+    失败走 onFail(由调用方回退原文),不阻断输入 */
+export function speechToMath(
+  text: string,
+  cb: { onDelta: (converted: string) => void; onFail: () => void },
+): void {
+  let acc = ''
+  postSSE(
+    '/api/speech/math',
+    { text },
+    {
+      onDelta: (chunk) => {
+        acc += chunk
+        cb.onDelta(acc)
+      },
+      onDone: () => {
+        if (!acc) cb.onFail()
+      },
+      onError: () => {
+        cb.onFail()
+      },
+    },
+    { headers: authHeaders() },
+  ).catch(() => {
+    /* 网络失败已由 onError 通知 */
+  })
 }
 
 export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta): ChatStreamHandle {

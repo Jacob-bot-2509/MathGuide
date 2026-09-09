@@ -67,7 +67,8 @@ def pick(role: str) -> str:
 
 
 async def _stream_once(base: str, key: str, model: str, system: str, user: str,
-                       history: list[dict] | None = None) -> AsyncIterator[str]:
+                       history: list[dict] | None = None,
+                       max_tokens: int | None = None) -> AsyncIterator[str]:
     messages: list[dict] = [{"role": "system", "content": system}]
     if history:
         messages.extend(history)
@@ -77,6 +78,8 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
         "messages": messages,
         "stream": True,
     }
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=60) as client:
         async with client.stream("POST", f"{base.rstrip('/')}/chat/completions",
@@ -98,14 +101,16 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
 
 async def stream_chat(system: str, user: str, role: str = "main",
                       fallback: bool = True,
-                      history: list[dict] | None = None) -> AsyncIterator[str]:
+                      history: list[dict] | None = None,
+                      max_tokens: int | None = None) -> AsyncIterator[str]:
     """流式对话;role 失败且 fallback 时自动切 backup(异平台容灾)。
-    history:最近几轮对话 [{role, content}](调用方已校验/截断)"""
+    history:最近几轮对话 [{role, content}](调用方已校验/截断);
+    max_tokens:约束输出长度(短任务转写/复核用,更快收尾)"""
     spec = resolve(role)
     if spec is None:
         raise RuntimeError(f"LLM 角色 {role} 未配置")
     try:
-        async for delta in _stream_once(*spec, system, user, history):
+        async for delta in _stream_once(*spec, system, user, history, max_tokens):
             yield delta
         return
     except Exception:
@@ -115,5 +120,5 @@ async def stream_chat(system: str, user: str, role: str = "main",
         if backup is None:
             raise
         print(f"[llm] {role} 调用失败,切换到 backup")
-        async for delta in _stream_once(*backup, system, user, history):
+        async for delta in _stream_once(*backup, system, user, history, max_tokens):
             yield delta

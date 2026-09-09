@@ -848,16 +848,21 @@ function toggleMic() {
   }
   sr.onend = () => {
     listening.value = false
-    // 用户主动点停且有新识别内容 → 把口语数学转写为数学符号(可手动修改后发送)
+    // 用户主动点停且有新识别内容 → 流式转写:首帧即替换输入框,失败回退原文
     if (srStopToConvert) {
       srStopToConvert = false
       const text = input.value
       if (text.trim() && text !== srBaseText) {
-        showToast(t('learn.toastConverting'))
-        speechToMath(text).then((converted) => {
-          input.value = converted
-          autoGrow()
-          if (converted !== text) showToast(t('learn.toastConverted'))
+        speechToMath(text, {
+          onDelta: (converted) => {
+            input.value = converted
+            autoGrow()
+          },
+          onFail: () => {
+            input.value = text
+            autoGrow()
+            showToast(t('learn.toastConvertFail'))
+          },
         })
       }
     }

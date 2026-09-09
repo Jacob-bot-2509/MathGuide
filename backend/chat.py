@@ -620,14 +620,15 @@ async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
     return _meter(resp, rec, len(prompt), cmd or "", meta)
 
 
-async def speech_to_math(request: Request) -> JSONResponse:
-    """语音识别文本 → 数学符号转写(口语念法 → Unicode/LaTeX),返回 JSON {text}。
-    转写失败原样返回,绝不阻断语音输入;计入限流与用量统计"""
+async def speech_to_math(request: Request) -> StreamingResponse:
+    """语音识别文本 → 数学符号转写(SSE 流式:首帧即上屏,前端逐帧替换输入框,
+    不用等模型收尾,感知延迟 ≈ 首 token 时间)。
+    失败时回放原文帧,绝不阻断语音输入;计入限流与用量统计"""
     rec = require_auth(request)
     body = await request.json()
     text = str(body.get("text", "")).strip()[:6000]
     if not text:
-        return JSONResponse({"text": ""})
+        return _stream_text("")
     _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
 
     system = (
@@ -636,26 +637,34 @@ async def speech_to_math(request: Request) -> JSONResponse:
         "复杂结构用简洁 LaTeX(如 x_0、\\frac{b}{a}、\\sum_{i=1}^{n});"
         "只输出转写结果,不要解释、不要补充。若文本不含数学内容,原样返回。"
     )
-    parts: list[str] = []
-    try:
-        async for delta in rag.llm.stream_chat(system, text, role="main", fallback=True):
-            parts.append(delta)
-            if sum(len(p) for p in parts) >= 800:
-                break
-    except Exception:  # noqa: BLE001 转写失败回退原文
-        return JSONResponse({"text": text})
-    result = "".join(parts).strip() or text
-    usage.record(
-        user=str(rec.get("nickname") or rec.get("uid") or "访客"),
-        phone=str(rec.get("phone") or ""),
-        cmd="语音转写",
-        prompt_len=len(text),
-        reply_len=len(result),
-        role="main",
-        research=False,
-        ts=time.time(),
+
+    async def gen():
+        parts: list[str] = []
+        try:
+            async for delta in rag.llm.stream_chat(system, text, role="main", fallback=True,
+                                                   max_tokens=400):
+                parts.append(delta)
+                yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+        except Exception:  # noqa: BLE001 转写失败回放原文,不阻断输入
+            yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+            return
+        usage.record(
+            user=str(rec.get("nickname") or rec.get("uid") or "访客"),
+            phone=str(rec.get("phone") or ""),
+            cmd="语音转写",
+            prompt_len=len(text),
+            reply_len=sum(len(p) for p in parts),
+            role="main",
+            research=False,
+            ts=time.time(),
+        )
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-    return JSONResponse({"text": result})
 
 
 async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta: dict):
