@@ -439,7 +439,7 @@ const CAT_NAMES: Record<string, [string, string]> = {
   algebra: ['高等代数', 'Advanced Algebra'],
   geometry: ['空间解析几何', 'Analytic Geometry'],
   ode: ['微分方程', 'Differential Equations'],
-  probability: ['概率统计', 'Probability & Statistics'],
+  probability: ['概率论与数理统计', 'Probability & Mathematical Statistics'],
   complex: ['复变函数', 'Complex Analysis'],
   topology: ['拓扑学', 'Topology'],
   other: ['未归类', 'Uncategorized'],

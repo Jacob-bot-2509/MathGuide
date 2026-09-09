@@ -62,11 +62,12 @@ CASES: list[tuple[str, str]] = [
     ("eigenvalues and eigenvectors", "Linear Algebra"),
     ("行列式怎么算", "线性代数"),
     ("对角化是什么意思", "线性代数"),
-    # ---- 概率统计 ----
-    ("期望怎么算", "概率统计"),
-    ("正态分布是什么", "概率统计"),
-    ("大数定律", "概率统计"),
-    ("probability distribution", "Probability & Statistics"),
+    # ---- 概率论与数理统计 ----
+    ("期望怎么算", "概率论与数理统计"),
+    ("正态分布是什么", "概率论与数理统计"),
+    ("大数定律", "概率论与数理统计"),
+    ("假设检验的步骤", "概率论与数理统计"),
+    ("probability distribution", "Probability & Mathematical Statistics"),
     # ---- 复变函数 ----
     ("复变函数是什么", "复变函数"),
     ("留数定理", "复变函数"),

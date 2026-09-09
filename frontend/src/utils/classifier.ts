@@ -46,13 +46,26 @@ export const CATEGORIES: Category[] = [
   },
   {
     key: 'probability',
-    label: '概率统计',
+    label: '概率论与数理统计',
     color: '#ffd166',
     keywords: [
-      '概率', '期望', '方差', '标准差', '分布', '正态', '随机变量', '假设检验', '置信区间',
-      '大数定律', '中心极限', '泊松', '二项分布', '回归',
-      'probability', 'expectation', 'variance', 'standard deviation', 'distribution', 'normal', 'random variable',
-      'hypothesis test', 'confidence interval', 'law of large numbers', 'central limit', 'poisson', 'binomial', 'regression',
+      // 概率论
+      '概率', '概率论', '随机变量', '分布', '正态', '泊松', '二项分布', '指数分布', '均匀分布', '几何分布',
+      '条件概率', '全概率', '贝叶斯', '独立性', '联合分布', '边缘分布', '概率密度', '分布函数',
+      '期望', '方差', '标准差', '协方差', '相关系数', '大数定律', '中心极限', '切比雪夫', '随机过程', '马尔可夫',
+      // 数理统计
+      '数理统计', '统计', '样本', '抽样', '统计量', '参数估计', '极大似然', '无偏', '置信区间', '区间估计',
+      '假设检验', '显著性', 'p值', '卡方', 't分布', 'f分布', '方差分析', '回归', '最小二乘',
+      // English
+      'probability', 'probability theory', 'random variable', 'distribution', 'normal', 'poisson', 'binomial',
+      'exponential distribution', 'uniform distribution', 'geometric distribution',
+      'conditional probability', 'total probability', 'bayes', 'independence', 'joint distribution',
+      'marginal distribution', 'probability density', 'distribution function',
+      'expectation', 'variance', 'standard deviation', 'covariance', 'correlation coefficient',
+      'law of large numbers', 'central limit', 'chebyshev', 'stochastic process', 'markov',
+      'mathematical statistics', 'statistic', 'sample', 'sampling', 'estimator', 'maximum likelihood',
+      'unbiased', 'confidence interval', 'hypothesis test', 'significance', 'p-value', 'chi-square',
+      't-distribution', 'f-distribution', 'anova', 'regression', 'least squares',
     ],
   },
   {

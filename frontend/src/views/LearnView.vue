@@ -124,6 +124,16 @@ function scrollBottom(smooth = true) {
   })
 }
 
+/** 是否"贴底"(距底部不足 60px):流式输出只在贴底时自动跟随;
+ *  用户上拉回看时保持原地,不把对话框往下拽;重新滚回底部即恢复跟随 */
+let pinnedToBottom = true
+
+function onListScroll() {
+  const el = listEl.value
+  if (!el) return
+  pinnedToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+}
+
 function autoGrow() {
   const el = inputEl.value
   if (!el) return
@@ -152,7 +162,8 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
     if (!pending) return
     reply.content += pending
     pending = ''
-    if (session === activeSession.value) scrollBottom(false)
+    // 贴底才跟随滚动:用户上拉阅读时不打扰
+    if (session === activeSession.value && pinnedToBottom) scrollBottom(false)
   }
   const stream = streamReply(prompt, {
     onDelta: (t) => {
@@ -262,6 +273,7 @@ function send(text?: string, cmd?: string) {
   session.messages.push({ id: nextMsgId(), role: 'user', content, cmd, chitchat: chitchat || undefined })
   input.value = ''
   autoGrow()
+  pinnedToBottom = true // 自己刚发消息:强制回底并恢复跟随
   scrollBottom()
   persistSessions()
 
@@ -407,6 +419,7 @@ function attachMessage(attachment: ChatAttachment, content: string) {
   }
 
   session.messages.push({ id: nextMsgId(), role: 'user', content, attachment })
+  pinnedToBottom = true
   scrollBottom()
   // 图片以 dataURL 随会话持久化:存储超限时明确提示,避免静默丢失记录
   if (!persistSessions()) showToast(t('learn.toastStorage'))
@@ -586,7 +599,7 @@ onBeforeUnmount(() => {
     />
 
     <!-- 对话区(当前会话) -->
-    <div ref="listEl" class="chat-list">
+    <div ref="listEl" class="chat-list" @scroll="onListScroll">
       <template v-if="activeSession">
         <div
           v-for="m in activeSession.messages"
