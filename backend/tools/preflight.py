@@ -36,11 +36,12 @@ FRONTEND = "http://localhost:5173"
 DEMO_PHONE = "13600136000"
 DEMO_PASSWORD = "demo123456"
 
-# 抽查题:(提问, 回复中必须出现的关键词)
+# 抽查题:(提问, 期望关键词);期望为空 = 会话应答:
+# 只要求非空回复且未降级为直答/框架(LLM 配置时由模型自然应答,不再限定词)
 SMOKE_CASES = [
     ("什么是泰勒展开?", "泰勒"),
     ("What is Taylor expansion?", "Taylor"),
-    ("你好", "MG"),
+    ("你好", ""),
 ]
 
 failures: list[str] = []
@@ -131,11 +132,16 @@ def main() -> int:
                     full += json.loads(p)
                 except json.JSONDecodeError:
                     full += p
-            if expect.lower() in full.lower():
+            if expect:
+                passed = expect.lower() in full.lower()
+                hint = "检查 knowledge/ 对应文档 keywords 是否包含该主题词"
+            else:
+                passed = len(full) > 5 and "知识库检索" not in full and "三步走" not in full and "难度判定" not in full
+                hint = "会话应答异常:可能 LLM 与直答链路均失败,查看后端控制台"
+            if passed:
                 ok(f"抽查题「{question}」命中({len(full)} 字)")
             else:
-                fail(f"抽查题「{question}」回复未包含预期内容「{expect}」",
-                     "检查 knowledge/ 对应文档 keywords 是否包含该主题词")
+                fail(f"抽查题「{question}」回复不符合预期(期望「{expect or '会话应答'}」)", hint)
         except Exception as e:
             fail(f"抽查题「{question}」请求失败:{e}", "查看后端控制台报错")
 
