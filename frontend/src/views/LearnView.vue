@@ -47,9 +47,10 @@ const PASTE_TEXT_MAX = 3000
 /** 触屏设备判定:手机/平板用「粘贴导入」替代拖拽(拖拽仅限电脑端) */
 const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
 
-/* 文本类文件:上传时读取正文随附件保存,章节导航等指令可基于教材内容工作 */
+/* 文本/PDF 教材:上传时提取正文随附件保存,章节导航等指令可基于内容工作。
+   上限 3 万字,发挥 QwenLong 长上下文能力(移动端粘贴导入仍 3 千字) */
 const FILE_TEXT_EXT = /\.(txt|md|markdown)$/i
-const FILE_TEXT_MAX = 6000
+const FILE_TEXT_MAX = 30000
 
 /* 会话上下文栈(共享 store:归档与回收站恢复基于同一份数据) */
 const sessions = toRef(sessionsState, 'sessions')
@@ -154,12 +155,13 @@ function autoGrow() {
 
 /** 组装最近几轮历史(供模型理解上下文):去掉刚发的本条用户消息
     (它作为 prompt 单独传递),排除流式中的消息,单条截断;
-    粘贴导入的文本文件以正文入历史,后续追问可基于文件内容作答 */
+    粘贴导入的文本文件以正文入历史,后续追问可基于文件内容作答。
+    上限 16 条:更早的对话由后端滚动摘要压缩,早期上下文不丢失 */
 function buildHistory(session: ChatSession): ChatMeta['history'] {
   return session.messages
     .slice(0, -1)
     .filter((m) => !m.streaming && m.content)
-    .slice(-8)
+    .slice(-16)
     .map((m) => ({ role: m.role, content: (m.attachment?.text || m.content).slice(0, 400) }))
 }
 
@@ -506,8 +508,23 @@ function onFile(e: Event) {
   if (file) attachFileItem(file)
 }
 
-/** 文件入库:文本类文件(.txt/.md)读取正文随附件保存,其余仅元信息 */
+/** 文件入库:PDF(pdfjs 提取文本层)/ 文本类(.txt/.md)读取正文随附件保存,其余仅元信息 */
 async function attachFileItem(file: File) {
+  if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
+    try {
+      const text = await extractPdfText(file)
+      if (!text) {
+        // 扫描版 PDF(无文本层):按普通文件接收并提示
+        attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name)
+        showToast(t('learn.toastPdfNoText'))
+        return
+      }
+      attachMessage({ kind: 'file', name: file.name, size: file.size, text }, file.name)
+      return
+    } catch {
+      /* 解析失败按普通文件处理 */
+    }
+  }
   if (FILE_TEXT_EXT.test(file.name)) {
     try {
       const raw = await file.text()
@@ -519,6 +536,23 @@ async function attachFileItem(file: File) {
     }
   }
   attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name)
+}
+
+/** PDF 文本提取(pdfjs 懒加载:仅首次传 PDF 时拉取,主包体积不受影响) */
+async function extractPdfText(file: File): Promise<string> {
+  const pdfjs = await import('pdfjs-dist')
+  const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+  pdfjs.GlobalWorkerOptions.workerSrc = worker.default
+  const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise
+  const parts: string[] = []
+  const pages = Math.min(doc.numPages, 80) // 页数上限,防超大 PDF 拖垮页面
+  for (let i = 1; i <= pages; i++) {
+    const page = await doc.getPage(i)
+    const content = await page.getTextContent()
+    parts.push(content.items.map((it) => ('str' in it ? it.str : '')).join(' '))
+  }
+  const text = parts.join('\n').replace(/\s+/g, ' ').trim()
+  return text.slice(0, FILE_TEXT_MAX)
 }
 
 /** 图片统一入库:压缩为缩略 dataURL 后作为图片附件发送(相册/拍照/拖入/粘贴共用) */

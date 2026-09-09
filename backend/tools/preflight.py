@@ -178,7 +178,7 @@ def main() -> int:
         spec = llm.resolve(r)
         roles.append(f"{r}:{'✓' if spec else '未配'}")
     print(f"{YELLOW}[i ]{RESET} LLM 角色: {' | '.join(roles)}")
-    print(f"{YELLOW}[i ]{RESET} Embedding:{'已配置 ' + embed.MODEL if embed.is_configured() else '未配置(关键词检索模式,可正常演示)'}")
+    print(f"{YELLOW}[i ]{RESET} Embedding:{'已配置 ' + embed.model_name() if embed.is_configured() else '未配置(关键词检索模式,可正常演示)'}")
 
     print("=" * 56)
     if failures:

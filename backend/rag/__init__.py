@@ -31,20 +31,33 @@ def _dir_stamp() -> tuple[int, float]:
 
 
 def init() -> None:
-    """装载知识库并构建索引(启动时调用)"""
+    """装载知识库并构建索引(启动时调用);
+    embedding 服务不可用时降级为关键词模式,不让后端起不来"""
     global _index, _embedder, _stamp, _terms
-    _embedder = embed.Embedder() if embed.is_configured() else None
+    if embed.is_configured():
+        try:
+            _embedder = embed.Embedder()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[rag] embedding 初始化失败,降级为关键词检索: {exc}")
+            _embedder = None
+    else:
+        _embedder = None
     _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
     _stamp = _dir_stamp()
     _terms = _collect_terms()
 
 
 def search(query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
-    """检索相关片段;知识库文件有增删改时自动重建索引后返回"""
+    """检索相关片段;知识库文件有增删改时自动重建索引后返回。
+    重建时 embedding 失败同样降级关键词模式,检索链路永不因向量服务崩断"""
     global _index, _stamp, _terms
     assert _index is not None, "rag.init() 未调用"
     if _dir_stamp() != _stamp:
-        _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
+        try:
+            _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[rag] 索引重建失败,降级为关键词模式: {exc}")
+            _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), None)
         _stamp = _dir_stamp()
         _terms = _collect_terms()
     return _index.search(query, top_k)

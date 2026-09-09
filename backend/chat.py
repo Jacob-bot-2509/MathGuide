@@ -126,7 +126,7 @@ def _pick_role(question: str) -> str:
 # 点击章节只发章节名即可(服务重启缓存失效,指引自动降级为通用知识作答)
 _TEXTBOOKS: dict[int, str] = {}
 _TEXTBOOK_MAX = 16
-_TEXTBOOK_CAP = 6000
+_TEXTBOOK_CAP = 30000  # 长文档教材上限(与前端 FILE_TEXT_MAX 一致,走 long 角色)
 
 
 def _cache_textbook(session_id: object, text: str) -> None:
@@ -297,11 +297,12 @@ def _compose_direct(prompt: str, chunks: list[tuple[rag.Chunk, float]]) -> str:
 
 
 def _validated_history(raw: object) -> list[dict]:
-    """校验并截断前端传来的历史消息(条数/长度双保险,异常值直接丢弃)"""
+    """校验并截断前端传来的历史消息(条数/长度双保险,异常值直接丢弃)。
+    上限 16 条:超出部分由滚动摘要压缩(_update_summary),早期上下文不丢失"""
     out: list[dict] = []
     if not isinstance(raw, list):
         return out
-    for item in raw[:8]:
+    for item in raw[:16]:
         if not isinstance(item, dict):
             continue
         role, content = item.get("role"), item.get("content")
@@ -309,6 +310,33 @@ def _validated_history(raw: object) -> list[dict]:
             continue
         out.append({"role": role, "content": content.strip()[:400]})
     return out
+
+
+# 会话滚动摘要:每 8 次请求压缩一次旧对话(便宜模型,失败静默),长对话保持早期上下文
+_SUMMARIES: dict[int, str] = {}
+_SUM_TICK: dict[int, int] = {}
+
+
+async def _update_summary(sid: int, old_turns: list[dict], prev: str) -> None:
+    system = (
+        "你是对话摘要助手。把以下更早的对话压缩成简短摘要(要点式,200 字内),"
+        "保留数学概念、未解决问题与用户偏好。只输出摘要本身。"
+    )
+    base = f"{prev}\n\n" if prev else ""
+    user = base + "\n".join(
+        f"{'用户' if t['role'] == 'user' else 'MG'}: {t['content']}" for t in old_turns)
+    parts: list[str] = []
+    try:
+        async for delta in rag.llm.stream_chat(system, user, role="main", fallback=False):
+            parts.append(delta)
+            if sum(len(p) for p in parts) >= 400:
+                break
+    except Exception:  # noqa: BLE001 摘要失败静默跳过,不影响主回答
+        return
+    text = "".join(parts).strip()
+    if text:
+        _SUMMARIES[sid] = text
+        print(f"[chat] 会话 {sid} 摘要已更新({len(text)} 字)")
 
 
 def _research_reply(outcome: rag.research.SearchOutcome, zh: bool) -> str:
@@ -352,7 +380,7 @@ def _research_cache_key(question: str) -> str:
 
 # ---------- 安全与用量(测试期防护) ----------
 
-PROMPT_MAX = 6000  # 服务端输入上限(字符):超出静默截断(前端限制之外的最后保险)
+PROMPT_MAX = 32000  # 服务端输入上限(字符):覆盖长文档教材(3万字)+ 指令前缀,超出静默截断
 
 # 限流:每用户滑动窗口(防脚本刷接口烧 token 费;正常学习节奏碰不到上限)
 _RATE_LIMIT_MAX = 6
@@ -461,11 +489,15 @@ async def _verify_answer(question: str, answer: str, role: str) -> str | None:
 
 
 async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]],
-                   history: list[dict] | None = None, role: str = "main", verify: bool = False):
+                   history: list[dict] | None = None, role: str = "main", verify: bool = False,
+                   summary: str = "", sid: int | None = None):
     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
-    verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过)"""
+    verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过);
+    summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)"""
     try:
         system = rag.build_system(chunks, cmd, zh=_is_chinese(prompt))
+        if summary:
+            system += f"\n\n【更早对话摘要】\n{summary}"
         answer: list[str] = []
         async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
             answer.append(delta)
@@ -477,6 +509,12 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             if verdict:
                 print(f"[chat] 复核({vrole}): {verdict[:60]}")
                 yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
+        if sid is not None and history and len(history) >= 16:
+            # 每 8 次请求异步压缩一次更早的对话(不阻塞本次响应;失败静默)
+            tick = _SUM_TICK.get(sid, 0) + 1
+            _SUM_TICK[sid] = tick
+            if tick % 8 == 0:
+                asyncio.create_task(_update_summary(sid, history[:-8], _SUMMARIES.get(sid, "")))
     except Exception as exc:  # noqa: BLE001 模型侧错误不区分类型,统一降级
         print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
         note = "⚠ 模型调用失败,以下为知识库直答内容:\n\n"
@@ -510,7 +548,7 @@ def _nav_guide_system():
 async def _gen_nav_list(question: str, zh: bool):
     """章节导航:只输出教材章节划分列表(不展示内容);失败时给出明确提示"""
     try:
-        async for delta in rag.llm.stream_chat(_nav_system(), question[:6000], role=rag.llm.pick("long")):
+        async for delta in rag.llm.stream_chat(_nav_system(), question[:_TEXTBOOK_CAP], role=rag.llm.pick("long")):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
         print(f"[chat] 章节导航调用失败: {exc}")
@@ -522,7 +560,7 @@ async def _gen_nav_list(question: str, zh: bool):
 async def _gen_nav_guide(question: str, zh: bool, tb: str = ""):
     """章节指引:用户点击章节后给出该章大概知识指引,末尾附「返回」按钮行;
     tb 为按会话缓存的教材文本,缓存失效时按通用知识作答该章"""
-    prompt = question[:6000]
+    prompt = question[:2000]
     if tb:
         prompt += f"\n\n<教材文本>:\n{tb}"
     else:
@@ -546,7 +584,7 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
         "不要搜索外部资料,不要编造文件里没有的内容;用与文件内容相同的语言回应。"
     ).format(name=name)
     try:
-        async for delta in rag.llm.stream_chat(system, body[:3000], role=rag.llm.pick("long")):
+        async for delta in rag.llm.stream_chat(system, body[:_TEXTBOOK_CAP], role=rag.llm.pick("long")):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型侧错误统一降级,不让前端假死
         print(f"[chat] 粘贴文本 LLM 调用失败,降级为接收回执: {exc}")
@@ -653,9 +691,12 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         verify = bool(chunks) or bool(_math_re().search(question))
         role = _pick_role(question)
         meta["role"] = role
+        sid = body.get("sessionId")
+        history = _validated_history(body.get("history"))
+        summary = _SUMMARIES.get(sid, "") if isinstance(sid, int) else ""
         return StreamingResponse(
-            _gen_llm(question, cmd, chunks, history=_validated_history(body.get("history")),
-                     role=role, verify=verify),
+            _gen_llm(question, cmd, chunks, history=history, role=role, verify=verify,
+                     summary=summary, sid=sid if isinstance(sid, int) else None),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )

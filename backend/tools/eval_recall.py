@@ -18,7 +18,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import config  # noqa: E402 装载 .env.local(embedding/LLM 配置),与 main.py 同路径
 import rag  # noqa: E402
+
+config.load_env()
 
 # (问法, 预期命中标题包含的主题词;空字符串 = 应不命中知识库的闲聊)
 CASES: list[tuple[str, str]] = [

@@ -11,6 +11,14 @@ MathGuide 后端(RAG 检索增强生成骨架)
 
 知识库:knowledge/*.md → rag 切片索引 → 检索 → LLM(未配置则直答)。
 """
+import sys
+
+# Windows 控制台默认 GBK:模型输出含 GBK 无法编码的字符(如下标 ₀)时,
+# 任何 print 都会抛 UnicodeEncodeError 打断回答链路 —— 启动即强制 UTF-8 + 行缓冲
+# (行缓冲保证日志实时落盘,不会因块缓冲攒在内存里看不到)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+
 import store
 from starlette.applications import Starlette
 from starlette.middleware import Middleware

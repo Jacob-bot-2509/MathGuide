@@ -54,7 +54,8 @@ def _cache_key(question: str, top_k: int) -> str:
 
 
 def expand_query(question: str) -> list[str]:
-    """从问句提取检索词:剥离研究意图词 → 中文术语映射英文 → 英文词提取"""
+    """规则版查询改写:剥离研究意图词 → 中文术语映射英文 → 英文词提取。
+    LLM 可用时被 _llm_expand_terms 取代(见 deep_search),此函数保留作离线兜底。"""
     t = question.lower()
     for m in sorted(route.RESEARCH_MARKERS, key=len, reverse=True):
         t = t.replace(m, " ")
@@ -73,6 +74,33 @@ def expand_query(question: str) -> list[str]:
     return out[:MAX_TERMS]
 
 
+async def _llm_expand_terms(question: str, timeout: float = 6.0) -> list[str] | None:
+    """LLM 查询改写:把口语化研究提问拆成高质量英文检索词(最多 6 个)。
+    失败/超时返回 None,由规则版 expand_query 兜底,离线可用性不受影响"""
+    system = (
+        "你是学术检索助手。把用户的研究问题改写成最多 6 个英文检索关键词或短语,"
+        "用逗号分隔,只输出关键词本身,不要任何解释。"
+    )
+
+    async def collect() -> list[str]:
+        parts: list[str] = []
+        async for delta in llm.stream_chat(system, question, role="main", fallback=False):
+            parts.append(delta)
+            if sum(len(p) for p in parts) >= 200:
+                break
+        text = "".join(parts).strip()
+        terms = [t.strip() for t in re.split(r"[,、;\n]", text) if t.strip()]
+        return [t for t in terms if 2 <= len(t) <= 60][:MAX_TERMS]
+
+    try:
+        terms = await asyncio.wait_for(collect(), timeout=timeout)
+        if terms:
+            print(f"[research] LLM 改写: {terms}")
+        return terms
+    except Exception:  # noqa: BLE001 改写失败不影响主链路,规则版兜底
+        return None
+
+
 async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0) -> SearchOutcome:
     key = _cache_key(question, top_k)
     now = time.monotonic()
@@ -81,7 +109,10 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0) -> S
         print(f"[research] 缓存命中: {question[:24]}")
         return hit[1]
     started = time.perf_counter()
-    terms = expand_query(question)
+    # 查询改写:LLM 可用时优先(口语化提问拆词更全),失败回退规则版
+    terms = await _llm_expand_terms(question) if llm.is_configured("main") else None
+    if not terms:
+        terms = expand_query(question)
     outcome = SearchOutcome(question=question, terms=terms)
     query = " ".join(terms)
 

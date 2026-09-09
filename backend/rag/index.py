@@ -19,6 +19,9 @@ W_BODY = 1.0
 W_VECTOR = 5.0
 # 混合模式下:向量相似度低于此值且无关键词命中 → 视为无关
 MIN_COSINE = 0.25
+# 纯向量命中(无任何关键词/bigram 证据)所需的语义置信度:
+# 闲聊话术(你好呀/谢谢)与数学文档的相似度约 0.3~0.45,必须拦在门外
+VECTOR_ONLY_MIN = 0.55
 # 低于该分数视为"没检索到相关知识",走兜底回复;
 # 需 ≥2 个正文二元组重合(或 1 个标题重合/关键词命中)才算相关,避免「怎么」这类泛词误命中
 MIN_SCORE = 1.5
@@ -69,7 +72,13 @@ class KnowledgeIndex:
     def search(self, query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
         q = query.lower()
         q_grams = _bigrams(q)
-        q_vec = self._embedder.embed_query(query) if self._embedder is not None else None
+        q_vec = None
+        if self._embedder is not None:
+            try:
+                q_vec = self._embedder.embed_query(query)
+            except Exception as exc:  # noqa: BLE001 embedding 服务抖动:本查询退化为关键词模式
+                print(f"[rag] query embedding 失败,本查询走关键词模式: {exc}")
+                q_vec = None
 
         scored: list[tuple[Chunk, float]] = []
         for i, (c, title_grams, body_grams) in enumerate(self._entries):
@@ -82,6 +91,9 @@ class KnowledgeIndex:
                 cosine = Embedder.cosine(q_vec, self._vectors[i])
                 # 语义匹配门限:向量弱相关且无关键词命中 → 视为无关,防止低相似度抬分
                 if cosine < MIN_COSINE and kw < W_KEYWORD:
+                    continue
+                # 纯向量命中(无关键词/bigram 证据)需要更强置信度,拦住闲聊噪声
+                if score <= 0 and cosine < VECTOR_ONLY_MIN:
                     continue
                 score += W_VECTOR * cosine
 
