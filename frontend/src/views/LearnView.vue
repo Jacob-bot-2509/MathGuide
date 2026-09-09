@@ -201,18 +201,22 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
       streams.delete(reply.id)
       persistSessions()
     },
-    // 请求失败(典型:后端未启动)时,若一字未出则显示错误提示,
+    // 请求失败(典型:后端未启动 / 限流 429)时,若一字未出则显示对应提示,
     // 避免气泡永远停留在"思考中"且无任何反馈。
     // 失败路径 onDone 不再触发(settled 拦截),清理须在此完整收尾,
     // 否则 streaming 永真 → 发送按钮永远"生成中"。
-    onError: () => {
+    onError: (err?: unknown) => {
       if (commit) {
         clearTimeout(commit)
         commit = null
       }
       flush() // 先提交已收到的残量,不丢内容
       reply.thinking = false
-      if (!reply.content) reply.content = t('learn.errStream')
+      if (!reply.content) {
+        reply.content = (err as { status?: number })?.status === 429
+          ? t('learn.toastRateLimit')
+          : t('learn.errStream')
+      }
       reply.streaming = false
       streams.delete(reply.id)
       persistSessions()

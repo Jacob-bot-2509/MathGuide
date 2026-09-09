@@ -23,10 +23,12 @@ import random
 import re
 import time
 
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import StreamingResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 import rag
+import usage
 from auth import require_auth
 
 CHUNK = 6          # 直答模式每帧字符数(配合浏览器端 ~24ms 渲染节流)
@@ -348,6 +350,51 @@ def _research_cache_key(question: str) -> str:
     return question.strip().lower()
 
 
+# ---------- 安全与用量(测试期防护) ----------
+
+PROMPT_MAX = 6000  # 服务端输入上限(字符):超出静默截断(前端限制之外的最后保险)
+
+# 限流:每用户滑动窗口(防脚本刷接口烧 token 费;正常学习节奏碰不到上限)
+_RATE_LIMIT_MAX = 6
+_RATE_WINDOW = 60.0
+_rate_log: dict[str, list[float]] = {}
+
+
+def _rate_check(uid: str) -> None:
+    now = time.monotonic()
+    hits = [t for t in _rate_log.get(uid, []) if now - t < _RATE_WINDOW]
+    if len(hits) >= _RATE_LIMIT_MAX:
+        raise HTTPException(429, "rate limited")
+    hits.append(now)
+    _rate_log[uid] = hits
+
+
+def _meter(resp: StreamingResponse, rec: dict, prompt_len: int, cmd: str,
+           meta: dict) -> StreamingResponse:
+    """用量电表:统计回复字数并落盘 usage.json(流结束才记账,客户端中途断开不记)。
+    注意:必须先捕获原迭代器再替换 body_iterator,否则新生成器会自引用死锁"""
+    original = resp.body_iterator
+
+    async def counted():
+        chars = 0
+        async for frame in original:
+            chars += len(frame) if isinstance(frame, str) else len(frame.decode("utf-8", "ignore"))
+            yield frame
+        usage.record(
+            user=str(rec.get("nickname") or rec.get("uid") or "访客"),
+            phone=str(rec.get("phone") or ""),
+            cmd=cmd,
+            prompt_len=prompt_len,
+            reply_len=chars,
+            role=meta["role"],
+            research=meta["research"],
+            ts=time.time(),
+        )
+
+    resp.body_iterator = counted()
+    return resp
+
+
 async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: bool,
                         ck: str | None = None):
     """研究型 LLM 综合:正文流式 + 引用区(后端拼装,不经过模型);
@@ -509,12 +556,31 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
     yield "data: [DONE]\n\n"
 
 
-async def chat_stream(request: Request) -> StreamingResponse:
-    require_auth(request)  # 401: {"detail": "unauthorized"}
+async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
+    """聊天入口(安全外壳):认证 → 输入上限 → 限流 → 路由 → 用量记账"""
+    rec = require_auth(request)  # 401: {"detail": "unauthorized"}
 
     body = await request.json()
     prompt = str(body.get("prompt", "")).strip()
-    cmd = body.get("cmd")
+    cmd = str(body.get("cmd", ""))[:50] if body.get("cmd") else None
+
+    # 服务端输入上限:前端限制之外的最后保险(超出静默截断,防误传大文本烧 token 费)
+    if len(prompt) > PROMPT_MAX:
+        prompt = prompt[:PROMPT_MAX]
+
+    # 限流:每用户滑动窗口,仅对非空提问计次(新会话问候不占用额度)
+    if prompt:
+        _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
+
+    meta = {"role": "main", "research": False}
+    resp = await _route_chat(prompt, cmd, body, rec, meta)
+    if not isinstance(resp, StreamingResponse):
+        return resp
+    return _meter(resp, rec, len(prompt), cmd or "", meta)
+
+
+async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta: dict):
+    """业务路由(与安全外壳分离):欢迎语 / 附件 / 章节导航 / 研究 / LLM / 直答"""
 
     # 前端新会话会以空 prompt 触发欢迎问候
     if not prompt:
@@ -526,6 +592,7 @@ async def chat_stream(request: Request) -> StreamingResponse:
     if m:
         kind, name, body = m.group(1), m.group(2).strip(), (m.group(3) or "").strip()
         if body and rag.llm.is_configured():
+            meta["role"] = "long"
             return StreamingResponse(
                 _gen_attach_llm(name, body, zh=_is_chinese(prompt)),
                 media_type="text/event-stream",
@@ -550,6 +617,7 @@ async def chat_stream(request: Request) -> StreamingResponse:
             gen = _gen_nav_list(question, zh)
         else:
             gen = _gen_nav_guide(question, zh, tb=_get_textbook(body.get("sessionId")))
+        meta["role"] = "long"
         return StreamingResponse(
             gen,
             media_type="text/event-stream",
@@ -561,15 +629,18 @@ async def chat_stream(request: Request) -> StreamingResponse:
     # P0/P1 路由:研究型提问优先于知识直答
     # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走跨论文库深度搜索)
     if rag.route.is_research_intent(question):
+        meta["research"] = True
         ck = _research_cache_key(question)
         cached = _RESEARCH_ANSWER.get(ck)
         if cached and time.monotonic() - cached[0] < _RESEARCH_TTL:
             print(f"[chat] 研究综合缓存命中: {question[:24]}")
+            meta["role"] = "deep"
             return _stream_text(cached[1])
         outcome = await rag.research.deep_search(question, top_k=3)
         # P2c:LLM 已配置 → 综合解答 + 编号引用 + 后端拼装引用区;
         # 未配置 → 来源列表(现有行为)
         if outcome.any_hit and rag.llm.is_configured():
+            meta["role"] = "deep"
             return StreamingResponse(
                 _gen_research(question, outcome, zh, ck=ck),
                 media_type="text/event-stream",
@@ -580,9 +651,11 @@ async def chat_stream(request: Request) -> StreamingResponse:
     if rag.llm.is_configured():
         # 双角色验证仅对数学题(命中知识库或题目措辞)开启;闲聊不浪费复核调用
         verify = bool(chunks) or bool(_math_re().search(question))
+        role = _pick_role(question)
+        meta["role"] = role
         return StreamingResponse(
             _gen_llm(question, cmd, chunks, history=_validated_history(body.get("history")),
-                     role=_pick_role(question), verify=verify),
+                     role=role, verify=verify),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )

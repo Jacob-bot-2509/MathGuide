@@ -21,7 +21,7 @@ _tokens: dict[str, dict] = {}
 # 手机号 -> uid 索引:认证请求 O(1) 查找
 _phone_index: dict[str, str] = {}
 
-TOKEN_TTL_DAYS = 7  # 演示 token 有效期:签发时顺带清理过期项,防 tokens.json 无限增长
+TOKEN_TTL_HOURS = 24  # 演示 token 有效期(测试期安全):验证时逐条检查过期,签发时顺带清理过期项
 
 
 def _load(path: Path) -> dict:
@@ -88,7 +88,7 @@ def _sweep_tokens() -> None:
     """清理过期 token(签发时顺带执行,摊薄写盘成本)"""
     now = time.time()
     stale = [t for t, e in _tokens.items()
-             if isinstance(e, dict) and now - e.get("issued", now) > TOKEN_TTL_DAYS * 86400]
+             if isinstance(e, dict) and now - e.get("issued", now) > TOKEN_TTL_HOURS * 3600]
     if not stale:
         return
     for t in stale:
@@ -105,11 +105,18 @@ def issue_token(uid: str) -> str:
 
 
 def resolve_token(token: str) -> dict | None:
-    """token -> 用户记录(兼容旧格式 token -> uid 字符串)"""
+    """token -> 用户记录(兼容旧格式 token -> uid 字符串);
+    过期 token 视为无效(旧格式无签发时间按当前时间起算)"""
     entry = _tokens.get(token)
     if entry is None:
         return None
-    uid = entry if isinstance(entry, str) else entry.get("uid")
+    if isinstance(entry, dict):
+        issued = entry.get("issued")
+        if isinstance(issued, (int, float)) and time.time() - issued > TOKEN_TTL_HOURS * 3600:
+            return None
+        uid = entry.get("uid")
+    else:
+        uid = entry
     return _users.get(uid) if uid else None
 
 

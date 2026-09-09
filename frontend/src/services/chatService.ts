@@ -63,10 +63,16 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
     if (settled) return
     settled = true
     if ((err as { status?: number }).status === 401) {
-      // 令牌失效(如服务端数据被清):清除本地登录态并回到登录页
+      // 令牌失效(过期或服务端数据被清):清除本地登录态并回到登录页
       clearUser()
       router.push('/login')
       showToast(t('login.toastExpired'))
+      return
+    }
+    if ((err as { status?: number }).status === 429) {
+      // 限流:不算错误,界面层用提示文案收尾
+      cb.onError?.(err)
+      cb.onDone('')
       return
     }
     console.error('[chatService] 流式请求失败:', err)

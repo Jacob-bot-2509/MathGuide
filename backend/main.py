@@ -22,10 +22,17 @@ import auth
 import chat
 import config
 import rag
+import usage
 
 
 async def health(request) -> JSONResponse:
     return JSONResponse({"ok": True, "service": "mg-backend"})
+
+
+async def stats(request) -> JSONResponse:
+    """用量统计(需登录):总调用数 / 总字数 / 按用户 / 按模型角色"""
+    auth.require_auth(request)
+    return JSONResponse(usage.summary())
 
 
 routes = [
@@ -34,6 +41,7 @@ routes = [
     Route("/api/auth/login", auth.login, methods=["POST"]),
     Route("/api/auth/logout", auth.logout, methods=["POST"]),
     Route("/api/chat/stream", chat.chat_stream, methods=["POST"]),
+    Route("/api/stats", stats),
 ]
 
 app = Starlette(
