@@ -21,6 +21,7 @@ import asyncio
 import json
 import random
 import re
+import time
 
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
@@ -117,6 +118,25 @@ def _pick_role(question: str) -> str:
     role = rag.llm.pick("deep") if any(m in q for m in _DEEP_MARKERS) else "main"
     print(f"[chat] 角色路由 {role} | {question[:20]}")
     return role
+
+
+# 教材缓存:章节导航列表生成时按会话暂存教材文本,后续章节指引按 sessionId 取用,
+# 点击章节只发章节名即可(服务重启缓存失效,指引自动降级为通用知识作答)
+_TEXTBOOKS: dict[int, str] = {}
+_TEXTBOOK_MAX = 16
+_TEXTBOOK_CAP = 6000
+
+
+def _cache_textbook(session_id: object, text: str) -> None:
+    if not isinstance(session_id, int) or not session_id or len(text) < 80:
+        return
+    _TEXTBOOKS[session_id] = text[:_TEXTBOOK_CAP]
+    if len(_TEXTBOOKS) > _TEXTBOOK_MAX:
+        _TEXTBOOKS.pop(next(iter(_TEXTBOOKS)))
+
+
+def _get_textbook(session_id: object) -> str:
+    return _TEXTBOOKS.get(session_id) if isinstance(session_id, int) else ""
 
 
 # 会话大脑:同类多条随机轮换,避免机械重复;语气自然、有温度
@@ -318,20 +338,39 @@ def _research_reply(outcome: rag.research.SearchOutcome, zh: bool) -> str:
     return "\n".join(lines)
 
 
-async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: bool):
+# 研究型综合结果缓存:同问题 TTL 内直接回放已综合全文(跳过搜索与 LLM,省时省钱)
+_RESEARCH_ANSWER: dict[str, tuple[float, str]] = {}
+_RESEARCH_TTL = 600.0   # 秒
+_RESEARCH_MAX = 32
+
+
+def _research_cache_key(question: str) -> str:
+    return question.strip().lower()
+
+
+async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: bool,
+                        ck: str | None = None):
     """研究型 LLM 综合:正文流式 + 引用区(后端拼装,不经过模型);
-    模型失败自动降级为来源列表"""
+    模型失败自动降级为来源列表;ck 非空时全文入库缓存供重复问题秒回"""
+    full: list[str] = []
     try:
         async for delta in rag.research.synthesize.synthesize_stream(
                 question, outcome.hits, zh, role=rag.llm.pick("deep")):
+            full.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
         print(f"[chat] 研究综合失败,降级为来源列表: {exc}")
         async for frame in _frames(_research_reply(outcome, zh)):
             yield frame
         return
-    async for frame in _frames(rag.research.synthesize.citations_block(outcome.hits, zh), pace=False):
+    citations = rag.research.synthesize.citations_block(outcome.hits, zh)
+    full.append(citations)
+    async for frame in _frames(citations, pace=False):
         yield frame
+    if ck:
+        _RESEARCH_ANSWER[ck] = (time.monotonic(), "".join(full))
+        if len(_RESEARCH_ANSWER) > _RESEARCH_MAX:
+            _RESEARCH_ANSWER.pop(next(iter(_RESEARCH_ANSWER)))
 
 
 async def _frames(text: str, pace: bool = True):
@@ -354,13 +393,43 @@ def _stream_text(text: str) -> StreamingResponse:
     )
 
 
+async def _verify_answer(question: str, answer: str, role: str) -> str | None:
+    """双角色验证:解答生成后用另一角色复核,返回一句复核结论(失败返回 None,不打断主回答)"""
+    system = (
+        "你是数学解答复核员。请核查用户问题与给出的解答:判断结论是否正确"
+        "(结论:正确 / 有误 / 需人工复核),并用一句话说明依据。"
+        "不要重算过程,不要输出除结论和一句话依据以外的任何内容。"
+    )
+    user = f"问题:{question[:300]}\n\n解答:\n{answer[:1500]}"
+    parts: list[str] = []
+    try:
+        async for delta in rag.llm.stream_chat(system, user, role=role):
+            parts.append(delta)
+            if sum(len(p) for p in parts) >= 300:
+                break
+    except Exception:  # noqa: BLE001 复核失败静默跳过,不影响主回答
+        return None
+    text = "".join(parts).strip()
+    return text[:200] or None
+
+
 async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]],
-                   history: list[dict] | None = None, role: str = "main"):
-    """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死"""
+                   history: list[dict] | None = None, role: str = "main", verify: bool = False):
+    """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
+    verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过)"""
     try:
         system = rag.build_system(chunks, cmd, zh=_is_chinese(prompt))
+        answer: list[str] = []
         async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
+            answer.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+        if verify:
+            # 解答者与复核者错开模型保证独立:deep 解答 → main 复核;main 解答 → deep 复核
+            vrole = "main" if role == "deep" else rag.llm.pick("deep")
+            verdict = await _verify_answer(prompt, "".join(answer), vrole)
+            if verdict:
+                print(f"[chat] 复核({vrole}): {verdict[:60]}")
+                yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型侧错误不区分类型,统一降级
         print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
         note = "⚠ 模型调用失败,以下为知识库直答内容:\n\n"
@@ -403,10 +472,16 @@ async def _gen_nav_list(question: str, zh: bool):
     yield "data: [DONE]\n\n"
 
 
-async def _gen_nav_guide(question: str, zh: bool):
-    """章节指引:用户点击章节后给出该章大概知识指引,末尾附「返回」按钮行"""
+async def _gen_nav_guide(question: str, zh: bool, tb: str = ""):
+    """章节指引:用户点击章节后给出该章大概知识指引,末尾附「返回」按钮行;
+    tb 为按会话缓存的教材文本,缓存失效时按通用知识作答该章"""
+    prompt = question[:6000]
+    if tb:
+        prompt += f"\n\n<教材文本>:\n{tb}"
+    else:
+        prompt += "\n\n(教材内容缓存已失效,请按通用知识作答该章)"
     try:
-        async for delta in rag.llm.stream_chat(_nav_guide_system(), question[:6000], role=rag.llm.pick("long")):
+        async for delta in rag.llm.stream_chat(_nav_guide_system(), prompt, role=rag.llm.pick("long")):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
         print(f"[chat] 章节指引调用失败: {exc}")
@@ -470,9 +545,13 @@ async def chat_stream(request: Request) -> StreamingResponse:
     if cmd in ("章节知识导航", "章节知识指引"):
         if not rag.llm.is_configured():
             return _stream_text("章节导航需要已配置 LLM,当前未配置。")
-        gen = _gen_nav_list if cmd == "章节知识导航" else _gen_nav_guide
+        if cmd == "章节知识导航":
+            _cache_textbook(body.get("sessionId"), question)  # 教材入库,后续点击只发章节名
+            gen = _gen_nav_list(question, zh)
+        else:
+            gen = _gen_nav_guide(question, zh, tb=_get_textbook(body.get("sessionId")))
         return StreamingResponse(
-            gen(question, zh),
+            gen,
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -482,21 +561,28 @@ async def chat_stream(request: Request) -> StreamingResponse:
     # P0/P1 路由:研究型提问优先于知识直答
     # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走跨论文库深度搜索)
     if rag.route.is_research_intent(question):
+        ck = _research_cache_key(question)
+        cached = _RESEARCH_ANSWER.get(ck)
+        if cached and time.monotonic() - cached[0] < _RESEARCH_TTL:
+            print(f"[chat] 研究综合缓存命中: {question[:24]}")
+            return _stream_text(cached[1])
         outcome = await rag.research.deep_search(question, top_k=3)
         # P2c:LLM 已配置 → 综合解答 + 编号引用 + 后端拼装引用区;
         # 未配置 → 来源列表(现有行为)
         if outcome.any_hit and rag.llm.is_configured():
             return StreamingResponse(
-                _gen_research(question, outcome, zh),
+                _gen_research(question, outcome, zh, ck=ck),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         return _stream_text(_research_reply(outcome, zh))
 
     if rag.llm.is_configured():
+        # 双角色验证仅对数学题(命中知识库或题目措辞)开启;闲聊不浪费复核调用
+        verify = bool(chunks) or bool(_math_re().search(question))
         return StreamingResponse(
             _gen_llm(question, cmd, chunks, history=_validated_history(body.get("history")),
-                     role=_pick_role(question)),
+                     role=_pick_role(question), verify=verify),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )

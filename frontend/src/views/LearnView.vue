@@ -443,15 +443,14 @@ function onNavChapter(name: string) {
     showToast(t('learn.toastBusy'))
     return
   }
-  const tb = latestTextbookText(session)
-  if (!tb) return
   const reply: ChatMsg = {
     id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true,
     navGuideFor: name,
   }
   session.messages.push(reply)
   const live = session.messages[session.messages.length - 1]
-  scheduleStream(session, live, `请给出「${name}」这一章的大概知识指引\n\n<教材文本>:\n${tb}`, 450, {
+  // 教材文本已由后端按 sessionId 缓存(章节导航生成列表时入库),这里只发章节名
+  scheduleStream(session, live, `请给出「${name}」这一章的大概知识指引`, 450, {
     cmd: '章节知识指引',
     sessionId: session.id,
     categoryKey: session.cat?.key,
