@@ -1,8 +1,7 @@
 /**
  * 聊天服务:页面唯一依赖的入口。
- * - VITE_USE_MOCK=true(默认)→ 本地 Mock 流式回复;
- * - = false → POST /api/chat/stream(OpenAI 兼容 SSE,带登录令牌)。
- * 页面层无需区分:streamReply 签名不变,可额外携带会话元数据(契约 ChatRequest)。
+ * POST /api/chat/stream(OpenAI 兼容 SSE,带登录令牌)。
+ * streamReply 签名固定,可额外携带会话元数据(契约 ChatRequest)。
  */
 import type { ChatRequest, ChatStreamHandle, StreamCallbacks } from '@/api/types'
 import { postSSE } from '@/api/http'
@@ -10,7 +9,6 @@ import { getToken, logout as clearUser } from '@/stores/user'
 import router from '@/router'
 import { showToast } from '@/utils/toast'
 import { t } from '@/utils/i18n'
-import { streamMockReply } from '@/mock/assistant'
 
 export type { ChatStreamHandle, StreamCallbacks }
 
@@ -22,20 +20,12 @@ export interface ChatMeta {
   history?: ChatRequest['history']
 }
 
-const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false'
-
 function authHeaders(): Record<string, string> {
   const token = getToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta): ChatStreamHandle {
-  if (USE_MOCK) {
-    // Mock 路径靠 [cmd] 前缀路由;真实接口用 cmd 字段,后端自行剥离
-    const text = meta?.cmd ? `[${meta.cmd}] ${prompt}` : prompt
-    return streamMockReply(text, cb)
-  }
-
   const controller = new AbortController()
   let settled = false
 

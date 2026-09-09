@@ -26,11 +26,8 @@ src/
   api/          # 接口层(后端接入唯一入口)
   │ types.ts    #   前后端接口契约:消息/流式回调/认证结构
   │ http.ts     #   fetch 封装 + OpenAI 兼容 SSE 流解析
-  services/     # 业务服务:页面唯一依赖,mock ↔ 真实接口的切换开关
+  services/     # 业务服务:页面唯一依赖(全部走真实后端)
   │ chatService.ts / authService.ts
-  mock/         # 演示环境模拟实现(后端接入后废弃)
-  │ assistant.ts #   双轨讲解 Mock 回复 + 逐字流式输出
-  │ accounts.ts  #   Mock 账号库
   stores/       # 全局状态:user(登录态)/ settings(应用设置)
   utils/        # 纯工具:toast / tex2svg / classifier / commands / avatar
   components/
@@ -59,13 +56,11 @@ Windows 下也可直接双击仓库根目录的 `dev.bat` 一键拉起两个服�
 (后端无 --reload,改动后端代码后需重启后端窗口;前端为热更新)。
 
 - 开发期由 vite 代理把 `/api` 转发到 `http://127.0.0.1:8000`(见 `vite.config.ts`);
-- `.env.local`(`VITE_USE_MOCK=false`)已把登录与聊天切换到真实接口;
-  删除该文件并重启 dev server 即回到纯 Mock 演示模式;
+- 登录与聊天全部走真实后端(LLM 平台密钥在 `backend/.env.local` 配置,见 `backend/.env.local.example`);
 - 登录令牌存于登录态(内存 + localStorage 刷新保持),令牌失效(401)时自动回登录页;
 - `src/api/http.ts` 解析 OpenAI 兼容 SSE,**每帧 payload 为 JSON 字符串**(兼容纯文本),
   正文中的 `\n` 由后端转义,流式拼接无丢字;
-- 聊天接口当前为后端无状态单轮回复(上下文栈仍由前端会话系统维护);
-  替换 MockLLM 为真实模型只需改 `backend/mockllm.py`,前端无需改动。
+- 聊天请求携带最近几轮历史(多轮上下文),会话上下文栈由前端会话系统维护。
 
 ## 功能说明
 
@@ -79,14 +74,14 @@ Windows 下也可直接双击仓库根目录的 `dev.bat` 一键拉起两个服�
 - **问题归纳系统 + 多会话(上下文栈)**:
   - 每个用户问题自动分类到高等数学大板块(数学分析 / 高等代数 /
     空间解析几何 / 拓扑学 / 微分方程 / 概率论与数理统计 / 复变函数),
-    分类器见 `lib/classifier.ts`,后端接入后可替换为模型分类。
+    分类器见 `utils/classifier.ts`(关键词预判,后端路由做最终裁决)。
   - 同板块问题延续当前会话;检测到不同类型的问题时,检索同板块
     旧会话并切回(上下文栈),否则新开会话 —— 避免不同类型问题相互纠缠。
   - 会话持久化到 localStorage(记忆功能,刷新不丢失);
     问题归纳面板按板块显示问题数量,点击问题跳回当时所在的对话。
   - 如需重置历史:浏览器控制台执行 `localStorage.removeItem('mg-learn-sessions')`。
-- **Mock 流式回复**:逐字输出模拟真实 SSE 流,后端接入后仅需替换
-  `streamMockReply` 的实现,界面层无需改动。
+- **LLM 流式回复**:后端转发模型增量(SSE),前端增量节流上屏;流式期间
+  贴底自动跟随、上拉阅读不抢滚;研究型问题回答末尾附小字引用区(可点击跳转)。
 
 ## 开发阶段
 
@@ -96,7 +91,7 @@ Windows 下也可直接双击仓库根目录的 `dev.bat` 一键拉起两个服�
 隐私与安全 / 语言 / 外观 / 关于 / 退出登录 / 回收站)、头像自选
 (预设 + 相册上传,需相册授权)、聊天页语音输入(浏览器本地识别)与
 模型语音回复开关(待开发)、浅色主题(全站含开机动画)。
-⑥ 国际化(进行中):设置 → 语言 支持简体中文 / English,界面即时切换;
-词典在 `utils/i18n.ts`,Mock 助手回复双语输出,中英文关键词均可命中。
+⑥ 国际化:设置 → 语言 支持简体中文 / English,界面即时切换;
+词典在 `utils/i18n.ts`,中英文关键词均可命中。
 
-用户与设置数据仅存于本机 localStorage,接入后端后由真实账号接口替换。
+账号数据存于后端(backend/data,JSON 存储);会话档案与设置存于本机 localStorage。

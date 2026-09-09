@@ -1,5 +1,5 @@
 /**
- * 用户状态:登录态与用户档案(演示环境持久化于 localStorage)。
+ * 用户状态:登录态与用户档案(账号存后端,登录态持久化于 localStorage)。
  * 认证流程统一走 services/authService,这里只负责状态与持久化。
  */
 import { reactive } from 'vue'
@@ -8,7 +8,7 @@ import type { AuthMethod, AuthUserDto } from '@/api/types'
 export type { AuthMethod, AuthUserDto }
 
 export interface UserInfo extends AuthUserDto {
-  /** 后端登录令牌(真实后端模式由服务端下发;本地 mock 登录无) */
+  /** 后端登录令牌(由服务端下发,请求层加 Authorization 头) */
   token?: string
   realName?: { name: string; idMasked: string }
 }

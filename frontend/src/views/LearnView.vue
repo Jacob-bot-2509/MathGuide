@@ -12,8 +12,8 @@
  * - 所有会话持久化到 localStorage(记忆功能),
  *   问题归纳面板按板块汇总,点击问题可跳回当时所在的对话。
  *
- * 当前使用 Mock 流式回复,后端接入后仅需替换 streamMockReply;
- * 分类与检索届时可替换为模型实现,界面无需改动。
+ * 回复由后端 LLM 流式生成(services/chatService,SSE 契约);
+ * 问题分类由前端关键词预判,后端路由做最终裁决。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
 import { useRouter } from 'vue-router'
