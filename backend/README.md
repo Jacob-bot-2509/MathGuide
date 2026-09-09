@@ -71,6 +71,18 @@ $\lim_{x\to 0}\frac{\sin x}{x}=1$ 是一切等价无穷小替换的根基。
 无需 frontmatter(此时 category 为 other,建议重要资料仍用 md 格式标好板块与关键词)。
 PDF / Word 等二进制格式:先转成 md/txt(或后续在 `rag/documents.py` 挂载解析器),格式同上。
 
+### 每日自动同步(增量更新)
+
+`tools/sync_knowledge.py` 只拉「上次同步以来」的 arXiv 论文(按 submittedDate 增量),
+且仅收录标题/摘要命中课程主题词的论文(自动入库质检门),拉完自动跑召回率评测,
+不过线不发布。同步标记存于 `tools/.last_sync`(不入库)。
+
+Windows 定时任务示例(每天 09:30 自动同步):
+
+```bat
+schtasks /Create /TN "MathGuide-KB-Sync" /SC DAILY /ST 09:30 /TR "\"D:\code\.venv\Scripts\python.exe\" \"D:\code\backend\tools\sync_knowledge.py\" --limit 20"
+```
+
 ## 检索升级(可选):embedding 向量混合
 
 知识量大或需要"换一种说法也能命中"的语义检索时,配置环境变量启用向量混合打分:
@@ -171,6 +183,7 @@ tokens.json 存令牌);清空这两个文件即可重置演示环境。
 
 ```bash
 python tools/check_keys.py      # LLM Key 快速校验(不打印 key 内容,两把都 ✓ 才可跑真机)
+python tools/sync_knowledge.py  # 知识库每日同步一条龙:增量拉取(课程词过滤)→ 召回评测 → 报告
 python tools/eval_recall.py    # 知识库召回率评测:54 道多语问法批量测,报告落盘 eval_report.txt
 python tools/eval_route.py     # 路由分流评测:50 用例四路(研究/知识/框架/会话)
 python tools/eval_search.py    # 深度搜索评测:10 道研究型问题(网络依赖,单源失败不影响整体)

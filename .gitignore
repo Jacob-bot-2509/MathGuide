@@ -18,3 +18,4 @@ dist/
 .env.local
 backend/tools/eval_report.txt
 backend/tools/eval_search_report.txt
+backend/tools/.last_sync

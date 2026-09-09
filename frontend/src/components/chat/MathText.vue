@@ -8,8 +8,9 @@ import { defineComponent, h, type VNode } from 'vue'
 import katex from 'katex'
 
 interface Seg {
-  type: 'text' | 'bold' | 'math' | 'mathd' | 'code'
+  type: 'text' | 'bold' | 'math' | 'mathd' | 'code' | 'link' | 'hr' | 'quote'
   value: string
+  href?: string
 }
 
 // 已闭合公式的渲染缓存:流式期间每帧只有最后一段在变化,
@@ -67,15 +68,66 @@ function parseInline(src: string): Seg[] {
   return segs
 }
 
+// 行内 markdown 链接:[文字](url);解析失败按纯文本保留
+const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g
+
+function parseInlineLinks(src: string): Seg[] {
+  const segs: Seg[] = []
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = LINK_RE.exec(src))) {
+    if (m.index > last) segs.push({ type: 'text', value: src.slice(last, m.index) })
+    segs.push({ type: 'link', value: m[1], href: m[2] })
+    last = m.index + m[0].length
+  }
+  if (last < src.length) segs.push({ type: 'text', value: src.slice(last) })
+  return segs
+}
+
 function parse(src: string): Seg[] {
   const segs: Seg[] = []
   for (const part of src.split(/(```[\s\S]*?(?:```|$))/g)) {
     if (part.startsWith('```')) {
       segs.push({ type: 'code', value: part.replace(/^```[a-z]*\s*|\s*```$/g, '') })
-    } else {
-      segs.push(...parseInline(part))
+      continue
+    }
+    // 单独成行的 --- → 分隔线(带捕获,奇数位置即分隔符)
+    const blocks = part.split(/((?:^|\n)---(?:\n|$))/)
+    for (let i = 0; i < blocks.length; i++) {
+      if (i % 2 === 1) {
+        segs.push({ type: 'hr', value: '' })
+        continue
+      }
+      segs.push(...parseBlock(blocks[i]))
     }
   }
+  return segs
+}
+
+/** 行级解析:连续 > 开头的行为引用块(引用区小字样式),其余走常规解析 */
+function parseBlock(src: string): Seg[] {
+  const segs: Seg[] = []
+  let normal = ''
+  let quote = ''
+  const flushNormal = () => {
+    if (normal.trim()) segs.push(...parseInline(normal))
+    normal = ''
+  }
+  const flushQuote = () => {
+    if (quote.trim()) segs.push({ type: 'quote', value: quote.trim() })
+    quote = ''
+  }
+  for (const line of src.split('\n')) {
+    if (line.startsWith('>')) {
+      flushNormal()
+      quote += `${line.slice(1).trim()}\n`
+    } else {
+      flushQuote()
+      normal += `${line}\n`
+    }
+  }
+  flushNormal()
+  flushQuote()
   return segs
 }
 
@@ -92,6 +144,15 @@ function buildNodes(text: string): VNode[] {
         return h('span', { key: i, class: 'seg-math', innerHTML: renderKatex(s.value, false) })
       case 'mathd':
         return h('span', { key: i, class: 'seg-mathd', innerHTML: renderKatex(s.value, true) })
+      case 'link':
+        return h('a', { key: i, class: 'seg-link', href: s.href, target: '_blank', rel: 'noopener' }, s.value)
+      case 'hr':
+        return h('hr', { key: i, class: 'seg-hr' })
+      case 'quote':
+        return h('div', { key: i, class: 'seg-quote' }, parseInlineLinks(s.value).map((x, j) =>
+          x.type === 'link'
+            ? h('a', { key: j, class: 'seg-link', href: x.href, target: '_blank', rel: 'noopener' }, x.value)
+            : h('span', { key: j }, x.value)))
     }
   })
 }
@@ -134,6 +195,35 @@ export default defineComponent({
   color: var(--text-dim);
   font-family: var(--font-tech);
   font-size: 12px;
+}
+
+/* 可点击链接(引用跳转) */
+.seg-link {
+  color: var(--cyan);
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.seg-link:hover {
+  color: var(--text-hi);
+}
+
+/* 分隔线(正文与引用区之间) */
+.seg-hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 12px 0;
+}
+
+/* 引用区:小字、醒目、可跳转(回答末尾的来源列表) */
+.seg-quote {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  border-left: 2px solid color-mix(in srgb, var(--cyan) 55%, transparent);
+  padding-left: 10px;
+  margin: 4px 0;
+  word-break: break-word;
 }
 
 .seg-mathd {

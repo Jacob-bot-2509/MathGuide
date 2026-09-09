@@ -50,12 +50,13 @@ async def synthesize_stream(question: str, hits: list[SearchHit], zh: bool,
 
 
 def citations_block(hits: list[SearchHit], zh: bool) -> str:
-    """引用区:后端用真实元数据拼装(不经模型,杜绝编造链接)"""
+    """引用区:后端用真实元数据拼装(不经模型,杜绝编造链接)。
+    格式约定(前端 MathText 渲染):--- 分隔线 + > 引用块(小字醒目)+ [文字](链接)"""
     head = "参考来源:" if zh else "References:"
     lines = ["", "---", f"**{head}**"]
     for i, h in enumerate(hits, 1):
         meta = " · ".join(x for x in [h.authors, str(h.year) if h.year else "", h.source] if x)
-        lines.append(f"[{i}] {h.title} — {meta}")
+        lines.append(f"> [{i}] {h.title} — {meta}")
         if h.url:
-            lines.append(f"    {h.url}")
+            lines.append(f"> [{h.url}]({h.url})")
     return "\n".join(lines)

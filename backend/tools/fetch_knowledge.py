@@ -31,6 +31,17 @@ _STOPWORDS = frozenset(
     "from by or at it its as not no we you they he she i me my our their your can will would".split()
 )
 
+# 课程主题词:增量同步时只收录标题/摘要命中这些词的论文(自动入库的质检门)
+COURSE_TERMS = (
+    "taylor", "maclaurin", "limit", "convergence", "derivative", "differential", "integral",
+    "series", "fourier", "differential equation", "ordinary differential", "partial differential",
+    "matrix", "linear algebra", "eigenvalue", "determinant", "probability", "statistics",
+    "normal distribution", "complex analysis", "residue", "analytic function", "topology",
+    "topological", "manifold", "mean value theorem", "riemann", "cauchy", "lagrange",
+    "numerical", "optimization", "convex", "functional analysis", "measure theory",
+    "harmonic analysis", "calculus", "multivariable",
+)
+
 # arXiv 高等数学相关分类
 ARXIV_CATS = [
     "math.CA", "math.AP", "math.AT", "math.CV", "math.DG", "math.FA",
@@ -99,15 +110,22 @@ def _arxiv_category(cat: str) -> str:
     return mapping.get(cat, "analysis")
 
 
-def fetch_arxiv(out_dir: Path, limit: int) -> int:
-    """拉取 arXiv 高等数学分类最新论文的标题+摘要"""
+def fetch_arxiv(out_dir: Path, limit: int, since: str | None = None,
+                do_filter: bool = True) -> int:
+    """拉取 arXiv 高等数学分类论文的标题+摘要。
+    since:YYYY-MM-DD,只拉该日期之后提交的论文(增量同步);
+    do_filter:仅收录标题/摘要命中 COURSE_TERMS 的论文(自动入库质检门)"""
     added = 0
     for cat in ARXIV_CATS:
         if added >= limit:
             break
-        query = urllib.parse.quote(f"cat:{cat}")
-        url = f"http://export.arxiv.org/api/query?search_query={query}&start=0&max_results={min(8, limit)}&sortBy=relevance"
-        print(f"[arxiv] {cat} ...")
+        q = f"cat:{cat}"
+        if since:
+            stamp = since.replace("-", "") + "0000"
+            q += f"+AND+submittedDate:[{stamp}+TO+now]"
+        url = ("http://export.arxiv.org/api/query?"
+               f"search_query={urllib.parse.quote(q)}&start=0&max_results={min(10, limit)}&sortBy=submittedDate&sortOrder=descending")
+        print(f"[arxiv] {cat}" + (f" since {since}" if since else "") + " ...")
         try:
             root = ET.fromstring(http_get(url))
         except Exception as exc:  # noqa: BLE001 网络/解析错误均可重试
@@ -121,6 +139,8 @@ def fetch_arxiv(out_dir: Path, limit: int) -> int:
             summary = (entry.findtext("a:summary", "", ns) or "").strip().replace("\n", " ")
             if not title or len(summary) < 60:
                 continue
+            if do_filter and not any(t in f"{title} {summary}".lower() for t in COURSE_TERMS):
+                continue  # 不命中课程主题词:不入库,保持知识库质量
             kws = re.findall(r"[A-Za-z][A-Za-z-]{2,}", title)[:8]
             if write_md(out_dir, title, title, kws + [cat], _arxiv_category(cat), summary):
                 added += 1
@@ -162,13 +182,16 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="采集公开高等数学资料 → knowledge/*.md")
     ap.add_argument("--source", choices=["arxiv", "wiki", "all"], default="all")
     ap.add_argument("--limit", type=int, default=10, help="最多新增文档数")
+    ap.add_argument("--since", default=None, help="仅拉取该日期(YYYY-MM-DD)之后的论文(增量同步)")
+    ap.add_argument("--no-filter", action="store_true", help="关闭课程关键词过滤(默认开启)")
     ap.add_argument("--out", default=str(Path(__file__).resolve().parent.parent / "knowledge"))
     args = ap.parse_args()
 
     out_dir = Path(args.out)
     total = 0
     if args.source in ("arxiv", "all"):
-        total += fetch_arxiv(out_dir, args.limit - total)
+        total += fetch_arxiv(out_dir, args.limit - total, since=args.since,
+                             do_filter=not args.no_filter)
     if args.source in ("wiki", "all"):
         total += fetch_wiki(out_dir, args.limit - total)
     print(f"\n新增 {total} 篇文档 → {out_dir}")
