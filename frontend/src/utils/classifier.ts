@@ -104,7 +104,7 @@ export const CATEGORIES: Category[] = [
 /** 未归类:匹配不到任何板块的问题(如闲聊、通用提问) */
 export const FALLBACK_CATEGORY: CategoryInfo = { key: 'other', label: '未归类', color: '#64748b' }
 
-/** 去掉指令前缀(如 [例题精讲])后分类;中英文关键词统一小写后匹配 */
+/** 去掉指令前缀(如 [章节知识导航])后分类;中英文关键词统一小写后匹配 */
 export function classifyQuestion(text: string): CategoryInfo {
   const content = text.replace(/^\s*\[.+?\]\s*/, '').toLowerCase()
   for (const c of CATEGORIES) {

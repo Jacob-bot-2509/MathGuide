@@ -51,7 +51,7 @@ const ZH: Dict = {
   /* 首页 */
   'home.heroSub': '基于大模型的高等数学学习辅助与科学研究智能助手',
   'home.learnTitle': '学习辅助',
-  'home.learnDesc': '一体化智能答疑对话,概念动画、例题精讲等五大指令随问随用。',
+  'home.learnDesc': '一体化智能答疑对话,概念动画、章节导航等四大指令随问随用。',
   'home.open': '已开放',
   'home.researchTitle': '科学研究',
   'home.researchDesc': '公式推导辅助 · 符号计算验算 · 论文公式解析,面向科研场景的深度推理。',
@@ -84,6 +84,12 @@ const ZH: Dict = {
   'learn.toastPasteEmpty': '剪贴板为空或读取失败,请先复制内容再试',
   'learn.toastDropTooMany': '一次最多导入 3 个文件,本次拖入已取消',
   'learn.toastPdfNoText': '该 PDF 为扫描版(无文本层),已按普通文件接收',
+  'learn.toastNbAdded': '加入成功,后续可以用于温故知新',
+  'learn.nbAfterYes': '还有需要帮你解答的吗?',
+  'learn.nbAfterNo': '好的,还有需要帮你解答的吗?',
+  'learn.nbEmpty': '📓 问题记录本还是空的:问几道题,解答完后点「是」即可收录,温故知新。',
+  'learn.nbTitle': '问题记录(共 {n} 条,点击题目跳回原问答)',
+  'learn.toastNbGone': '该问答原会话已不在,无法跳转',
   'learn.toastVoiceDenied': '请在设置 → 隐私与安全中开启语音识别授权',
   'learn.toastNoSR': '当前浏览器不支持语音识别,请使用 Chrome / Edge',
   'learn.toastMicDenied': '麦克风权限被拒绝:请点击地址栏的权限图标,允许本网站使用麦克风后重试',
@@ -270,7 +276,7 @@ const EN: Dict = {
 
   'home.heroSub': 'AI-powered higher mathematics learning & research assistant',
   'home.learnTitle': 'Learn',
-  'home.learnDesc': 'One-stop intelligent Q&A: concept animations, worked examples and 4 more commands on demand.',
+  'home.learnDesc': 'One-stop intelligent Q&A: concept animations, chapter navigation and 2 more commands on demand.',
   'home.open': 'Open',
   'home.researchTitle': 'Research',
   'home.researchDesc': 'Formula derivation · symbolic verification · paper formula parsing, deep reasoning for research.',
@@ -302,6 +308,12 @@ const EN: Dict = {
   'learn.toastPasteEmpty': 'Clipboard is empty or unreadable — copy something first',
   'learn.toastDropTooMany': 'Up to 3 files per drop — this drop was cancelled',
   'learn.toastPdfNoText': 'This PDF is a scan (no text layer); received as a regular file',
+  'learn.toastNbAdded': 'Saved — review it anytime to refresh your memory',
+  'learn.nbAfterYes': 'Anything else I can help you with?',
+  'learn.nbAfterNo': 'Sure. Anything else I can help you with?',
+  'learn.nbEmpty': '📓 Your notebook is empty: ask a question, then tap Yes after the answer to save it for review.',
+  'learn.nbTitle': 'Question notebook ({n} entries, tap a question to jump back)',
+  'learn.toastNbGone': 'The original chat is gone, cannot jump to it',
   'learn.toastVoiceDenied': 'Enable voice recognition in Settings → Privacy & Security first',
   'learn.toastNoSR': 'Speech recognition is not supported in this browser, use Chrome / Edge',
   'learn.toastMicDenied': 'Microphone permission denied: click the permission icon in the address bar and allow mic access',
@@ -468,25 +480,22 @@ export function catName(key: string): string {
 
 const CMD_NAMES: Record<string, [string, string]> = {
   概念动画演示: ['概念动画演示', 'Concept Animation'],
-  例题精讲: ['例题精讲', 'Worked Examples'],
   章节知识导航: ['章节知识导航', 'Chapter Navigator'],
-  错题归纳: ['错题归纳', 'Mistake Review'],
+  问题记录: ['问题记录', 'Question Notebook'],
   公式查询手册: ['公式查询手册', 'Formula Handbook'],
 }
 
 const CMD_HINTS: Record<string, [string, string]> = {
   概念动画演示: ['输入想看的数学概念,演示其几何意义', 'Enter a concept to see its geometric meaning animated'],
-  例题精讲: ['输入题目或知识点,给出例题与讲解', 'Enter a topic to get worked examples'],
   章节知识导航: ['上传或粘贴教材后,一键划分章节;点击章节查看知识指引', 'Upload or paste a textbook to get its chapter list; tap a chapter for guidance'],
-  错题归纳: ['粘贴错题,归纳错误原因与易错点', 'Paste a wrong answer to analyze its causes'],
+  问题记录: ['归纳本:已收纳的问题与参考解答,温故知新', 'Notebook: saved questions with answers and approaches for review'],
   公式查询手册: ['查询常用公式与定理', 'Look up common formulas and theorems'],
 }
 
 const CMD_DEFAULTS: Record<string, [string, string]> = {
   概念动画演示: ['函数极限的动画演示', 'Animation of the limit of a function'],
-  例题精讲: ['一道经典极限例题', 'A classic limit example'],
   章节知识导航: ['高等数学章节结构', 'Chapter structure of higher mathematics'],
-  错题归纳: ['错题归纳模板', 'Mistake review template'],
+  问题记录: ['问题记录本', 'My question notebook'],
   公式查询手册: ['常用公式速查', 'Common formulas at a glance'],
 }
 

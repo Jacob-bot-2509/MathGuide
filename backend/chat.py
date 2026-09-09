@@ -37,7 +37,7 @@ FRAME_MS = 0.02    # 帧间隔(秒),模拟真实模型逐字输出
 WELCOME_ZH = (
     "**欢迎回到 MATHGUIDE · 学习辅助**\n\n"
     "我是 MG,你的高等数学学习与研究助手。直接提问即可,或用下方指令:"
-    "概念动画演示 / 例题精讲 / 章节知识导航 / 错题归纳 / 公式查询手册。\n\n"
+    "概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册。\n\n"
     "问题的**板块我会自动识别**,先给严谨的专业表述,再给形象化理解,并带上公式推演;"
     "中文、英文提问都可以。\n\n"
     "(Welcome to MATHGUIDE · Learn. You can also ask in English, e.g. \"explain limits with intuition\".)"
@@ -72,8 +72,7 @@ ATTACH_IMAGE_ZH = (
 )
 ATTACH_FILE_ZH = (
     "已收到文件 **{name}**(大小 {size} KB)。\n\n"
-    "演示环境仅保存文件元信息;接入后端文件服务后支持 PDF / 讲义解析,"
-    "可执行「章节知识导航」与「例题精讲」的整篇喂入。"
+    "文本/PDF 教材已读取正文,可执行「章节知识导航」一键划分章节;"
 )
 ATTACH_IMAGE_EN = (
     "Image **{name}** received and kept in this conversation.\n\n"
@@ -164,16 +163,16 @@ CHITCHAT_SETS_ZH: dict[str, list[str]] = {
         "过奖啦,真正厉害的是坚持提问的你。",
     ],
     "intro": [
-        "我是 MG,MathGuide 的高等数学学习助手。概念讲解、例题精讲、章节导航、错题归纳、公式查询,都是我的拿手活。",
+        "我是 MG,MathGuide 的高等数学学习助手。概念讲解、章节导航、问题记录、公式查询,都是我的拿手活。",
         "我叫 MG,专攻高等数学的学习与科研辅助。你可以直接丢给我一道题,或者问我某个概念怎么理解。",
     ],
     "ability": [
         "我能帮你做这些:讲概念(带形象理解)、串章节知识、归纳错题、查公式,还能给难题搭解题框架。",
-        "我的主战场是高等数学:概念讲解、例题精讲、错题归纳、公式查询,还能陪你梳理章节脉络。",
+        "我的主战场是高等数学:概念讲解、问题记录、公式查询,还能陪你梳理章节脉络。",
     ],
     "usage": [
-        "直接在输入框提问就行,比如「什么是泰勒展开」;下面指令栏的按钮可以一键切到例题精讲、公式查询等模式。",
-        "用法很简单:输入问题回车即可。想要例题点「例题精讲」,想查公式点「公式查询手册」。",
+        "直接在输入框提问就行,比如「什么是泰勒展开」;下面指令栏的按钮可以一键切到章节导航、公式查询等模式。",
+        "用法很简单:输入问题回车即可。想回顾收纳过的题目点「问题记录」,想查公式点「公式查询手册」。",
     ],
     "mood": [
         "听起来你有点低落?数学解不出来的挫败感我懂。要不先聊两句,或者换一道简单题找回手感?",
@@ -509,6 +508,10 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             if verdict:
                 print(f"[chat] 复核({vrole}): {verdict[:60]}")
                 yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
+            # 解答完询问是否收录进问题记录(归纳本):前端渲染为「是/否」按钮
+            nb = ("\n\n[是](cmd://nb/yes) [否](cmd://nb/no)" if _is_chinese(prompt)
+                  else "\n\n[Yes](cmd://nb/yes) [No](cmd://nb/no)")
+            yield f"data: {json.dumps(nb, ensure_ascii=False)}\n\n"
         if sid is not None and history and len(history) >= 16:
             # 每 8 次请求异步压缩一次更早的对话(不阻塞本次响应;失败静默)
             tick = _SUM_TICK.get(sid, 0) + 1

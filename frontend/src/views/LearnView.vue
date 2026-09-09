@@ -35,6 +35,7 @@ import {
   type ChatSession,
 } from '@/stores/sessions'
 import { addToTrash } from '@/stores/trash'
+import { addNotebookEntry, notebookState } from '@/stores/notebook'
 import { compressImage } from '@/utils/avatar'
 import { showToast } from '@/utils/toast'
 
@@ -343,6 +344,11 @@ function send(text?: string, cmd?: string) {
 
 /** 点击指令:直接执行对应功能 */
 function runCommand(cmd: string) {
+  // 问题记录 = 本地归纳本:直接展示,不走后端
+  if (cmd === '问题记录') {
+    showNotebook()
+    return
+  }
   // 输入为空用指令默认问题;不清空输入,由 send 在成功发出后统一清空
   const text = input.value.trim() || cmdDefault(cmd) || cmd
   send(text, cmd)
@@ -422,7 +428,7 @@ function latestTextbookText(session: ChatSession): string {
   return ''
 }
 
-/** 对话区点击:承接 MathText 渲染的 cmd:// 契约按钮(章节胶囊 / 返回黄框) */
+/** 对话区点击:承接 MathText 渲染的 cmd:// 契约按钮(章节胶囊 / 返回黄框 / 收录是否) */
 function onListClick(e: MouseEvent) {
   const el = (e.target as HTMLElement).closest<HTMLElement>('[data-mg-cmd]')
   if (!el) return
@@ -433,7 +439,82 @@ function onListClick(e: MouseEvent) {
   }
   if (url.startsWith('cmd://chapter/')) {
     onNavChapter(decodeURIComponent(url.slice('cmd://chapter/'.length)))
+    return
   }
+  if (url === 'cmd://nb/yes' || url === 'cmd://nb/no') {
+    const msgEl = (e.target as HTMLElement).closest<HTMLElement>('[data-msg-id]')
+    onNotebookChoice(url.endsWith('/yes'), msgEl ? Number(msgEl.dataset.msgId) : 0)
+    return
+  }
+  if (url.startsWith('cmd://nb/jump/')) {
+    jumpToNotebookEntry(Number(url.slice('cmd://nb/jump/'.length)))
+  }
+}
+
+/* ---------- 问题记录(归纳本):解答完询问是否收录,点「是」收纳成档 ---------- */
+
+/** 收录选择:先摘掉按钮(防重复点击),「是」则把本题问答收纳进归纳本;
+    无论是否都接一句形式性询问(一次性提问若干问题 → 统一收纳在一档) */
+function onNotebookChoice(yes: boolean, msgId: number) {
+  const session = activeSession.value
+  if (!session) return
+  const idx = session.messages.findIndex((m) => m.id === msgId)
+  if (idx < 0) return
+  const answer = session.messages[idx]
+  answer.content = answer.content.replace(/\s*\[(是|否|Yes|No)\]\(cmd:\/\/nb\/(yes|no)\)/g, '')
+  if (yes) {
+    const question = [...session.messages.slice(0, idx)].reverse().find((m) => m.role === 'user')
+    if (question) {
+      addNotebookEntry(question.content, answer.content, session.id, question.id)
+      showToast(t('learn.toastNbAdded'))
+    }
+  }
+  session.messages.push({
+    id: nextMsgId(),
+    role: 'assistant',
+    content: yes ? t('learn.nbAfterYes') : t('learn.nbAfterNo'),
+  })
+  persistSessions()
+  scrollBottom()
+}
+
+/** 点击「问题记录」指令:本地归纳本,输出所整理的题目与参考解答(含参考思路),点击条目跳回原问答 */
+function showNotebook() {
+  const session = activeSession.value ?? createSession()
+  if (session.messages.some((m) => m.streaming)) {
+    showToast(t('learn.toastBusy'))
+    return
+  }
+  const entries = notebookState.entries
+  if (!entries.length) {
+    session.messages.push({
+      id: nextMsgId(),
+      role: 'assistant',
+      content: t('learn.nbEmpty'),
+    })
+  } else {
+    const lines: string[] = [`📓 **${t('learn.nbTitle', { n: entries.length })}**`]
+    for (const [i, e] of entries.entries()) {
+      lines.push(`\n**${i + 1}. 题目**: [${e.question.slice(0, 120)}${e.question.length > 120 ? '…' : ''}](cmd://nb/jump/${e.id})`)
+      const preview = e.answer.slice(0, 300)
+      lines.push(`**参考解答**: ${preview}${e.answer.length > 300 ? '…' : ''}`)
+    }
+    session.messages.push({ id: nextMsgId(), role: 'assistant', content: lines.join('\n') })
+  }
+  persistSessions()
+  scrollBottom()
+}
+
+/** 归纳本条目跳回原问答(温故知新) */
+function jumpToNotebookEntry(id: number) {
+  const entry = notebookState.entries.find((e) => e.id === id)
+  if (!entry) return
+  const session = sessions.value.find((s) => s.id === entry.sessionId)
+  if (!session || !session.messages.some((m) => m.id === entry.msgId)) {
+    showToast(t('learn.toastNbGone'))
+    return
+  }
+  jumpTo(entry.msgId)
 }
 
 /** 点击章节:已讲解过 → 直接跳转到已生成的指引;未讲解 → 请求该章知识指引 */

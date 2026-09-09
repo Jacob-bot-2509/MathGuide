@@ -156,10 +156,10 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文档(预留)
 
 ```jsonc
 // POST /api/chat/stream  body:
-{ "prompt": "什么是导数", "cmd": "例题精讲", "sessionId": 1, "categoryKey": "analysis" }
+{ "prompt": "什么是导数", "cmd": "章节知识导航", "sessionId": 1, "categoryKey": "analysis" }
 ```
 
-- `cmd` 与前端指令栏对应(概念动画演示 / 例题精讲 / 章节知识导航 / 错题归纳 / 公式查询手册);
+- `cmd` 与前端指令栏对应(概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册);
   `sessionId` / `categoryKey` 随契约接收,当前为**无状态单轮回复**(上下文栈由前端维护);
 - 空 `prompt` 视为新会话,下发欢迎语;难度由后端按问题措辞自动判定(中英文);
 - 响应为 OpenAI 兼容 SSE,**每帧 payload 是 JSON 字符串**(正文含换行、LaTeX 反斜杠时仍为单行,不会拆碎 data 行):

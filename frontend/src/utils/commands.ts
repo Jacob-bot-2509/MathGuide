@@ -12,9 +12,8 @@ export interface Command {
 
 export const COMMANDS: Command[] = [
   { key: '概念动画演示', label: '概念动画演示', icon: '▶', hint: '输入想看的数学概念,演示其几何意义' },
-  { key: '例题精讲', label: '例题精讲', icon: '✎', hint: '输入题目或知识点,给出例题与讲解' },
   { key: '章节知识导航', label: '章节知识导航', icon: '◈', hint: '查看高等数学章节知识结构' },
-  { key: '错题归纳', label: '错题归纳', icon: '✖', hint: '粘贴错题,归纳错误原因与易错点' },
+  { key: '问题记录', label: '问题记录', icon: '📓', hint: '归纳本:已收纳的问题与参考解答,温故知新' },
   { key: '公式查询手册', label: '公式查询手册', icon: '∫', hint: '查询常用公式与定理' },
 ]
 // 注:指令的默认提问与多语言提示统一在 utils/i18n.ts(CMD_DEFAULTS / CMD_HINTS),
