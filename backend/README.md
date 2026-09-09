@@ -170,6 +170,7 @@ tokens.json 存令牌);清空这两个文件即可重置演示环境。
 ## 质检工具(tools/)
 
 ```bash
+python tools/check_keys.py      # LLM Key 快速校验(不打印 key 内容,两把都 ✓ 才可跑真机)
 python tools/eval_recall.py    # 知识库召回率评测:54 道多语问法批量测,报告落盘 eval_report.txt
 python tools/eval_route.py     # 路由分流评测:50 用例四路(研究/知识/框架/会话)
 python tools/eval_search.py    # 深度搜索评测:10 道研究型问题(网络依赖,单源失败不影响整体)

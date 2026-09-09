@@ -22,6 +22,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import config  # noqa: E402 装载 .env.local(LLM key),与 main.py 同路径
+
+config.load_env()
+
 RED = "\033[91m"
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
