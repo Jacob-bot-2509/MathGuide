@@ -6,6 +6,12 @@
 
 /* ---------- 聊天 ---------- */
 
+/** 历史对话条目(多轮上下文,只传文本;服务端会再做条数/长度截断) */
+export interface ChatHistoryItem {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 /** 发送给后端的聊天请求 */
 export interface ChatRequest {
   /** 会话 id(上下文栈) */
@@ -14,6 +20,8 @@ export interface ChatRequest {
   categoryKey?: string
   prompt: string
   cmd?: string
+  /** 最近几轮历史对话(供模型理解上下文;直答/闲聊路径不受影响) */
+  history?: ChatHistoryItem[]
 }
 
 /** 流式回调(OpenAI 兼容 SSE 的通用形态) */

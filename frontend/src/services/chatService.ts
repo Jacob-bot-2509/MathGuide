@@ -19,6 +19,7 @@ export interface ChatMeta {
   cmd?: string
   sessionId?: number
   categoryKey?: string
+  history?: ChatRequest['history']
 }
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false'
@@ -38,7 +39,13 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
   const controller = new AbortController()
   let settled = false
 
-  const body: ChatRequest = { prompt, cmd: meta?.cmd, sessionId: meta?.sessionId, categoryKey: meta?.categoryKey }
+  const body: ChatRequest = {
+    prompt,
+    cmd: meta?.cmd,
+    sessionId: meta?.sessionId,
+    categoryKey: meta?.categoryKey,
+    history: meta?.history,
+  }
 
   postSSE(
     '/api/chat/stream',

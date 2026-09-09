@@ -262,6 +262,21 @@ def _compose_direct(prompt: str, chunks: list[tuple[rag.Chunk, float]]) -> str:
     return "".join(parts)
 
 
+def _validated_history(raw: object) -> list[dict]:
+    """校验并截断前端传来的历史消息(条数/长度双保险,异常值直接丢弃)"""
+    out: list[dict] = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw[:8]:
+        if not isinstance(item, dict):
+            continue
+        role, content = item.get("role"), item.get("content")
+        if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+            continue
+        out.append({"role": role, "content": content.strip()[:400]})
+    return out
+
+
 def _research_reply(outcome: rag.research.SearchOutcome, zh: bool) -> str:
     """研究型回复(P1):按相关度列出高置信来源(标题/作者/年份/摘要/链接),
     来源统计与失败源如实呈现;接入 LLM 后此函数升级为「综合解答 + 引用」(P2)"""
@@ -302,17 +317,19 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
         async for frame in _frames(_research_reply(outcome, zh)):
             yield frame
         return
-    async for frame in _frames(rag.research.synthesize.citations_block(outcome.hits, zh)):
+    async for frame in _frames(rag.research.synthesize.citations_block(outcome.hits, zh), pace=False):
         yield frame
 
 
-async def _frames(text: str):
-    """按帧切片流式下发一段完整文本(JSON 字符串包裹,含 [DONE] 收尾)"""
+async def _frames(text: str, pace: bool = True):
+    """按帧切片流式下发一段完整文本(JSON 字符串包裹,含 [DONE] 收尾);
+    pace=False 用于引用区等附属内容:不做人工逐字拟态,即时下发"""
     i = 0
     while i < len(text):
         yield f"data: {json.dumps(text[i:i + CHUNK], ensure_ascii=False)}\n\n"
         i += CHUNK
-        await asyncio.sleep(FRAME_MS)
+        if pace:
+            await asyncio.sleep(FRAME_MS)
     yield "data: [DONE]\n\n"
 
 
@@ -324,11 +341,12 @@ def _stream_text(text: str) -> StreamingResponse:
     )
 
 
-async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]]):
-    """LLM 流式:模型增量原样转发;调用失败自动降级为直答,不让前端假死"""
+async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]],
+                   history: list[dict] | None = None):
+    """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死"""
     try:
         system = rag.build_system(chunks, cmd, zh=_is_chinese(prompt))
-        async for delta in rag.llm.stream_chat(system, prompt):
+        async for delta in rag.llm.stream_chat(system, prompt, history=history):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型侧错误不区分类型,统一降级
         print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
@@ -382,7 +400,7 @@ async def chat_stream(request: Request) -> StreamingResponse:
 
     if rag.llm.is_configured():
         return StreamingResponse(
-            _gen_llm(question, cmd, chunks),
+            _gen_llm(question, cmd, chunks, history=_validated_history(body.get("history"))),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )

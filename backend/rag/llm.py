@@ -61,14 +61,15 @@ def is_configured(role: str = "main") -> bool:
     return resolve(role) is not None
 
 
-async def _stream_once(base: str, key: str, model: str,
-                       system: str, user: str) -> AsyncIterator[str]:
+async def _stream_once(base: str, key: str, model: str, system: str, user: str,
+                       history: list[dict] | None = None) -> AsyncIterator[str]:
+    messages: list[dict] = [{"role": "system", "content": system}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user})
     payload = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
         "stream": True,
     }
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
@@ -91,13 +92,15 @@ async def _stream_once(base: str, key: str, model: str,
 
 
 async def stream_chat(system: str, user: str, role: str = "main",
-                      fallback: bool = True) -> AsyncIterator[str]:
-    """流式对话;role 失败且 fallback 时自动切 backup(异平台容灾)"""
+                      fallback: bool = True,
+                      history: list[dict] | None = None) -> AsyncIterator[str]:
+    """流式对话;role 失败且 fallback 时自动切 backup(异平台容灾)。
+    history:最近几轮对话 [{role, content}](调用方已校验/截断)"""
     spec = resolve(role)
     if spec is None:
         raise RuntimeError(f"LLM 角色 {role} 未配置")
     try:
-        async for delta in _stream_once(*spec, system, user):
+        async for delta in _stream_once(*spec, system, user, history):
             yield delta
         return
     except Exception:
@@ -107,5 +110,5 @@ async def stream_chat(system: str, user: str, role: str = "main",
         if backup is None:
             raise
         print(f"[llm] {role} 调用失败,切换到 backup")
-        async for delta in _stream_once(*backup, system, user):
+        async for delta in _stream_once(*backup, system, user, history):
             yield delta

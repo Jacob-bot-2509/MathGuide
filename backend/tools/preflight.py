@@ -44,6 +44,9 @@ SMOKE_CASES = [
     ("你好", ""),
 ]
 
+# 研究型冒烟(耗时较长,单独超时):要求回复含来源/链接(搜索→综合→引用全链路)
+RESEARCH_SMOKE = ("泰勒展开的最新研究进展", 120)
+
 failures: list[str] = []
 
 
@@ -144,6 +147,29 @@ def main() -> int:
                 fail(f"抽查题「{question}」回复不符合预期(期望「{expect or '会话应答'}」)", hint)
         except Exception as e:
             fail(f"抽查题「{question}」请求失败:{e}", "查看后端控制台报错")
+
+    # 5b. 研究型全链路冒烟(搜索 → 精排 → 综合 → 引用)
+    question, timeout = RESEARCH_SMOKE
+    try:
+        resp = post(f"{BASE}/api/chat/stream", {"prompt": question}, token=token, timeout=timeout)
+        full = ""
+        for raw in resp:
+            line = raw.decode("utf-8").strip()
+            if not line.startswith("data:"):
+                continue
+            p = line[5:].strip()
+            if not p or p == "[DONE]":
+                continue
+            try:
+                full += json.loads(p)
+            except json.JSONDecodeError:
+                full += p
+        if ("来源" in full or "References" in full or "http" in full) and len(full) > 100:
+            ok(f"研究型冒烟「{question}」通过({len(full)} 字)")
+        else:
+            fail(f"研究型冒烟「{question}」未返回来源/引用", "检查深度搜索各源与综合链路日志")
+    except Exception as e:
+        fail(f"研究型冒烟「{question}」请求失败:{e}", "查看后端控制台报错")
 
     # 6. LLM / embedding 配置状态(信息项)
     from rag import embed, llm

@@ -96,8 +96,10 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0) -> S
     )
 
     outcome.hits = rank.rank(outcome.hits, terms, question, top_k)
-    # P2b:LLM 精排(配置了模型时;失败自动回退规则排序)
-    if outcome.hits and llm.is_configured():
+    # P2b:LLM 精排(配置了模型且含外源结果时;纯知识库命中无需精排,
+    # 失败自动回退规则排序)
+    if (outcome.hits and llm.is_configured()
+            and any(h.source != "知识库" for h in outcome.hits)):
         outcome.hits = await rerank.rerank(question, outcome.hits, timeout=6.0)
     outcome.elapsed = round(time.perf_counter() - started, 2)
     return outcome

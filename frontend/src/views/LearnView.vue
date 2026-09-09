@@ -131,6 +131,16 @@ function autoGrow() {
   el.style.height = `${Math.min(el.scrollHeight, 160)}px`
 }
 
+/** 组装最近几轮历史(供模型理解上下文):去掉刚发的本条用户消息
+    (它作为 prompt 单独传递),排除附件与流式中的消息,单条截断 */
+function buildHistory(session: ChatSession): ChatMeta['history'] {
+  return session.messages
+    .slice(0, -1)
+    .filter((m) => !m.streaming && !m.attachment && m.content)
+    .slice(-8)
+    .map((m) => ({ role: m.role, content: m.content.slice(0, 400) }))
+}
+
 /** 让某会话的一条助手消息开始流式接收回复(输出在所属会话内进行,切换界面不中断) */
 function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?: ChatMeta) {
   // 增量节流:高频 chunk 先攒进 pending,约每 24ms 合并提交一次;
@@ -255,7 +265,9 @@ function send(text?: string, cmd?: string) {
   scrollBottom()
   persistSessions()
 
-  // prompt 原文随流发送;指令与归属随 ChatMeta 传给后端(契约 ChatRequest)
+  // prompt 原文随流发送;指令与归属随 ChatMeta 传给后端(契约 ChatRequest);
+  // 最近几轮历史一并携带,模型可理解上下文
+  const history = buildHistory(session)
   const reply: ChatMsg = { id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true }
   session.messages.push(reply)
   // 流式回调必须操作响应式代理(数组里读出的那条),而不是 push 进去的裸对象;
@@ -265,6 +277,7 @@ function send(text?: string, cmd?: string) {
     cmd,
     sessionId: session.id,
     categoryKey: session.cat?.key,
+    history,
   })
 }
 
@@ -402,7 +415,11 @@ function attachMessage(attachment: ChatAttachment, content: string) {
   session.messages.push(reply)
   // 同上:流式期间通过响应式代理更新,界面才能实时刷新
   const live = session.messages[session.messages.length - 1]
-  scheduleStream(session, live, `[attach:${attachment.kind}]${attachment.name}`, 450)
+  scheduleStream(session, live, `[attach:${attachment.kind}]${attachment.name}`, 450, {
+    sessionId: session.id,
+    categoryKey: session.cat?.key,
+    history: buildHistory(session),
+  })
 }
 
 function fmtSize(bytes?: number): string {
