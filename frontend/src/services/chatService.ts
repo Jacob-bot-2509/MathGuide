@@ -26,11 +26,12 @@ function authHeaders(): Record<string, string> {
 }
 
 /** 语音识别文本 → 数学符号转写(SSE 流式):首帧即上屏,逐帧回调累计全文;
-    失败走 onFail(由调用方回退原文),不阻断输入 */
+    失败走 onFail(由调用方回退原文),不阻断输入;返回 cancel 供新旧转换切换 */
 export function speechToMath(
   text: string,
   cb: { onDelta: (converted: string) => void; onFail: () => void },
-): void {
+): { cancel: () => void } {
+  const controller = new AbortController()
   let acc = ''
   postSSE(
     '/api/speech/math',
@@ -47,10 +48,11 @@ export function speechToMath(
         cb.onFail()
       },
     },
-    { headers: authHeaders() },
+    { headers: authHeaders(), controller },
   ).catch(() => {
     /* 网络失败已由 onError 通知 */
   })
+  return { cancel: () => controller.abort() }
 }
 
 export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta): ChatStreamHandle {

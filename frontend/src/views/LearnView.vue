@@ -38,6 +38,7 @@ import {
 import { addToTrash } from '@/stores/trash'
 import { addNotebookEntry, notebookState } from '@/stores/notebook'
 import { compressImage } from '@/utils/avatar'
+import { quickMathConvert } from '@/utils/speechTips'
 import { showToast } from '@/utils/toast'
 
 const router = useRouter()
@@ -812,6 +813,45 @@ let sr: ISpeechRecognition | null = null
 let srBaseText = ''
 let srStopToConvert = false // 用户主动点停 → 结束后自动转写数学符号
 
+/* 转写提速编排:说话中后台预热(停顿 800ms 起转,结果攒着不打扰输入框)+
+   点停 0ms 本地速转先出符号 + LLM 精修流式覆盖;seq 保证新旧转换互不干扰 */
+let convSeq = 0
+let convCancel: (() => void) | null = null
+let convAcc = '' // 当前流累计结果
+let convRaw = '' // 当前流对应的原文
+let convLive = false // 是否把流式结果显示到输入框
+let convWarmDone = false
+let convDebounce: ReturnType<typeof setTimeout> | null = null
+
+function cancelConvert() {
+  convSeq++
+  convCancel?.()
+  convCancel = null
+  convLive = false
+}
+
+function startConvert(raw: string, live: boolean) {
+  if (!raw.trim()) return
+  cancelConvert()
+  convRaw = raw
+  convLive = live
+  convAcc = ''
+  const seq = convSeq
+  convCancel = speechToMath(raw, {
+    onDelta: (full) => {
+      if (seq !== convSeq) return
+      convAcc = full
+      if (convLive) {
+        input.value = full
+        autoGrow()
+      }
+    },
+    onFail: () => {
+      if (seq === convSeq && !listening.value) showToast(t('learn.toastConvertFail'))
+    },
+  }).cancel
+}
+
 function toggleMic() {
   if (listening.value) {
     srStopToConvert = true
@@ -832,6 +872,8 @@ function toggleMic() {
   sr.interimResults = true
   sr.continuous = true
   srBaseText = input.value
+  convWarmDone = false
+  cancelConvert() // 清理上一次语音遗留的转写流
   sr.onresult = (e) => {
     let final = ''
     let interim = ''
@@ -845,25 +887,37 @@ function toggleMic() {
     }
     input.value = srBaseText + final + interim
     autoGrow()
+    // 后台预热:停顿 800ms 后把当前文本拿去转写(结果先攒着,点停即展示)
+    if (convDebounce) clearTimeout(convDebounce)
+    convDebounce = setTimeout(() => {
+      convDebounce = null
+      if (listening.value && !convWarmDone) {
+        convWarmDone = true
+        startConvert(input.value, false)
+      }
+    }, 800)
   }
   sr.onend = () => {
     listening.value = false
-    // 用户主动点停且有新识别内容 → 流式转写:首帧即替换输入框,失败回退原文
+    if (convDebounce) {
+      clearTimeout(convDebounce)
+      convDebounce = null
+    }
+    // 用户主动点停且有新识别内容 → 转写三步:说话期间已转好就直接上屏;
+    // 否则先 0ms 本地速转出符号,再 LLM 精修流式覆盖
     if (srStopToConvert) {
       srStopToConvert = false
-      const text = input.value
-      if (text.trim() && text !== srBaseText) {
-        speechToMath(text, {
-          onDelta: (converted) => {
-            input.value = converted
-            autoGrow()
-          },
-          onFail: () => {
-            input.value = text
-            autoGrow()
-            showToast(t('learn.toastConvertFail'))
-          },
-        })
+      const raw = input.value
+      if (raw.trim() && raw !== srBaseText) {
+        if (convRaw === raw && convAcc) {
+          convLive = true
+          input.value = convAcc
+          autoGrow()
+        } else {
+          input.value = quickMathConvert(raw)
+          autoGrow()
+          startConvert(raw, true)
+        }
       }
     }
   }
@@ -915,6 +969,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopAllStreams()
   sr?.stop()
+  cancelConvert()
+  if (convDebounce) clearTimeout(convDebounce)
   if (flashTimer) clearTimeout(flashTimer)
 })
 </script>
