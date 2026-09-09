@@ -195,6 +195,9 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
       }
       flush() // 提交最后的残量,避免丢尾
       reply.streaming = false
+      reply.thinking = false
+      // 主动停止且未出字时给一句停止提示(此时流已被 cancelReply 移出 streams)
+      if (!reply.content && !streams.has(reply.id)) reply.content = t('learn.stoppedNote')
       streams.delete(reply.id)
       persistSessions()
     },
@@ -239,6 +242,23 @@ function cancelReply(id: number) {
     stream.cancel()
     streams.delete(id)
   }
+}
+
+/** 停止当前会话的生成:进行中的流中止后走正常收尾(保留已生成内容),
+    尚未启动的(思考阶段)同步收尾,避免"生成中"卡死 */
+function stopGenerating() {
+  const session = activeSession.value
+  if (!session) return
+  for (const m of session.messages) {
+    if (!m.streaming) continue
+    cancelReply(m.id)
+    m.thinking = false
+    if (!streams.has(m.id)) {
+      m.streaming = false
+      if (!m.content) m.content = t('learn.stoppedNote')
+    }
+  }
+  persistSessions()
 }
 
 function send(text?: string, cmd?: string) {
@@ -887,7 +907,10 @@ onBeforeUnmount(() => {
           @keydown.enter.exact.prevent="send()"
           @paste="onPaste"
         ></textarea>
-        <button class="send" :disabled="busy" @click="send()">{{ busy ? t('learn.generating') : t('learn.send') }}</button>
+        <!-- 生成中变为「停止生成」:可中断长回答,已生成内容保留 -->
+        <button class="send" :class="{ 'is-stop': busy }" @click="busy ? stopGenerating() : send()">
+          {{ busy ? t('learn.stop') : t('learn.send') }}
+        </button>
       </div>
       <div class="commands">
         <span class="tech-label cmd-label">{{ t('learn.cmdLabel') }}</span>
@@ -1215,6 +1238,18 @@ onBeforeUnmount(() => {
 .send:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* 停止生成态:暖黄色警示,点击中断当前回答 */
+.send.is-stop {
+  color: #ffd166;
+  border-color: rgba(255, 209, 102, 0.5);
+  background: rgba(255, 209, 102, 0.1);
+}
+
+.send.is-stop:hover {
+  background: rgba(255, 209, 102, 0.18);
+  box-shadow: 0 0 12px rgba(255, 209, 102, 0.25);
 }
 
 /* ---------- 指令栏(位于输入行下方) ---------- */
