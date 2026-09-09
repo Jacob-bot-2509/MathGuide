@@ -4,7 +4,7 @@
  * streamReply 签名固定,可额外携带会话元数据(契约 ChatRequest)。
  */
 import type { ChatRequest, ChatStreamHandle, StreamCallbacks } from '@/api/types'
-import { postSSE } from '@/api/http'
+import { post, postSSE } from '@/api/http'
 import { getToken, logout as clearUser } from '@/stores/user'
 import router from '@/router'
 import { showToast } from '@/utils/toast'
@@ -23,6 +23,17 @@ export interface ChatMeta {
 function authHeaders(): Record<string, string> {
   const token = getToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/** 语音识别文本 → 数学符号转写(口语念法 → Unicode/LaTeX);失败原样返回,不阻断输入 */
+export async function speechToMath(text: string): Promise<string> {
+  try {
+    const res = await post<{ text: string }>('/api/speech/math', { text }, authHeaders())
+    if (res && res.text && res.text !== text) return res.text
+  } catch {
+    /* 转写失败回退原文 */
+  }
+  return text
 }
 
 export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta): ChatStreamHandle {

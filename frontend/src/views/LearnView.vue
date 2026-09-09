@@ -22,7 +22,7 @@ import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import SpeechTips from '@/components/chat/SpeechTips.vue'
 import { COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
-import { streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
+import { speechToMath, streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
 import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyQuestion, isChitchat } from '@/utils/classifier'
 import { settingsState, updateSettings } from '@/stores/settings'
 import {
@@ -810,9 +810,11 @@ function getSR(): SRConstructor | null {
 const listening = ref(false)
 let sr: ISpeechRecognition | null = null
 let srBaseText = ''
+let srStopToConvert = false // 用户主动点停 → 结束后自动转写数学符号
 
 function toggleMic() {
   if (listening.value) {
+    srStopToConvert = true
     sr?.stop()
     return
   }
@@ -846,6 +848,19 @@ function toggleMic() {
   }
   sr.onend = () => {
     listening.value = false
+    // 用户主动点停且有新识别内容 → 把口语数学转写为数学符号(可手动修改后发送)
+    if (srStopToConvert) {
+      srStopToConvert = false
+      const text = input.value
+      if (text.trim() && text !== srBaseText) {
+        showToast(t('learn.toastConverting'))
+        speechToMath(text).then((converted) => {
+          input.value = converted
+          autoGrow()
+          if (converted !== text) showToast(t('learn.toastConverted'))
+        })
+      }
+    }
   }
   sr.onerror = (e) => {
     listening.value = false

@@ -620,6 +620,44 @@ async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
     return _meter(resp, rec, len(prompt), cmd or "", meta)
 
 
+async def speech_to_math(request: Request) -> JSONResponse:
+    """语音识别文本 → 数学符号转写(口语念法 → Unicode/LaTeX),返回 JSON {text}。
+    转写失败原样返回,绝不阻断语音输入;计入限流与用量统计"""
+    rec = require_auth(request)
+    body = await request.json()
+    text = str(body.get("text", "")).strip()[:6000]
+    if not text:
+        return JSONResponse({"text": ""})
+    _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
+
+    system = (
+        "你是数学语音转写助手。把用户语音识别出的口语数学文本转写为规范数学表达式:"
+        "能用 Unicode 数学符号(如 ² ³ ⁿ √ ∫ π → ∞ ≤ ≥ × ÷ ≈)就直接用,"
+        "复杂结构用简洁 LaTeX(如 x_0、\\frac{b}{a}、\\sum_{i=1}^{n});"
+        "只输出转写结果,不要解释、不要补充。若文本不含数学内容,原样返回。"
+    )
+    parts: list[str] = []
+    try:
+        async for delta in rag.llm.stream_chat(system, text, role="main", fallback=True):
+            parts.append(delta)
+            if sum(len(p) for p in parts) >= 800:
+                break
+    except Exception:  # noqa: BLE001 转写失败回退原文
+        return JSONResponse({"text": text})
+    result = "".join(parts).strip() or text
+    usage.record(
+        user=str(rec.get("nickname") or rec.get("uid") or "访客"),
+        phone=str(rec.get("phone") or ""),
+        cmd="语音转写",
+        prompt_len=len(text),
+        reply_len=len(result),
+        role="main",
+        research=False,
+        ts=time.time(),
+    )
+    return JSONResponse({"text": result})
+
+
 async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta: dict):
     """业务路由(与安全外壳分离):欢迎语 / 附件 / 章节导航 / 研究 / LLM / 直答"""
 

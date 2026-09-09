@@ -49,6 +49,7 @@ routes = [
     Route("/api/auth/login", auth.login, methods=["POST"]),
     Route("/api/auth/logout", auth.logout, methods=["POST"]),
     Route("/api/chat/stream", chat.chat_stream, methods=["POST"]),
+    Route("/api/speech/math", chat.speech_to_math, methods=["POST"]),
     Route("/api/stats", stats),
 ]
 
