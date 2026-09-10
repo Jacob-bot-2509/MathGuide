@@ -9,14 +9,17 @@ import re
 
 from rag.index import STOPWORDS, _bigrams
 
-from .types import SearchHit
+from .types import KB_SOURCE, SearchHit
 
+# 来源权重:键必须覆盖 SOURCE_FNS + KB_SOURCE 全部来源,
+# 漏写的源会静默落到默认 1.0(与同档来源口径不一致)
 SOURCE_WEIGHT = {
     "arXiv": 1.0,
     "Semantic Scholar": 1.2,
     "zbMATH": 1.3,  # 数学专业库 + 同行评论,MSC 分类保证对口
+    "OpenAlex": 1.1,  # 开放学术图谱:覆盖面广,质量信号弱于 S2/zbMATH
     "StackExchange": 0.9,
-    "知识库": 2.0,  # 内部库最贴合课程体系,权重最高
+    KB_SOURCE: 2.0,  # 内部库最贴合课程体系,权重最高
 }
 PER_SOURCE_CAP = 2  # 多样性:单一来源最多贡献 2 条
 

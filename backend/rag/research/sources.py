@@ -26,8 +26,15 @@ from .types import SearchHit
 
 UA = {"User-Agent": "MathGuide-DeepSearch/1.0"}
 
-S2_API_KEY = os.getenv("MG_S2_API_KEY", "")
-CONTACT_MAIL = os.getenv("MG_CONTACT_MAIL", "")
+# 惰性读取:config.load_env() 在 main 启动时才跑,晚于本模块导入
+# (此前写成模块级 os.getenv,导致 .env.local 里配的这两个值永远读不到)
+def _s2_key() -> str:
+    return os.getenv("MG_S2_API_KEY", "")
+
+
+def _contact_mail() -> str:
+    return os.getenv("MG_CONTACT_MAIL", "")
+
 
 RETRIES = 2          # 外部源重试次数
 BACKOFF_BASE = 1.5   # 指数退避基数(秒):1.5, 3, ...
@@ -80,10 +87,9 @@ async def search_arxiv(query: str, max_results: int = 8) -> list[SearchHit]:
                                       int(year) if year.isdigit() else 0, link))
         return hits
 
-    try:
-        return await _retry(_fetch)
-    except Exception:
-        return []
+    # 失败不再吞掉:异常上抛给编排层,由它记入 outcome.errors 并如实告知用户
+    # (此前静默 return [],错误上报机制形同虚设,用户只看到"该源 0 条")
+    return await _retry(_fetch)
 
 
 async def search_semantic_scholar(query: str, limit: int = 8) -> list[SearchHit]:
@@ -93,15 +99,13 @@ async def search_semantic_scholar(query: str, limit: int = 8) -> list[SearchHit]
         "fields": "title,abstract,year,authors,url,citationCount",
         "limit": limit,
     }))
-    headers = {"x-api-key": S2_API_KEY} if S2_API_KEY else None
+    key = _s2_key()
+    headers = {"x-api-key": key} if key else None
 
     async def _fetch():
         return json.loads(await asyncio.to_thread(_http_get, url, 10, headers))
 
-    try:
-        data = await _retry(_fetch)
-    except Exception:
-        return []  # 429 限流或不可达:静默跳过(不配 key 时公共池常被限流)
+    data = await _retry(_fetch)  # 429 限流或不可达:由编排层记入 errors 后跳过
     hits: list[SearchHit] = []
     for p in data.get("data", []):
         title = (p.get("title") or "").strip()
@@ -134,17 +138,15 @@ async def search_openalex(query: str, limit: int = 8) -> list[SearchHit]:
         "per-page": limit,
         "sort": "relevance_score:desc",
     }
-    if CONTACT_MAIL:
-        params["mailto"] = CONTACT_MAIL
+    mail = _contact_mail()
+    if mail:
+        params["mailto"] = mail
     url = "https://api.openalex.org/works?" + urllib.parse.urlencode(params)
 
     async def _fetch():
         return json.loads(await asyncio.to_thread(_http_get, url, 10))
 
-    try:
-        data = await _retry(_fetch)
-    except Exception:
-        return []
+    data = await _retry(_fetch)
     hits: list[SearchHit] = []
     for w in data.get("results", []):
         title = (w.get("display_name") or "").strip()
@@ -175,10 +177,7 @@ async def search_zbmath(query: str, limit: int = 8) -> list[SearchHit]:
     async def _fetch():
         return json.loads(await asyncio.to_thread(_http_get, url, 12))
 
-    try:
-        data = await _retry(_fetch)
-    except Exception:
-        return []
+    data = await _retry(_fetch)
     hits: list[SearchHit] = []
     for doc in data.get("result") or []:
         title = ((doc.get("title") or {}).get("title") or "").strip()
@@ -213,10 +212,11 @@ async def search_stackexchange(query: str, limit: int = 8) -> list[SearchHit]:
         "site": "math",
         "pagesize": limit,
     }))
-    try:
-        data = json.loads(await asyncio.to_thread(_http_get, url, 10))
-    except Exception:
-        return []
+
+    async def _fetch():
+        return json.loads(await asyncio.to_thread(_http_get, url, 10))
+
+    data = await _retry(_fetch)
     hits: list[SearchHit] = []
     for item in data.get("items", []):
         title = (item.get("title") or "").strip()

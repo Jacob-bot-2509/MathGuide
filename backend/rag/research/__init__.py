@@ -17,10 +17,10 @@ import time
 
 from rag import llm, route
 from rag import search as kb_search
-from rag.index import STOPWORDS, _bigrams
+from rag.index import STOPWORDS
 
 from . import rank, rerank, sources, synthesize
-from .types import SearchHit, SearchOutcome
+from .types import KB_SOURCE, SearchHit, SearchOutcome
 
 __all__ = ["expand_query", "deep_search", "rerank", "synthesize",
            "SearchHit", "SearchOutcome"]
@@ -45,6 +45,7 @@ ZH2EN = {
 }
 
 MAX_TERMS = 6
+DEFAULT_TIMEOUT = 15.0   # 一轮深度搜索的总预算(秒);评测脚本引用此常量,不另抄一份
 
 # 深度搜索源注册表:键 = SearchHit.source(前端勾选框、来源统计、引用区同一口径);
 # 顺序即展示顺序。KB_SOURCE 为内部知识库,由编排层直连 rag.search,不走适配器。
@@ -55,7 +56,6 @@ SOURCE_FNS = {
     "OpenAlex": sources.search_openalex,
     "StackExchange": sources.search_stackexchange,
 }
-KB_SOURCE = "知识库"
 ALL_SOURCES = (KB_SOURCE, *SOURCE_FNS)
 
 # 结果缓存:同一研究问题 TTL 内重复查询直接复用,降低外部源限流风险(演示期同题重问常见)
@@ -133,7 +133,7 @@ async def _llm_expand_terms(question: str, timeout: float = 6.0) -> list[str] | 
         return None
 
 
-async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0,
+async def deep_search(question: str, top_k: int = 3, timeout: float = DEFAULT_TIMEOUT,
                       scope: list[str] | None = None) -> SearchOutcome:
     """scope = 本轮要检索的平台名列表(取自 SOURCE_FNS / KB_SOURCE);
     None 或空 = 全平台。未知名字忽略(白名单外的一律不认,防前端脏数据)"""
@@ -172,7 +172,9 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0,
             outcome.hits.extend(hs)
             outcome.sources[name] = len(hs)
         except Exception as exc:  # noqa: BLE001 单源失败只记录,不影响其他源
-            outcome.errors.append(f"{name}:{type(exc).__name__}")
+            # errors 存来源名(给用户看的话术),细节打日志(给排查用)
+            outcome.errors.append(name)
+            print(f"[research] {name} 不可达(已跳过): {type(exc).__name__} {exc}")
 
     # 源搜索预算:LLM 配置时给精排留 6s,总预算仍 ≤ timeout(默认 15s)
     src_budget = max((timeout - 6) if llm.is_configured() else (timeout - 2), 5)
@@ -188,7 +190,7 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0,
     # P2b:LLM 精排(配置了模型且含外源结果时;纯知识库命中无需精排,
     # 失败自动回退规则排序)
     if (outcome.hits and llm.is_configured()
-            and any(h.source != "知识库" for h in outcome.hits)):
+            and any(h.source != KB_SOURCE for h in outcome.hits)):
         outcome.hits = await rerank.rerank(question, outcome.hits, timeout=10.0)
     outcome.elapsed = round(time.perf_counter() - started, 2)
     # 存入缓存(超容逐出最旧一条,简单 LRU)

@@ -60,10 +60,6 @@ def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
 
 # ---------- 用户 ----------
 
-def find_user(uid: str) -> dict | None:
-    return _users.get(uid)
-
-
 def find_user_by_phone(phone: str) -> tuple[str, dict] | None:
     uid = _phone_index.get(phone)
     if not uid:

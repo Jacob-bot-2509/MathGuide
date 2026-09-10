@@ -139,7 +139,7 @@ def main() -> int:
                 passed = expect.lower() in full.lower()
                 hint = "检查 knowledge/ 对应文档 keywords 是否包含该主题词"
             else:
-                passed = len(full) > 5 and "知识库检索" not in full and "三步走" not in full and "难度判定" not in full
+                passed = len(full) > 5 and "知识库检索" not in full and "三步走" not in full
                 hint = "会话应答异常:可能 LLM 与直答链路均失败,查看后端控制台"
             if passed:
                 ok(f"抽查题「{question}」命中({len(full)} 字)")

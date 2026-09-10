@@ -9,6 +9,7 @@ RAG 检索增强生成:知识库加载 → 检索 → prompt 组装。
 知识库热更新:knowledge/ 目录内容变化(增删改文档)后,下次检索自动重建索引,
 开发期无需重启后端。embedding 模式(配置 MG_EMBED_*)下重建会复用磁盘缓存。
 """
+import re
 import threading
 from pathlib import Path
 
@@ -46,7 +47,7 @@ def init() -> None:
         _embedder = None
     _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
     _stamp = _dir_stamp()
-    _terms = _collect_terms()
+    _terms = _collect_terms(_index)
     if _embedder is not None:
         threading.Thread(target=_warm_embedder, daemon=True, name="embed-warmup").start()
 
@@ -78,7 +79,7 @@ def search(query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
                     print(f"[rag] 索引重建失败,降级为关键词模式: {exc}")
                     _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), None)
                 _stamp = _dir_stamp()
-                _terms = _collect_terms()
+                _terms = _collect_terms(_index)
     return _index.search(query, top_k)
 
 
@@ -87,9 +88,40 @@ def terms() -> frozenset[str]:
     return _terms
 
 
-def _collect_terms() -> frozenset[str]:
-    chunks = load_knowledge(KNOWLEDGE_DIR)
-    return frozenset(kw for c in chunks for kw in c.keywords)
+# 确切数学问题的措辞标记(与知识库触发词共同判定;命中才走答题框架)
+MATH_EXTRA_WORDS = (
+    "求", "证明", "计算", "求解", "求导", "求证", "这道", "这题", "例题", "题目", "公式", "定理", "数学",
+    "怎么做", "怎么算", "如何求", "如何证",
+    "solve", "prove", "compute", "evaluate", "show that", "theorem", "equation", "problem", "math",
+)
+
+# (词表, 已编译正则):词表是知识库触发词的并集,基本不变,
+# 缓存后每次请求不再把上百个词重新编译成正则
+_math_re_cache: tuple[frozenset[str], re.Pattern] | None = None
+
+
+def _compile_math_re(terms: frozenset[str]) -> re.Pattern:
+    """CJK 子串匹配,英文按词边界;裸「求」加否定回溯,排除「请求/要求」这类日常用词"""
+    all_terms = set(terms) | set(MATH_EXTRA_WORDS)
+    zh = sorted((t for t in all_terms if not t.isascii()), key=len, reverse=True)
+    en = sorted((t for t in all_terms if t.isascii() and len(t) >= 3), key=len, reverse=True)
+    zh_parts = [re.escape(t) if t != "求" else r"(?<![请要])求" for t in zh]
+    pattern = "|".join(zh_parts + [r"\b" + re.escape(t) + r"\b" for t in en])
+    return re.compile(pattern, re.IGNORECASE)
+
+
+def is_math_question(text: str) -> bool:
+    """是否确切数学问题:知识库触发词(terms)与题目措辞任一命中"""
+    global _math_re_cache
+    if _math_re_cache is None or _math_re_cache[0] is not _terms:
+        _math_re_cache = (_terms, _compile_math_re(_terms))
+    return bool(_math_re_cache[1].search(text))
+
+
+def _collect_terms(index: KnowledgeIndex) -> frozenset[str]:
+    """触发词取自已装载的索引:再调一次 load_knowledge 会把整个知识库解析第二遍
+    (含 frontmatter 与切片),启动与每次热点重建都要白付这份开销"""
+    return frozenset(kw for c in index.chunks for kw in c.keywords)
 
 
 def build_system(chunks: list[tuple[Chunk, float]], cmd: str | None, zh: bool = True) -> str:
@@ -125,4 +157,5 @@ def build_system(chunks: list[tuple[Chunk, float]], cmd: str | None, zh: bool = 
 
 from . import research  # noqa: E402,F401 深度搜索编排(P1);置于文件末尾,依赖上方 search 等已定义
 
-__all__ = ["init", "search", "build_system", "llm", "embed", "route", "research", "Chunk"]
+__all__ = ["init", "search", "build_system", "terms", "is_math_question",
+           "llm", "embed", "route", "research", "Chunk"]

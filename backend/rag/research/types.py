@@ -1,6 +1,10 @@
 """深度搜索数据结构(执行表 P1)"""
 from dataclasses import dataclass, field
 
+# 内部知识库的来源名:SearchHit.source、来源权重表、前端勾选框、引用区共用同一个字面量。
+# 定义在此(而非 __init__)是为了让 rank/sources 等被 __init__ 导入的模块也能引用,不产生循环导入
+KB_SOURCE = "知识库"
+
 
 @dataclass
 class SearchHit:

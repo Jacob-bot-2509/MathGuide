@@ -19,9 +19,15 @@ W_BODY = 1.0
 W_VECTOR = 5.0
 # 混合模式下:向量相似度低于此值且无关键词命中 → 视为无关
 MIN_COSINE = 0.25
-# 纯向量命中(无任何关键词/bigram 证据)所需的语义置信度:
-# 闲聊话术(你好呀/谢谢)与数学文档的相似度约 0.3~0.45,必须拦在门外
-VECTOR_ONLY_MIN = 0.55
+# 无关键词证据时(纯语义命中)所需的相似度下限。
+# 判据是「关键词命中为 0」而不是「总分为 0」——中文常用词二元组(什么/怎么/这道)
+# 会给闲聊句凭空造出二元组重合,按总分判等于没有门限(eval_route 五条误判皆源于此)。
+# 门限值取自实测分布(text-embedding-v3,同一批知识库):
+#   闲聊话术      0.36~0.46   你好/谢谢/今天天气不错
+#   无知识的数学题 0.49~0.57   这道题怎么解/求值:sin30 度等于多少
+#   真正的知识问句 0.62~0.80   求证一个不等式/线性代数基础/什么是泰勒展开
+# 0.60 落在空档中间。换 embedding 模型必须按新分布重标此值。
+VECTOR_ONLY_MIN = 0.60
 # 低于该分数视为"没检索到相关知识",走兜底回复;
 # 需 ≥2 个正文二元组重合(或 1 个标题重合/关键词命中)才算相关,避免「怎么」这类泛词误命中
 MIN_SCORE = 1.5
@@ -57,7 +63,19 @@ class KnowledgeIndex:
         self._embedder = embedder
         self._vectors: list[Optional[list[float]]] = [None] * len(chunks)
         if embedder is not None:
-            self._vectors = embedder.embed_chunks([(c.id, f"{c.title} {c.title_en} {c.text}") for c in chunks])
+            self._vectors = embedder.embed_chunks(
+                [(c.id, self._embed_text(c)) for c in chunks])
+
+    @staticmethod
+    def _embed_text(c: Chunk) -> str:
+        """向量化的文本口径(标题 + 中英标题 + 正文):集中一处,
+        避免装载与重算用了不同拼法导致缓存指纹不匹配"""
+        return f"{c.title} {c.title_en} {c.text}"
+
+    @property
+    def chunks(self) -> list[Chunk]:
+        """已装载的全部片段(供上层收集触发词等,免去二次解析知识库)"""
+        return [c for c, _, _ in self._entries]
 
     def _keyword_score(self, chunk: Chunk, q: str) -> float:
         score = 0.0
@@ -92,8 +110,8 @@ class KnowledgeIndex:
                 # 语义匹配门限:向量弱相关且无关键词命中 → 视为无关,防止低相似度抬分
                 if cosine < MIN_COSINE and kw < W_KEYWORD:
                     continue
-                # 纯向量命中(无关键词/bigram 证据)需要更强置信度,拦住闲聊噪声
-                if score <= 0 and cosine < VECTOR_ONLY_MIN:
+                # 无关键词命中 = 只有语义相似度在支撑,需要更强置信度,拦住闲聊噪声
+                if kw <= 0 and cosine < VECTOR_ONLY_MIN:
                     continue
                 score += W_VECTOR * cosine
 

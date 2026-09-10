@@ -23,13 +23,9 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-USER_AGENT = "MathGuide-KB-Fetcher/1.0 (competition demo)"
+from rag.index import STOPWORDS as _STOPWORDS  # noqa: E402 停用词表唯一真源,不另抄一份
 
-# 英文停用词:不进 keywords(与 rag/index.py STOPWORDS 同口径)
-_STOPWORDS = frozenset(
-    "a an the for of and on in to is are was were be been with some this that these those "
-    "from by or at it its as not no we you they he she i me my our their your can will would".split()
-)
+USER_AGENT = "MathGuide-KB-Fetcher/1.0 (competition demo)"
 
 # 课程主题词:增量同步时只收录标题/摘要命中这些词的论文(自动入库的质检门)
 COURSE_TERMS = (

@@ -68,7 +68,8 @@ $\lim_{x\to 0}\frac{\sin x}{x}=1$ 是一切等价无穷小替换的根基。
 
 - `keywords`:中英触发词(JSON 数组,统一小写),参与检索打分;
 - `category`:与前端 `utils/classifier.ts` 板块 key 一致
-  (analysis / algebra / geometry / ode / probability / complex / topology / other);
+  (analysis / algebra / numberTheory / geometry / ode / probability / complex / topology / other);
+  该字段是**文档归属标记**,检索不按它过滤(召回由关键词/向量决定);
 - 正文按 `##` 标题切片,单节过长自动按段落再切(公式块不切断);
   公式统一 LaTeX(行内 `$...$`、块级 `$$...$$`),前端 KaTeX 直接渲染。
 
@@ -109,8 +110,9 @@ set MG_CONTACT_MAIL=xxx@xx.com  # OpenAlex 礼貌池标识(官方建议,提升�
 - 启用后片段在装载时批量向量化(单批 ≤10,阿里云实测上限),结果缓存于
   `knowledge/.embeddings.json`(chunk id 为键,文档改动自动重算),重启不重复计费;
 - 检索按「关键词命中 + 向量相似度」混合排序,未配置时行为与纯关键词模式一致;
-- **闲聊噪声门限**:纯向量命中(无任何关键词/bigram 证据)需相似度 ≥0.55,
-  否则"你好呀"这类话术会以低相似度误命中数学文档;
+- **闲聊噪声门限**:无关键词证据、纯靠语义相似度的命中需 ≥0.60,否则"你会什么""这道题怎么解"
+  这类问句会以 0.4~0.57 的相似度误命中数学文档,把闲聊答成知识直答;
+  门限按当前 embedding 模型实测分布标定(**换模型必须重标**,见 `rag/index.py` 注释);
 - **降级保护**:embedding 初始化 / 索引重建 / 单次查询任一环节失败,
   自动退回关键词模式,检索链路永不因向量服务故障崩溃;
 - 缓存文件请勿入库(.gitignore 已排除 `knowledge/.embeddings.json`)。
@@ -173,11 +175,16 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
 ```jsonc
 // POST /api/chat/stream  body:
 { "prompt": "什么是导数", "cmd": "章节知识导航", "sessionId": 1,
-  "categoryKey": "analysis", "history": [{"role": "user", "content": "…"}] }
+  "categoryKey": "analysis", "sources": ["arXiv", "zbMATH"],
+  "history": [{"role": "user", "content": "…"}] }
 ```
 
-- `cmd` 与前端指令栏对应(概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册);
+- `cmd` 与前端指令栏对应(概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围);
   `history` 为最近几轮对话(≤16 条 × 400 字,后端校验),多轮上下文由后端组装;
+- `categoryKey` 为前端板块预判,**后端不消费**:四路裁决(研究/知识/框架/会话)由
+  `rag/route.py` 依问句判定,板块只用于前端会话归并与归纳面板,字段作契约预留;
+- `sources` 为研究型提问的检索范围(平台名,取值见 `rag/research` 源注册表);
+  缺省 / 空 / 非法值一律视为全平台,白名单外的名字直接忽略;
 - 空 `prompt` 视为新会话,下发欢迎语;
 - **章节导航契约**:`cmd=章节知识导航` 携带教材正文(≤3 万字)→ 返回可点击章节列表
   `[章节](cmd://chapter/…)`,教材按 `sessionId` 缓存;`cmd=章节知识指引` 只发章节名,

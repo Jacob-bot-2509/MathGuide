@@ -14,8 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import chat  # noqa: E402  复用 chat.py 的判定函数,保证与线上链路同源
+import config  # noqa: E402
 import rag  # noqa: E402
+
+config.load_env()  # 与后端同一份环境:不加载会跑成"无向量/无 LLM"的另一套配置,评测结论对不上线上
 
 # (问法, 期望路由)  route ∈ research / knowledge / framework / chat
 CASES: list[tuple[str, str]] = [
@@ -51,7 +53,8 @@ CASES: list[tuple[str, str]] = [
     ("线性代数基础", "knowledge"),
     # ---- 方法论框架(确切数学题但知识库未命中) ----
     ("帮我看看这道题怎么做", "framework"),
-    ("证明哥德巴赫猜想", "framework"),
+    # 数论篇已收录「哥德巴赫猜想」关键词 → 命中知识库,知识直答是正确行为
+    ("证明哥德巴赫猜想", "knowledge"),
     ("这道题怎么解", "framework"),
     # 检索真实命中「证明不等式的标准套路」(中值定理篇)→ 知识直答是正确行为
     ("求证一个不等式", "knowledge"),
@@ -79,15 +82,14 @@ CASES: list[tuple[str, str]] = [
 
 
 def decide(question: str) -> str:
-    """与 chat.py chat_stream 同源的判定顺序(研究 → 知识 → 框架 → 会话)"""
-    chunks = rag.search(question, top_k=3)
+    """线上链路的裁决,复用 rag.route.decide(不另写一份判定链)。
+    顺序与 chat.py 一致:研究意图先判、且判为研究后不再检索
+    —— 生产链路上研究型提问不做知识库检索(深度搜索内部自会检索)"""
     if rag.route.is_research_intent(question):
-        return "research"
-    if chunks:
-        return "knowledge"
-    if chat._math_re().search(question):
-        return "framework"
-    return "chat"  # 含 _chitchat_kind 命中与一般陈述(同走会话大脑)
+        return rag.route.RESEARCH
+    chunks = rag.search(question, top_k=3)
+    return rag.route.decide(question, has_chunks=bool(chunks),
+                            is_math=rag.is_math_question(question))
 
 
 def main() -> int:

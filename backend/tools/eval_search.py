@@ -16,7 +16,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import config  # noqa: E402
 import rag  # noqa: E402
+
+config.load_env()  # 与后端同一份环境:不加载会跑成"无向量/无 LLM"的另一套配置
 
 CASES = [
     "泰勒展开的最新研究进展",
@@ -31,7 +34,7 @@ CASES = [
     "state of the art in numerical integration",
 ]
 
-TIMEOUT_LIMIT = 15.0
+TIMEOUT_LIMIT = rag.research.DEFAULT_TIMEOUT   # 与线上同一条预算线
 
 
 async def run_one(question: str) -> tuple[str, bool, str]:

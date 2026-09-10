@@ -2,7 +2,10 @@
 聊天路由:POST /api/chat/stream(需 Bearer token)。
 
 契约(与 frontend/src/api/types.ts ChatRequest 对齐):
-请求体 { prompt: string, cmd?: string, sessionId?: number, categoryKey?: string }
+请求体 { prompt: string, cmd?: string, sessionId?: number,
+        categoryKey?: string, history?: [], sources?: string[] }
+categoryKey 是前端板块预判,后端不消费(四路裁决见 rag/route.py),仅作契约预留;
+sources 是研究型提问的检索范围(平台名白名单在 rag/research)。
 
 响应为 OpenAI 兼容 SSE,每帧 payload 为 JSON 字符串(正文换行经转义,
 帧内无裸换行,data 行不会因正文被拆碎而丢字):
@@ -11,11 +14,12 @@
     data: [DONE]
 前端 postSSE 逐行解析,JSON 解析失败回退纯文本,遇 [DONE] 结束。
 
-回复链路(RAG):
-- 空 prompt → 欢迎语;
-- 已配置 LLM(环境变量 MG_LLM_BASE_URL / MG_LLM_API_KEY)→ 检索知识片段 →
-  组装 system prompt → 模型流式输出;
-- 未配置 LLM → 知识库直答模式:流式下发检索到的知识片段,全链路仍可演示。
+回复链路(顺序即优先级,裁决口径见 rag/route.py):
+- 空 prompt → 欢迎语;附件前缀 → 接收回执 / 交长文模型阅读;
+- 章节导航指令 → 划分章节列表 / 输出该章指引;
+- 研究型提问 → 跨论文库深度搜索 → LLM 综合 + 后端拼装引用区;
+- 其余 → 检索知识片段 → 有 LLM 则组装 system prompt 流式输出,
+  未配置 LLM 则知识库直答,知识库未命中再按「数学题 / 闲聊」分流。
 """
 import asyncio
 import json
@@ -37,7 +41,7 @@ FRAME_MS = 0.02    # 帧间隔(秒),模拟真实模型逐字输出
 WELCOME_ZH = (
     "**欢迎回到 MATHGUIDE · 学习辅助**\n\n"
     "我是 MG,你的高等数学学习与研究助手。直接提问即可,或用下方指令:"
-    "概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册。\n\n"
+    "概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围。\n\n"
     "问题的**板块我会自动识别**,先给严谨的专业表述,再给形象化理解,并带上公式推演;"
     "中文、英文提问都可以。\n\n"
     "(Welcome to MATHGUIDE · Learn. You can also ask in English, e.g. \"explain limits with intuition\".)"
@@ -90,24 +94,8 @@ def _is_chinese(text: str) -> bool:
     return any("一" <= ch <= "鿿" for ch in text)
 
 
-# 确切数学问题的措辞标记(与知识库触发词共同判定;命中才走答题框架)
-_MATH_EXTRA_WORDS = (
-    "求", "证明", "计算", "求解", "求导", "求证", "这道", "这题", "例题", "题目", "公式", "定理", "数学",
-    "怎么做", "怎么算", "如何求", "如何证",
-    "solve", "prove", "compute", "evaluate", "show that", "theorem", "equation", "problem", "math",
-)
-
-
-def _math_re() -> re.Pattern:
-    """由知识库触发词 + 题目措辞组成数学问题识别正则(CJK 子串匹配,英文按词边界)。
-    裸「求」加否定回溯,排除「请求/要求」这类日常用词。"""
-    terms = set(rag.terms()) | set(_MATH_EXTRA_WORDS)
-    zh = sorted((t for t in terms if not t.isascii()), key=len, reverse=True)
-    en = sorted((t for t in terms if t.isascii() and len(t) >= 3), key=len, reverse=True)
-    zh_parts = [re.escape(t) if t != "求" else r"(?<![请要])求" for t in zh]
-    pattern = "|".join(zh_parts + [r"\b" + re.escape(t) + r"\b" for t in en])
-    return re.compile(pattern, re.IGNORECASE)
-
+# 数学题判定(知识库触发词 + 题目措辞)统一在 rag.is_math_question:
+# 正则编译一次缓存复用,评测工具与线上链路同源
 
 # 深答路由触发词:证明 / 竞赛类问题交给 deep 强模型(未配置自动回退 main)
 _DEEP_MARKERS = ("证明", "求证", "竞赛", "奥数", "难题", "prove", "proof", "olympiad")
@@ -339,16 +327,24 @@ async def _update_summary(sid: int, old_turns: list[dict], prev: str) -> None:
 
 
 def _research_reply(outcome: rag.research.SearchOutcome, zh: bool) -> str:
-    """研究型回复(P1):按相关度列出高置信来源(标题/作者/年份/摘要/链接),
-    来源统计与失败源如实呈现;接入 LLM 后此函数升级为「综合解答 + 引用」(P2)"""
+    """研究型回复的降级形态(未配置 LLM 或综合失败时用):按相关度列出高置信来源
+    (标题/作者/年份/摘要/链接),来源统计与失败源如实呈现。
+    正常链路是 _gen_research 的「综合解答 + 引用」,本函数只作兜底"""
     if not outcome.any_hit:
         if zh:
-            return ("跨论文库检索暂未找到高置信来源(网络或限额),建议稍后再试,"
+            why = f"(本次不可达:{'、'.join(outcome.errors)})" if outcome.errors else "(网络或限额)"
+            return (f"跨论文库检索暂未找到高置信来源{why},建议稍后再试,"
                     "或把问题描述得更具体一些。")
-        return ("No high-confidence sources found right now (network or rate limits). "
+        why = f" (unreachable: {', '.join(outcome.errors)})" if outcome.errors else " (network or rate limits)"
+        return (f"No high-confidence sources found right now{why}. "
                 "Try again later or rephrase the question more specifically.")
 
-    stats = " · ".join(f"{name} {n}" for name, n in outcome.sources.items() if n)
+    # 统计口径必须与下方列表一致:outcome.sources 是各源"抓到的候选数",
+    # 这里的 hits 是去重排序后"真正入选的条数",混用会出现「3 条(arXiv 8 · ...)」这种自相矛盾
+    picked: dict[str, int] = {}
+    for h in outcome.hits:
+        picked[h.source] = picked.get(h.source, 0) + 1
+    stats = " · ".join(f"{name} {n}" for name, n in picked.items())
     lines = [f"已检索到 {len(outcome.hits)} 条高置信来源({stats}),按相关度排序:"] if zh else \
         [f"Found {len(outcome.hits)} relevant sources ({stats}), ranked by relevance:"]
     for i, h in enumerate(outcome.hits, 1):
@@ -417,19 +413,26 @@ def _meter(resp: StreamingResponse, rec: dict, prompt_len: int, cmd: str,
         async for frame in original:
             chars += len(frame) if isinstance(frame, str) else len(frame.decode("utf-8", "ignore"))
             yield frame
-        usage.record(
-            user=str(rec.get("nickname") or rec.get("uid") or "访客"),
-            phone=str(rec.get("phone") or ""),
-            cmd=cmd,
-            prompt_len=prompt_len,
-            reply_len=chars,
-            role=meta["role"],
-            research=meta["research"],
-            ts=time.time(),
-        )
+        _record(rec, cmd=cmd, prompt_len=prompt_len, reply_len=chars,
+                role=meta["role"], research=meta["research"])
 
     resp.body_iterator = counted()
     return resp
+
+
+def _record(rec: dict, *, cmd: str, prompt_len: int, reply_len: int,
+            role: str, research: bool) -> None:
+    """用量记账统一入口(聊天链路与语音转写共用,字段口径不会各写各的)"""
+    usage.record(
+        user=str(rec.get("nickname") or rec.get("uid") or "访客"),
+        phone=str(rec.get("phone") or ""),
+        cmd=cmd,
+        prompt_len=prompt_len,
+        reply_len=reply_len,
+        role=role,
+        research=research,
+        ts=time.time(),
+    )
 
 
 async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: bool,
@@ -469,12 +472,18 @@ async def _frames(text: str, pace: bool = True):
     yield "data: [DONE]\n\n"
 
 
-def _stream_text(text: str) -> StreamingResponse:
+def _sse(gen) -> StreamingResponse:
+    """SSE 响应统一构造:媒体类型与反缓冲头只写一处
+    (散在五处时,漏一个头就会被中间代理缓冲,流式变一次性吐出)"""
     return StreamingResponse(
-        _frames(text),
+        gen,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _stream_text(text: str) -> StreamingResponse:
+    return _sse(_frames(text))
 
 
 async def _verify_answer(question: str, answer: str, role: str) -> str | None:
@@ -558,7 +567,7 @@ def _nav_guide_system():
     )
 
 
-async def _gen_nav_list(question: str, zh: bool):
+async def _gen_nav_list(question: str):
     """章节导航:只输出教材章节划分列表(不展示内容);失败时给出明确提示"""
     try:
         async for delta in rag.llm.stream_chat(_nav_system(), question[:_TEXTBOOK_CAP], role=rag.llm.pick("long")):
@@ -570,7 +579,7 @@ async def _gen_nav_list(question: str, zh: bool):
     yield "data: [DONE]\n\n"
 
 
-async def _gen_nav_guide(question: str, zh: bool, tb: str = ""):
+async def _gen_nav_guide(question: str, tb: str = ""):
     """章节指引:用户点击章节后给出该章大概知识指引,末尾附「返回」按钮行;
     tb 为按会话缓存的教材文本,缓存失效时按通用知识作答该章"""
     prompt = question[:2000]
@@ -663,23 +672,11 @@ async def speech_to_math(request: Request) -> StreamingResponse:
         except Exception:  # noqa: BLE001 转写失败回放原文,不阻断输入
             yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
             return
-        usage.record(
-            user=str(rec.get("nickname") or rec.get("uid") or "访客"),
-            phone=str(rec.get("phone") or ""),
-            cmd="语音转写",
-            prompt_len=len(text),
-            reply_len=sum(len(p) for p in parts),
-            role="main",
-            research=False,
-            ts=time.time(),
-        )
+        _record(rec, cmd="语音转写", prompt_len=len(text),
+                reply_len=sum(len(p) for p in parts), role="main", research=False)
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(
-        gen(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _sse(gen())
 
 
 async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta: dict):
@@ -696,11 +693,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         kind, name, body = m.group(1), m.group(2).strip(), (m.group(3) or "").strip()
         if body and rag.llm.is_configured():
             meta["role"] = "long"
-            return StreamingResponse(
-                _gen_attach_llm(name, body, zh=_is_chinese(prompt)),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
+            return _sse(_gen_attach_llm(name, body, zh=_is_chinese(prompt)))
         if _is_chinese(prompt):
             text = (ATTACH_IMAGE_ZH if kind == "image" else ATTACH_FILE_ZH).format(name=name, size="—")
         else:
@@ -717,22 +710,16 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             return _stream_text("章节导航需要已配置 LLM,当前未配置。")
         if cmd == "章节知识导航":
             _cache_textbook(body.get("sessionId"), question)  # 教材入库,后续点击只发章节名
-            gen = _gen_nav_list(question, zh)
+            gen = _gen_nav_list(question)
         else:
-            gen = _gen_nav_guide(question, zh, tb=_get_textbook(body.get("sessionId")))
+            gen = _gen_nav_guide(question, tb=_get_textbook(body.get("sessionId")))
         meta["role"] = "long"
-        return StreamingResponse(
-            gen,
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    # 检索含 embedding 请求(同步、冷启动可达数十秒)→ 线程池执行,
-    # 不阻塞事件循环(否则这段等待会冻住所有并发会话)
-    chunks = await asyncio.to_thread(rag.search, question, 3)
+        return _sse(gen)
 
     # P0/P1 路由:研究型提问优先于知识直答
     # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走跨论文库深度搜索)
+    # 必须先判意图、后检索:深度搜索内部自会检索知识库,
+    # 这里若先检一遍,研究型提问就要白付一份 embedding 开销(结果还被丢掉)
     if rag.route.is_research_intent(question):
         meta["research"] = True
         # 搜索范围(前端勾选的平台;缺省/空 = 全平台);非法名白名单校验在 deep_search 内
@@ -748,33 +735,30 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         # 未配置 → 来源列表(现有行为)
         if outcome.any_hit and rag.llm.is_configured():
             meta["role"] = "deep"
-            return StreamingResponse(
-                _gen_research(question, outcome, zh, ck=ck),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
+            return _sse(_gen_research(question, outcome, zh, ck=ck))
         return _stream_text(_research_reply(outcome, zh))
+
+    # 检索含 embedding 请求(同步、冷启动可达数十秒)→ 线程池执行,
+    # 不阻塞事件循环(否则这段等待会冻住所有并发会话)
+    chunks = await asyncio.to_thread(rag.search, question, 3)
 
     if rag.llm.is_configured():
         # 双角色验证仅对数学题(命中知识库或题目措辞)开启;闲聊不浪费复核调用
-        verify = bool(chunks) or bool(_math_re().search(question))
+        verify = bool(chunks) or rag.is_math_question(question)
         role = _pick_role(question)
         meta["role"] = role
         sid = body.get("sessionId")
         history = _validated_history(body.get("history"))
         summary = _SUMMARIES.get(sid, "") if isinstance(sid, int) else ""
-        return StreamingResponse(
-            _gen_llm(question, cmd, chunks, history=history, role=role, verify=verify,
-                     summary=summary, sid=sid if isinstance(sid, int) else None),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        return _sse(_gen_llm(question, cmd, chunks, history=history, role=role, verify=verify,
+                             summary=summary, sid=sid if isinstance(sid, int) else None))
     # 直答模式:
     # ① 检索到相关知识 → 知识直答(专业问询专业回答);
     # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架;
     # ③ 其余(寒暄/感谢/告别/夸奖/介绍/情绪/应和/一般对话)→ 像人一样对话,不检索
+    # 裁决口径与 rag.route.decide 一致(评测工具跑的就是这条链)
     if chunks:
         return _stream_text(_compose_direct(question, chunks))
-    if _math_re().search(question):
+    if rag.is_math_question(question):
         return _stream_text(FALLBACK_ZH if zh else FALLBACK_EN)
     return _stream_text(_conversational_reply(question, zh, _chitchat_kind(question)))
