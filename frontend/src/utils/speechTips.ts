@@ -9,36 +9,6 @@ export interface SpeechTip {
   formula: string
 }
 
-/**
- * 本地速转(0ms):常见念法的即时规则替换,在 LLM 精修前先让符号上屏。
- * 只含方向正确的安全规则("a 分之 b"→b/a),其余交给模型精修。
- */
-const QUICK_MATH_RULES: [RegExp, string][] = [
-  [/([^\s\d]+)分之([^\s\d]+)/g, '$2/$1'],
-  [/的平方/g, '²'],
-  [/的立方/g, '³'],
-  [/的n次方/g, 'ⁿ'],
-  [/的 n 次方/g, 'ⁿ'],
-  [/乘以/g, '×'],
-  [/除以/g, '÷'],
-  [/大于等于/g, '≥'],
-  [/小于等于/g, '≤'],
-  [/不等于/g, '≠'],
-  [/约等于/g, '≈'],
-  [/根号/g, '√'],
-  [/派/g, 'π'],
-  [/无穷/g, '∞'],
-  [/加/g, '+'],
-  [/减/g, '−'],
-  [/等于/g, '='],
-]
-
-export function quickMathConvert(text: string): string {
-  let out = text
-  for (const [re, rep] of QUICK_MATH_RULES) out = out.replace(re, rep)
-  return out.replace(/ ([²³ⁿ])/g, '$1') // "x ²" → "x²"
-}
-
 export interface TipGroup {
   title: [string, string]
   items: SpeechTip[]

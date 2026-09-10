@@ -26,10 +26,15 @@ function authHeaders(): Record<string, string> {
 }
 
 /** 语音识别文本 → 数学符号转写(SSE 流式):首帧即上屏,逐帧回调累计全文;
-    失败走 onFail(由调用方回退原文),不阻断输入;返回 cancel 供新旧转换切换 */
+    失败走 onFail(由调用方回退原文),不阻断输入;返回 cancel 供新旧转换切换;
+    onDone 携带完整精修结果(供调用方缓存) */
 export function speechToMath(
   text: string,
-  cb: { onDelta: (converted: string) => void; onFail: () => void },
+  cb: {
+    onDelta: (converted: string) => void
+    onFail: () => void
+    onDone?: (full: string) => void
+  },
 ): { cancel: () => void } {
   const controller = new AbortController()
   let acc = ''
@@ -41,8 +46,9 @@ export function speechToMath(
         acc += chunk
         cb.onDelta(acc)
       },
-      onDone: () => {
-        if (!acc) cb.onFail()
+      onDone: (full) => {
+        if (acc) cb.onDone?.(full)
+        else cb.onFail()
       },
       onError: () => {
         cb.onFail()

@@ -38,7 +38,7 @@ import {
 import { addToTrash } from '@/stores/trash'
 import { addNotebookEntry, notebookState } from '@/stores/notebook'
 import { compressImage } from '@/utils/avatar'
-import { quickMathConvert } from '@/utils/speechTips'
+import { cachedConvert, saveConvert, speechMathConvert } from '@/utils/speechMath'
 import { showToast } from '@/utils/toast'
 
 const router = useRouter()
@@ -841,10 +841,14 @@ function startConvert(raw: string, live: boolean) {
     onDelta: (full) => {
       if (seq !== convSeq) return
       convAcc = full
-      if (convLive) {
+      if (convLive && full !== input.value) {
         input.value = full
         autoGrow()
       }
+    },
+    onDone: (full) => {
+      if (seq !== convSeq) return
+      saveConvert(raw, full, 'llm') // 精修结果入缓存:同句再念零请求
     },
     onFail: () => {
       if (seq === convSeq && !listening.value) showToast(t('learn.toastConvertFail'))
@@ -903,18 +907,27 @@ function toggleMic() {
       clearTimeout(convDebounce)
       convDebounce = null
     }
-    // 用户主动点停且有新识别内容 → 转写三步:说话期间已转好就直接上屏;
-    // 否则先 0ms 本地速转出符号,再 LLM 精修流式覆盖
+    // 用户主动点停且有新识别内容 → 转写四档:
+    // ① 缓存里有精修结果 → 直接上屏,零网络;
+    // ② 说话期间预热已完成 → 直接上屏 LLM 结果;
+    // ③ 否则本地编译器 0ms 出符号上屏;
+    // ④ LLM 后台精修无感覆盖(结果回写缓存)。
     if (srStopToConvert) {
       srStopToConvert = false
       const raw = input.value
       if (raw.trim() && raw !== srBaseText) {
-        if (convRaw === raw && convAcc) {
+        const cached = cachedConvert(raw)
+        if (cached && cached.source === 'llm') {
+          input.value = cached.text
+          autoGrow()
+        } else if (convRaw === raw && convAcc) {
           convLive = true
           input.value = convAcc
           autoGrow()
         } else {
-          input.value = quickMathConvert(raw)
+          const local = cached?.text ?? speechMathConvert(raw)
+          if (!cached) saveConvert(raw, local, 'local')
+          input.value = local
           autoGrow()
           startConvert(raw, true)
         }

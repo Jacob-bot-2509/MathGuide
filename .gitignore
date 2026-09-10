@@ -19,3 +19,4 @@ dist/
 backend/tools/eval_report.txt
 backend/tools/eval_search_report.txt
 backend/tools/.last_sync
+.speech-math-test.cjs
