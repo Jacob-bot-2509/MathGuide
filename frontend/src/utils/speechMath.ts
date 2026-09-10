@@ -87,6 +87,23 @@ const DICT: [string, string][] = [
 const FN = `[fghFuvwφψ]`
 
 const STRUCT: ((s: string) => string)[] = [
+  // 大小写归一(最先执行):明确念了「大/大写」的字母保留大写(占位保护),
+  // 其余英文字母一律小写——ASR 大小写随机,不刻意说"大"就按小写处理
+  (s) => {
+    const caps: string[] = []
+    let out = s
+      .replace(/大写\s*([a-zA-Z])/g, (_, c: string) => {
+        caps.push(c.toUpperCase())
+        return `\u0000${caps.length - 1}\u0000`
+      })
+      .replace(/大\s*([a-zA-Z])(?![a-zA-Z])/g, (_, c: string) => {
+        caps.push(c.toUpperCase())
+        return `\u0000${caps.length - 1}\u0000`
+      })
+    // 只小写 ASCII 大写字母(不动希腊字母 Γ/Ω 等,toLowerCase 会把它们也变小写)
+    out = out.replace(/[A-Z]/g, (c) => c.toLowerCase())
+    return out.replace(/\u0000(\d+)\u0000/g, (_, i: string) => caps[Number(i)])
+  },
   // 幂:平方/立方/n 次方/任意次方(先转换,后续函数/分数规则才能拿到完整项)
   (s) => s.replace(/的?\s*平方/g, '²'),
   (s) => s.replace(/的?\s*立方/g, '³'),
@@ -151,10 +168,8 @@ const STRUCT: ((s: string) => string)[] = [
   (s) => s.replace(/([a-zA-Z])\s*的秩/g, 'rank($1)'),
   (s) => s.replace(/([a-zA-Z])\s*与\s*([a-zA-Z])\s*的内积/g, '⟨$1,$2⟩'),
   (s) => s.replace(/([a-zA-Z0-9])\s*取\s*([a-zA-Z0-9])/g, 'C($1,$2)'),
-  (s) => s.replace(/大\s*O\s*([a-zA-Z0-9])\s*方/g, 'O($1²)'),
+  (s) => s.replace(/O\s*([a-zA-Z0-9])\s*方/g, 'O($1²)'),
   (s) => s.replace(/∇²\s*([a-zA-Zα-ω])/g, '∇²$1'),
-  // 大写函数名:"大 F x" → F(x)(置于函数调用规则之前)
-  (s) => s.replace(/大\s*([a-zA-Z])(?![a-zA-Z])/g, (_, c: string) => c.toUpperCase()),
   // 共轭 / 均值拔 / bar
   (s) => s.replace(/([a-zA-Zα-ω])\s*的共轭/g, '$1̄'),
   (s) => s.replace(/([a-zA-Zα-ω])\s*拔/g, '$1̄'),
@@ -245,18 +260,18 @@ export const SELF_TESTS: [string, string][] = [
   ['极限 x 趋于 a', 'limₓ→ₐ'],
   ['梯度 f', '∇f'],
   ['二重积分', '∬'],
-  ['x 属于 A', 'x∈A'],
+  ['x 属于 大 A', 'x∈A'],
   ['对任意 x', '∀x'],
   ['存在 x', '∃x'],
   ['并集 交集', '∪ ∩'],
   ['x 的范数', '‖x‖'],
-  ['A 的转置', 'Aᵀ'],
-  ['A 的逆', 'A⁻¹'],
-  ['行列式 A', 'det(A)'],
+  ['大 A 的转置', 'Aᵀ'],
+  ['大 A 的逆', 'A⁻¹'],
+  ['行列式 大 A', 'det(A)'],
   ['x 拔', 'x̄'],
   ['n 的阶乘', 'n!'],
-  ['A 在 B 发生条件下的概率', 'P(A|B)'],
-  ['X 的期望', 'E[X]'],
+  ['大 A 在 大 B 发生条件下的概率', 'P(A|B)'],
+  ['大 X 的期望', 'E[X]'],
   ['伽马函数 n', 'Γ(n)'],
   ['大 O n 方', 'O(n²)'],
   ['拉普拉斯算子 f', '∇²f'],
@@ -266,15 +281,15 @@ export const SELF_TESTS: [string, string][] = [
   ['a 与 b 的内积', '⟨a,b⟩'],
   ['a 点乘 b', 'a·b'],
   ['a 叉乘 b', 'a×b'],
-  ['A 的迹', 'tr(A)'],
-  ['A 的秩', 'rank(A)'],
-  ['A 张量积 B', 'A⊗B'],
-  ['A 直和 B', 'A⊕B'],
+  ['大 A 的迹', 'tr(A)'],
+  ['大 A 的秩', 'rank(A)'],
+  ['大 A 张量积 大 B', 'A⊗B'],
+  ['大 A 直和 大 B', 'A⊕B'],
   ['z 的共轭', 'z̄'],
   ['z 的实部', 'Re(z)'],
   ['z 的虚部', 'Im(z)'],
   ['z 的模', '|z|'],
-  ['X 服从均值为缪、方差为西格玛平方的正态分布', 'X~N(μ,σ²)'],
+  ['大 X 服从均值为缪、方差为西格玛平方的正态分布', 'X~N(μ,σ²)'],
   ['n 取 k', 'C(n,k)'],
   ['x 的绝对值', '|x|'],
   ['派', 'π'],
@@ -284,5 +299,8 @@ export const SELF_TESTS: [string, string][] = [
   ['e 的 x 次方', 'eˣ'],
   ['x 下标 n', 'xₙ'],
   ['屏方', '²'],
+  ['X 的平方', 'x²'],
+  ['大 x 的平方', 'X²'],
+  ['大 F x', 'F(x)'],
   ['你好呀', '你好呀'],
 ]
