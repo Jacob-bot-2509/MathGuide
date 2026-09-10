@@ -119,10 +119,12 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0) -> S
     outcome = SearchOutcome(question=question, terms=terms)
     query = " ".join(terms)
 
-    # 内部知识库(同步、必然成功)
+    # 内部知识库(同步实现,含可能数十秒的 embedding 请求 → 挪出事件循环,
+    # 否则会冻住整个后端的所有并发请求)
+    kb_hits = await asyncio.to_thread(kb_search, question, 3)
     internal = [
         SearchHit("知识库", c.title, c.text[:400], "", 0, "", 0)
-        for c, _s in kb_search(question, top_k=3)
+        for c, _s in kb_hits
     ]
     outcome.sources["知识库"] = len(internal)
     outcome.hits.extend(internal)

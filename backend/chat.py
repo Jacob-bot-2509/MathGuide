@@ -717,7 +717,9 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    chunks = rag.search(question, top_k=3)
+    # 检索含 embedding 请求(同步、冷启动可达数十秒)→ 线程池执行,
+    # 不阻塞事件循环(否则这段等待会冻住所有并发会话)
+    chunks = await asyncio.to_thread(rag.search, question, 3)
 
     # P0/P1 路由:研究型提问优先于知识直答
     # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走跨论文库深度搜索)

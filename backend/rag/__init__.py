@@ -9,6 +9,7 @@ RAG 检索增强生成:知识库加载 → 检索 → prompt 组装。
 知识库热更新:knowledge/ 目录内容变化(增删改文档)后,下次检索自动重建索引,
 开发期无需重启后端。embedding 模式(配置 MG_EMBED_*)下重建会复用磁盘缓存。
 """
+import threading
 from pathlib import Path
 
 from .documents import Chunk, load_knowledge
@@ -21,6 +22,7 @@ _index: KnowledgeIndex | None = None
 _embedder: embed.Embedder | None = None
 _stamp: tuple[int, float] | None = None
 _terms: frozenset[str] = frozenset()
+_rebuild_lock = threading.Lock()  # 索引重建串行化(检索已移出事件循环,防并发重建竞争)
 
 
 def _dir_stamp() -> tuple[int, float]:
@@ -45,21 +47,38 @@ def init() -> None:
     _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
     _stamp = _dir_stamp()
     _terms = _collect_terms()
+    if _embedder is not None:
+        threading.Thread(target=_warm_embedder, daemon=True, name="embed-warmup").start()
+
+
+def _warm_embedder() -> None:
+    """后台预热 embedding 连接:服务端冷启动实测可达 40s+(之后 0.2s),
+    放在启动期后台完成,避免用户第一个问题被冷启动卡住"""
+    try:
+        assert _embedder is not None
+        _embedder.embed_query("预热")
+        print("[rag] embedding 预热完成")
+    except Exception as exc:  # noqa: BLE001 预热失败不影响启动与检索(查询侧仍有降级)
+        print(f"[rag] embedding 预热失败(不影响启动): {exc}")
 
 
 def search(query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
     """检索相关片段;知识库文件有增删改时自动重建索引后返回。
-    重建时 embedding 失败同样降级关键词模式,检索链路永不因向量服务崩断"""
+    重建时 embedding 失败同样降级关键词模式,检索链路永不因向量服务崩断。
+    注意:本函数为同步实现,异步调用方须用 asyncio.to_thread 包裹,
+    否则 embedding 请求(可能数十秒)会阻塞事件循环、冻住整个后端"""
     global _index, _stamp, _terms
     assert _index is not None, "rag.init() 未调用"
     if _dir_stamp() != _stamp:
-        try:
-            _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[rag] 索引重建失败,降级为关键词模式: {exc}")
-            _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), None)
-        _stamp = _dir_stamp()
-        _terms = _collect_terms()
+        with _rebuild_lock:
+            if _dir_stamp() != _stamp:  # 双检:并发进入时只重建一次
+                try:
+                    _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[rag] 索引重建失败,降级为关键词模式: {exc}")
+                    _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), None)
+                _stamp = _dir_stamp()
+                _terms = _collect_terms()
     return _index.search(query, top_k)
 
 
