@@ -71,6 +71,12 @@ CASES: list[tuple[str, str]] = [
     ("大数定律", "概率论与数理统计"),
     ("假设检验的步骤", "概率论与数理统计"),
     ("probability distribution", "Probability & Mathematical Statistics"),
+    # ---- 数论 ----
+    ("数论是什么", "数论"),
+    ("素数怎么判断", "数论"),
+    ("费马小定理", "数论"),
+    ("同余是什么意思", "数论"),
+    ("prime number theorem", "Number Theory"),
     # ---- 复变函数 ----
     ("复变函数是什么", "复变函数"),
     ("留数定理", "复变函数"),

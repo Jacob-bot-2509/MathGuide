@@ -35,6 +35,8 @@ ZH2EN = {
     "特征值": "eigenvalue", "特征向量": "eigenvector",
     "概率": "probability", "正态分布": "normal distribution", "期望": "expectation",
     "方差": "variance", "大数定律": "law of large numbers", "中心极限定理": "central limit theorem",
+    "数论": "number theory", "素数": "prime number", "同余": "congruence",
+    "费马小定理": "fermat's little theorem", "欧拉函数": "euler totient function", "丢番图": "diophantine",
     "复变": "complex analysis", "留数": "residue", "解析函数": "analytic function",
     "拓扑": "topology", "紧致": "compact", "同胚": "homeomorphism",
     "傅里叶": "fourier", "中值定理": "mean value theorem",

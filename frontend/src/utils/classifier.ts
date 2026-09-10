@@ -27,6 +27,31 @@ export const CATEGORIES: Category[] = [
     ],
   },
   {
+    key: 'numberTheory',
+    label: '数论',
+    color: '#ffb04d',
+    keywords: [
+      // 整除与素数
+      '数论', '素数', '质数', '合数', '整除', '约数', '公约数', '最大公约数', '公倍数', '最小公倍数', '互素', '互质',
+      '算术基本定理', '素数定理', '哥德巴赫', '孪生素数', '梅森素数', '费马数', '完全数',
+      // 同余
+      '同余', '取模', '模运算', '费马小定理', '欧拉定理', '欧拉函数', '威尔逊定理', '中国剩余定理', '孙子定理',
+      '二次剩余', '勒让德符号', '原根', '离散对数',
+      // 数论函数
+      '数论函数', '积性函数', '莫比乌斯', '狄利克雷卷积', '筛法',
+      // 丢番图
+      '丢番图', '不定方程', '勾股数', '佩尔方程', '连分数',
+      // English
+      'number theory', 'prime', 'primality', 'divisor', 'divisibility', 'gcd', 'greatest common divisor', 'lcm',
+      'least common multiple', 'coprime', 'relatively prime', 'fundamental theorem of arithmetic', 'prime number theorem',
+      'goldbach', 'twin prime', 'mersenne', 'perfect number',
+      'congruence', 'modulo', 'modular arithmetic', "fermat's little theorem", 'euler theorem', 'euler totient',
+      'wilson theorem', 'chinese remainder', 'quadratic residue', 'legendre symbol', 'primitive root', 'discrete logarithm',
+      'arithmetic function', 'multiplicative function', 'mobius', 'dirichlet convolution',
+      'diophantine', 'pythagorean triple', 'pell equation', 'continued fraction',
+    ],
+  },
+  {
     key: 'ode',
     label: '微分方程',
     color: '#ff4dd2',
@@ -116,7 +141,7 @@ export function classifyQuestion(text: string): CategoryInfo {
 }
 
 /** 归纳面板的展示顺序(按教学板块顺序,其他垫底) */
-export const DISPLAY_KEYS = ['analysis', 'algebra', 'geometry', 'ode', 'probability', 'complex', 'topology', 'other'] as const
+export const DISPLAY_KEYS = ['analysis', 'algebra', 'numberTheory', 'geometry', 'ode', 'probability', 'complex', 'topology', 'other'] as const
 
 /* ---------- 闲聊识别(与后端 chat.py _QUESTION_RE 保持同一口径) ---------- */
 

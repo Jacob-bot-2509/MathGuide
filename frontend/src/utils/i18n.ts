@@ -476,6 +476,7 @@ export function t(key: string, params?: Record<string, string | number>): string
 const CAT_NAMES: Record<string, [string, string]> = {
   analysis: ['数学分析', 'Mathematical Analysis'],
   algebra: ['高等代数', 'Advanced Algebra'],
+  numberTheory: ['数论', 'Number Theory'],
   geometry: ['空间解析几何', 'Analytic Geometry'],
   ode: ['微分方程', 'Differential Equations'],
   probability: ['概率论与数理统计', 'Probability & Mathematical Statistics'],
