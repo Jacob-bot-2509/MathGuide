@@ -164,11 +164,13 @@ function autoGrow() {
 /** 组装最近几轮历史(供模型理解上下文):去掉刚发的本条用户消息
     (它作为 prompt 单独传递),排除流式中的消息,单条截断;
     粘贴导入的文本文件以正文入历史,后续追问可基于文件内容作答。
+    被中断的回答(interrupted)也排除:半截话混进上下文,模型
+    会把它当成完整的一轮去理解,徒增困惑。
     上限 16 条:更早的对话由后端滚动摘要压缩,早期上下文不丢失 */
 function buildHistory(session: ChatSession): ChatMeta['history'] {
   return session.messages
     .slice(0, -1)
-    .filter((m) => !m.streaming && m.content)
+    .filter((m) => !m.streaming && m.content && !m.interrupted)
     .slice(-16)
     .map((m) => ({ role: m.role, content: (m.attachment?.text || m.content).slice(0, 400) }))
 }
