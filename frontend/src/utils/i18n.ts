@@ -11,7 +11,6 @@ type Dict = Record<string, string>
 const ZH: Dict = {
   /* 开场 */
   'intro.tagline': '高等数学学习辅助 · 科学研究',
-  'intro.enter': '进入 MATHGUIDE',
 
   /* 登录 */
   'login.slogan': '登录方式即实名认证方式 · 信息仅用于账号管理',
@@ -66,12 +65,10 @@ const ZH: Dict = {
   'learn.placeholder': '输入你的高数问题,Enter 发送(Shift+Enter 换行);或点击下方指令快速执行',
   'learn.listening': '正在聆听,请说话…',
   'learn.send': '发送',
-  'learn.generating': '生成中',
   'learn.stop': '停止生成',
   'learn.stoppedNote': '⏹ 已停止生成',
   'learn.cmdLabel': '指令 / COMMANDS',
   'learn.voiceLabel': 'MG 语音回复',
-  'learn.devBadge': '待开发',
   'learn.thinking': 'MG 思考中',
   'learn.errStream': '⚠ 连接失败:未能从后端获得回复,请确认后端服务已启动后重新提问。',
   'learn.toastRateLimit': '⚠ 提问太频繁啦,休息几秒再问~',
@@ -227,7 +224,6 @@ const ZH: Dict = {
 
   /* 科学研究占位 */
   'research.title': '科学研究',
-  'research.icon': '∇',
   'research.desc': '面向科研场景的深度推理与计算验证闭环',
   'research.status': '界面开发中 · 阶段四',
   'research.f1': '公式推导辅助',
@@ -252,7 +248,6 @@ const ZH: Dict = {
 
 const EN: Dict = {
   'intro.tagline': 'Higher Mathematics Learning & Research',
-  'intro.enter': 'ENTER MATHGUIDE',
 
   'login.slogan': 'Sign-in method = identity verification · Info is used only for account management',
   'login.tabPass': 'Password',
@@ -304,12 +299,10 @@ const EN: Dict = {
   'learn.placeholder': 'Ask a higher math question, Enter to send (Shift+Enter for newline), or tap a command below',
   'learn.listening': 'Listening, speak now…',
   'learn.send': 'Send',
-  'learn.generating': 'Generating',
   'learn.stop': 'Stop',
   'learn.stoppedNote': '⏹ Stopped',
   'learn.cmdLabel': 'COMMANDS',
   'learn.voiceLabel': 'MG voice reply',
-  'learn.devBadge': 'TBD',
   'learn.thinking': 'MG thinking',
   'learn.errStream': '⚠ Connection failed: no reply from the backend. Make sure the backend service is running, then ask again.',
   'learn.toastRateLimit': '⚠ Too many questions — take a few seconds, then ask again',
@@ -455,7 +448,6 @@ const EN: Dict = {
   'common.mgLearn': 'MG · LEARN',
 
   'research.title': 'Research',
-  'research.icon': '∇',
   'research.desc': 'Deep reasoning and computation-verification loops for research',
   'research.status': 'UI under development · Phase 4',
   'research.f1': 'Formula derivation',

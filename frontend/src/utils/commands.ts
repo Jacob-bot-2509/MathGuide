@@ -4,18 +4,18 @@
  * 其余五个模块以"指令"形式挂在指令栏,点击即执行。
  */
 export interface Command {
+  /** 契约键:与后端 cmd 字段一致,也是 i18n 文案表的查表键 */
   key: string
-  label: string
   icon: string
-  hint: string
 }
 
+/** 指令栏条目:只留结构与图标,文案(名称/提示/默认提问)统一由
+ * utils/i18n.ts 的 CMD_NAMES / CMD_HINTS / CMD_DEFAULTS 提供 —— 那里才有中英双语。
+ * 曾在这里挂过一份中文 label/hint,结果两处说法逐渐分叉且英文界面无文案可用 */
 export const COMMANDS: Command[] = [
-  { key: '概念动画演示', label: '概念动画演示', icon: '▶', hint: '输入想看的数学概念,演示其几何意义' },
-  { key: '章节知识导航', label: '章节知识导航', icon: '◈', hint: '查看高等数学章节知识结构' },
-  { key: '问题记录', label: '问题记录', icon: '📓', hint: '归纳本:已收纳的问题与参考解答,温故知新' },
-  { key: '公式查询手册', label: '公式查询手册', icon: '∫', hint: '查询常用公式与定理' },
-  { key: '搜索范围', label: '搜索范围', icon: '⌘', hint: '勾选研究型提问检索的平台,全选即全平台' },
+  { key: '概念动画演示', icon: '▶' },
+  { key: '章节知识导航', icon: '◈' },
+  { key: '问题记录', icon: '📓' },
+  { key: '公式查询手册', icon: '∫' },
+  { key: '搜索范围', icon: '⌘' },
 ]
-// 注:指令的默认提问与多语言提示统一在 utils/i18n.ts(CMD_DEFAULTS / CMD_HINTS),
-// 避免两处维护同一份文案;空输入时 LearnView 通过 cmdDefault(cmd) 读取。

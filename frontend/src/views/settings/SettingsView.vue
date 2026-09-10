@@ -9,6 +9,7 @@ import { settingsState, updateSettings } from '@/stores/settings'
 import { userState } from '@/stores/user'
 import { trashState } from '@/stores/trash'
 import { logout } from '@/services/authService'
+import SettingsShell from '@/components/common/SettingsShell.vue'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 
@@ -33,126 +34,74 @@ function doLogout() {
 </script>
 
 <template>
-  <div class="settings">
-    <header class="head">
-      <button class="back" @click="router.back()">{{ t('common.back') }}</button>
-      <span class="title">{{ t('settings.title') }}</span>
+  <SettingsShell :title="t('settings.title')">
+    <template #extra>
       <span class="tech-label sub">MG SYSTEM · SETTINGS</span>
-    </header>
+    </template>
 
-    <main class="body">
-      <!-- 账号 -->
-      <p class="section tech-label">{{ t('settings.sectionAccount') }}</p>
-      <button class="row" @click="router.push('/settings/account')">
-        <span class="row-label">{{ t('settings.account') }}</span>
-        <span class="row-value">
-          <UserAvatar :avatar="userState.info?.avatar" :size="26" />
-          <span class="nick">{{ userState.info?.nickname }}</span>
-          <span class="chev">›</span>
-        </span>
-      </button>
-      <button class="row" @click="router.push('/settings/privacy')">
-        <span class="row-label">{{ t('settings.privacy') }}</span>
-        <span class="row-value"><span class="chev">›</span></span>
-      </button>
-      <button class="row" @click="router.push('/settings/trash')">
-        <span class="row-label">{{ t('settings.trash') }}</span>
-        <span class="row-value">
-          <span class="trash-count">{{ t('settings.items', { n: trashState.items.length }) }}</span>
-          <span class="chev">›</span>
-        </span>
-      </button>
+    <!-- 账号 -->
+    <p class="section tech-label">{{ t('settings.sectionAccount') }}</p>
+    <button class="row" @click="router.push('/settings/account')">
+      <span class="row-label">{{ t('settings.account') }}</span>
+      <span class="row-value">
+        <UserAvatar :avatar="userState.info?.avatar" :size="26" />
+        <span class="nick">{{ userState.info?.nickname }}</span>
+        <span class="chev">›</span>
+      </span>
+    </button>
+    <button class="row" @click="router.push('/settings/privacy')">
+      <span class="row-label">{{ t('settings.privacy') }}</span>
+      <span class="row-value"><span class="chev">›</span></span>
+    </button>
+    <button class="row" @click="router.push('/settings/trash')">
+      <span class="row-label">{{ t('settings.trash') }}</span>
+      <span class="row-value">
+        <span class="trash-count">{{ t('settings.items', { n: trashState.items.length }) }}</span>
+        <span class="chev">›</span>
+      </span>
+    </button>
 
-      <!-- 应用 -->
-      <p class="section tech-label">{{ t('settings.sectionApp') }}</p>
-      <div class="row">
-        <span class="row-label">{{ t('settings.language') }}</span>
-        <MgSelect
-          v-model="settingsState.language"
-          :options="[
-            { value: 'zh', label: '简体中文' },
-            { value: 'en', label: 'English' },
-          ]"
-          @change="onLanguageChange"
-        />
-      </div>
-      <div class="row">
-        <span class="row-label">{{ t('settings.appearance') }}</span>
-        <span class="seg">
-          <button class="seg-btn" :class="{ on: settingsState.theme === 'dark' }" @click="pickTheme('dark')">{{ t('settings.dark') }}</button>
-          <button class="seg-btn" :class="{ on: settingsState.theme === 'light' }" @click="pickTheme('light')">{{ t('settings.light') }}</button>
-        </span>
-      </div>
+    <!-- 应用 -->
+    <p class="section tech-label">{{ t('settings.sectionApp') }}</p>
+    <div class="row">
+      <span class="row-label">{{ t('settings.language') }}</span>
+      <MgSelect
+        v-model="settingsState.language"
+        :options="[
+          { value: 'zh', label: '简体中文' },
+          { value: 'en', label: 'English' },
+        ]"
+        @change="onLanguageChange"
+      />
+    </div>
+    <div class="row">
+      <span class="row-label">{{ t('settings.appearance') }}</span>
+      <span class="seg">
+        <button class="seg-btn" :class="{ on: settingsState.theme === 'dark' }" @click="pickTheme('dark')">{{ t('settings.dark') }}</button>
+        <button class="seg-btn" :class="{ on: settingsState.theme === 'light' }" @click="pickTheme('light')">{{ t('settings.light') }}</button>
+      </span>
+    </div>
 
-      <!-- 关于 -->
-      <p class="section tech-label">{{ t('settings.sectionAbout') }}</p>
-      <button class="row" @click="router.push('/settings/about')">
-        <span class="row-label">{{ t('settings.feedback') }}</span>
-        <span class="row-value"><span class="chev">›</span></span>
-      </button>
-      <button class="row" @click="router.push('/settings/about')">
-        <span class="row-label">{{ t('settings.about') }}</span>
-        <span class="row-value"><span class="chev">›</span></span>
-      </button>
+    <!-- 关于 -->
+    <p class="section tech-label">{{ t('settings.sectionAbout') }}</p>
+    <button class="row" @click="router.push('/settings/about')">
+      <span class="row-label">{{ t('settings.feedback') }}</span>
+      <span class="row-value"><span class="chev">›</span></span>
+    </button>
+    <button class="row" @click="router.push('/settings/about')">
+      <span class="row-label">{{ t('settings.about') }}</span>
+      <span class="row-value"><span class="chev">›</span></span>
+    </button>
 
-      <!-- 退出登录(红色) -->
-      <button class="logout" @click="doLogout">{{ t('settings.logout') }}</button>
-    </main>
-  </div>
+    <!-- 退出登录(红色) -->
+    <button class="logout" @click="doLogout">{{ t('settings.logout') }}</button>
+  </SettingsShell>
 </template>
 
 <style scoped>
-.settings {
-  min-height: 100vh;
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 16px 26px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-panel);
-}
-
-.back {
-  background: transparent;
-  border: 1px solid var(--line);
-  color: var(--text);
-  padding: 7px 16px;
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 13px;
-  transition: all var(--dur-fast) var(--ease-out);
-}
-
-.back:hover {
-  color: var(--cyan);
-  border-color: var(--line-bright);
-  box-shadow: var(--glow-cyan);
-}
-
-.title {
-  color: var(--text-hi);
-  font-size: 16px;
-  letter-spacing: 0.1em;
-}
-
 .sub {
   margin-left: auto;
   font-size: 10px;
-}
-
-.body {
-  max-width: 560px;
-  margin: 0 auto;
-  padding: 22px 24px 60px;
-}
-
-.section {
-  margin: 22px 0 8px;
-  font-size: 11px;
-  color: var(--text-dim);
 }
 
 .row {

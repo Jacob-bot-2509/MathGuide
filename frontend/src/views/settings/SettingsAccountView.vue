@@ -4,15 +4,14 @@
  * 实名认证状态与实名信息补全。
  */
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import UserAvatar from '@/components/common/UserAvatar.vue'
 import { updateUser, userState } from '@/stores/user'
 import { settingsState } from '@/stores/settings'
 import { AVATAR_PRESETS, fileToAvatar } from '@/utils/avatar'
+import SettingsShell from '@/components/common/SettingsShell.vue'
 import { authName, realnameText, t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 
-const router = useRouter()
 
 const nickname = ref(userState.info?.nickname ?? '')
 const pickingAvatar = ref(false)
@@ -82,128 +81,79 @@ function saveRealName() {
 </script>
 
 <template>
-  <div class="acc">
-    <header class="head">
-      <button class="back" @click="router.back()">{{ t('common.back') }}</button>
-      <span class="title">{{ t('acc.title') }}</span>
-    </header>
+  <SettingsShell :title="t('acc.title')">
+    <!-- 头像 -->
+    <div class="avatar-block">
+      <UserAvatar :avatar="user?.avatar" :size="76" />
+      <button class="ghost-btn" @click="pickingAvatar = !pickingAvatar">
+        {{ pickingAvatar ? t('acc.collapse') : t('acc.changeAvatar') }}
+      </button>
+      <button class="ghost-btn" @click="pickFromAlbum">{{ t('acc.fromAlbum') }}</button>
+      <input ref="fileEl" type="file" accept="image/*" hidden @change="onFile" />
+    </div>
 
-    <main class="body">
-      <!-- 头像 -->
-      <div class="avatar-block">
-        <UserAvatar :avatar="user?.avatar" :size="76" />
-        <button class="ghost-btn" @click="pickingAvatar = !pickingAvatar">
-          {{ pickingAvatar ? t('acc.collapse') : t('acc.changeAvatar') }}
-        </button>
-        <button class="ghost-btn" @click="pickFromAlbum">{{ t('acc.fromAlbum') }}</button>
-        <input ref="fileEl" type="file" accept="image/*" hidden @change="onFile" />
+    <div v-if="pickingAvatar" class="preset-grid">
+      <button
+        v-for="p in AVATAR_PRESETS"
+        :key="p.key"
+        class="preset-item"
+        :title="p.glyph"
+        @click="pickPreset(p.key)"
+      >
+        <UserAvatar :avatar="p.key" :size="44" />
+      </button>
+    </div>
+
+    <!-- 昵称 -->
+    <p class="section tech-label">{{ t('acc.nickname') }}</p>
+    <div class="field-row">
+      <input v-model="nickname" class="input" :placeholder="t('acc.nickPh')" maxlength="16" />
+      <button class="save-btn" @click="saveNickname">{{ t('acc.save') }}</button>
+    </div>
+
+    <!-- 账号信息 -->
+    <p class="section tech-label">{{ t('acc.info') }}</p>
+    <div class="info-card">
+      <div class="info-row">
+        <span class="k">{{ t('acc.phone') }}</span>
+        <span class="v">{{ maskPhone(user?.phone) }}</span>
       </div>
-
-      <div v-if="pickingAvatar" class="preset-grid">
-        <button
-          v-for="p in AVATAR_PRESETS"
-          :key="p.key"
-          class="preset-item"
-          :title="p.glyph"
-          @click="pickPreset(p.key)"
-        >
-          <UserAvatar :avatar="p.key" :size="44" />
-        </button>
+      <div class="info-row">
+        <span class="k">{{ t('acc.method') }}</span>
+        <span class="v">{{ user ? authName(user.authMethod) : '-' }}</span>
       </div>
+    </div>
 
-      <!-- 昵称 -->
-      <p class="section tech-label">{{ t('acc.nickname') }}</p>
-      <div class="field-row">
-        <input v-model="nickname" class="input" :placeholder="t('acc.nickPh')" maxlength="16" />
-        <button class="save-btn" @click="saveNickname">{{ t('acc.save') }}</button>
+    <!-- 实名认证 -->
+    <p class="section tech-label">{{ t('acc.realname') }}</p>
+    <div class="info-card">
+      <div v-if="user" class="info-row">
+        <span class="k">{{ t('acc.status') }}</span>
+        <span class="v ok">{{ realnameText(user.authMethod) }}</span>
       </div>
-
-      <!-- 账号信息 -->
-      <p class="section tech-label">{{ t('acc.info') }}</p>
-      <div class="info-card">
+      <template v-if="user?.realName">
         <div class="info-row">
-          <span class="k">{{ t('acc.phone') }}</span>
-          <span class="v">{{ maskPhone(user?.phone) }}</span>
+          <span class="k">{{ t('acc.name') }}</span>
+          <span class="v">{{ user.realName.name.slice(0, 1) }}**</span>
         </div>
         <div class="info-row">
-          <span class="k">{{ t('acc.method') }}</span>
-          <span class="v">{{ user ? authName(user.authMethod) : '-' }}</span>
+          <span class="k">{{ t('acc.id') }}</span>
+          <span class="v">{{ user.realName.idMasked }}</span>
         </div>
-      </div>
-
-      <!-- 实名认证 -->
-      <p class="section tech-label">{{ t('acc.realname') }}</p>
-      <div class="info-card">
-        <div v-if="user" class="info-row">
-          <span class="k">{{ t('acc.status') }}</span>
-          <span class="v ok">{{ realnameText(user.authMethod) }}</span>
+      </template>
+      <template v-else>
+        <div class="real-form">
+          <input v-model="realName" class="input" :placeholder="t('acc.namePh')" maxlength="12" />
+          <input v-model="realId" class="input" :placeholder="t('acc.idPh')" maxlength="18" />
+          <button class="save-btn" @click="saveRealName">{{ t('acc.submit') }}</button>
         </div>
-        <template v-if="user?.realName">
-          <div class="info-row">
-            <span class="k">{{ t('acc.name') }}</span>
-            <span class="v">{{ user.realName.name.slice(0, 1) }}**</span>
-          </div>
-          <div class="info-row">
-            <span class="k">{{ t('acc.id') }}</span>
-            <span class="v">{{ user.realName.idMasked }}</span>
-          </div>
-        </template>
-        <template v-else>
-          <div class="real-form">
-            <input v-model="realName" class="input" :placeholder="t('acc.namePh')" maxlength="12" />
-            <input v-model="realId" class="input" :placeholder="t('acc.idPh')" maxlength="18" />
-            <button class="save-btn" @click="saveRealName">{{ t('acc.submit') }}</button>
-          </div>
-          <p class="note">{{ t('acc.note') }}</p>
-        </template>
-      </div>
-    </main>
-  </div>
+        <p class="note">{{ t('acc.note') }}</p>
+      </template>
+    </div>
+  </SettingsShell>
 </template>
 
 <style scoped>
-.acc {
-  min-height: 100vh;
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 16px 26px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-panel);
-}
-
-.back {
-  background: transparent;
-  border: 1px solid var(--line);
-  color: var(--text);
-  padding: 7px 16px;
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 13px;
-  transition: all var(--dur-fast) var(--ease-out);
-}
-
-.back:hover {
-  color: var(--cyan);
-  border-color: var(--line-bright);
-  box-shadow: var(--glow-cyan);
-}
-
-.title {
-  color: var(--text-hi);
-  font-size: 16px;
-  letter-spacing: 0.1em;
-}
-
-.body {
-  max-width: 560px;
-  margin: 0 auto;
-  padding: 26px 24px 60px;
-}
-
 .avatar-block {
   display: flex;
   align-items: center;
@@ -247,11 +197,6 @@ function saveRealName() {
   border-color: var(--line-bright);
   box-shadow: var(--glow-cyan);
   transform: translateY(-2px);
-}
-
-.section {
-  margin: 26px 0 10px;
-  font-size: 11px;
 }
 
 .field-row {

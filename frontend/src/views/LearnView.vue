@@ -21,6 +21,7 @@ import MathText from '@/components/chat/MathText.vue'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
 import SpeechTips from '@/components/chat/SpeechTips.vue'
+import MgSwitch from '@/components/common/MgSwitch.vue'
 import { COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
 import { speechToMath, streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
@@ -939,7 +940,9 @@ function toggleMic() {
           autoGrow()
         } else if (convRaw === raw && convAcc) {
           convLive = true
-          input.value = convAcc
+          // 与①③④同一口径:预热流是 LLM 原始输出(可能含 ^_{}、LaTeX 记号),
+          // 漏掉美化会让同一句话因走哪条路径而长得不一样
+          input.value = beautifyMath(convAcc)
           autoGrow()
         } else {
           const local = cached?.text ?? speechMathConvert(raw)
@@ -971,9 +974,9 @@ function toggleMic() {
 }
 
 /** 模型语音回复开关(功能待开发,开启后仍以文本回复) */
-function toggleModelVoice() {
-  updateSettings({ modelVoice: !settingsState.modelVoice })
-  if (settingsState.modelVoice) showToast(t('learn.toastVoiceDev'))
+function setModelVoice(on: boolean) {
+  updateSettings({ modelVoice: on })
+  if (on) showToast(t('learn.toastVoiceDev'))
 }
 
 /* ---------- 初始化 ---------- */
@@ -1077,7 +1080,8 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </div>
-            <span v-if="m.role === 'user' && m.cmd" class="cmd-tag">{{ m.cmd }}</span>
+            <!-- 走 cmdName 而非裸键:契约键是中文,英文界面下会露出中文 -->
+            <span v-if="m.role === 'user' && m.cmd" class="cmd-tag">{{ cmdName(m.cmd) }}</span>
             <span v-if="m.role === 'user' && activeSession.cat" class="cat-chip">
               <span class="cat-dot" :style="{ background: activeSession.cat.color }"></span>{{ catName(activeSession.cat.key) }}
             </span>
@@ -1172,14 +1176,12 @@ onBeforeUnmount(() => {
         </button>
         <span class="voice-toggle">
           <span class="voice-label">{{ t('learn.voiceLabel') }}</span>
-          <button
-            class="switch"
-            :class="{ on: settingsState.modelVoice }"
+          <MgSwitch
+            size="sm"
+            :model-value="settingsState.modelVoice"
             :title="t('learn.voiceHint')"
-            @click="toggleModelVoice"
-          >
-            <span class="knob"></span>
-          </button>
+            @update:model-value="setModelVoice"
+          />
           <span class="dev-badge">{{ t('common.tbd') }}</span>
         </span>
       </div>
@@ -1807,38 +1809,6 @@ onBeforeUnmount(() => {
 .voice-label {
   color: var(--text-dim);
   font-size: 12px;
-}
-
-.switch {
-  width: 34px;
-  height: 18px;
-  border-radius: 999px;
-  background: rgba(96, 165, 250, 0.15);
-  border: 1px solid var(--line);
-  position: relative;
-  cursor: pointer;
-  transition: all var(--dur-fast) var(--ease-out);
-}
-
-.switch .knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--text-dim);
-  transition: all var(--dur-fast) var(--ease-out);
-}
-
-.switch.on {
-  background: rgba(77, 214, 255, 0.25);
-  border-color: var(--line-bright);
-}
-
-.switch.on .knob {
-  left: 18px;
-  background: var(--cyan);
 }
 
 .dev-badge {

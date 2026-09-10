@@ -18,6 +18,13 @@ export function httpError(res: { status: number }): HttpError {
   return e
 }
 
+/** 读取错误上的 HTTP 状态码(非本层抛出的错误返回 undefined)。
+ * 服务层判 401/429 一律走这里:先前各处自行 `as { status?: number }`,
+ * 同一个形状散落多份,改契约时必然漏改 */
+export function statusOf(err: unknown): number | undefined {
+  return typeof (err as HttpError | null)?.status === 'number' ? (err as HttpError).status : undefined
+}
+
 export async function post<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',

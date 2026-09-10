@@ -5,7 +5,7 @@
 import type { UserInfo } from '@/stores/user'
 import { getToken, login as setUser, logout as clearUser } from '@/stores/user'
 import type { AuthUserDto, LoginResponse } from '@/api/types'
-import { post } from '@/api/http'
+import { post, statusOf } from '@/api/http'
 import { AVATAR_PRESETS } from '@/utils/avatar'
 
 /** 演示验证码(与后端 auth.py DEMO_CODE 一致;正式环境由短信服务下发) */
@@ -20,10 +20,6 @@ async function applyLogin(user: AuthUserDto, token: string): Promise<UserInfo> {
   return info
 }
 
-function errStatus(err: unknown): number | undefined {
-  return (err as { status?: number }).status
-}
-
 /** 手机号 + 密码登录 */
 export async function loginWithPassword(phone: string, password: string): Promise<LoginResult> {
   try {
@@ -31,8 +27,8 @@ export async function loginWithPassword(phone: string, password: string): Promis
     await applyLogin(res.user, res.token)
     return 'ok'
   } catch (err) {
-    if (errStatus(err) === 404) return 'notfound'
-    if (errStatus(err) === 401) return 'wrong'
+    if (statusOf(err) === 404) return 'notfound'
+    if (statusOf(err) === 401) return 'wrong'
     throw err // 网络等错误交由调用方提示
   }
 }
@@ -50,7 +46,7 @@ export async function registerWithPassword(phone: string, password: string): Pro
     await applyLogin(res.user, res.token)
     return true
   } catch (err) {
-    if (errStatus(err) === 409) return false
+    if (statusOf(err) === 409) return false
     throw err
   }
 }

@@ -4,7 +4,7 @@
  * streamReply 签名固定,可额外携带会话元数据(契约 ChatRequest)。
  */
 import type { ChatRequest, ChatStreamHandle, StreamCallbacks } from '@/api/types'
-import { postSSE } from '@/api/http'
+import { postSSE, statusOf } from '@/api/http'
 import { getToken, logout as clearUser } from '@/stores/user'
 import router from '@/router'
 import { showToast } from '@/utils/toast'
@@ -101,14 +101,14 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
   ).catch((err: unknown) => {
     if (settled) return
     settled = true
-    if ((err as { status?: number }).status === 401) {
+    if (statusOf(err) === 401) {
       // 令牌失效(过期或服务端数据被清):清除本地登录态并回到登录页
       clearUser()
       router.push('/login')
       showToast(t('login.toastExpired'))
       return
     }
-    if ((err as { status?: number }).status === 429) {
+    if (statusOf(err) === 429) {
       // 限流:不算错误,界面层用提示文案收尾
       cb.onError?.(err)
       cb.onDone('')

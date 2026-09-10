@@ -277,6 +277,17 @@ export function saveConvert(raw: string, text: string, source: 'local' | 'llm'):
   }
 }
 
+/** 清空转换缓存(隐私页「清除本地数据」调用)。
+ * 缓存里存的是用户说过的原话,属本地学习数据,必须能一键抹掉;
+ * key 留在本模块内,调用方不必知道存储细节 */
+export function clearConvertCache(): void {
+  try {
+    localStorage.removeItem(CACHE_KEY)
+  } catch {
+    /* 隐私模式下不可写,本就不存在缓存 */
+  }
+}
+
 /* ---------- 自测集(取自念法贴士,新增规则须在此补用例) ---------- */
 export const SELF_TESTS: [string, string][] = [
   ['x 的平方加 y 的平方等于 z 的平方', 'x²+y²=z²'],

@@ -3,11 +3,10 @@
  * 关于:功能与改进(反馈)+ 关于 MG(产品信息)。
  */
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import SettingsShell from '@/components/common/SettingsShell.vue'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 
-const router = useRouter()
 const feedback = ref('')
 
 function submitFeedback() {
@@ -22,95 +21,41 @@ function submitFeedback() {
 </script>
 
 <template>
-  <div class="about">
-    <header class="head">
-      <button class="back" @click="router.back()">{{ t('common.back') }}</button>
-      <span class="title">{{ t('about.title') }}</span>
-    </header>
+  <SettingsShell :title="t('about.title')">
+    <p class="section tech-label">{{ t('about.feedbackTitle') }}</p>
+    <div class="card">
+      <textarea
+        v-model="feedback"
+        class="feedback"
+        rows="4"
+        :placeholder="t('about.feedbackPh')"
+      ></textarea>
+      <button class="submit" @click="submitFeedback">{{ t('about.submit') }}</button>
+    </div>
 
-    <main class="body">
-      <p class="section tech-label">{{ t('about.feedbackTitle') }}</p>
-      <div class="card">
-        <textarea
-          v-model="feedback"
-          class="feedback"
-          rows="4"
-          :placeholder="t('about.feedbackPh')"
-        ></textarea>
-        <button class="submit" @click="submitFeedback">{{ t('about.submit') }}</button>
-      </div>
-
-      <p class="section tech-label">{{ t('about.aboutTitle') }}</p>
-      <div class="card about-card">
-        <div class="logo-row">
-          <span class="logo-mark">MG</span>
-          <div class="logo-text">
-            <span class="name">MATHGUIDE</span>
-            <span class="ver">v0.1.0 · 演示环境</span>
-          </div>
+    <p class="section tech-label">{{ t('about.aboutTitle') }}</p>
+    <div class="card about-card">
+      <div class="logo-row">
+        <span class="logo-mark">MG</span>
+        <div class="logo-text">
+          <span class="name">MATHGUIDE</span>
+          <span class="ver">v0.1.0 · 演示环境</span>
         </div>
-        <p class="desc">{{ t('about.desc') }}</p>
-        <div class="stack">
-          <span class="stack-chip">Vue 3</span>
-          <span class="stack-chip">TypeScript</span>
-          <span class="stack-chip">GSAP</span>
-          <span class="stack-chip">KaTeX</span>
-          <span class="stack-chip">MathJax</span>
-        </div>
-        <p class="copyright">EST. 2026 · MG SYSTEM · HIGHER MATHEMATICS ASSISTANT</p>
       </div>
-    </main>
-  </div>
+      <p class="desc">{{ t('about.desc') }}</p>
+      <div class="stack">
+        <span class="stack-chip">Vue 3</span>
+        <span class="stack-chip">TypeScript</span>
+        <span class="stack-chip">GSAP</span>
+        <span class="stack-chip">KaTeX</span>
+        <span class="stack-chip">MathJax</span>
+      </div>
+      <p class="copyright">EST. 2026 · MG SYSTEM · HIGHER MATHEMATICS ASSISTANT</p>
+    </div>
+  </SettingsShell>
 </template>
 
 <style scoped>
-.about {
-  min-height: 100vh;
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 16px 26px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-panel);
-}
-
-.back {
-  background: transparent;
-  border: 1px solid var(--line);
-  color: var(--text);
-  padding: 7px 16px;
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 13px;
-  transition: all var(--dur-fast) var(--ease-out);
-}
-
-.back:hover {
-  color: var(--cyan);
-  border-color: var(--line-bright);
-  box-shadow: var(--glow-cyan);
-}
-
-.title {
-  color: var(--text-hi);
-  font-size: 16px;
-  letter-spacing: 0.1em;
-}
-
-.body {
-  max-width: 560px;
-  margin: 0 auto;
-  padding: 26px 24px 60px;
-}
-
-.section {
-  margin: 22px 0 10px;
-  font-size: 11px;
-}
-
 .card {
   background: var(--bg-card);
   border: 1px solid var(--line);
