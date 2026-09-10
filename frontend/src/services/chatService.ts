@@ -48,7 +48,14 @@ export function speechToMath(
         acc += chunk
         cb.onDelta(acc)
       },
-      onDone: (full) => {
+      onDone: (full, complete) => {
+        // 没等到 [DONE] 就断的流不能算数:调用方会把结果按原句键写进转换缓存,
+        // 半个表达式的转写一旦入缓存,以后每次念同一句话都返回这半截(持久污染),
+        // 而输入框里留着的也是半截结果 —— 一律按失败走,回退原文
+        if (!complete) {
+          cb.onFail()
+          return
+        }
         if (acc) cb.onDone?.(full)
         else cb.onFail()
       },
@@ -84,10 +91,10 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
         cb.onDelta(chunk)
       },
       // 全文由 postSSE 统一累积(onDone 的 full 参数),这里不再重复拼一遍
-      onDone: (full) => {
+      onDone: (full, complete) => {
         if (settled) return
         settled = true
-        cb.onDone(full)
+        cb.onDone(full, complete)
       },
       // 读取中途失败:先标记错误态;settled 使 finally 的 onDone 不再重复回调,
       // 完整收尾(清理 streaming / 错误提示)由界面层 onError 负责
@@ -110,13 +117,15 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
     }
     if (statusOf(err) === 429) {
       // 限流:不算错误,界面层用提示文案收尾
+      // (complete=false:这条流压根没跑完,但错误文案已由 onError 铺好,
+      //  界面层认得出这是失败收尾,不会再叠一层「已中断」标记)
       cb.onError?.(err)
-      cb.onDone('')
+      cb.onDone('', false)
       return
     }
     console.error('[chatService] 流式请求失败:', err)
     cb.onError?.(err)
-    cb.onDone('')
+    cb.onDone('', false)
   })
 
   return { cancel: () => controller.abort() }

@@ -37,6 +37,7 @@ from auth import require_auth
 
 CHUNK = 6          # 直答模式每帧字符数(配合浏览器端 ~24ms 渲染节流)
 FRAME_MS = 0.02    # 帧间隔(秒),模拟真实模型逐字输出
+_DONE = "data: [DONE]\n\n"  # SSE 收尾标记(由 _sse 统一补,生成器不再各自 yield)
 
 WELCOME_ZH = (
     "**欢迎回到 MATHGUIDE · 学习辅助**\n\n"
@@ -461,7 +462,7 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
 
 
 async def _frames(text: str, pace: bool = True):
-    """按帧切片流式下发一段完整文本(JSON 字符串包裹,含 [DONE] 收尾);
+    """按帧切片流式下发一段完整文本(JSON 字符串包裹);收尾标记由 _sse 统一补。
     pace=False 用于引用区等附属内容:不做人工逐字拟态,即时下发"""
     i = 0
     while i < len(text):
@@ -469,14 +470,26 @@ async def _frames(text: str, pace: bool = True):
         i += CHUNK
         if pace:
             await asyncio.sleep(FRAME_MS)
-    yield "data: [DONE]\n\n"
 
 
 def _sse(gen) -> StreamingResponse:
     """SSE 响应统一构造:媒体类型与反缓冲头只写一处
-    (散在五处时,漏一个头就会被中间代理缓冲,流式变一次性吐出)"""
+    (散在五处时,漏一个头就会被中间代理缓冲,流式变一次性吐出)。
+
+    收尾的 [DONE] 也由这里统一补。先前是每个生成器各自记得 yield 一行,
+    结果四个降级分支(章节导航 / 章节指引 / 粘贴文本 / 语音转写)提前 return 时全漏了:
+    前端收不到收尾标记,就没法区分「后端正常降级」和「连接被掐断」,
+    只能把半截回答当成完整回答存进历史。契约收进这一层,新生成器想漏也漏不掉。
+    生成器里若自带 [DONE] 会在此丢弃,保证一条流恰好一个收尾。"""
+    async def terminated():
+        async for frame in gen:
+            if frame != _DONE:
+                yield frame
+        # 只有生成器正常跑完才走得到这里;客户端中途断开时本协程被取消,不会补发
+        yield _DONE
+
     return StreamingResponse(
-        gen,
+        terminated(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -544,7 +557,6 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
         async for frame in _frames(_compose_direct(prompt, chunks)):
             yield frame
         return
-    yield "data: [DONE]\n\n"
 
 
 # 章节链接契约:[章节名](cmd://chapter/<名称>) —— 前端 MathText 渲染为可点击章节;
@@ -576,7 +588,6 @@ async def _gen_nav_list(question: str):
         print(f"[chat] 章节导航调用失败: {exc}")
         yield f"data: {json.dumps('⚠ 章节导航调用失败,请稍后重试。', ensure_ascii=False)}\n\n"
         return
-    yield "data: [DONE]\n\n"
 
 
 async def _gen_nav_guide(question: str, tb: str = ""):
@@ -595,7 +606,6 @@ async def _gen_nav_guide(question: str, tb: str = ""):
         yield f"data: {json.dumps('⚠ 章节指引调用失败,请稍后重试。', ensure_ascii=False)}\n\n"
         return
     yield f"data: {json.dumps('\n\n[返回](cmd://back)', ensure_ascii=False)}\n\n"
-    yield "data: [DONE]\n\n"
 
 
 async def _gen_attach_llm(name: str, body: str, zh: bool):
@@ -613,7 +623,6 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
         note = (ATTACH_FILE_ZH if zh else ATTACH_FILE_EN).format(name=name, size="—")
         yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
         return
-    yield "data: [DONE]\n\n"
 
 
 async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
@@ -674,7 +683,6 @@ async def speech_to_math(request: Request) -> StreamingResponse:
             return
         _record(rec, cmd="语音转写", prompt_len=len(text),
                 reply_len=sum(len(p) for p in parts), role="main", research=False)
-        yield "data: [DONE]\n\n"
 
     return _sse(gen())
 

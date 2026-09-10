@@ -179,6 +179,9 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
   // MathText 对已闭合公式有渲染缓存,单次提交开销极小,不会随正文增长变慢
   let pending = ''
   let commit: ReturnType<typeof setTimeout> | null = null
+  // 本次流是否已由 onError 收过尾:失败路径 chatService 会补一次 onDone,
+  // 那是幂等清理,不该再叠一层「已中断」标记
+  let failed = false
   const flush = () => {
     commit = null
     if (!pending) return
@@ -198,7 +201,7 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
         commit = setTimeout(flush, 24)
       }
     },
-    onDone: () => {
+    onDone: (_full, complete) => {
       if (commit) {
         clearTimeout(commit)
         commit = null
@@ -206,8 +209,16 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
       flush() // 提交最后的残量,避免丢尾
       reply.streaming = false
       reply.thinking = false
-      // 主动停止且未出字时给一句停止提示(此时流已被 cancelReply 移出 streams)
-      if (!reply.content && !streams.has(reply.id)) reply.content = t('learn.stoppedNote')
+      if (!reply.content) {
+        // 一字未出:主动停止给停止提示(此时流已被 cancelReply 移出 streams);
+        // 被中断则给连接失败提示,否则气泡空着,用户以为卡住了
+        if (!streams.has(reply.id)) reply.content = t('learn.stoppedNote')
+        else if (!complete && !failed) reply.content = t('learn.errStream')
+      } else if (!complete && !failed) {
+        // 连接断在后端 [DONE] 之前(后端重启 / 网络中断):手里的字只是半截。
+        // 不标记的话,这半截回答和完整回答在界面上长得一模一样,用户无从察觉
+        reply.interrupted = true
+      }
       streams.delete(reply.id)
       persistSessions()
     },
@@ -216,6 +227,7 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
     // 失败路径 onDone 不再触发(settled 拦截),清理须在此完整收尾,
     // 否则 streaming 永真 → 发送按钮永远"生成中"。
     onError: (err?: unknown) => {
+      failed = true
       if (commit) {
         clearTimeout(commit)
         commit = null
@@ -226,6 +238,10 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
         reply.content = (err as { status?: number })?.status === 429
           ? t('learn.toastRateLimit')
           : t('learn.errStream')
+      } else {
+        // 已经有内容还报错 = 流断在半途(实测后端被杀时是连接重置,不走干净关闭那条路)。
+        // 这半截同样得标记,否则它和完整回答在界面上没有区别
+        reply.interrupted = true
       }
       reply.streaming = false
       streams.delete(reply.id)
@@ -1089,6 +1105,8 @@ onBeforeUnmount(() => {
               <span v-if="m.thinking" class="thinking">{{ t('learn.thinking') }}<span class="dots">···</span></span>
               <MathText v-if="m.content" :text="m.content" />
               <span v-if="m.streaming && !m.thinking" class="cursor">▍</span>
+              <!-- 半截回答的标记:与完整回答同形,不点明用户看不出缺了一段 -->
+              <span v-if="m.interrupted" class="cut-note">{{ t('learn.interrupted') }}</span>
             </template>
             <template v-else>{{ m.content }}</template>
           </div>
@@ -1428,6 +1446,17 @@ onBeforeUnmount(() => {
   animation: mg-blink 1s steps(1) infinite;
   color: var(--cyan);
   margin-left: 2px;
+}
+
+/* 中断标记:另起一行、弱化处理 —— 它是对这条回答的批注,不是回答本身 */
+.cut-note {
+  display: block;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--line);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 
 /* ---------- 输入区 ---------- */

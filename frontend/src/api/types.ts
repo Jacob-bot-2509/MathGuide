@@ -29,7 +29,14 @@ export interface ChatRequest {
 /** 流式回调(OpenAI 兼容 SSE 的通用形态) */
 export interface StreamCallbacks {
   onDelta: (text: string) => void
-  onDone: (full: string) => void
+  /**
+   * 流结束。complete 为 false 表示**没等到后端 [DONE] 收尾就断了**
+   * (后端进程重启、网络中断):手里的 full 可能只是半截回答。
+   * 用户主动取消不算(那是调用方自己掐的,不是被中断)。
+   * 调用方必须区别对待 —— 半截回答与完整回答在界面上长得一模一样,
+   * 不标记就会被当成完整答案存进历史,用户永远不知道它缺了一段。
+   */
+  onDone: (full: string, complete: boolean) => void
   /** 流请求失败(网络 / HTTP 错误;用户主动取消不触发)。可选,用于界面提示错误态 */
   onError?: (err: unknown) => void
 }

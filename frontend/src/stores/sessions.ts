@@ -30,6 +30,9 @@ export interface ChatMsg {
   nav?: 'list'
   /** 章节指引:记录本回复讲解的章节(重复点击直接跳转,不重新生成) */
   navGuideFor?: string
+  /** 回答被中断(连接断在后端 [DONE] 之前),内容可能不完整。
+   * 必须随档案一起存:刷新后这半截回答还在,得让用户知道它缺了一段 */
+  interrupted?: boolean
 }
 
 export interface ChatSession {
@@ -101,6 +104,7 @@ export function persistSessions(): boolean {
             id: m.id, role: m.role, content: m.content, cmd: m.cmd,
             attachment: m.attachment, chitchat: m.chitchat,
             nav: m.nav, navGuideFor: m.navGuideFor,
+            interrupted: m.interrupted,
           }))
           .slice(-120),
       })),

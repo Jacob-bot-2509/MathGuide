@@ -60,6 +60,10 @@ export async function postSSE(
   const decoder = new TextDecoder()
   let buffer = ''
   let full = ''
+  // 后端每条 SSE 流都以 [DONE] 收尾(见 backend/chat.py 的 _sse)。
+  // 收到它才算这次回答完整 —— 连接干净地关上、但没有 [DONE],
+  // 意味着流是在中途断的,手里的 full 只是半截
+  let terminated = false
 
   try {
     for (;;) {
@@ -71,7 +75,11 @@ export async function postSSE(
       for (const line of lines) {
         if (!line.startsWith('data:')) continue
         const payload = line.slice(5).trim()
-        if (!payload || payload === '[DONE]') continue
+        if (payload === '[DONE]') {
+          terminated = true
+          continue
+        }
+        if (!payload) continue
         // 后端按 OpenAI 惯例用 JSON 字符串包裹增量(换行转义 \\n);
         // 解析失败视为纯文本(兼容旧实现与第三方流)
         let chunk: string = payload
@@ -91,6 +99,7 @@ export async function postSSE(
       throw err
     }
   } finally {
-    cb.onDone(full)
+    // 用户主动取消(abort)不算被中断:那是调用方自己掐的,不是连接断的
+    cb.onDone(full, terminated || ac.signal.aborted)
   }
 }
