@@ -86,25 +86,26 @@ const DICT: [string, string][] = [
 /* ---------- 4) 结构规则(顺序敏感) ---------- */
 const FN = `[fghFuvwφψ]`
 
+export function normalizeSpeechCase(s: string): string {
+  const caps: string[] = []
+  let out = s
+    .replace(/大写\s*([a-zA-Z])/g, (_, c: string) => {
+      caps.push(c.toUpperCase())
+      return `\u0000${caps.length - 1}\u0000`
+    })
+    .replace(/大\s*([a-zA-Z])(?![a-zA-Z])/g, (_, c: string) => {
+      caps.push(c.toUpperCase())
+      return `\u0000${caps.length - 1}\u0000`
+    })
+  // 只小写 ASCII 大写字母(不动希腊字母 Γ/Ω 等,toLowerCase 会把它们也变小写)
+  out = out.replace(/[A-Z]/g, (c) => c.toLowerCase())
+  return out.replace(/\u0000(\d+)\u0000/g, (_, i: string) => caps[Number(i)])
+}
+
 const STRUCT: ((s: string) => string)[] = [
-  // 大小写归一(最先执行):明确念了「大/大写」的字母保留大写(占位保护),
-  // 其余英文字母一律小写——ASR 大小写随机,不刻意说"大"就按小写处理
-  (s) => {
-    const caps: string[] = []
-    let out = s
-      .replace(/大写\s*([a-zA-Z])/g, (_, c: string) => {
-        caps.push(c.toUpperCase())
-        return `\u0000${caps.length - 1}\u0000`
-      })
-      .replace(/大\s*([a-zA-Z])(?![a-zA-Z])/g, (_, c: string) => {
-        caps.push(c.toUpperCase())
-        return `\u0000${caps.length - 1}\u0000`
-      })
-    // 只小写 ASCII 大写字母(不动希腊字母 Γ/Ω 等,toLowerCase 会把它们也变小写)
-    out = out.replace(/[A-Z]/g, (c) => c.toLowerCase())
-    return out.replace(/\u0000(\d+)\u0000/g, (_, i: string) => caps[Number(i)])
-  },
-  // 幂:平方/立方/n 次方/任意次方(先转换,后续函数/分数规则才能拿到完整项)
+  // 大小写归一(最先执行):不刻意念"大"的字母一律小写(占位保护大/大写标记);
+  // 发 LLM 精修的文本同样先过此归一,惯例大小写由模型自动判别
+  normalizeSpeechCase,  // 幂:平方/立方/n 次方/任意次方(先转换,后续函数/分数规则才能拿到完整项)
   (s) => s.replace(/的?\s*平方/g, '²'),
   (s) => s.replace(/的?\s*立方/g, '³'),
   (s) => s.replace(/的?\s*([a-zA-Z0-9])\s*次方/g, (_, x: string) => sup(x)),

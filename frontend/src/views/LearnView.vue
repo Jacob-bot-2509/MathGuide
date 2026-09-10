@@ -38,7 +38,7 @@ import {
 import { addToTrash } from '@/stores/trash'
 import { addNotebookEntry, notebookState } from '@/stores/notebook'
 import { compressImage } from '@/utils/avatar'
-import { cachedConvert, saveConvert, speechMathConvert } from '@/utils/speechMath'
+import { cachedConvert, normalizeSpeechCase, saveConvert, speechMathConvert } from '@/utils/speechMath'
 import { showToast } from '@/utils/toast'
 
 const router = useRouter()
@@ -837,7 +837,9 @@ function startConvert(raw: string, live: boolean) {
   convLive = live
   convAcc = ''
   const seq = convSeq
-  convCancel = speechToMath(raw, {
+  // 先本地归一大小写(ASR 大小写是噪声,不刻意念"大"一律小写),
+  // 再交 LLM 按数学惯例自动判别(矩阵 A/随机变量 X 等该大写则大写)
+  convCancel = speechToMath(normalizeSpeechCase(raw), {
     onDelta: (full) => {
       if (seq !== convSeq) return
       convAcc = full
