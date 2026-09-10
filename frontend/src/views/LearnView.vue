@@ -19,12 +19,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
 import { useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
+import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
 import SpeechTips from '@/components/chat/SpeechTips.vue'
 import { COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
 import { speechToMath, streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
 import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyQuestion, isChitchat } from '@/utils/classifier'
 import { settingsState, updateSettings } from '@/stores/settings'
+import { isAllSelected, scopeForRequest, selectedSources } from '@/stores/researchScope'
 import {
   MAX_SESSIONS,
   nextMsgId,
@@ -60,6 +62,7 @@ const sessions = toRef(sessionsState, 'sessions')
 const activeId = toRef(sessionsState, 'activeId')
 const input = ref('')
 const panelOpen = ref(false)
+const scopeOpen = ref(false)
 const tipsOpen = ref(false)
 const flashMsgId = ref(0)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
@@ -342,6 +345,8 @@ function send(text?: string, cmd?: string) {
     sessionId: session.id,
     categoryKey: session.cat?.key,
     history,
+    // 搜索范围:全平台时不传该字段(后端走默认全量),缩小范围才带上
+    sources: scopeForRequest(),
   })
 }
 
@@ -350,6 +355,11 @@ function runCommand(cmd: string) {
   // 问题记录 = 本地归纳本:直接展示,不走后端
   if (cmd === '问题记录') {
     showNotebook()
+    return
+  }
+  // 搜索范围 = 本地设置(平台勾选):开面板,不发请求
+  if (cmd === '搜索范围') {
+    scopeOpen.value = !scopeOpen.value
     return
   }
   // 输入为空用指令默认问题;不清空输入,由 send 在成功发出后统一清空
@@ -1029,6 +1039,9 @@ onBeforeUnmount(() => {
       @delete="deleteHistory"
     />
 
+    <!-- 搜索范围面板(指令「搜索范围」开合):研究型提问检索哪些平台 -->
+    <ResearchScopePanel v-if="scopeOpen" @close="scopeOpen = false" />
+
     <!-- 念法速查贴士(语音输入中点击麦克风旁的📓打开) -->
     <SpeechTips v-if="tipsOpen" @close="tipsOpen = false" />
 
@@ -1145,8 +1158,17 @@ onBeforeUnmount(() => {
       </div>
       <div class="commands">
         <span class="tech-label cmd-label">{{ t('learn.cmdLabel') }}</span>
-        <button v-for="c in COMMANDS" :key="c.key" class="cmd" :title="cmdHint(c.key)" @click="runCommand(c.key)">
+        <button
+          v-for="c in COMMANDS"
+          :key="c.key"
+          class="cmd"
+          :class="{ 'cmd--active': c.key === '搜索范围' && !isAllSelected() }"
+          :title="cmdHint(c.key)"
+          @click="runCommand(c.key)"
+        >
           <span class="cmd-icon">{{ c.icon }}</span>{{ cmdName(c.key) }}
+          <!-- 范围缩小到部分平台时常驻数字,提醒当前不是全平台检索 -->
+          <span v-if="c.key === '搜索范围' && !isAllSelected()" class="cmd-badge">{{ selectedSources.length }}</span>
         </button>
         <span class="voice-toggle">
           <span class="voice-label">{{ t('learn.voiceLabel') }}</span>
@@ -1522,6 +1544,22 @@ onBeforeUnmount(() => {
 .cmd-icon {
   font-size: 11px;
   color: var(--cyan);
+}
+
+/* 搜索范围已缩小到部分平台:常驻高亮 + 数量角标 */
+.cmd--active {
+  border-color: var(--line-bright);
+  color: var(--cyan);
+}
+
+.cmd-badge {
+  font-family: var(--font-tech);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--cyan);
+  color: #0b1220;
 }
 
 /* ---------- 附件 ---------- */

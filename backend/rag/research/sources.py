@@ -54,8 +54,10 @@ async def _retry(fn, *args, retries: int = RETRIES):
 
 
 async def search_arxiv(query: str, max_results: int = 8) -> list[SearchHit]:
+    """query 为 arXiv 检索语法(由编排层按源特性构造,见 _query_for):
+    必须用 all:"词" OR all:"词" 展开——写成整串引号短语会变成精确匹配,多词必 0 命中"""
     url = "http://export.arxiv.org/api/query?" + urllib.parse.urlencode({
-        "search_query": f'all:"{query}"',
+        "search_query": query,
         "start": 0,
         "max_results": max_results,
         "sortBy": "relevance",

@@ -373,8 +373,18 @@ _RESEARCH_TTL = 600.0   # 秒
 _RESEARCH_MAX = 32
 
 
-def _research_cache_key(question: str) -> str:
-    return question.strip().lower()
+def _clean_scope(raw: object) -> list[str] | None:
+    """请求体里的搜索范围(平台名列表)→ 干净的字符串列表;None/空/非列表 = 全平台"""
+    if not isinstance(raw, list):
+        return None
+    out = [str(s)[:30] for s in raw][:12]
+    return [s for s in out if s] or None
+
+
+def _research_cache_key(question: str, scope: list[str] | None = None) -> str:
+    """范围参与缓存键:同一问题换了检索平台必须重新检索"""
+    tag = "all" if not scope else ",".join(sorted(scope))
+    return f"{tag}|{question.strip().lower()}"
 
 
 # ---------- 安全与用量(测试期防护) ----------
@@ -725,13 +735,15 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走跨论文库深度搜索)
     if rag.route.is_research_intent(question):
         meta["research"] = True
-        ck = _research_cache_key(question)
+        # 搜索范围(前端勾选的平台;缺省/空 = 全平台);非法名白名单校验在 deep_search 内
+        scope = _clean_scope(body.get("sources"))
+        ck = _research_cache_key(question, scope)
         cached = _RESEARCH_ANSWER.get(ck)
         if cached and time.monotonic() - cached[0] < _RESEARCH_TTL:
             print(f"[chat] 研究综合缓存命中: {question[:24]}")
             meta["role"] = "deep"
             return _stream_text(cached[1])
-        outcome = await rag.research.deep_search(question, top_k=3)
+        outcome = await rag.research.deep_search(question, top_k=3, scope=scope)
         # P2c:LLM 已配置 → 综合解答 + 编号引用 + 后端拼装引用区;
         # 未配置 → 来源列表(现有行为)
         if outcome.any_hit and rag.llm.is_configured():

@@ -18,6 +18,8 @@ export interface ChatMeta {
   sessionId?: number
   categoryKey?: string
   history?: ChatRequest['history']
+  /** 研究型提问的搜索范围(平台名列表;缺省 = 全平台) */
+  sources?: string[]
 }
 
 function authHeaders(): Record<string, string> {
@@ -71,6 +73,7 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
     sessionId: meta?.sessionId,
     categoryKey: meta?.categoryKey,
     history: meta?.history,
+    sources: meta?.sources,
   }
 
   postSSE(

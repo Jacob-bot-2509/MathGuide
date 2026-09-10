@@ -22,6 +22,8 @@ export interface ChatRequest {
   cmd?: string
   /** 最近几轮历史对话(供模型理解上下文;直答/闲聊路径不受影响) */
   history?: ChatHistoryItem[]
+  /** 研究型提问的搜索范围(平台名列表;缺省 = 全平台) */
+  sources?: string[]
 }
 
 /** 流式回调(OpenAI 兼容 SSE 的通用形态) */

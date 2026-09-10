@@ -46,14 +46,28 @@ ZH2EN = {
 
 MAX_TERMS = 6
 
+# 深度搜索源注册表:键 = SearchHit.source(前端勾选框、来源统计、引用区同一口径);
+# 顺序即展示顺序。KB_SOURCE 为内部知识库,由编排层直连 rag.search,不走适配器。
+SOURCE_FNS = {
+    "arXiv": sources.search_arxiv,
+    "zbMATH": sources.search_zbmath,
+    "Semantic Scholar": sources.search_semantic_scholar,
+    "OpenAlex": sources.search_openalex,
+    "StackExchange": sources.search_stackexchange,
+}
+KB_SOURCE = "知识库"
+ALL_SOURCES = (KB_SOURCE, *SOURCE_FNS)
+
 # 结果缓存:同一研究问题 TTL 内重复查询直接复用,降低外部源限流风险(演示期同题重问常见)
 _cache: dict[str, tuple[float, SearchOutcome]] = {}
 _CACHE_TTL = 300.0   # 秒
 _CACHE_MAX = 64
 
 
-def _cache_key(question: str, top_k: int) -> str:
-    return f"{top_k}|{question.strip().lower()}"
+def _cache_key(question: str, top_k: int, scope: list[str] | None) -> str:
+    """范围(勾选的平台)参与缓存键:换了平台的同题必须重新检索"""
+    tag = "all" if not scope else ",".join(sorted(scope))
+    return f"{top_k}|{tag}|{question.strip().lower()}"
 
 
 def expand_query(question: str) -> list[str]:
@@ -75,6 +89,21 @@ def expand_query(question: str) -> list[str]:
             seen.add(term)
             out.append(term)
     return out[:MAX_TERMS]
+
+
+def _query_for(name: str, terms: list[str], question: str) -> str:
+    """按源构造检索串(实测差异极大,同一串喂给所有源会大面积 0 命中):
+    - arXiv:引号内多词 = 精确短语匹配 → 必须展开成 all:"词" OR all:"词";
+    - zbMATH / StackExchange:全文检索,词越多要求全中 → 只取最相关的前 1~2 个;
+    - Semantic Scholar / OpenAlex:语义与全文混合,可吃下完整术语串。"""
+    t = [x for x in terms if x] or [question]
+    if name == "arXiv":
+        return " OR ".join(f'all:"{x}"' for x in t[:3])
+    if name == "zbMATH":
+        return " ".join(t[:2])
+    if name == "StackExchange":
+        return t[0]
+    return " ".join(t)
 
 
 async def _llm_expand_terms(question: str, timeout: float = 6.0) -> list[str] | None:
@@ -104,8 +133,15 @@ async def _llm_expand_terms(question: str, timeout: float = 6.0) -> list[str] | 
         return None
 
 
-async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0) -> SearchOutcome:
-    key = _cache_key(question, top_k)
+async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0,
+                      scope: list[str] | None = None) -> SearchOutcome:
+    """scope = 本轮要检索的平台名列表(取自 SOURCE_FNS / KB_SOURCE);
+    None 或空 = 全平台。未知名字忽略(白名单外的一律不认,防前端脏数据)"""
+    chosen: set[str] | None = None
+    if scope:
+        picked = {s for s in scope if s in ALL_SOURCES}
+        chosen = picked or None  # 勾选全非法 → 退回全平台,不让用户拿到空结果
+    key = _cache_key(question, top_k, sorted(chosen) if chosen else None)
     now = time.monotonic()
     hit = _cache.get(key)
     if hit and now - hit[0] < _CACHE_TTL:
@@ -121,17 +157,18 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0) -> S
 
     # 内部知识库(同步实现,含可能数十秒的 embedding 请求 → 挪出事件循环,
     # 否则会冻住整个后端的所有并发请求)
-    kb_hits = await asyncio.to_thread(kb_search, question, 3)
-    internal = [
-        SearchHit("知识库", c.title, c.text[:400], "", 0, "", 0)
-        for c, _s in kb_hits
-    ]
-    outcome.sources["知识库"] = len(internal)
-    outcome.hits.extend(internal)
+    if chosen is None or KB_SOURCE in chosen:
+        kb_hits = await asyncio.to_thread(kb_search, question, 3)
+        internal = [
+            SearchHit(KB_SOURCE, c.title, c.text[:400], "", 0, "", 0)
+            for c, _s in kb_hits
+        ]
+        outcome.sources[KB_SOURCE] = len(internal)
+        outcome.hits.extend(internal)
 
     async def run(name: str, fn, budget: float) -> None:
         try:
-            hs = await asyncio.wait_for(fn(query), timeout=budget)
+            hs = await asyncio.wait_for(fn(_query_for(name, terms, question)), timeout=budget)
             outcome.hits.extend(hs)
             outcome.sources[name] = len(hs)
         except Exception as exc:  # noqa: BLE001 单源失败只记录,不影响其他源
@@ -139,20 +176,20 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0) -> S
 
     # 源搜索预算:LLM 配置时给精排留 6s,总预算仍 ≤ timeout(默认 15s)
     src_budget = max((timeout - 6) if llm.is_configured() else (timeout - 2), 5)
-    await asyncio.gather(
-        run("arXiv", sources.search_arxiv, src_budget),
-        run("SemanticScholar", sources.search_semantic_scholar, src_budget),
-        run("OpenAlex", sources.search_openalex, src_budget),
-        run("StackExchange", sources.search_stackexchange, src_budget),
-        run("zbMATH", sources.search_zbmath, src_budget),
-    )
+    # 按勾选范围并发(未勾选的源一个请求都不发:省时,也省对方配额);
+    # 源名统一取注册表键,与 SearchHit.source 同口径(前端勾选框/引用区一致)
+    await asyncio.gather(*[
+        run(name, fn, src_budget)
+        for name, fn in SOURCE_FNS.items()
+        if chosen is None or name in chosen
+    ])
 
     outcome.hits = rank.rank(outcome.hits, terms, question, top_k)
     # P2b:LLM 精排(配置了模型且含外源结果时;纯知识库命中无需精排,
     # 失败自动回退规则排序)
     if (outcome.hits and llm.is_configured()
             and any(h.source != "知识库" for h in outcome.hits)):
-        outcome.hits = await rerank.rerank(question, outcome.hits, timeout=6.0)
+        outcome.hits = await rerank.rerank(question, outcome.hits, timeout=10.0)
     outcome.elapsed = round(time.perf_counter() - started, 2)
     # 存入缓存(超容逐出最旧一条,简单 LRU)
     _cache[key] = (time.monotonic(), outcome)

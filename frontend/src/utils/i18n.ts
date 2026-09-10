@@ -117,6 +117,14 @@ const ZH: Dict = {
   'panel.jump': '打开该问答所在的历史会话',
   'panel.del': '删除这条记录',
 
+  /* 搜索范围(研究型提问的数据源) */
+  'scope.title': '搜索范围 · SEARCH SCOPE',
+  'scope.picked': '已选 {n}/{total} 个平台',
+  'scope.all': '全平台',
+  'scope.hint': '研究型提问(带「研究 / 进展 / 文献」等字样)会到勾选的平台检索;全选即全平台,取消的平台不发请求。',
+  'scope.only': '只搜这一个平台',
+  'scope.onlyShort': '只搜它',
+
   /* 设置 */
   'settings.title': '设置',
   'settings.sectionAccount': '账号',
@@ -345,6 +353,13 @@ const EN: Dict = {
   'panel.jump': 'Open the original chat of this Q&A',
   'panel.del': 'Delete this record',
 
+  'scope.title': 'SEARCH SCOPE',
+  'scope.picked': '{n}/{total} sources selected',
+  'scope.all': 'All',
+  'scope.hint': 'Research questions (with words like "research / progress / literature") search the selected sources. All selected = every platform; unchecked ones receive no request.',
+  'scope.only': 'Search only this source',
+  'scope.onlyShort': 'Only',
+
   'settings.title': 'Settings',
   'settings.sectionAccount': 'Account',
   'settings.sectionApp': 'App',
@@ -495,6 +510,7 @@ const CMD_NAMES: Record<string, [string, string]> = {
   章节知识导航: ['章节知识导航', 'Chapter Navigator'],
   问题记录: ['问题记录', 'Question Notebook'],
   公式查询手册: ['公式查询手册', 'Formula Handbook'],
+  搜索范围: ['搜索范围', 'Search Scope'],
 }
 
 const CMD_HINTS: Record<string, [string, string]> = {
@@ -502,6 +518,7 @@ const CMD_HINTS: Record<string, [string, string]> = {
   章节知识导航: ['上传或粘贴教材后,一键划分章节;点击章节查看知识指引', 'Upload or paste a textbook to get its chapter list; tap a chapter for guidance'],
   问题记录: ['归纳本:已收纳的问题与参考解答,温故知新', 'Notebook: saved questions with answers and approaches for review'],
   公式查询手册: ['查询常用公式与定理', 'Look up common formulas and theorems'],
+  搜索范围: ['勾选研究型提问要检索的平台(全选即全平台)', 'Pick which platforms research questions search'],
 }
 
 const CMD_DEFAULTS: Record<string, [string, string]> = {
