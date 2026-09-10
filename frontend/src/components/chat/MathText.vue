@@ -28,10 +28,12 @@ function renderKatex(latex: string, display: boolean): string {
   if (hit !== undefined) return hit
   let html = ''
   try {
-    html = katex.renderToString(latex, { displayMode: display, throwOnError: false })
+    // throwOnError: true —— 语法有误(未闭合花括号、非法宏等)时抛异常走下方 catch,
+    // 原样展示 LaTeX 源码;若用 false,KaTeX 会把错误渲染成红色 katex-error 文本,
+    // 用户看到的是刺眼的报错而不是内容
+    html = katex.renderToString(latex, { displayMode: display, throwOnError: true })
   } catch {
-    // 渲染异常(如 KaTeX 宏展开超限)时不静默丢内容:原样展示 LaTeX 源码,
-    // 保证任何符号都不会"凭空消失"
+    // 渲染异常时不静默丢内容:原样展示 LaTeX 源码,保证任何符号都不会"凭空消失"
     html = `<code class="seg-math-raw">${escapeHtml(latex)}</code>`
   }
   if (katexCache.size >= KATEX_CACHE_MAX) katexCache.clear()
@@ -54,14 +56,18 @@ function parseBold(src: string): Seg[] {
 
 function parseInline(src: string): Seg[] {
   const segs: Seg[] = []
-  // 行内 $...$:内容不以数字/空白开头,避免把 "$5 and $6" 这类金额误判为公式
-  const re = /\$\$([\s\S]+?)\$\$|\$(?=[^0-9\s])([^$\n]+?)\$/g
+  // 三种公式写法:$$..$$ 块级、\(..\) 行内(LLM 与知识库常用)、$..$ 行内。
+  // 行内 $ 只要求后一位不是数字 —— "$5 and $6" 金额仍被挡,
+  // 而 "$ x > 0 $" 这类带空格的数学公式(LLM 实测会输出)能正常渲染。
+  // 未闭合的公式不会匹配,留在纯文本里,闭合后自动渲染(流式友好)
+  const re = /\$\$([\s\S]+?)\$\$|\\\(([\s\S]+?)\\\)|\$(?=[^0-9])([^$\n]+?)\$/g
   let last = 0
   let m: RegExpExecArray | null
   while ((m = re.exec(src))) {
     segs.push(...parseBold(src.slice(last, m.index)))
     if (m[1] !== undefined) segs.push({ type: 'mathd', value: m[1] })
-    else segs.push({ type: 'math', value: m[2] })
+    else if (m[2] !== undefined) segs.push({ type: 'math', value: m[2] })
+    else segs.push({ type: 'math', value: m[3] })
     last = m.index + m[0].length
   }
   segs.push(...parseBold(src.slice(last)))
