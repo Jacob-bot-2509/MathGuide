@@ -12,6 +12,8 @@ urllib 自动读取 Windows 系统代理,而 httpx 只认环境变量——arXiv
 - OpenAlex:开放学术图谱,免 key;设 MG_CONTACT_MAIL 后进礼貌池;
   部分网络下代理出口被限流(429)会自动跳过;
 - StackExchange(math 站):评分/回答数为质量信号,可达性最稳;
+- zbMATH Open:数学专业文献库(免 key,CC-BY-SA),带数学家同行评论(Review)
+  与 MSC 分类——唯一数学专属源,命中即高度对口;
 - 知识库:由编排层直接调用 rag.search,不走本文件。
 """
 import asyncio
@@ -155,6 +157,47 @@ async def search_openalex(query: str, limit: int = 8) -> list[SearchHit]:
                               _rebuild_abstract(w.get("abstract_inverted_index"))[:500], authors,
                               int(w.get("publication_year") or 0), url,
                               int(w.get("cited_by_count") or 0)))
+    return hits
+
+
+async def search_zbmath(query: str, limit: int = 8) -> list[SearchHit]:
+    """zbMATH Open:数学专业文献库(免 key,2021 年起开放,CC-BY-SA)。
+    特色是数学家撰写的同行评论(Review)与 MSC 分类,优先作摘要展示"""
+    import json
+    url = "https://api.zbmath.org/v1/document/_structured_search?" + urllib.parse.urlencode({
+        "Anywhere": query,          # 字段名即 API 契约(带空格:Title/Author name/MSC 等)
+        "results_per_page": limit,
+        "page": 0,
+    })
+
+    async def _fetch():
+        return json.loads(await asyncio.to_thread(_http_get, url, 12))
+
+    try:
+        data = await _retry(_fetch)
+    except Exception:
+        return []
+    hits: list[SearchHit] = []
+    for doc in data.get("result") or []:
+        title = ((doc.get("title") or {}).get("title") or "").strip()
+        # 版权受限记录的占位条目(API 会返回「contents unavailable…」),丢弃
+        if not title or "zbMATH Open Web Interface contents unavailable" in title:
+            continue
+        authors = ", ".join(a.get("name", "") for a in
+                            (doc.get("contributors") or {}).get("authors", [])[:3])
+        contribs = doc.get("editorial_contributions") or []
+        # 同行评论最专业;无评论时退到作者摘要,再退到出处
+        best = next((c for c in contribs if c.get("contribution_type") == "review"), None) \
+            or next(iter(contribs), None)
+        snippet = (best.get("text") if best else "") or \
+            (doc.get("source") or {}).get("source", "") or ""
+        msc = (doc.get("msc") or [{}])[0]
+        if msc.get("text"):
+            snippet = f"{snippet}〔MSC {msc.get('code','')}:{msc['text']}〕"
+        year = str(doc.get("year") or "")
+        hits.append(SearchHit("zbMATH", title, snippet[:500], authors,
+                              int(year) if year.isdigit() else 0,
+                              doc.get("zbmath_url") or ""))
     return hits
 
 

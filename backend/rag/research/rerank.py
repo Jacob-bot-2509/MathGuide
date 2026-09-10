@@ -47,13 +47,17 @@ async def rerank(question: str, candidates: list[SearchHit],
     if len(candidates) < 2 or not llm.is_configured(role):
         return candidates
     try:
-        raw = ""
-        async for delta in asyncio.wait_for(
-            llm.stream_chat(
-                "你是检索结果的相关性评审。只输出要求的 JSON,不要其他内容。",
-                _build_prompt(question, candidates), role=role, fallback=False),
-            timeout=timeout):
-            raw += delta
+        # 注意:stream_chat 是异步生成器,必须包成协程再交给 wait_for
+        # (直接 wait_for(生成器) 会抛 TypeError,精排静默失效)
+        async def _collect() -> str:
+            parts: list[str] = []
+            async for delta in llm.stream_chat(
+                    "你是检索结果的相关性评审。只输出要求的 JSON,不要其他内容。",
+                    _build_prompt(question, candidates), role=role, fallback=False):
+                parts.append(delta)
+            return "".join(parts)
+
+        raw = await asyncio.wait_for(_collect(), timeout=timeout)
         llm_scores = _parse(raw, len(candidates))
     except Exception as exc:  # noqa: BLE001 精排失败退化为纯规则排序
         print(f"[rerank] 精排失败,回退规则排序: {exc}")

@@ -6,9 +6,10 @@
         接入 LLM 后此函数替换为模型查询改写,签名不变)
     deep_search(question, top_k) → SearchOutcome(≤15s,单源失败不影响整体)
 
-来源:arXiv / Semantic Scholar / OpenAlex / StackExchange(外网,各自超时熔断)
+来源:arXiv / Semantic Scholar / OpenAlex / StackExchange / zbMATH Open(外网,各自超时熔断)
 + 内部知识库。Semantic Scholar 可配 MG_S2_API_KEY(免费申请)走专属配额;
-OpenAlex 可配 MG_CONTACT_MAIL 进礼貌池;受限网络下被限流的源自动跳过。
+OpenAlex 可配 MG_CONTACT_MAIL 进礼貌池;zbMATH Open 免 key(数学专业库);
+受限网络下被限流的源自动跳过。
 """
 import asyncio
 import re
@@ -141,6 +142,7 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = 15.0) -> S
         run("SemanticScholar", sources.search_semantic_scholar, src_budget),
         run("OpenAlex", sources.search_openalex, src_budget),
         run("StackExchange", sources.search_stackexchange, src_budget),
+        run("zbMATH", sources.search_zbmath, src_budget),
     )
 
     outcome.hits = rank.rank(outcome.hits, terms, question, top_k)

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 @dataclass
 class SearchHit:
     """一条搜索命中(来源元数据全部为 API 真实返回,绝不伪造)"""
-    source: str              # arXiv / Semantic Scholar / StackExchange / 知识库
+    source: str              # arXiv / Semantic Scholar / zbMATH / StackExchange / 知识库
     title: str
     snippet: str = ""
     authors: str = ""

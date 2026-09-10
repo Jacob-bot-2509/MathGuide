@@ -34,7 +34,7 @@ backend/
     embed.py      # Embedding 客户端(懒加载配置,批量 ≤10,失败自动降级)
     llm.py        # LLM 客户端(双平台四角色,按需路由 + 跨平台容灾)
     route.py      # 问题路由:研究型提问分流(简单应答 vs 深度搜索)
-    research/     # 深度搜索:arXiv / Semantic Scholar / OpenAlex / StackExchange
+    research/     # 深度搜索:arXiv / Semantic Scholar / OpenAlex / StackExchange / zbMATH
                   # + LLM 查询改写 + 去重打分 + LLM 精排 + 双层缓存
     __init__.py   # init / search / build_system(进程内单例)
   knowledge/   # 知识库文档(*.md,公式用 LaTeX),新增文档无需改代码
