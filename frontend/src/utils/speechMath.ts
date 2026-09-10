@@ -10,6 +10,9 @@ const SUP: Record<string, string> = {
   '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
   a: 'ᵃ', b: 'ᵇ', c: 'ᶜ', d: 'ᵈ', e: 'ᵉ', f: 'ᶠ', g: 'ᵍ', h: 'ʰ', i: 'ⁱ', j: 'ʲ', k: 'ᵏ', l: 'ˡ',
   m: 'ᵐ', n: 'ⁿ', o: 'ᵒ', p: 'ᵖ', r: 'ʳ', s: 'ˢ', t: 'ᵗ', u: 'ᵘ', v: 'ᵛ', w: 'ʷ', x: 'ˣ', y: 'ʸ', z: 'ᶻ',
+  // 大写上标(Unicode 只有这些字母存在上标形式;无形式的如 X 回退 ^X)
+  A: 'ᴬ', B: 'ᴮ', D: 'ᴰ', E: 'ᴱ', G: 'ᴳ', H: 'ᴴ', I: 'ᴵ', J: 'ᴶ', K: 'ᴷ', L: 'ᴸ',
+  M: 'ᴹ', N: 'ᴺ', O: 'ᴼ', P: 'ᴾ', R: 'ᴿ', T: 'ᵀ', U: 'ᵁ', V: 'ⱽ', W: 'ᵂ',
 }
 const SUB: Record<string, string> = {
   '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
@@ -112,7 +115,8 @@ export function normalizeSpeechCase(s: string): string {
 const STRUCT: ((s: string) => string)[] = [
   // 大小写归一(最先执行):不刻意念"大"的字母一律小写(占位保护大/大写标记);
   // 发 LLM 精修的文本同样先过此归一,惯例大小写由模型自动判别
-  normalizeSpeechCase,  // 幂:平方/立方/n 次方/任意次方(先转换,后续函数/分数规则才能拿到完整项)
+  normalizeSpeechCase,
+  // 幂:平方/立方/n 次方/任意次方(先转换,后续函数/分数规则才能拿到完整项)
   (s) => s.replace(/的?\s*平方/g, '²'),
   (s) => s.replace(/的?\s*立方/g, '³'),
   (s) => s.replace(/的?\s*([a-zA-Z0-9])\s*次方/g, (_, x: string) => sup(x)),
@@ -211,6 +215,33 @@ export function speechMathConvert(raw: string): string {
     .replace(/[、。]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+/* ---------- Unicode 美化:模型精修可能输出 ^/_ 或 LaTeX 记号,输入框是纯文本,
+   转成可直接读的 Unicode 形式(A^T→Aᵀ、A^{-1}→A⁻¹、x_0→x₀、\frac→/、\sum→∑ᵢ₌₁ⁿ) ---------- */
+export function beautifyMath(text: string): string {
+  let s = text.replace(/\$/g, '') // 输入框不渲染 KaTeX,去掉 $ 定界符
+  s = s.replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, (_, a: string, b: string) =>
+    `${/\W/.test(a) ? `(${a})` : a}/${/\W/.test(b) ? `(${b})` : b}`)
+  s = s.replace(/\\sum_\{([^{}]+)\}\^\{([^{}]+)\}/g, (_, lo: string, hi: string) => {
+    const m = lo.match(/^([a-zA-Z0-9])=([a-zA-Z0-9])$/)
+    const loStr = m ? `${sub(m[1])}₌${sub(m[2])}` : sub(lo)
+    return `∑${loStr}${sup(hi)}`
+  })
+  s = s.replace(/\\int_\{([^{}]+)\}\^\{([^{}]+)\}/g, (_, lo: string, hi: string) => `∫${sub(lo)}${sup(hi)}`)
+  s = s.replace(/\\sqrt\{([^{}]+)\}/g, '√($1)')
+  s = s.replace(/\\times/g, '×').replace(/\\cdot/g, '·').replace(/\\to/g, '→')
+    .replace(/\\infty/g, '∞').replace(/\\neq/g, '≠').replace(/\\leq/g, '≤')
+    .replace(/\\geq/g, '≥').replace(/\\approx/g, '≈').replace(/\\partial/g, '∂')
+    .replace(/\\nabla/g, '∇').replace(/\\pi/g, 'π').replace(/\\sum/g, '∑')
+    .replace(/\\int/g, '∫').replace(/\\prime/g, '′')
+  s = s.replace(/\^\{-1\}/g, '⁻¹')
+  s = s.replace(/\^\{([a-zA-Z0-9])\}/g, (_, p: string) => sup(p))
+  s = s.replace(/\^([a-zA-Z0-9])(?![a-zA-Z0-9])/g, (_, p: string) => sup(p))
+  s = s.replace(/_\{([a-zA-Z0-9])\}/g, (_, p: string) => sub(p))
+  s = s.replace(/_([a-zA-Z0-9])(?![a-zA-Z0-9])/g, (_, p: string) => sub(p))
+  // 运算符两侧空格收紧(与编译器清理口径一致)
+  return s.replace(/\s*([+−×÷=≥≤≠≈→⇒⇔∈∉⊆⊂∀∃·⊗⊕])\s*/g, '$1')
 }
 
 /* ---------- 转换缓存(LRU;精修结果也入库,重复句式零请求) ---------- */
@@ -315,4 +346,21 @@ export const SELF_TESTS: [string, string][] = [
   ['大 x 的平方', 'X²'],
   ['大 F x', 'F(x)'],
   ['你好呀', '你好呀'],
+]
+
+/* 美化器自测(模型精修输出 → 输入框直读形式) */
+export const BEAUTY_TESTS: [string, string][] = [
+  ['A^T', 'Aᵀ'],
+  ['A^{-1}', 'A⁻¹'],
+  ['x_0', 'x₀'],
+  ['x^2', 'x²'],
+  ['X^2', 'X²'],
+  ['\\frac{b}{a}', 'b/a'],
+  ['\\frac{x+1}{x-1}', '(x+1)/(x-1)'],
+  ['\\sum_{i=1}^{n}', '∑ᵢ₌₁ⁿ'],
+  ['\\int_{0}^{1}', '∫₀¹'],
+  ['\\sqrt{x+1}', '√(x+1)'],
+  ['$x^2+y^2$', 'x²+y²'],
+  ['2\\times 3', '2×3'],
+  ['x\\neq 0', 'x≠0'],
 ]

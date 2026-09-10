@@ -38,7 +38,7 @@ import {
 import { addToTrash } from '@/stores/trash'
 import { addNotebookEntry, notebookState } from '@/stores/notebook'
 import { compressImage } from '@/utils/avatar'
-import { cachedConvert, normalizeSpeechCase, saveConvert, speechMathConvert } from '@/utils/speechMath'
+import { beautifyMath, cachedConvert, normalizeSpeechCase, saveConvert, speechMathConvert } from '@/utils/speechMath'
 import { showToast } from '@/utils/toast'
 
 const router = useRouter()
@@ -499,7 +499,8 @@ function showNotebook() {
     const lines: string[] = [`📓 **${t('learn.nbTitle', { n: entries.length })}**`]
     for (const [i, e] of entries.entries()) {
       lines.push(`\n**${i + 1}. 题目**: [${e.question.slice(0, 120)}${e.question.length > 120 ? '…' : ''}](cmd://nb/jump/${e.id})`)
-      const preview = e.answer.slice(0, 300)
+      // 预览同样过 Unicode 美化:去掉 $ 定界符、^/_ 与常见 LaTeX 记号,直读显示
+      const preview = beautifyMath(e.answer.slice(0, 300))
       lines.push(`**参考解答**: ${preview}${e.answer.length > 300 ? '…' : ''}`)
     }
     session.messages.push({ id: nextMsgId(), role: 'assistant', content: lines.join('\n') })
@@ -843,14 +844,18 @@ function startConvert(raw: string, live: boolean) {
     onDelta: (full) => {
       if (seq !== convSeq) return
       convAcc = full
-      if (convLive && full !== input.value) {
-        input.value = full
-        autoGrow()
+      if (convLive) {
+        // 输入框是纯文本:把模型可能输出的 ^/_、LaTeX 记号美化为 Unicode 直读形式
+        const pretty = beautifyMath(full)
+        if (pretty !== input.value) {
+          input.value = pretty
+          autoGrow()
+        }
       }
     },
     onDone: (full) => {
       if (seq !== convSeq) return
-      saveConvert(raw, full, 'llm') // 精修结果入缓存:同句再念零请求
+      saveConvert(raw, beautifyMath(full), 'llm') // 精修结果(美化后)入缓存:同句再念零请求
     },
     onFail: () => {
       if (seq === convSeq && !listening.value) showToast(t('learn.toastConvertFail'))
