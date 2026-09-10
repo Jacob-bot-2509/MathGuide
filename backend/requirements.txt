@@ -1,3 +1,4 @@
 starlette
 uvicorn
 httpx
+watchfiles  # 仅开发用(dev_reload.py 热重载守护;生产 uvicorn 直跑不需要)
