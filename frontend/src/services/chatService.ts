@@ -90,6 +90,10 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
       onDelta: (chunk) => {
         cb.onDelta(chunk)
       },
+      // 后端元信息帧(研究型标记等)原样上抛
+      onMeta: (meta) => {
+        cb.onMeta?.(meta)
+      },
       // 全文由 postSSE 统一累积(onDone 的 full 参数),这里不再重复拼一遍
       onDone: (full, complete) => {
         if (settled) return

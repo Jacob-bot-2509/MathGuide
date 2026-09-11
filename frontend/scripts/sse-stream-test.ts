@@ -49,11 +49,12 @@ interface Outcome {
   full: string
   complete: boolean | null
   errors: number
+  meta: Record<string, unknown> | null
 }
 
 /** 跑一次 postSSE,回收它回调出来的事实 */
 async function run(frames: string[], opts: FakeOpts = {}): Promise<Outcome> {
-  const out: Outcome = { full: '', complete: null, errors: 0 }
+  const out: Outcome = { full: '', complete: null, errors: 0, meta: null }
   const controller = opts.controller ?? new AbortController()
   const realFetch = globalThis.fetch
   globalThis.fetch = (() => Promise.resolve(fakeResponse(frames, { ...opts, controller }))) as typeof fetch
@@ -66,6 +67,9 @@ async function run(frames: string[], opts: FakeOpts = {}): Promise<Outcome> {
         onDone: (full, complete) => {
           out.full = full
           out.complete = complete
+        },
+        onMeta: (meta) => {
+          out.meta = meta
         },
         onError: () => {
           out.errors++
@@ -128,6 +132,12 @@ async function main() {
   r = await run([frame('泰') + DONE])
   check('同批到达:文字不漏', r.full, '泰')
   check('同批到达:complete=true', r.complete, true)
+
+  // ⑦ 元信息对象帧:单独回调 onMeta,不混进正文
+  r = await run(['data: {"mg_meta":{"research":true}}\n\n', frame('泰'), DONE])
+  check('meta 帧:onMeta 收到研究标记', r.meta, { mg_meta: { research: true } })
+  check('meta 帧:不混入正文', r.full, '泰')
+  check('meta 帧:complete 正常', r.complete, true)
 
   console.log(`\nSSE 收尾契约自测:${passed}/${passed + failed.length} 通过`)
   for (const f of failed) console.log(f)

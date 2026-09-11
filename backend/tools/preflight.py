@@ -20,6 +20,11 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+# 本机自检必须直连:urllib 默认读 Windows 系统代理(如 Clash 类工具),
+# 会把 127.0.0.1 的请求截胡返回假 404,让自检误报「后端不可达」
+# (实测:后端正常时 preflight 仍 FAIL,坑过一次)
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config  # noqa: E402 装载 .env.local(LLM key),与 main.py 同路径
@@ -74,6 +79,25 @@ def post(url: str, body: dict, token: str = "", timeout: int = 20):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
+def accumulate_stream(resp) -> str:
+    """SSE 响应 → 累积正文(只拼 JSON 字符串帧;dict 帧是元信息如 mg_meta,跳过)"""
+    full = ""
+    for raw in resp:
+        line = raw.decode("utf-8").strip()
+        if not line.startswith("data:"):
+            continue
+        p = line[5:].strip()
+        if not p or p == "[DONE]":
+            continue
+        try:
+            v = json.loads(p)
+        except json.JSONDecodeError:
+            v = p
+        if isinstance(v, str):
+            full += v
+    return full
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # 规避 Windows GBK 控制台
@@ -123,18 +147,7 @@ def main() -> int:
     for question, expect in SMOKE_CASES:
         try:
             resp = post(f"{BASE}/api/chat/stream", {"prompt": question}, token=token)
-            full = ""
-            for raw in resp:
-                line = raw.decode("utf-8").strip()
-                if not line.startswith("data:"):
-                    continue
-                p = line[5:].strip()
-                if not p or p == "[DONE]":
-                    continue
-                try:
-                    full += json.loads(p)
-                except json.JSONDecodeError:
-                    full += p
+            full = accumulate_stream(resp)
             if expect:
                 passed = expect.lower() in full.lower()
                 hint = "检查 knowledge/ 对应文档 keywords 是否包含该主题词"
@@ -152,18 +165,7 @@ def main() -> int:
     question, timeout = RESEARCH_SMOKE
     try:
         resp = post(f"{BASE}/api/chat/stream", {"prompt": question}, token=token, timeout=timeout)
-        full = ""
-        for raw in resp:
-            line = raw.decode("utf-8").strip()
-            if not line.startswith("data:"):
-                continue
-            p = line[5:].strip()
-            if not p or p == "[DONE]":
-                continue
-            try:
-                full += json.loads(p)
-            except json.JSONDecodeError:
-                full += p
+        full = accumulate_stream(resp)
         if ("来源" in full or "References" in full or "http" in full) and len(full) > 100:
             ok(f"研究型冒烟「{question}」通过({len(full)} 字)")
         else:

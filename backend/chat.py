@@ -461,6 +461,20 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
             _RESEARCH_ANSWER.pop(next(iter(_RESEARCH_ANSWER)))
 
 
+def _with_meta(resp: StreamingResponse, meta: dict) -> StreamingResponse:
+    """在流最前附一帧元信息(JSON 对象帧):前端据此识别研究型回答
+    (导出入口只对研究消息显示)。包在 _meter 之外,meta 帧不计入用量长度"""
+    original = resp.body_iterator
+
+    async def prefixed():
+        yield f"data: {json.dumps({'mg_meta': meta}, ensure_ascii=False)}\n\n"
+        async for frame in original:
+            yield frame
+
+    resp.body_iterator = prefixed()
+    return resp
+
+
 async def _frames(text: str, pace: bool = True):
     """按帧切片流式下发一段完整文本(JSON 字符串包裹);收尾标记由 _sse 统一补。
     pace=False 用于引用区等附属内容:不做人工逐字拟态,即时下发"""
@@ -645,7 +659,8 @@ async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
     resp = await _route_chat(prompt, cmd, body, rec, meta)
     if not isinstance(resp, StreamingResponse):
         return resp
-    return _meter(resp, rec, len(prompt), cmd or "", meta)
+    resp = _meter(resp, rec, len(prompt), cmd or "", meta)
+    return _with_meta(resp, meta)
 
 
 async def speech_to_math(request: Request) -> StreamingResponse:

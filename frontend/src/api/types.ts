@@ -39,6 +39,11 @@ export interface StreamCallbacks {
   onDone: (full: string, complete: boolean) => void
   /** 流请求失败(网络 / HTTP 错误;用户主动取消不触发)。可选,用于界面提示错误态 */
   onError?: (err: unknown) => void
+  /**
+   * 元信息帧(后端在流最前附的 JSON 对象帧,如研究型标记)。
+   * 用于给消息打上后端路由才知道的标记(导出入口等只对研究消息显示)
+   */
+  onMeta?: (meta: Record<string, unknown>) => void
 }
 
 export interface ChatStreamHandle {

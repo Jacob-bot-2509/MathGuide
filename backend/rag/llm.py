@@ -81,7 +81,10 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
     if max_tokens:
         payload["max_tokens"] = max_tokens
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    async with httpx.AsyncClient(timeout=60) as client:
+    # trust_env=False 强制直连:阿里云/智谱 API 国内直连可达,走系统代理
+    # (Clash 类工具)反而被中间人证书拦截(实测 SSL CERTIFICATE_VERIFY_FAILED);
+    # 检索源则相反,外网源必须经代理,两处策略不同是有意的
+    async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
         async with client.stream("POST", f"{base.rstrip('/')}/chat/completions",
                                  json=payload, headers=headers) as resp:
             resp.raise_for_status()

@@ -29,6 +29,7 @@ from starlette.routing import Route
 import auth
 import chat
 import config
+import doc
 import rag
 import usage
 
@@ -50,6 +51,7 @@ routes = [
     Route("/api/auth/logout", auth.logout, methods=["POST"]),
     Route("/api/chat/stream", chat.chat_stream, methods=["POST"]),
     Route("/api/speech/math", chat.speech_to_math, methods=["POST"]),
+    Route("/api/doc/export", doc.export_pdf, methods=["POST"]),
     Route("/api/stats", stats),
 ]
 

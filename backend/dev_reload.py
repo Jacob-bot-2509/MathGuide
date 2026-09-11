@@ -29,6 +29,14 @@ ROOT = Path(__file__).resolve().parent
 proc: subprocess.Popen | None = None
 
 
+def _kill_tree(pid: int) -> None:
+    """强杀进程树。必须按树杀:venv 的 python.exe 是转发器,真正跑 uvicorn 的
+    是 base 解释器子进程,只杀直接子进程会留下孤儿继续占着端口
+    (实测:半死实例短暂接管 8000,对外返回 404 幽灵响应)"""
+    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                   capture_output=True, check=False)
+
+
 def free_port(port: str) -> None:
     """杀掉占着目标端口的残留 uvicorn(上次窗口被直接点 X 留下的孤儿)。
     只对 python 进程下手,避免误杀无关程序。"""
@@ -47,9 +55,8 @@ def free_port(port: str) -> None:
             capture_output=True, text=True, check=False,
         ).stdout
         if "python" in name.lower():
-            subprocess.run(["taskkill", "/F", "/PID", pid],
-                           capture_output=True, check=False)
-            print(f"[dev_reload] 清掉残留进程 PID {pid}(端口 {port})")
+            _kill_tree(int(pid))
+            print(f"[dev_reload] 清掉残留进程树 PID {pid}(端口 {port})")
 
 
 def start() -> subprocess.Popen:
@@ -63,7 +70,7 @@ def start() -> subprocess.Popen:
 def restart() -> None:
     global proc
     if proc is not None and proc.poll() is None:
-        proc.kill()  # 强杀,不走 Ctrl+C 控制台广播(那在 ConPTY 下失效)
+        _kill_tree(proc.pid)  # 按树强杀(见 _kill_tree 注),不走 Ctrl+C 广播
         proc.wait()
     proc = start()
     print(f"[dev_reload] 已重启 uvicorn(端口 {PORT})")
@@ -90,7 +97,7 @@ def main() -> None:
         pass
     finally:
         if proc is not None and proc.poll() is None:
-            proc.kill()
+            _kill_tree(proc.pid)
         print("[dev_reload] 已退出")
 
 

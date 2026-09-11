@@ -25,6 +25,7 @@ import MgSwitch from '@/components/common/MgSwitch.vue'
 import { COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
 import { speechToMath, streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
+import { downloadBlob, exportSurveyPdf } from '@/services/docService'
 import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyQuestion, isChitchat } from '@/utils/classifier'
 import { settingsState, updateSettings } from '@/stores/settings'
 import { isAllSelected, scopeForRequest, selectedSources } from '@/stores/researchScope'
@@ -175,6 +176,30 @@ function buildHistory(session: ChatSession): ChatMeta['history'] {
     .map((m) => ({ role: m.role, content: (m.attachment?.text || m.content).slice(0, 400) }))
 }
 
+/** 打开着语言选择菜单的研究消息 id(同一时刻只开一个) */
+const exportMenu = ref<number | null>(null)
+/** 正在生成 PDF 的研究消息 id(按钮转「生成中…」) */
+const exportingMsg = ref<number | null>(null)
+
+/** 导出研究综述:语言由菜单选定后执行;生成需 20~60 秒,期间按钮禁用 */
+async function doExport(msg: ChatMsg, lang: 'zh' | 'en') {
+  exportMenu.value = null
+  if (exportingMsg.value !== null) return
+  exportingMsg.value = msg.id
+  try {
+    const { blob } = await exportSurveyPdf(msg.content, lang)
+    // 下载文件名用该消息的首行文字(通常是综述标题),非法文件名字符替换掉
+    const title = (msg.content.split('\n').find((l) => l.trim()) || '研究综述')
+      .slice(0, 40).replace(/[\\/:*?"<>|]/g, '_')
+    downloadBlob(blob, `${title}-${lang}.pdf`)
+    showToast(t('learn.exportDone'))
+  } catch {
+    showToast(t('learn.exportFailed'))
+  } finally {
+    exportingMsg.value = null
+  }
+}
+
 /** 让某会话的一条助手消息开始流式接收回复(输出在所属会话内进行,切换界面不中断) */
 function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?: ChatMeta) {
   // 增量节流:高频 chunk 先攒进 pending,约每 24ms 合并提交一次;
@@ -193,6 +218,11 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
     if (session === activeSession.value && pinnedToBottom) scrollBottom(false)
   }
   const stream = streamReply(prompt, {
+    onMeta: (meta) => {
+      // 后端路由才知道的标记:研究型回答打上 research,导出入口只对它显示
+      const inner = (meta as { mg_meta?: { research?: boolean } }).mg_meta
+      if (inner?.research) reply.research = true
+    },
     onDelta: (t) => {
       reply.thinking = false
       pending += t
@@ -463,7 +493,11 @@ function latestTextbookText(session: ChatSession): string {
 /** 对话区点击:承接 MathText 渲染的 cmd:// 契约按钮(章节胶囊 / 返回黄框 / 收录是否) */
 function onListClick(e: MouseEvent) {
   const el = (e.target as HTMLElement).closest<HTMLElement>('[data-mg-cmd]')
-  if (!el) return
+  if (!el) {
+    // 点到对话区空白处:收起导出的语言菜单(菜单自身的点击被 @click.stop 拦住)
+    if (exportMenu.value !== null) exportMenu.value = null
+    return
+  }
   const url = el.dataset.mgCmd || ''
   if (url === 'cmd://back') {
     backToNavList()
@@ -1109,6 +1143,22 @@ onBeforeUnmount(() => {
               <span v-if="m.streaming && !m.thinking" class="cursor">▍</span>
               <!-- 半截回答的标记:与完整回答同形,不点明用户看不出缺了一段 -->
               <span v-if="m.interrupted" class="cut-note">{{ t('learn.interrupted') }}</span>
+              <!-- 研究综述的导出入口(仅后端标记过的研究消息显示) -->
+              <template v-if="m.research && !m.streaming">
+                <button
+                  class="export-btn"
+                  type="button"
+                  :disabled="exportingMsg === m.id"
+                  @click.stop="exportMenu = exportMenu === m.id ? null : m.id"
+                >
+                  {{ exportingMsg === m.id ? t('learn.exporting') : t('learn.exportPdf') }}
+                </button>
+                <div v-if="exportMenu === m.id" class="export-menu" @click.stop>
+                  <span class="export-menu-title">{{ t('learn.exportLangTitle') }}</span>
+                  <button type="button" @click="doExport(m, 'zh')">{{ t('learn.exportLangZh') }}</button>
+                  <button type="button" @click="doExport(m, 'en')">{{ t('learn.exportLangEn') }}</button>
+                </div>
+              </template>
             </template>
             <template v-else>{{ m.content }}</template>
           </div>
@@ -1459,6 +1509,66 @@ onBeforeUnmount(() => {
   color: var(--text-dim);
   font-size: 11.5px;
   line-height: 1.5;
+}
+
+/* 研究综述导出:小按钮 + 语言选择菜单 */
+.export-btn {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 4px 14px;
+  border: 1px solid var(--line-bright);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cyan) 8%, transparent);
+  color: var(--cyan);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.export-btn:hover {
+  box-shadow: var(--glow-cyan);
+}
+
+.export-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.export-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 6px;
+  padding: 8px;
+  width: fit-content;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.export-menu-title {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  padding: 0 6px 4px;
+}
+
+.export-menu button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.export-menu button:hover {
+  background: rgba(96, 165, 250, 0.1);
+  color: var(--cyan);
 }
 
 /* ---------- 输入区 ---------- */

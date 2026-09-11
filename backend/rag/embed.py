@@ -77,6 +77,8 @@ class Embedder:
             headers={"Authorization": f"Bearer {c['key']}"},
             json={"model": c["model"], "input": texts},
             timeout=120,
+            # 与 rag/llm.py 同口径:计费 API 直连,不走系统代理(MITM 证书拦截)
+            trust_env=False,
         )
         resp.raise_for_status()
         data = sorted(resp.json()["data"], key=lambda d: d["index"])

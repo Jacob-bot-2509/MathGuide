@@ -81,11 +81,15 @@ export async function postSSE(
         }
         if (!payload) continue
         // 后端按 OpenAI 惯例用 JSON 字符串包裹增量(换行转义 \\n);
-        // 解析失败视为纯文本(兼容旧实现与第三方流)
+        // JSON 对象帧是元信息(如 mg_meta),单独回调;解析失败视为纯文本
         let chunk: string = payload
         try {
           const parsed: unknown = JSON.parse(payload)
           if (typeof parsed === 'string') chunk = parsed
+          else if (parsed && typeof parsed === 'object') {
+            cb.onMeta?.(parsed as Record<string, unknown>)
+            continue
+          }
         } catch {
           /* plain text, keep as-is */
         }
