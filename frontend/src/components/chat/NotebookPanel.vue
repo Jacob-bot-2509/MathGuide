@@ -41,15 +41,25 @@ function fmtDate(ts: number): string {
 </template>
 
 <style scoped>
+/* 定位:挂在指令栏上方(父容器 .input-bar position:relative),
+   由 LearnView 的 <Transition name="nb-rise"> 做从下向上展开 / 从上向下收起。
+   z-index 高于 LearnView 的全屏遮罩(.nb-overlay z 40):遮罩压暗其余界面,
+   面板浮在遮罩上,呈现「按钮与面板不在一个图层」的效果 */
 .nb-panel {
+  position: absolute;
+  bottom: 100%;
+  left: 16px;
+  right: 16px;
+  z-index: 45;
   display: flex;
   flex-direction: column;
   max-height: 46vh;
-  margin: 0 18px 12px;
+  margin: 0 0 10px;
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 12px;
   overflow: hidden;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
 }
 
 .panel-head {
@@ -142,11 +152,13 @@ function fmtDate(ts: number): string {
 .nb-q {
   flex: 1;
   min-width: 0;
+  /* 一行最多 10 个字符,超出的词条标题另起一行(中文一字 1em) */
+  max-width: 10em;
   color: var(--text-hi);
   font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+  white-space: normal;
 }
 
 .nb-date {

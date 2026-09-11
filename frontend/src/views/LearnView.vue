@@ -1084,14 +1084,6 @@ onBeforeUnmount(() => {
     <!-- 搜索范围面板(指令「搜索范围」开合):研究型提问检索哪些平台 -->
     <ResearchScopePanel v-if="scopeOpen" @close="scopeOpen = false" />
 
-    <!-- 问题记录(归纳本)词条面板(指令「问题记录」开合):滚动选择词条跳回原问答 -->
-    <NotebookPanel
-      v-if="notebookOpen"
-      :entries="notebookState.entries"
-      @close="notebookOpen = false"
-      @pick="pickNotebookEntry"
-    />
-
     <!-- 念法速查贴士(语音输入中点击麦克风旁的📓打开) -->
     <SpeechTips v-if="tipsOpen" @close="tipsOpen = false" />
 
@@ -1225,6 +1217,17 @@ onBeforeUnmount(() => {
           {{ busy ? t('learn.stop') : t('learn.send') }}
         </button>
       </div>
+      <!-- 问题记录词条面板:从指令栏上方展开;遮罩压暗全屏,点任意暗处收起 -->
+      <div v-if="notebookOpen" class="nb-overlay" @click="notebookOpen = false"></div>
+      <Transition name="nb-rise">
+        <NotebookPanel
+          v-if="notebookOpen"
+          :entries="notebookState.entries"
+          @close="notebookOpen = false"
+          @pick="pickNotebookEntry"
+        />
+      </Transition>
+
       <div class="commands">
         <span class="tech-label cmd-label">{{ t('learn.cmdLabel') }}</span>
         <button
@@ -1568,12 +1571,38 @@ onBeforeUnmount(() => {
 
 /* ---------- 输入区 ---------- */
 .input-bar {
+  position: relative; /* 问题记录面板与附件弹层以此为定位锚点 */
   border-top: 1px solid var(--line);
   background: var(--bg-panel);
   padding: 12px 22px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* 问题记录面板的全屏遮罩:压暗其余界面,面板浮在其上(两层效果),
+   点击任意暗处收起面板 */
+.nb-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(3, 6, 12, 0.55);
+  backdrop-filter: blur(1.5px);
+}
+
+/* 面板从下向上展开 / 从上向下收起 */
+.nb-rise-enter-active {
+  transition: transform 0.22s var(--ease-out), opacity 0.22s;
+}
+
+.nb-rise-leave-active {
+  transition: transform 0.18s var(--ease-in), opacity 0.18s;
+}
+
+.nb-rise-enter-from,
+.nb-rise-leave-to {
+  transform: translateY(26px);
+  opacity: 0;
 }
 
 .input-row {
