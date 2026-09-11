@@ -64,10 +64,32 @@ const FILE_TEXT_MAX = 30000
 const sessions = toRef(sessionsState, 'sessions')
 const activeId = toRef(sessionsState, 'activeId')
 const input = ref('')
-const panelOpen = ref(false)
-const scopeOpen = ref(false)
-/** 归纳本词条面板开合(「问题记录」指令) */
-const notebookOpen = ref(false)
+/** 浮层面板统一开关:同一时间只允许一个面板展开(点开新的自动收起旧的),
+    关闭后其余按钮才可点(全屏遮罩拦截) */
+type PanelKind = 'summary' | 'scope' | 'notebook'
+const activePanel = ref<PanelKind | null>(null)
+
+function togglePanel(kind: PanelKind) {
+  // 仅支持单个面板展开:开新面板时收起念法贴士(贴士打开时也会收起面板,见下)
+  tipsOpen.value = false
+  activePanel.value = activePanel.value === kind ? null : kind
+}
+
+/** 面板锚点:对齐所属按钮(相对 .learn 的 left/top/width) */
+const panelAnchor = ref<{ left: number; top: number; width: number } | null>(null)
+
+/** 量取按钮位置(面板出现前调用;按钮一定在页面上,量不到则退化为不传) */
+function anchorTo(selector: string) {
+  const btn = document.querySelector<HTMLElement>(selector)
+  const root = document.querySelector<HTMLElement>('.learn')
+  if (!btn || !root) {
+    panelAnchor.value = null
+    return
+  }
+  const b = btn.getBoundingClientRect()
+  const r = root.getBoundingClientRect()
+  panelAnchor.value = { left: b.left - r.left, top: b.bottom - r.top, width: b.width }
+}
 const tipsOpen = ref(false)
 const flashMsgId = ref(0)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
@@ -411,7 +433,7 @@ function runCommand(cmd: string) {
   }
   // 搜索范围 = 本地设置(平台勾选):开面板,不发请求
   if (cmd === '搜索范围') {
-    scopeOpen.value = !scopeOpen.value
+    togglePanel('scope')
     return
   }
   // 输入为空用指令默认问题;不清空输入,由 send 在成功发出后统一清空
@@ -472,7 +494,7 @@ function jumpTo(id: number) {
   if (!session) return
   activeId.value = session.id
   persistSessions()
-  panelOpen.value = false
+  activePanel.value = null
   nextTick(() => {
     listEl.value
       ?.querySelector<HTMLElement>(`[data-msg-id="${id}"]`)
@@ -550,12 +572,19 @@ function onNotebookChoice(yes: boolean, msgId: number) {
 /** 点击「问题记录」指令:打开归纳本词条面板 —— 不往对话框刷记录,
     词条滚动陈列,选中后跳回该问答所在的原对话上下文 */
 function showNotebook() {
-  notebookOpen.value = true
+  anchorTo('.cmd[data-cmd="问题记录"]')
+  togglePanel('notebook')
+}
+
+/** 打开问题归纳面板(顶部「问题归纳」按钮):面板对齐按钮、从按钮下方展开 */
+function toggleSummaryPanel() {
+  anchorTo('.sum-btn')
+  togglePanel('summary')
 }
 
 /** 面板选中词条:关面板,跳回原问答上下文(会话/消息已不存在的给提示) */
 function pickNotebookEntry(id: number) {
-  notebookOpen.value = false
+  activePanel.value = null
   jumpToNotebookEntry(id)
 }
 
@@ -1063,7 +1092,7 @@ onBeforeUnmount(() => {
           {{ catName(activeSession.cat.key) }}{{ t('learn.context') }}
         </span>
         <span v-else-if="!activeSession?.cat" class="session-chip session-chip--dim">{{ t('learn.newSession') }}</span>
-        <button class="sum-btn" @click="panelOpen = !panelOpen">
+        <button class="sum-btn" @click="toggleSummaryPanel()">
           {{ t('learn.archive') }}<span v-if="questionCount" class="sum-badge">{{ questionCount }}</span>
         </button>
         <span class="badge tech-label">{{ t('common.mgLearn') }}</span>
@@ -1071,18 +1100,23 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <!-- 问题归纳面板 -->
-    <CategoryPanel
-      v-if="panelOpen"
-      :items="summary"
-      :total="questionCount"
-      @close="panelOpen = false"
-      @jump="jumpTo"
-      @delete="deleteHistory"
-    />
+    <!-- 问题归纳面板:浮层形态,对齐「问题归纳」按钮,从按钮下方展开 -->
+    <Transition name="cat-drop">
+      <CategoryPanel
+        v-if="activePanel === 'summary'"
+        :items="summary"
+        :total="questionCount"
+        :left="panelAnchor?.left"
+        :top="panelAnchor ? panelAnchor.top + 6 : undefined"
+        :width="panelAnchor?.width"
+        @close="activePanel = null"
+        @jump="jumpTo"
+        @delete="deleteHistory"
+      />
+    </Transition>
 
     <!-- 搜索范围面板(指令「搜索范围」开合):研究型提问检索哪些平台 -->
-    <ResearchScopePanel v-if="scopeOpen" @close="scopeOpen = false" />
+    <ResearchScopePanel v-if="activePanel === 'scope'" @close="activePanel = null" />
 
     <!-- 念法速查贴士(语音输入中点击麦克风旁的📓打开) -->
     <SpeechTips v-if="tipsOpen" @close="tipsOpen = false" />
@@ -1185,7 +1219,7 @@ onBeforeUnmount(() => {
             v-if="listening"
             class="tips-btn"
             :title="t('tips.title')"
-            @click="tipsOpen = !tipsOpen"
+            @click="activePanel = null; tipsOpen = !tipsOpen"
           >
             📓
           </button>
@@ -1217,13 +1251,15 @@ onBeforeUnmount(() => {
           {{ busy ? t('learn.stop') : t('learn.send') }}
         </button>
       </div>
-      <!-- 问题记录词条面板:从指令栏上方展开;遮罩压暗全屏,点任意暗处收起 -->
-      <div v-if="notebookOpen" class="nb-overlay" @click="notebookOpen = false"></div>
+      <!-- 问题记录词条面板:从「问题记录」按钮上方展开,宽度与按钮一致;
+           遮罩统一挂在页尾(见下),点任意暗处收起 -->
       <Transition name="nb-rise">
         <NotebookPanel
-          v-if="notebookOpen"
+          v-if="activePanel === 'notebook'"
           :entries="notebookState.entries"
-          @close="notebookOpen = false"
+          :left="panelAnchor?.left"
+          :width="panelAnchor?.width"
+          @close="activePanel = null"
           @pick="pickNotebookEntry"
         />
       </Transition>
@@ -1236,6 +1272,7 @@ onBeforeUnmount(() => {
           class="cmd"
           :class="{ 'cmd--active': c.key === '搜索范围' && !isAllSelected() }"
           :title="cmdHint(c.key)"
+          :data-cmd="c.key"
           @click="runCommand(c.key)"
         >
           <span class="cmd-icon">{{ c.icon }}</span>{{ cmdName(c.key) }}
@@ -1254,6 +1291,11 @@ onBeforeUnmount(() => {
         </span>
       </div>
     </footer>
+
+    <!-- 浮层面板统一遮罩:压暗全屏,点任意暗处收起当前面板(收起后按钮才可点) -->
+    <Transition name="mask-fade">
+      <div v-if="activePanel" class="panel-overlay" @click="activePanel = null"></div>
+    </Transition>
   </div>
 </template>
 
@@ -1580,9 +1622,9 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
-/* 问题记录面板的全屏遮罩:压暗其余界面,面板浮在其上(两层效果),
-   点击任意暗处收起面板 */
-.nb-overlay {
+/* 浮层面板统一全屏遮罩:压暗其余界面,面板浮在其上(两层效果),
+   点任意暗处收起面板 —— 收起前其余按钮被遮罩拦截,不可点击 */
+.panel-overlay {
   position: fixed;
   inset: 0;
   z-index: 40;
@@ -1590,7 +1632,17 @@ onBeforeUnmount(() => {
   backdrop-filter: blur(1.5px);
 }
 
-/* 面板从下向上展开 / 从上向下收起 */
+.mask-fade-enter-active,
+.mask-fade-leave-active {
+  transition: opacity 0.2s;
+}
+
+.mask-fade-enter-from,
+.mask-fade-leave-to {
+  opacity: 0;
+}
+
+/* 底部面板(问题记录):从下向上展开 / 从上向下收起 */
 .nb-rise-enter-active {
   transition: transform 0.22s var(--ease-out), opacity 0.22s;
 }
@@ -1602,6 +1654,21 @@ onBeforeUnmount(() => {
 .nb-rise-enter-from,
 .nb-rise-leave-to {
   transform: translateY(26px);
+  opacity: 0;
+}
+
+/* 顶部面板(问题归纳):从按钮下方落下展开 / 向上收起 */
+.cat-drop-enter-active {
+  transition: transform 0.22s var(--ease-out), opacity 0.22s;
+}
+
+.cat-drop-leave-active {
+  transition: transform 0.18s var(--ease-in), opacity 0.18s;
+}
+
+.cat-drop-enter-from,
+.cat-drop-leave-to {
+  transform: translateY(-12px);
   opacity: 0;
 }
 

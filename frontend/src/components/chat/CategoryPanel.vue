@@ -19,7 +19,14 @@ export interface CategoryItem {
   questions: PanelQuestion[]
 }
 
-defineProps<{ items: CategoryItem[]; total: number }>()
+const props = defineProps<{
+  items: CategoryItem[]
+  total: number
+  /** 对齐按钮的位置(LearnView 量取,px) */
+  left?: number
+  top?: number
+  width?: number
+}>()
 const emit = defineEmits<{ close: []; jump: [id: number]; delete: [id: number] }>()
 
 const open = ref<string | null>(null)
@@ -30,7 +37,14 @@ function toggle(key: string) {
 </script>
 
 <template>
-  <section class="cat-panel">
+  <section
+    class="cat-panel"
+    :style="{
+      left: props.left !== undefined ? `${props.left}px` : '16px',
+      top: props.top !== undefined ? `${props.top}px` : '58px',
+      width: props.width !== undefined ? `${props.width}px` : undefined,
+    }"
+  >
     <header class="panel-head">
       <span class="tech-label panel-title">{{ t('panel.title') }}</span>
       <span class="panel-total tech-label">{{ t('panel.total', { n: total }) }}</span>
@@ -69,11 +83,20 @@ function toggle(key: string) {
 </template>
 
 <style scoped>
+/* 浮层形态:对齐「问题归纳」按钮,从按钮下方展开(left/top/width 由 LearnView
+   量取按钮位置传入);z-index 高于全屏遮罩(40),呈两层效果 */
 .cat-panel {
+  position: absolute;
+  left: 16px;
+  top: 58px;
+  width: min(320px, calc(100vw - 32px));
+  z-index: 45;
   background: var(--bg-panel);
-  border-bottom: 1px solid var(--line);
-  padding: 12px 22px 14px;
-  max-height: 38vh;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+  padding: 12px 14px;
+  max-height: 46vh;
   overflow-y: auto;
 }
 

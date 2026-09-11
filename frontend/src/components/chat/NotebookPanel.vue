@@ -7,7 +7,9 @@
 import type { NotebookEntry } from '@/stores/notebook'
 import { t } from '@/utils/i18n'
 
-defineProps<{ entries: NotebookEntry[] }>()
+// left/width:对齐所属的「问题记录」按钮(由 LearnView 量取按钮位置传入);
+// 未传入时退化为原全宽形态
+const props = defineProps<{ entries: NotebookEntry[]; left?: number; width?: number }>()
 const emit = defineEmits<{ close: []; pick: [id: number] }>()
 
 function fmtDate(ts: number): string {
@@ -18,7 +20,14 @@ function fmtDate(ts: number): string {
 </script>
 
 <template>
-  <section class="nb-panel">
+  <section
+    class="nb-panel"
+    :style="{
+      left: props.left !== undefined ? `${props.left}px` : '16px',
+      right: props.left !== undefined ? 'auto' : '16px',
+      width: props.width !== undefined ? `${props.width}px` : 'auto',
+    }"
+  >
     <header class="panel-head">
       <span class="tech-label panel-title">📓 {{ t('learn.nbPanelTitle') }}</span>
       <span class="panel-total tech-label">{{ t('learn.nbPanelTotal', { n: entries.length }) }}</span>
@@ -152,8 +161,9 @@ function fmtDate(ts: number): string {
 .nb-q {
   flex: 1;
   min-width: 0;
-  /* 一行最多 10 个字符,超出的词条标题另起一行(中文一字 1em) */
-  max-width: 10em;
+  /* 一行最多 10 个字符,超出的词条标题另起一行(中文一字 1em);
+     面板对齐按钮变窄时以面板可用宽度为上限,不撑破 */
+  max-width: min(10em, 100%);
   color: var(--text-hi);
   font-size: 13px;
   line-height: 1.5;
