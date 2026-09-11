@@ -20,6 +20,7 @@ import { useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
+import NotebookPanel from '@/components/chat/NotebookPanel.vue'
 import SpeechTips from '@/components/chat/SpeechTips.vue'
 import MgSwitch from '@/components/common/MgSwitch.vue'
 import { COMMANDS } from '@/utils/commands'
@@ -65,6 +66,8 @@ const activeId = toRef(sessionsState, 'activeId')
 const input = ref('')
 const panelOpen = ref(false)
 const scopeOpen = ref(false)
+/** 归纳本词条面板开合(「问题记录」指令) */
+const notebookOpen = ref(false)
 const tipsOpen = ref(false)
 const flashMsgId = ref(0)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
@@ -544,32 +547,16 @@ function onNotebookChoice(yes: boolean, msgId: number) {
   scrollBottom()
 }
 
-/** 点击「问题记录」指令:本地归纳本,输出所整理的题目与参考解答(含参考思路),点击条目跳回原问答 */
+/** 点击「问题记录」指令:打开归纳本词条面板 —— 不往对话框刷记录,
+    词条滚动陈列,选中后跳回该问答所在的原对话上下文 */
 function showNotebook() {
-  const session = activeSession.value ?? createSession()
-  if (session.messages.some((m) => m.streaming)) {
-    showToast(t('learn.toastBusy'))
-    return
-  }
-  const entries = notebookState.entries
-  if (!entries.length) {
-    session.messages.push({
-      id: nextMsgId(),
-      role: 'assistant',
-      content: t('learn.nbEmpty'),
-    })
-  } else {
-    const lines: string[] = [`📓 **${t('learn.nbTitle', { n: entries.length })}**`]
-    for (const [i, e] of entries.entries()) {
-      lines.push(`\n**${i + 1}. 题目**: [${e.question.slice(0, 120)}${e.question.length > 120 ? '…' : ''}](cmd://nb/jump/${e.id})`)
-      // 预览同样过 Unicode 美化:去掉 $ 定界符、^/_ 与常见 LaTeX 记号,直读显示
-      const preview = beautifyMath(e.answer.slice(0, 300))
-      lines.push(`**参考解答**: ${preview}${e.answer.length > 300 ? '…' : ''}`)
-    }
-    session.messages.push({ id: nextMsgId(), role: 'assistant', content: lines.join('\n') })
-  }
-  persistSessions()
-  scrollBottom()
+  notebookOpen.value = true
+}
+
+/** 面板选中词条:关面板,跳回原问答上下文(会话/消息已不存在的给提示) */
+function pickNotebookEntry(id: number) {
+  notebookOpen.value = false
+  jumpToNotebookEntry(id)
 }
 
 /** 归纳本条目跳回原问答(温故知新) */
@@ -1096,6 +1083,14 @@ onBeforeUnmount(() => {
 
     <!-- 搜索范围面板(指令「搜索范围」开合):研究型提问检索哪些平台 -->
     <ResearchScopePanel v-if="scopeOpen" @close="scopeOpen = false" />
+
+    <!-- 问题记录(归纳本)词条面板(指令「问题记录」开合):滚动选择词条跳回原问答 -->
+    <NotebookPanel
+      v-if="notebookOpen"
+      :entries="notebookState.entries"
+      @close="notebookOpen = false"
+      @pick="pickNotebookEntry"
+    />
 
     <!-- 念法速查贴士(语音输入中点击麦克风旁的📓打开) -->
     <SpeechTips v-if="tipsOpen" @close="tipsOpen = false" />
