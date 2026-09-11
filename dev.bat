@@ -1,12 +1,13 @@
 @echo off
-rem MathGuide 一键启动:同时拉起后端(8000)与前端(5173),各占一个窗口。
-rem 关闭对应窗口即停止对应服务。
-rem 前后端都是热更新:后端 dev_reload.py 监听 backend\*.py,前端 vite 监听 src。
-rem 不用 uvicorn 自带的 --reload —— 它的重启协议(CTRL_C_EVENT 控制台广播)
-rem 在 Windows Terminal(ConPTY)下失效会卡死,详见 backend/dev_reload.py 头注。
-rem 热重载会掐断正在生成的那条回答,界面上标为「回答已中断」
-rem (前端靠 SSE 的 [DONE] 收尾标记识别,见 backend/README.md)。
-rem 停后端请在后端窗口按 Ctrl+C;直接点 X 会留下孤儿进程(下次启动会自动清)。
+rem MathGuide one-click start: backend (8000) + frontend (5173), one window each.
+rem Closing a window stops that service; reopen with this file.
+rem Both ends hot-reload: backend dev_reload.py watches backend\*.py, frontend vite watches src.
+rem NOTE: backend uses dev_reload.py instead of uvicorn --reload because the latter's
+rem restart protocol (CTRL_C_EVENT console broadcast) hangs under Windows Terminal (ConPTY),
+rem see backend/dev_reload.py header. Hot reload kills in-flight replies; the UI marks
+rem them "answer interrupted" (SSE [DONE] contract, see backend/README.md).
+rem To stop the backend cleanly press Ctrl+C in its window; closing with X may leave
+rem an orphan uvicorn (cleaned up automatically on next start).
 
 start "MG Backend  :8000" cmd /k "cd /d D:\code\backend && title MG Backend :8000 && D:\code\.venv\Scripts\python.exe dev_reload.py"
 start "MG Frontend :5173" cmd /k "cd /d D:\code\frontend && npm run dev"
