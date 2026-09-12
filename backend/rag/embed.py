@@ -76,7 +76,11 @@ class Embedder:
             f"{c['base'].rstrip('/')}/embeddings",
             headers={"Authorization": f"Bearer {c['key']}"},
             json={"model": c["model"], "input": texts},
-            timeout=120,
+            # 超时阈值:正常 <2s。服务端慢时(实测单次 42s)超过阈值即抛超时,
+            # 检索自动降级为关键词模式,绝不让用户干等(embed 失败降级链路见 index.py)。
+            # 注意 httpx 单值 timeout 是"每个阶段各算",connect+read 串行会双倍,
+            # 必须分段给:最坏 ≈ connect 3s + read 5s = 8s
+            timeout=httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=2.0),
             # 与 rag/llm.py 同口径:计费 API 直连,不走系统代理(MITM 证书拦截)
             trust_env=False,
         )
