@@ -1263,7 +1263,7 @@ onBeforeUnmount(() => {
           {{ busy ? t('learn.stop') : t('learn.send') }}
         </button>
       </div>
-      <!-- 问题记录词条面板:从「问题记录」按钮上方展开,宽度与按钮一致;
+      <!-- 三个底部浮层面板:各包独立 Transition(Transition 要求恰好一个子元素);
            遮罩统一挂在页尾(见下),点任意暗处收起 -->
       <Transition name="nb-rise">
         <NotebookPanel
@@ -1274,6 +1274,8 @@ onBeforeUnmount(() => {
           @close="activePanel = null"
           @pick="pickNotebookEntry"
         />
+      </Transition>
+      <Transition name="nb-rise">
         <FormulaPanel
           v-if="activePanel === 'formula'"
           :left="panelAnchor?.left"
@@ -1281,6 +1283,8 @@ onBeforeUnmount(() => {
           @close="activePanel = null"
           @pick="pickFormula"
         />
+      </Transition>
+      <Transition name="nb-rise">
         <ResearchScopePanel
           v-if="activePanel === 'scope'"
           :left="panelAnchor?.left"
