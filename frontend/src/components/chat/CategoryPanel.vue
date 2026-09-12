@@ -245,9 +245,11 @@ function toggle(key: string) {
   font-size: 12.5px;
   line-height: 1.6;
   cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 一行最多 10 个字符,超出的题目另起一行(面板对齐按钮变窄时
+     以可用宽度为上限,不撑破) */
+  max-width: min(10em, 100%);
+  overflow-wrap: break-word;
+  white-space: normal;
   transition:
     color var(--dur-fast),
     background var(--dur-fast);
