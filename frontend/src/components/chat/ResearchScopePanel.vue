@@ -28,9 +28,19 @@ function label(s: (typeof SOURCE_OPTIONS)[number]): string {
 function hint(s: (typeof SOURCE_OPTIONS)[number]): string {
   return en.value ? s.hintEn : s.hint
 }
+
+// left/width:「搜索范围」按钮的左缘与宽度(LearnView 量取);
+// 面板水平居中于按钮,在其正上方展开
+const props = defineProps<{ left?: number; width?: number }>()
 </script>
 
 <template>
+  <!-- 外层定位:锚在按钮中心;动画 transform 由 Transition 加在外层,
+       与内层的 translateX 居中互不干扰 -->
+  <div
+    class="scope-wrap"
+    :style="{ left: props.left !== undefined && props.width !== undefined ? `${props.left + props.width / 2}px` : '50%' }"
+  >
   <section class="scope-panel">
     <header class="panel-head">
       <span class="tech-label panel-title">{{ t('scope.title') }}</span>
@@ -62,14 +72,29 @@ function hint(s: (typeof SOURCE_OPTIONS)[number]): string {
       </li>
     </ul>
   </section>
+  </div>
 </template>
 
 <style scoped>
+/* 外层定位:锚在按钮中心正上方(按钮在底部指令栏);内层 translateX(-50%)
+   水平居中,与 Transition 的位移动画互不覆盖 */
+.scope-wrap {
+  position: absolute;
+  bottom: 100%;
+  margin-bottom: 10px;
+  z-index: 45;
+  width: 0;
+}
+
 .scope-panel {
+  transform: translateX(-50%);
+  width: min(340px, calc(100vw - 32px));
   background: var(--bg-panel);
-  border-bottom: 1px solid var(--line);
-  padding: 12px 22px 14px;
-  max-height: 38vh;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+  padding: 12px 14px;
+  max-height: 46vh;
   overflow-y: auto;
 }
 

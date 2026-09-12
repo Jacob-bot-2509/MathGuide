@@ -21,6 +21,7 @@ import MathText from '@/components/chat/MathText.vue'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
 import NotebookPanel from '@/components/chat/NotebookPanel.vue'
+import FormulaPanel from '@/components/chat/FormulaPanel.vue'
 import SpeechTips from '@/components/chat/SpeechTips.vue'
 import MgSwitch from '@/components/common/MgSwitch.vue'
 import { COMMANDS } from '@/utils/commands'
@@ -66,7 +67,7 @@ const activeId = toRef(sessionsState, 'activeId')
 const input = ref('')
 /** 浮层面板统一开关:同一时间只允许一个面板展开(点开新的自动收起旧的),
     关闭后其余按钮才可点(全屏遮罩拦截) */
-type PanelKind = 'summary' | 'scope' | 'notebook'
+type PanelKind = 'summary' | 'scope' | 'notebook' | 'formula'
 const activePanel = ref<PanelKind | null>(null)
 
 function togglePanel(kind: PanelKind) {
@@ -433,7 +434,14 @@ function runCommand(cmd: string) {
   }
   // 搜索范围 = 本地设置(平台勾选):开面板,不发请求
   if (cmd === '搜索范围') {
+    anchorTo('.cmd[data-cmd="搜索范围"]')
     togglePanel('scope')
+    return
+  }
+  // 公式查询手册 = 板块词条面板:选板块后发该板块公式的提问
+  if (cmd === '公式查询手册') {
+    anchorTo('.cmd[data-cmd="公式查询手册"]')
+    togglePanel('formula')
     return
   }
   // 输入为空用指令默认问题;不清空输入,由 send 在成功发出后统一清空
@@ -586,6 +594,12 @@ function toggleSummaryPanel() {
 function pickNotebookEntry(id: number) {
   activePanel.value = null
   jumpToNotebookEntry(id)
+}
+
+/** 公式手册选中板块:关面板,发「该板块常用公式」的提问走知识检索链路 */
+function pickFormula(key: string) {
+  activePanel.value = null
+  send(`${catName(key)}${t('learn.formulaAsk')}`, '公式查询手册')
 }
 
 /** 归纳本条目跳回原问答(温故知新) */
@@ -1115,8 +1129,6 @@ onBeforeUnmount(() => {
       />
     </Transition>
 
-    <!-- 搜索范围面板(指令「搜索范围」开合):研究型提问检索哪些平台 -->
-    <ResearchScopePanel v-if="activePanel === 'scope'" @close="activePanel = null" />
 
     <!-- 念法速查贴士(语音输入中点击麦克风旁的📓打开) -->
     <SpeechTips v-if="tipsOpen" @close="tipsOpen = false" />
@@ -1261,6 +1273,19 @@ onBeforeUnmount(() => {
           :width="panelAnchor?.width"
           @close="activePanel = null"
           @pick="pickNotebookEntry"
+        />
+        <FormulaPanel
+          v-if="activePanel === 'formula'"
+          :left="panelAnchor?.left"
+          :width="panelAnchor?.width"
+          @close="activePanel = null"
+          @pick="pickFormula"
+        />
+        <ResearchScopePanel
+          v-if="activePanel === 'scope'"
+          :left="panelAnchor?.left"
+          :width="panelAnchor?.width"
+          @close="activePanel = null"
         />
       </Transition>
 
