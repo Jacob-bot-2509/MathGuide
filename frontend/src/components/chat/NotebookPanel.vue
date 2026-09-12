@@ -2,12 +2,15 @@
 /**
  * 问题记录(归纳本)面板:收录过的问答按词条滚动陈列。
  * 点击词条跳回该问答所在的原对话上下文(不往对话框里刷记录列表)。
+ * 面板水平居中于「问题记录」按钮,在按钮正上方展开。
  * 样式与 CategoryPanel 同族:panel-head / 列表 / ✕ 关闭。
  */
 import type { NotebookEntry } from '@/stores/notebook'
 import { t } from '@/utils/i18n'
 
-defineProps<{ entries: NotebookEntry[] }>()
+// left/width:「问题记录」按钮的左缘与宽度(LearnView 量取);
+// 按钮中心 = left + width/2,面板以 translateX(-50%) 居中于该点
+const props = defineProps<{ entries: NotebookEntry[]; left?: number; width?: number }>()
 const emit = defineEmits<{ close: []; pick: [id: number] }>()
 
 /** 词条下方的小日期:只到日,不精确到时间 */
@@ -19,28 +22,35 @@ function fmtDate(ts: number): string {
 </script>
 
 <template>
-  <section class="nb-panel">
-    <header class="panel-head">
-      <span class="tech-label panel-title">📓 {{ t('learn.nbPanelTitle') }}</span>
-      <span class="panel-total tech-label">{{ t('learn.nbPanelTotal', { n: entries.length }) }}</span>
-      <button class="close" aria-label="close" @click="emit('close')">✕</button>
-    </header>
-    <p class="hint">{{ t('learn.nbPanelHint') }}</p>
+  <!-- 外层定位:anchor 在按钮中心;动画 transform 由 Transition 加在外层,
+       与内层的 translateX 居中互不干扰 -->
+  <div
+    class="nb-wrap"
+    :style="{ left: props.left !== undefined && props.width !== undefined ? `${props.left + props.width / 2}px` : '50%' }"
+  >
+    <section class="nb-panel">
+      <header class="panel-head">
+        <span class="tech-label panel-title">📓 {{ t('learn.nbPanelTitle') }}</span>
+        <span class="panel-total tech-label">{{ t('learn.nbPanelTotal', { n: entries.length }) }}</span>
+        <button class="close" aria-label="close" @click="emit('close')">✕</button>
+      </header>
+      <p class="hint">{{ t('learn.nbPanelHint') }}</p>
 
-    <p v-if="!entries.length" class="empty">{{ t('learn.nbEmpty') }}</p>
-    <ul v-else class="nb-list">
-      <li v-for="(e, i) in entries" :key="e.id" class="nb-item">
-        <button class="nb-row" :title="t('learn.nbJump')" @click="emit('pick', e.id)">
-          <span class="nb-main">
-            <span class="nb-idx tech-label">{{ String(i + 1).padStart(2, '0') }}</span>
-            <span class="nb-q">{{ e.question }}</span>
-            <span class="chev">›</span>
-          </span>
-          <span class="nb-date">{{ fmtDate(e.createdAt) }}</span>
-        </button>
-      </li>
-    </ul>
-  </section>
+      <p v-if="!entries.length" class="empty">{{ t('learn.nbEmpty') }}</p>
+      <ul v-else class="nb-list">
+        <li v-for="(e, i) in entries" :key="e.id" class="nb-item">
+          <button class="nb-row" :title="t('learn.nbJump')" @click="emit('pick', e.id)">
+            <span class="nb-main">
+              <span class="nb-idx tech-label">{{ String(i + 1).padStart(2, '0') }}</span>
+              <span class="nb-q">{{ e.question }}</span>
+              <span class="chev">›</span>
+            </span>
+            <span class="nb-date">{{ fmtDate(e.createdAt) }}</span>
+          </button>
+        </li>
+      </ul>
+    </section>
+  </div>
 </template>
 
 <style scoped>
@@ -48,12 +58,18 @@ function fmtDate(ts: number): string {
    由 LearnView 的 <Transition name="nb-rise"> 做从下向上展开 / 从上向下收起。
    z-index 高于 LearnView 的全屏遮罩(.nb-overlay z 40):遮罩压暗其余界面,
    面板浮在遮罩上,呈现「按钮与面板不在一个图层」的效果 */
-.nb-panel {
+/* 外层定位:锚在按钮中心正上方;Transition 的位移动画作用于这一层,
+   内层 .nb-panel 的 translateX(-50%) 负责水平居中,两者互不覆盖 */
+.nb-wrap {
   position: absolute;
   bottom: 100%;
-  left: 16px;
-  right: auto;
+  margin-bottom: 10px;
   z-index: 45;
+  width: 0;
+}
+
+.nb-panel {
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   /* 宽度自适应词条长度:随最长词条伸缩,上下限兜底 */
@@ -61,7 +77,6 @@ function fmtDate(ts: number): string {
   min-width: 260px;
   max-width: min(560px, calc(100vw - 32px));
   max-height: 46vh;
-  margin: 0 0 10px;
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 12px;

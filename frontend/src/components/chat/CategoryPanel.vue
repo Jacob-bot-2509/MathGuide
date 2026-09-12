@@ -37,14 +37,17 @@ function toggle(key: string) {
 </script>
 
 <template>
-  <section
-    class="cat-panel"
+  <!-- 外层定位:锚在按钮中心;动画 transform 由 Transition 加在外层,
+       与内层的 translateX 居中互不干扰 -->
+  <div
+    class="cat-wrap"
     :style="{
-      left: props.left !== undefined ? `${props.left}px` : '16px',
+      left: props.left !== undefined && props.width !== undefined
+        ? `${props.left + props.width / 2}px` : '50%',
       top: props.top !== undefined ? `${props.top}px` : '58px',
-      width: props.width !== undefined ? `${props.width}px` : undefined,
     }"
   >
+  <section class="cat-panel">
     <header class="panel-head">
       <span class="tech-label panel-title">{{ t('panel.title') }}</span>
       <span class="panel-total tech-label">{{ t('panel.total', { n: total }) }}</span>
@@ -80,17 +83,21 @@ function toggle(key: string) {
       </li>
     </ul>
   </section>
+  </div>
 </template>
 
 <style scoped>
-/* 浮层形态:对齐「问题归纳」按钮,从按钮下方展开(left/top/width 由 LearnView
-   量取按钮位置传入);z-index 高于全屏遮罩(40),呈两层效果 */
-.cat-panel {
+/* 外层定位:锚在按钮中心(按钮在页面顶部,面板只能向下展开);
+   内层 translateX(-50%) 水平居中,与 Transition 的位移动画互不覆盖 */
+.cat-wrap {
   position: absolute;
-  left: 16px;
-  top: 58px;
-  width: min(320px, calc(100vw - 32px));
   z-index: 45;
+  width: 0;
+}
+
+.cat-panel {
+  transform: translateX(-50%);
+  width: min(320px, calc(100vw - 32px));
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 12px;
