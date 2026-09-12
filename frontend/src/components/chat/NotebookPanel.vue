@@ -7,11 +7,10 @@
 import type { NotebookEntry } from '@/stores/notebook'
 import { t } from '@/utils/i18n'
 
-// left/width:对齐所属的「问题记录」按钮(由 LearnView 量取按钮位置传入);
-// 未传入时退化为原全宽形态
-const props = defineProps<{ entries: NotebookEntry[]; left?: number; width?: number }>()
+defineProps<{ entries: NotebookEntry[] }>()
 const emit = defineEmits<{ close: []; pick: [id: number] }>()
 
+/** 词条下方的小日期:只到日,不精确到时间 */
 function fmtDate(ts: number): string {
   const d = new Date(ts)
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -20,14 +19,7 @@ function fmtDate(ts: number): string {
 </script>
 
 <template>
-  <section
-    class="nb-panel"
-    :style="{
-      left: props.left !== undefined ? `${props.left}px` : '16px',
-      right: props.left !== undefined ? 'auto' : '16px',
-      width: props.width !== undefined ? `${props.width}px` : 'auto',
-    }"
-  >
+  <section class="nb-panel">
     <header class="panel-head">
       <span class="tech-label panel-title">📓 {{ t('learn.nbPanelTitle') }}</span>
       <span class="panel-total tech-label">{{ t('learn.nbPanelTotal', { n: entries.length }) }}</span>
@@ -39,10 +31,12 @@ function fmtDate(ts: number): string {
     <ul v-else class="nb-list">
       <li v-for="(e, i) in entries" :key="e.id" class="nb-item">
         <button class="nb-row" :title="t('learn.nbJump')" @click="emit('pick', e.id)">
-          <span class="nb-idx tech-label">{{ String(i + 1).padStart(2, '0') }}</span>
-          <span class="nb-q">{{ e.question.slice(0, 60) }}{{ e.question.length > 60 ? '…' : '' }}</span>
+          <span class="nb-main">
+            <span class="nb-idx tech-label">{{ String(i + 1).padStart(2, '0') }}</span>
+            <span class="nb-q">{{ e.question }}</span>
+            <span class="chev">›</span>
+          </span>
           <span class="nb-date">{{ fmtDate(e.createdAt) }}</span>
-          <span class="chev">›</span>
         </button>
       </li>
     </ul>
@@ -58,10 +52,14 @@ function fmtDate(ts: number): string {
   position: absolute;
   bottom: 100%;
   left: 16px;
-  right: 16px;
+  right: auto;
   z-index: 45;
   display: flex;
   flex-direction: column;
+  /* 宽度自适应词条长度:随最长词条伸缩,上下限兜底 */
+  width: fit-content;
+  min-width: 260px;
+  max-width: min(560px, calc(100vw - 32px));
   max-height: 46vh;
   margin: 0 0 10px;
   background: var(--bg-panel);
@@ -135,8 +133,9 @@ function fmtDate(ts: number): string {
 
 .nb-row {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
   width: 100%;
   text-align: left;
   background: transparent;
@@ -152,6 +151,12 @@ function fmtDate(ts: number): string {
   border-color: var(--line);
 }
 
+.nb-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .nb-idx {
   font-size: 11px;
   color: var(--text-dim);
@@ -161,20 +166,17 @@ function fmtDate(ts: number): string {
 .nb-q {
   flex: 1;
   min-width: 0;
-  /* 一行最多 10 个字符,超出的词条标题另起一行(中文一字 1em);
-     面板对齐按钮变窄时以面板可用宽度为上限,不撑破 */
-  max-width: min(10em, 100%);
   color: var(--text-hi);
   font-size: 13px;
-  line-height: 1.5;
-  overflow-wrap: break-word;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nb-date {
-  flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--text-dim);
+  padding-left: 26px; /* 与标题起点对齐(序号宽度 + 间距) */
 }
 
 .chev {

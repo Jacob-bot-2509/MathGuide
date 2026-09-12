@@ -572,7 +572,6 @@ function onNotebookChoice(yes: boolean, msgId: number) {
 /** 点击「问题记录」指令:打开归纳本词条面板 —— 不往对话框刷记录,
     词条滚动陈列,选中后跳回该问答所在的原对话上下文 */
 function showNotebook() {
-  anchorTo('.cmd[data-cmd="问题记录"]')
   togglePanel('notebook')
 }
 
@@ -1257,8 +1256,6 @@ onBeforeUnmount(() => {
         <NotebookPanel
           v-if="activePanel === 'notebook'"
           :entries="notebookState.entries"
-          :left="panelAnchor?.left"
-          :width="panelAnchor?.width"
           @close="activePanel = null"
           @pick="pickNotebookEntry"
         />
