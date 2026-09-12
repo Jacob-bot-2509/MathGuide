@@ -16,6 +16,9 @@ dist/
 # 本地环境变量
 *.local
 .env.local
+
+# 桥接自动轮询辅助(本机脚本 + 已处理消息记录,勿入库)
+.bridge-poll/
 backend/tools/eval_report.txt
 backend/tools/eval_search_report.txt
 backend/tools/.last_sync
