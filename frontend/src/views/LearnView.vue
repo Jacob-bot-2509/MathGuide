@@ -596,10 +596,11 @@ function pickNotebookEntry(id: number) {
   jumpToNotebookEntry(id)
 }
 
-/** 公式手册选中板块:关面板,发「该板块常用公式」的提问走知识检索链路 */
+/** 公式手册选中板块:关面板,先发澄清请求——请 MG 询问想查哪个具体知识点,
+    而不是一股脑列出该领域全部公式(两步流程:先问点、再作答) */
 function pickFormula(key: string) {
   activePanel.value = null
-  send(`${catName(key)}${t('learn.formulaAsk')}`, '公式查询手册')
+  send(t('learn.formulaClarify', { cat: catName(key) }), '公式查询手册')
 }
 
 /** 归纳本条目跳回原问答(温故知新) */

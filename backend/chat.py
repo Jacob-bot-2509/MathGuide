@@ -17,6 +17,7 @@ sources 是研究型提问的检索范围(平台名白名单在 rag/research)。
 回复链路(顺序即优先级,裁决口径见 rag/route.py):
 - 空 prompt → 欢迎语;附件前缀 → 接收回执 / 交长文模型阅读;
 - 章节导航指令 → 划分章节列表 / 输出该章指引;
+- 公式手册第一步(澄清标记)→ 只询问想查哪个具体知识点,不检索、不收纳(澄清提问带独立复核);
 - 研究型提问 → 跨论文库深度搜索 → LLM 综合 + 后端拼装引用区;
 - 其余 → 检索知识片段 → 有 LLM 则组装 system prompt 流式输出,
   未配置 LLM 则知识库直答,知识库未命中再按「数学题 / 闲聊」分流。
@@ -639,6 +640,81 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
         return
 
 
+# 公式手册第一步的澄清标记(与前端 i18n 双语模板固定子串成契约):
+# 命中即走澄清分支——不检索知识库、不触发复核与问题记录收纳
+_CLARIFY_ZH = "请先询问我想查哪个具体知识点"
+_CLARIFY_EN = "Please first ask me which specific topic"
+
+
+def _is_formula_clarify(question: str, cmd: str | None) -> bool:
+    """公式手册两步流程的第一步:指令命中且提问带澄清标记"""
+    return cmd == "公式查询手册" and (_CLARIFY_ZH in question or _CLARIFY_EN in question)
+
+
+def _is_formula_followup(history: list[dict] | None) -> bool:
+    """公式手册两步流程的第二步:上一条用户消息带澄清标记 → 本轮是
+    「说出知识点」的作答轮,双角色复核必须开启(即使检索未命中)"""
+    for h in reversed(history or []):
+        if h.get("role") != "user":
+            continue
+        return _CLARIFY_ZH in h.get("content", "") or _CLARIFY_EN in h.get("content", "")
+    return False
+
+
+async def _verify_clarify(question: str, answer: str, role: str) -> str | None:
+    """澄清步骤独立复核:另一角色核查是否只询问了知识点、没有提前列出公式
+    (失败返回 None,不打断澄清提问)"""
+    system = (
+        "你是公式查询手册的澄清复核员。核查以下用户请求与助手回复:"
+        "回复是否只询问用户想查哪个具体知识点,没有列出任何公式、没有展开讲解。"
+        "只输出一行结论(符合要求 / 不符合要求)和一句依据,不要输出其他内容。"
+    )
+    user = f"用户请求:{question[:300]}\n\n助手回复:\n{answer[:600]}"
+    parts: list[str] = []
+    try:
+        async for delta in rag.llm.stream_chat(system, user, role=role):
+            parts.append(delta)
+            if sum(len(p) for p in parts) >= 300:
+                break
+    except Exception:  # noqa: BLE001 复核失败静默跳过,不打断澄清提问
+        return None
+    text = "".join(parts).strip()
+    return text[:200] or None
+
+
+async def _gen_formula_clarify(question: str):
+    """公式手册第一次点击:只输出澄清提问(询问想查哪个具体知识点,可举例),
+    不列公式、不展开讲解;澄清提问由另一角色独立复核(是否只问了知识点、
+    没提前列公式),复核失败静默跳过;LLM 未配置/失败降级为静态澄清语,
+    面板点击绝不无回应"""
+    system = (
+        "用户正在使用「公式查询手册」,想查询某一数学领域的公式和定理。"
+        "请只用一两句自然、有温度的话询问用户想查哪个具体知识点,"
+        "并举该领域 3~5 个常见知识点为例;不要列出任何公式,不要展开讲解,"
+        "等用户说出具体知识点后再作答。回答语言跟随用户语言。"
+    )
+    answer: list[str] = []
+    try:
+        async for delta in rag.llm.stream_chat(system, question[:300], role="main"):
+            answer.append(delta)
+            yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+    except Exception as exc:  # noqa: BLE001
+        print(f"[chat] 公式手册澄清调用失败,降级为静态提示: {exc}")
+        zh = _is_chinese(question)
+        text = ("好的!你想查该领域哪个具体知识点呢?告诉我具体名称"
+                "(比如你最近学到的某个概念或定理),我马上给你对应的公式与定理。") if zh else (
+                "Sure! Which specific topic in this section are you looking for? "
+                "Name it (e.g. a concept or theorem you just learned) and I'll fetch the formulas.")
+        yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+        return
+    # 双角色复核:main 出澄清提问 → deep 独立核查(与解答复核同款模式,角色错开)
+    vrole = rag.llm.pick("deep")
+    verdict = await _verify_clarify(question, "".join(answer), vrole)
+    if verdict:
+        print(f"[chat] 公式手册澄清复核({vrole}): {verdict[:60]}")
+        yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
+
+
 async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
     """聊天入口(安全外壳):认证 → 输入上限 → 限流 → 路由 → 用量记账"""
     rec = require_auth(request)  # 401: {"detail": "unauthorized"}
@@ -739,6 +815,12 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         meta["role"] = "long"
         return _sse(gen)
 
+    # 公式手册两步流程:第一步(澄清标记)只询问想查哪个具体知识点,
+    # 不检索知识库、不触发问题记录收纳(澄清提问仍带双角色复核);
+    # 用户说出知识点后走常规链路
+    if _is_formula_clarify(question, cmd):
+        return _sse(_gen_formula_clarify(question))
+
     # P0/P1 路由:研究型提问优先于知识直答
     # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走跨论文库深度搜索)
     # 必须先判意图、后检索:深度搜索内部自会检索知识库,
@@ -766,12 +848,13 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     chunks = await asyncio.to_thread(rag.search, question, 3)
 
     if rag.llm.is_configured():
-        # 双角色验证仅对数学题(命中知识库或题目措辞)开启;闲聊不浪费复核调用
-        verify = bool(chunks) or rag.is_math_question(question)
+        # 双角色验证仅对数学题(命中知识库或题目措辞)开启;闲聊不浪费复核调用。
+        # 公式手册第二步(上一条用户消息带澄清标记)强制开启:公式定理作答必须有独立复核
         role = _pick_role(question)
         meta["role"] = role
         sid = body.get("sessionId")
         history = _validated_history(body.get("history"))
+        verify = bool(chunks) or rag.is_math_question(question) or _is_formula_followup(history)
         summary = _SUMMARIES.get(sid, "") if isinstance(sid, int) else ""
         return _sse(_gen_llm(question, cmd, chunks, history=history, role=role, verify=verify,
                              summary=summary, sid=sid if isinstance(sid, int) else None))
