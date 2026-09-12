@@ -1,6 +1,6 @@
 <script lang="ts">
 /**
- * 轻量富文本渲染:行内公式 $...$、块级公式 $$...$$、代码块 ```、加粗 **...**。
+ * 轻量富文本渲染:行内公式 $...$ / \(..\)、块级公式 $$...$$ / \[..\]、代码块 ```、加粗 **...**。
  * 流式输出中未闭合的公式会原样显示,闭合后自动渲染为 KaTeX。
  * 使用渲染函数输出,避免模板插值 VNode 数组带来的问题。
  */
@@ -56,18 +56,19 @@ function parseBold(src: string): Seg[] {
 
 function parseInline(src: string): Seg[] {
   const segs: Seg[] = []
-  // 三种公式写法:$$..$$ 块级、\(..\) 行内(LLM 与知识库常用)、$..$ 行内。
+  // 四种公式写法:$$..$$ 与 \[..\] 块级、\(..\) 与 $..$ 行内(LLM 与知识库常用)。
   // 行内 $ 只要求后一位不是数字 —— "$5 and $6" 金额仍被挡,
   // 而 "$ x > 0 $" 这类带空格的数学公式(LLM 实测会输出)能正常渲染。
   // 未闭合的公式不会匹配,留在纯文本里,闭合后自动渲染(流式友好)
-  const re = /\$\$([\s\S]+?)\$\$|\\\(([\s\S]+?)\\\)|\$(?=[^0-9])([^$\n]+?)\$/g
+  const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$(?=[^0-9])([^$\n]+?)\$/g
   let last = 0
   let m: RegExpExecArray | null
   while ((m = re.exec(src))) {
     segs.push(...parseBold(src.slice(last, m.index)))
     if (m[1] !== undefined) segs.push({ type: 'mathd', value: m[1] })
-    else if (m[2] !== undefined) segs.push({ type: 'math', value: m[2] })
-    else segs.push({ type: 'math', value: m[3] })
+    else if (m[2] !== undefined) segs.push({ type: 'mathd', value: m[2] })
+    else if (m[3] !== undefined) segs.push({ type: 'math', value: m[3] })
+    else segs.push({ type: 'math', value: m[4] })
     last = m.index + m[0].length
   }
   segs.push(...parseBold(src.slice(last)))
