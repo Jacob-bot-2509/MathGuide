@@ -17,6 +17,7 @@ stream_chat(system, user, role='main', fallback=True):
 """
 import json
 import os
+import time
 from typing import AsyncIterator
 
 import httpx
@@ -68,7 +69,8 @@ def pick(role: str) -> str:
 
 async def _stream_once(base: str, key: str, model: str, system: str, user: str,
                        history: list[dict] | None = None,
-                       max_tokens: int | None = None) -> AsyncIterator[str]:
+                       max_tokens: int | None = None,
+                       first_token_secs: float = 20.0) -> AsyncIterator[str]:
     messages: list[dict] = [{"role": "system", "content": system}]
     if history:
         messages.extend(history)
@@ -84,10 +86,22 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
     # trust_env=False 强制直连:阿里云/智谱 API 国内直连可达,走系统代理
     # (Clash 类工具)反而被中间人证书拦截(实测 SSL CERTIFICATE_VERIFY_FAILED);
     # 检索源则相反,外网源必须经代理,两处策略不同是有意的
-    async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
+    # 超时分段给:connect 快失败,read 限 30s —— 阿里云慢速期首字实测 70s+,
+    # 保活空帧会不断重置单值超时导致永不切换;read 超时后 stream_chat
+    # 自动切 backup(智谱,异平台容灾),用户最多等 ~35s 就换路,绝不干等
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+        trust_env=False,
+    ) as client:
         async with client.stream("POST", f"{base.rstrip('/')}/chat/completions",
                                  json=payload, headers=headers) as resp:
             resp.raise_for_status()
+            # 首字超时看门狗:慢速期网关会发保活空帧,httpx 的 read 超时被不断
+            # 重置形同虚设;这里按"首个正文 delta 的到达时间"硬限时,超时抛
+            # TimeoutError,由 stream_chat 切换到 backup(异平台容灾)。
+            # 正文开始后不再限时(长答案的帧间隙不受影响)
+            started = time.monotonic()
+            got_content = False
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -99,7 +113,11 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
                 if delta:
+                    got_content = True
                     yield delta
+                elif not got_content and time.monotonic() - started > first_token_secs:
+                    raise TimeoutError(
+                        f"首字超时 {first_token_secs}s(慢速期保活帧撑过 read 超时),切换 backup")
 
 
 async def stream_chat(system: str, user: str, role: str = "main",
@@ -112,8 +130,11 @@ async def stream_chat(system: str, user: str, role: str = "main",
     spec = resolve(role)
     if spec is None:
         raise RuntimeError(f"LLM 角色 {role} 未配置")
+    # 首字上限:fast 角色给 20s(正常 <2s,慢速期实测 70s+);
+    # deep/long 有思考阶段(期间只出 reasoning 帧、无 content delta),给 120s 防误伤
+    ttft = 120.0 if role in ("deep", "long") else 20.0
     try:
-        async for delta in _stream_once(*spec, system, user, history, max_tokens):
+        async for delta in _stream_once(*spec, system, user, history, max_tokens, ttft):
             yield delta
         return
     except Exception:
@@ -123,5 +144,5 @@ async def stream_chat(system: str, user: str, role: str = "main",
         if backup is None:
             raise
         print(f"[llm] {role} 调用失败,切换到 backup")
-        async for delta in _stream_once(*backup, system, user, history, max_tokens):
+        async for delta in _stream_once(*backup, system, user, history, max_tokens, ttft):
             yield delta
