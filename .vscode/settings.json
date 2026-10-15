@@ -1,4 +1,17 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:system",
-    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe"
+    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+    "python-envs.pythonProjects": [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:system",
+            "packageManager": "ms-python.python:pip"
+        }
+    ],
+    "cline.mcpServers": {
+        "ai-bridge": {
+            "command": "npx",
+            "args": ["-y", "ai-bridge-mcp"]
+        }
+    }
 }
