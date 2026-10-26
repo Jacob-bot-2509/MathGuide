@@ -6,9 +6,9 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.10.0-dev'
-export const APP_STABLE_VERSION = 'v1.9.0'
-export const APP_STABLE_DATE = '2026-10-26'
+export const APP_VERSION = 'v1.10.0'
+export const APP_STABLE_VERSION = 'v1.10.0'
+export const APP_STABLE_DATE = '2026-10-27'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
 export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
@@ -49,8 +49,8 @@ export interface LegalDoc {
 export const RELEASES: ReleaseEntry[] = [
   {
     version: APP_VERSION,
-    date: '',
-    status: 'dev',
+    date: APP_STABLE_DATE,
+    status: 'latest',
     items: [
       {
         zh: '待办清单:一次性 / 每天 / 每周任务,到点高亮提醒、浏览器通知、过期补看与暂停。',
@@ -76,8 +76,8 @@ export const RELEASES: ReleaseEntry[] = [
   },
   {
     version: 'v1.9.0',
-    date: APP_STABLE_DATE,
-    status: 'latest',
+    date: '2026-10-26',
+    status: 'released',
     items: [
       {
         zh: '安全加固:PBKDF2 口令、登录限流、请求体上限、导出文档 CSP nonce 与跨用户缓存隔离。',
