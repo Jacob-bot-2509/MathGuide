@@ -1,0 +1,2 @@
+# Release artifacts are byte-verified; never apply EOL conversion.
+releases/** -text
