@@ -29,8 +29,32 @@ _rebuild_lock = threading.Lock()  # 索引重建串行化(检索已移出事件�
 def _dir_stamp() -> tuple[int, float]:
     """(文件数, 最新 mtime) 签名:与上次不同即视为知识库有变化"""
     files = [p for p in KNOWLEDGE_DIR.glob("*") if p.suffix in (".md", ".txt")]
-    mtimes = [p.stat().st_mtime for p in files]
+    mtimes: list[float] = []
+    for path in files:
+        try:
+            mtimes.append(path.stat().st_mtime)
+        except OSError:
+            # 文件在 glob 与 stat 之间被删/被占用:让下一次检索重新判断,
+            # 不因为一次竞态把整条检索链路打断
+            continue
     return len(files), (max(mtimes) if mtimes else 0.0)
+
+
+def _load_index(embedder: embed.Embedder | None) -> KnowledgeIndex:
+    return KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), embedder)
+
+
+def _load_index_or_empty() -> KnowledgeIndex:
+    """降级再兜一层:embedding 失败后再用纯关键词装载,若仍失败(知识库目录
+    不可读、全部文件损坏)就用空索引启动。
+
+    关键:不能在这里直接把异常放出去 —— 那会让 uvicorn 起不来,与
+    「检索失败一律降级,不阻断后端」的承诺相反。"""
+    try:
+        return _load_index(None)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[rag] 知识库装载失败,以空索引启动(检索将走通用知识): {exc}")
+        return KnowledgeIndex([], None)
 
 
 def init() -> None:
@@ -45,7 +69,14 @@ def init() -> None:
             _embedder = None
     else:
         _embedder = None
-    _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
+    try:
+        # 构造 Embedder 只读缓存;真正会发网络请求的是 KnowledgeIndex 里的
+        # embed_chunks。冷缓存/服务抖动时这里才是失败点,必须一起兜住
+        # (README 承诺「初始化失败自动降级」,不能只包住 Embedder 构造)。
+        _index = _load_index(_embedder)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[rag] 索引装载失败,降级为关键词检索: {exc}")
+        _index = _load_index_or_empty()
     _stamp = _dir_stamp()
     _terms = _collect_terms(_index)
     if _embedder is not None:
@@ -74,10 +105,10 @@ def search(query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
         with _rebuild_lock:
             if _dir_stamp() != _stamp:  # 双检:并发进入时只重建一次
                 try:
-                    _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), _embedder)
+                    _index = _load_index(_embedder)
                 except Exception as exc:  # noqa: BLE001
                     print(f"[rag] 索引重建失败,降级为关键词模式: {exc}")
-                    _index = KnowledgeIndex(load_knowledge(KNOWLEDGE_DIR), None)
+                    _index = _load_index_or_empty()
                 _stamp = _dir_stamp()
                 _terms = _collect_terms(_index)
     return _index.search(query, top_k)

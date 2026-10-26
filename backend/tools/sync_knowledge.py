@@ -9,12 +9,12 @@
 流程:
     1. 读取 tools/.last_sync(不存在则用 --days 回看窗口)
     2. arXiv 增量拉取(submittedDate 范围 + 课程关键词过滤)
-    3. 更新 .last_sync
-    4. 跑 eval_recall 确认召回率未劣化(不过线则退出码 1)
+    3. 跑 eval_recall 确认召回率未劣化(不过线则退出码 1)
+    4. 评测通过后才更新 .last_sync
     5. 输出摘要报告
 
 Windows 定时任务示例(每天 09:30 自动跑):
-    schtasks /Create /TN "MathGuide-KB-Sync" /SC DAILY /ST 09:30 /TR "\"D:\\code\\.venv\\Scripts\\python.exe\" \"D:\\code\\backend\\tools\\sync_knowledge.py\" --limit 20"
+    schtasks /Create /TN "MathGuide-KB-Sync" /SC DAILY /ST 09:30 /TR "\"C:\\path\\to\\MathGuide\\.venv\\Scripts\\python.exe\" \"C:\\path\\to\\MathGuide\\backend\\tools\\sync_knowledge.py\" --limit 20"
 """
 import argparse
 import subprocess
@@ -50,17 +50,17 @@ def main() -> int:
     added = fk.fetch_arxiv(KB_DIR, args.limit, since=since, do_filter=True)
     print(f"新增 {added} 篇")
 
-    # 3. 更新标记
-    MARKER.write_text(date.today().isoformat(), encoding="utf-8")
-
-    # 4. 召回率评测(不过线则报错)
+    # 3. 召回率评测(不过线则报错)
     print("\n跑召回率评测 ...")
     ret = subprocess.run([sys.executable, str(TOOLS_DIR / "eval_recall.py")],
                          cwd=str(TOOLS_DIR.parent))
     if ret.returncode != 0:
         print("!! 召回率评测未过线,请按报告修复 keywords 后再发布。")
+        # 不更新同步标记:修好后重跑仍会覆盖同一窗口(已存在的文件会跳过,幂等)
         return 1
 
+    # 4. 评测通过才推进标记,避免有问题的批次被永久跳过
+    MARKER.write_text(date.today().isoformat(), encoding="utf-8")
     print(f"\n同步完成:新增 {added} 篇,召回率保持 100%,知识库已热重载生效。")
     return 0
 

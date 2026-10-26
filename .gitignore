@@ -2,6 +2,7 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # 后端运行时数据(演示账号,勿入库)
 backend/data/
@@ -23,3 +24,6 @@ backend/tools/eval_report.txt
 backend/tools/eval_search_report.txt
 backend/tools/.last_sync
 .speech-math-test.cjs
+.math-text-test.cjs
+.sse-stream-test.cjs
+.trash-store-test.cjs

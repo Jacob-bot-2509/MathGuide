@@ -9,7 +9,8 @@
    后端 `pip install -r requirements.txt`
 2. **密钥**:把 `.env.local` 手动拷到 `backend/`(含 API key,**不入库**,
    展示机没有它,所有模型调用全挂)
-3. **自检**:`cd backend && python tools/preflight.py` —— 全绿方可演示
+3. **自检**:`cd backend && ..\.venv\Scripts\python.exe tools\preflight.py` —— 全绿方可演示
+   (演示账号不存在时 preflight 会自动注册)
 4. **预热**:把动线第 5 步的研究问题预先问一遍(回答进缓存,现场秒回,
    不用等 60 秒检索)
 5. **启动**:仓库根目录双击 `dev.bat`(后端 8000 热重载守护 + 前端 5173)
@@ -79,4 +80,4 @@ StackExchange 等外网源在无代理时可能不通 —— 单源失败自动�
   混合检索(关键词/二元组/向量)
 - **怎么保证答案可信**:知识问题有来源可查;解答有双模型复核;
   研究结论有编号引用
-- **成本**:用量记账 usage.json 可量化,演示期单次问答量级几分钱
+- **成本**:用量记账 usage.jsonl 可量化,演示期单次问答量级几分钱

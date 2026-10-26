@@ -108,7 +108,8 @@ def main() -> int:
     # 1. 后端健康
     try:
         body = json.loads(get(f"{BASE}/api/health").read())
-        assert body.get("ok") is True
+        if body.get("ok") is not True:
+            raise ValueError("health payload 不是 {ok: true}")
         ok("后端服务 8000 健康")
     except Exception:
         fail("后端服务 8000 不可达", "先启动后端:仓库根目录双击 dev.bat,或 uvicorn main:app --port 8000")
@@ -116,25 +117,50 @@ def main() -> int:
 
     # 2. 前端
     try:
-        assert get(FRONTEND).status == 200
+        if get(FRONTEND).status != 200:
+            raise ValueError("前端返回非 200")
         ok("前端服务 5173 可访问")
     except Exception:
         fail("前端服务 5173 不可达", "先启动前端:npm run dev(dev.bat 会一并启动)")
 
-    # 3. 代理登录
+    # 3. 经 vite 代理登录(演示账号)
+    # 新 clone 的 data/ 被 gitignore,可能没有演示账号:404 时自动注册再重试,
+    # 让自检在一台干净机器上也能一次跑通。
     token = ""
     try:
         body = json.loads(post(f"{BASE}/api/auth/login",
-                               {"method": "password", "phone": DEMO_PHONE, "password": DEMO_PASSWORD}).read())
+                               {"method": "password", "phone": DEMO_PHONE,
+                                "password": DEMO_PASSWORD}).read())
         token = body.get("token", "")
-        assert token
-        ok(f"演示账号登录成功({DEMO_PHONE})")
     except urllib.error.HTTPError as e:
-        fail(f"演示账号登录失败(HTTP {e.code})", "检查 data/users.json 是否被误删;密码应为 demo123456")
-        return 1
+        if e.code != 404:
+            fail(f"演示账号登录失败(HTTP {e.code})", "检查 data/users.json 是否被误删;密码应为 demo123456")
+            return 1
+        try:
+            post(f"{BASE}/api/auth/register",
+                 {"phone": DEMO_PHONE, "password": DEMO_PASSWORD})
+        except urllib.error.HTTPError as reg_err:
+            if reg_err.code != 409:
+                fail(f"演示账号创建失败(HTTP {reg_err.code})", "检查后端日志")
+                return 1
+        except Exception:
+            fail("演示账号创建失败(网络错误)", "确认后端正在运行")
+            return 1
+        try:
+            body = json.loads(post(f"{BASE}/api/auth/login",
+                                   {"method": "password", "phone": DEMO_PHONE,
+                                    "password": DEMO_PASSWORD}).read())
+            token = body.get("token", "")
+        except Exception:
+            fail("演示账号创建后登录仍失败", "检查后端日志与 users.json 写入权限")
+            return 1
     except Exception:
         fail("演示账号登录失败(网络错误)", "确认后端正在运行")
         return 1
+    if not token:
+        fail("演示账号登录返回空 token", "检查后端日志")
+        return 1
+    ok(f"演示账号登录成功({DEMO_PHONE})")
 
     # 4. 知识库装载
     docs = sorted(Path(__file__).resolve().parent.parent.glob("knowledge/*.md"))

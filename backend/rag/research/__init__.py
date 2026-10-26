@@ -14,6 +14,7 @@ OpenAlex 可配 MG_CONTACT_MAIL 进礼貌池;zbMATH Open 免 key(数学专业库
 import asyncio
 import re
 import time
+from collections import OrderedDict
 
 from rag import llm, route
 from rag import search as kb_search
@@ -59,7 +60,7 @@ SOURCE_FNS = {
 ALL_SOURCES = (KB_SOURCE, *SOURCE_FNS)
 
 # 结果缓存:同一研究问题 TTL 内重复查询直接复用,降低外部源限流风险(演示期同题重问常见)
-_cache: dict[str, tuple[float, SearchOutcome]] = {}
+_cache: OrderedDict[str, tuple[float, SearchOutcome]] = OrderedDict()
 _CACHE_TTL = 300.0   # 秒
 _CACHE_MAX = 64
 
@@ -145,7 +146,8 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = DEFAULT_TI
     now = time.monotonic()
     hit = _cache.get(key)
     if hit and now - hit[0] < _CACHE_TTL:
-        print(f"[research] 缓存命中: {question[:24]}")
+        _cache.move_to_end(key)  # 命中即刷新 LRU 顺序
+        print(f"[research] 缓存命中(问题 {len(question)} 字)")
         return hit[1]
     started = time.perf_counter()
     # 查询改写:LLM 可用时优先(口语化提问拆词更全),失败回退规则版
@@ -193,8 +195,9 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = DEFAULT_TI
             and any(h.source != KB_SOURCE for h in outcome.hits)):
         outcome.hits = await rerank.rerank(question, outcome.hits, timeout=10.0)
     outcome.elapsed = round(time.perf_counter() - started, 2)
-    # 存入缓存(超容逐出最旧一条,简单 LRU)
+    # 存入缓存(超容逐出最久未使用的条目,简单 LRU)
     _cache[key] = (time.monotonic(), outcome)
-    if len(_cache) > _CACHE_MAX:
-        _cache.pop(next(iter(_cache)))
+    _cache.move_to_end(key)
+    while len(_cache) > _CACHE_MAX:
+        _cache.popitem(last=False)
     return outcome

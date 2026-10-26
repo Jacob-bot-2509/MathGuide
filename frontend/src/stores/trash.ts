@@ -45,10 +45,13 @@ function persistTrash() {
   }
 }
 
-/** 清除超期(超过 30 天)的记录 */
+/** 清除超期(超过 30 天)的记录;有变化才写盘,否则下次加载会“复活”旧记录 */
 export function purgeExpired() {
   const cutoff = Date.now() - TRASH_RETENTION_DAYS * DAY_MS
-  trashState.items = trashState.items.filter((t) => t.deletedAt >= cutoff)
+  const next = trashState.items.filter((t) => t.deletedAt >= cutoff)
+  if (next.length === trashState.items.length) return
+  trashState.items = next
+  persistTrash()
 }
 
 export function addToTrash(item: TrashItem) {

@@ -11,23 +11,34 @@
 
 ```bash
 cd backend
-D:/code/.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
+# 默认只绑本机;需要局域网演示时再显式用 --host 0.0.0.0(并先关闭 MG_DEMO_MODE)
+../.venv/Scripts/python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 # 前端开发模式(5173)已配置 vite 代理 /api → 8000,直连 8000 亦可调试
 ```
 
-依赖:starlette、uvicorn、httpx(见 `requirements.txt`,已装于 `D:/code/.venv`)。
-Windows 下也可用仓库根目录 `dev.bat` 一键启动前后端。
+依赖:starlette、uvicorn、httpx(见 `requirements.txt`,已装于仓库根的 `.venv`)。
+Windows 下也可用仓库根目录 `dev.bat` 一键启动前后端(脚本按自身所在目录解析路径,不再依赖 `D:\code`)。
+
+开发测试依赖:
+
+```bash
+../.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
+../.venv/Scripts/python.exe -m pytest
+```
 
 ## 目录
 
 ```
 backend/
-  main.py      # 应用入口 + 路由表 + CORS(开发期放行)+ UTF-8 输出修复
-  store.py     # JSON 文件持久化(users.json / tokens.json),token 24h 过期
-  auth.py      # 注册 / 登录 / 登出 + require_auth(401)
+  main.py      # 应用入口 + 路由表 + CORS(默认只放行本机前端)+ UTF-8 输出修复
+  store.py     # JSON 持久化 + PBKDF2 密码哈希(旧格式登录时自动升级),token 24h 过期
+  auth.py      # 注册 / 登录 / 登出 + require_auth(401) / require_admin(403) + 认证限流
+  session_cache.py # 教材/摘要缓存,键 = (uid, sessionId),防止跨用户撞号
+  http_utils.py    # JSON 请求体解析:2 MiB 上限(413)与 400 语义
+  rate_limit.py    # 滑动窗口限流(聊天/认证共用,自动清理不活跃 key)
   chat.py      # POST /api/chat/stream:SSE 流式下发 + RAG 编排
                # (安全外壳:输入上限/限流/用量记账 → 路由 → LLM/直答)
-  usage.py     # 用量统计(电表):调用记录落盘 usage.json,支撑 /api/stats 与报表
+  usage.py     # 用量统计(电表):调用记录追加到 usage.jsonl,支撑 /api/stats 与报表
   rag/
     documents.py  # 知识文档加载与切片(markdown + frontmatter)
     index.py      # 检索索引:关键词 + bigram + 向量混合打分(闲聊噪声门限)
@@ -39,6 +50,7 @@ backend/
                   # + 搜索范围(scope:前端勾选平台,未勾选的不发请求)
     __init__.py   # init / search / build_system(进程内单例)
   knowledge/   # 知识库文档(*.md,公式用 LaTeX),新增文档无需改代码
+  static/katex/ # PDF 导出用的 KaTeX 资源(后端自带,不依赖前端 node_modules)
   data/        # 运行时生成:用户 / 令牌 / 用量数据(勿入库)
   tools/       # 质检与运维:评测 / 自检 / key 校验 / 知识同步 / 用量报表
 ```
@@ -86,7 +98,7 @@ PDF / Word 等二进制格式:先转成 md/txt(或后续在 `rag/documents.py` �
 Windows 定时任务示例(每天 09:30 自动同步):
 
 ```bat
-schtasks /Create /TN "MathGuide-KB-Sync" /SC DAILY /ST 09:30 /TR "\"D:\code\.venv\Scripts\python.exe\" \"D:\code\backend\tools\sync_knowledge.py\" --limit 20"
+schtasks /Create /TN "MathGuide-KB-Sync" /SC DAILY /ST 09:30 /TR "\"C:\path\to\MathGuide\.venv\Scripts\python.exe\" \"C:\path\to\MathGuide\backend\tools\sync_knowledge.py\" --limit 20"
 ```
 
 ## 检索升级(可选):embedding 向量混合
@@ -115,6 +127,8 @@ set MG_CONTACT_MAIL=xxx@xx.com  # OpenAlex 礼貌池标识(官方建议,提升�
   门限按当前 embedding 模型实测分布标定(**换模型必须重标**,见 `rag/index.py` 注释);
 - **降级保护**:embedding 初始化 / 索引重建 / 单次查询任一环节失败,
   自动退回关键词模式,检索链路永不因向量服务故障崩溃;
+- **知识库容错**:单个 md/txt 文件解析失败(编码/占用/frontmatter 畸形)只跳过该文件;
+  全部不可读时以空索引启动(检索走通用知识),不阻断后端;
 - 缓存文件请勿入库(.gitignore 已排除 `knowledge/.embeddings.json`)。
 
 ## 接入真实 LLM
@@ -137,7 +151,8 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
 - 证明 / 竞赛类提问 → deep;教材 / 粘贴长文档 → long;研究型综合 → deep;其余 → main;
 - 研究型问题:LLM 查询改写(失败回退规则版)→ 跨论文库搜索 → LLM 精排 →
   **综合解答 + 编号引用**,引用区由后端用真实元数据拼装(幻觉防线);
-  搜索与综合**双层缓存**,重复问题秒回;
+  搜索与综合**双层缓存**,重复问题秒回;外部源请求带总预算,超时会关闭在途响应,
+  不让线程空转到各自超时;
 - **双角色验证**:数学题解答完成后由另一角色复核,结论追加在答案末尾(🔍 复核);
 - **多轮对话**:携带最近 16 轮历史,更早对话每 8 轮滚动压缩成摘要附在 system 中;
 - 解答末尾由后端拼装「是 / 否」收录按钮(契约 `cmd://nb/yes|no`),
@@ -146,16 +161,18 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
 
 ## 接口契约
 
-统一前缀 `/api`;除注册 / 登录外均需请求头 `Authorization: Bearer <token>`。
+统一前缀 `/api`;除健康检查、注册、登录外均需请求头 `Authorization: Bearer <token>`。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/health` | 健康检查 `{ok, service}` |
+| GET | `/api/health` | 健康检查 `{ok, service}`(公开) |
 | POST | `/api/auth/register` | 手机号 + 密码注册 → `200 {token, user}` / `409 {error:"exists"}` |
 | POST | `/api/auth/login` | 四种方式,见下 → 一律 `200 {token, user}` |
-| POST | `/api/auth/logout` | 吊销当前 token → `200 {ok:true}` |
+| POST | `/api/auth/logout` | 吊销当前 token 并清理该用户会话缓存 → `200 {ok:true}` |
 | POST | `/api/chat/stream` | 聊天流式回复(SSE) |
-| GET | `/api/stats` | 用量统计(需 token):总调用数 / 回复字数 / 按用户 / 按模型角色 |
+| POST | `/api/speech/math` | 语音识别文本 → 数学符号转写(SSE) |
+| POST | `/api/doc/export` | 研究综述 → 结构化 → PDF 下载 |
+| GET | `/api/stats` | 用量统计(**仅管理员**):总调用数 / 回复字数 / 按用户 / 按模型角色 |
 
 登录请求体:
 
@@ -168,7 +185,30 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
 { "method": "wechat", "nickname": "...", "avatar": "preset:sum" }
 ```
 
-`user` DTO:`{ nickname, avatar, authMethod: "phone-pass"|"phone-code"|"wechat"|"qq", phone? }`
+`user` DTO:`{ nickname, avatar, authMethod: "phone-pass"|"phone-code"|"wechat"|"qq", phone?, accountKey }`
+
+`accountKey` 是内部 uid 的不可逆哈希,前端只用它判断本机学习数据属于哪个账号:
+换账号登录时清理上一位用户的本地会话/归纳本,同一账号重新登录则保留。
+
+### 安全与部署模式
+
+- **演示模式**:`MG_DEMO_MODE` 默认 `1`,允许固定验证码 `123456`、微信/QQ 访客登录
+  与开放注册。固定验证码对**已注册手机号**同样有效,开放注册也无法验证手机号归属,
+  只适合本机演示;真实部署必须设 `MG_DEMO_MODE=0`(关闭固定验证码、访客登录与
+  `/register`),账号由真实短信/第三方流程或管理端创建,并配合 HTTPS。
+  游客账号受 `MG_GUEST_MAX`(默认 500,0=禁止)约束,超出时先清理无有效 token 的最旧游客。
+- **CORS**:默认只放行 `http://localhost:5173` 与 `http://127.0.0.1:5173`;
+  其他来源用 `MG_CORS_ORIGINS` 显式列出,不要长期使用 `*`。
+- **管理员**:`/api/stats` 需要手机号或 uid 命中 `MG_ADMIN_PHONES` / `MG_ADMIN_UIDS`
+  白名单;未配置则默认无人可访问(403)。
+- **请求体上限**:所有 JSON 接口 2 MiB,超限 413;昵称/头像/密码等字段另有长度上限。
+- **认证限流**:登录/注册按客户端 IP 60 秒 10 次;聊天/语音/导出按用户 60 秒 6 次。
+  反向代理部署时需让 uvicorn 正确获取客户端 IP(`--proxy-headers` 且仅信任自家代理),
+  否则所有请求会被当成同一个 IP。
+- **密码**:新账号用 PBKDF2-HMAC-SHA256(20 万轮);旧版单轮 SHA-256 记录在登录成功后
+  自动升级,并全程用 `secrets.compare_digest` 比较。
+- **会话缓存**:教材/滚动摘要按 `(uid, sessionId)` 隔离;`sessionId` 由客户端提供,
+  绝不能当作全局唯一键使用。
 
 ### 聊天流(SSE)
 
@@ -187,7 +227,7 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
   缺省 / 空 / 非法值一律视为全平台,白名单外的名字直接忽略;
 - 空 `prompt` 视为新会话,下发欢迎语;
 - **章节导航契约**:`cmd=章节知识导航` 携带教材正文(≤3 万字)→ 返回可点击章节列表
-  `[章节](cmd://chapter/…)`,教材按 `sessionId` 缓存;`cmd=章节知识指引` 只发章节名,
+  `[章节](cmd://chapter/…)`,教材按 `(用户, sessionId)` 缓存;`cmd=章节知识指引` 只发章节名,
   返回指引并附 `[返回](cmd://back)`(缓存失效时按通用知识作答);
 - **附件契约**:`[attach:image|file]文件名`,文本文件可带正文(空行分隔)交 LLM 阅读理解;
 - **安全底座**:prompt 服务端截断 3.2 万字;每用户 60 秒内最多 6 问(超出 429);
@@ -204,28 +244,47 @@ data: [DONE]
 前端按帧 `JSON.parse`(失败回退纯文本)后拼接即为完整正文。
 认证失败:401 `{"detail":"unauthorized"}`;限流:429 `{"detail":"rate limited"}`。
 
-**收尾标记是契约的一部分**:每条流(含各降级分支)都以 `data: [DONE]` 结束,
+**收尾标记是契约的一部分**:正常完成的流(含各正常降级分支)都以 `data: [DONE]` 结束,
 由 `chat.py` 的 `_sse` 统一补发,生成器不必也不能自己 yield(重复的会被丢弃)。
 前端据此判断回答是否完整 —— 没等到 `[DONE]` 就断开(后端重启、网络中断)时,
 已收到的正文只是半截,界面会标「回答已中断」,不会当成完整回答存进历史。
+语音转写是例外:若已输出半截再失败,会主动中断流(不补原文、不补 `[DONE]`),
+让前端回退原文,避免半截转写写进本地缓存。
 改后端时若绕过 `_sse` 直接返回 `StreamingResponse`,这条判定就失效了。
 
 ## 用量统计(测试期成本可见)
 
-每次聊天流结束后自动记账到 `data/usage.json`(谁、什么指令、回复字数、模型角色;
-上限 2000 条,超量丢最旧):
+每次聊天流结束后自动记账到 `data/usage.jsonl`(谁、什么指令、回复字数、模型角色;
+内存保留最近 2000 条,磁盘追加写入、超过 2200 行时压实一次;兼容旧
+`data/usage.json` 数组并在下次写入时迁移,旧文件保留作备份)。
+PDF 导出只记调用次数,不把文件字节数混进「回复字数」:
 
 ```bash
-python tools/usage.py   # 终端报表:总调用/回复字数/按用户/按模型角色
-# 或接口查询(需登录 token):GET /api/stats → {calls, totalChars, users, roles}
+../.venv/Scripts/python.exe tools/usage.py   # 终端报表:总调用/回复字数/按用户/按模型角色
+# 或接口查询(需管理员 token):GET /api/stats → {calls, totalChars, users, roles}
 ```
+
+## 测试
+
+```bash
+../.venv/Scripts/python.exe -m pytest        # 后端单元/集成测试(不读 .env、不联网)
+cd ../frontend && npm test                   # 前端自测(编译器/SSE/MathText 安全用例)
+```
+
+后端测试覆盖:store 密码与 token 生命周期、auth 注册/登录/演示模式/管理员/限流/
+游客上限、请求体 413/400、会话缓存跨用户隔离、embedding 冷启动降级、LLM 半截输出不回放、
+文档切片、排序/精排、arXiv HTTPS/响应上限/请求取消、usage JSONL 迁移与压实、PDF 消毒。
 
 ## 演示账号
 
 验证码登录演示码固定 `123456`。注册产生的数据落盘于 `data/`(users.json 存加盐口令摘要,
 tokens.json 存令牌);清空这两个文件即可重置演示环境。
+`tools/preflight.py` 在演示账号不存在时会自动注册,新 clone 也能直接自检。
 
 ## 质检工具(tools/)
+
+以下命令在 `backend/` 目录执行;请使用项目 venv(先激活 `.venv`,或把 `python`
+换成 `..\.venv\Scripts\python.exe`):
 
 ```bash
 python tools/check_keys.py      # LLM Key 快速校验(不打印 key 内容,两把都 ✓ 才可跑真机)

@@ -4,6 +4,7 @@
  */
 import type { UserInfo } from '@/stores/user'
 import { getToken, login as setUser, logout as clearUser } from '@/stores/user'
+import { claimLocalData, clearLearningData } from '@/stores/localData'
 import type { AuthUserDto, LoginResponse } from '@/api/types'
 import { post, statusOf } from '@/api/http'
 import { AVATAR_PRESETS } from '@/utils/avatar'
@@ -17,6 +18,8 @@ type LoginResult = 'ok' | 'notfound' | 'wrong'
 async function applyLogin(user: AuthUserDto, token: string): Promise<UserInfo> {
   const info: UserInfo = { ...user, token }
   setUser(info)
+  // 换账号登录时清理上一位用户的本地学习数据;同账号重登(含 401 后)保留
+  claimLocalData(user.accountKey)
   return info
 }
 
@@ -72,4 +75,7 @@ export function logout(): void {
     })
   }
   clearUser()
+  // 会话/归纳本/回收站/语音缓存只存在本机:不清掉的话,
+  // 同一台设备换账号登录会看到上一位用户的学习数据
+  clearLearningData()
 }

@@ -40,6 +40,14 @@ export function speechToMath(
 ): { cancel: () => void } {
   const controller = new AbortController()
   let acc = ''
+  // postSSE 在读取报错时会先回调 onError,再在 finally 回调 onDone(false);
+  // 两条路径都会走到「失败」,用一次性闸门保证调用方只收到一次 onFail
+  let failed = false
+  const fail = () => {
+    if (failed) return
+    failed = true
+    cb.onFail()
+  }
   postSSE(
     '/api/speech/math',
     { text },
@@ -53,14 +61,14 @@ export function speechToMath(
         // 半个表达式的转写一旦入缓存,以后每次念同一句话都返回这半截(持久污染),
         // 而输入框里留着的也是半截结果 —— 一律按失败走,回退原文
         if (!complete) {
-          cb.onFail()
+          fail()
           return
         }
         if (acc) cb.onDone?.(full)
-        else cb.onFail()
+        else fail()
       },
       onError: () => {
-        cb.onFail()
+        fail()
       },
     },
     { headers: authHeaders(), controller },

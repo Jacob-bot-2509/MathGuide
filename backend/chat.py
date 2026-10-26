@@ -27,6 +27,7 @@ import json
 import random
 import re
 import time
+from collections import OrderedDict
 
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
@@ -35,6 +36,17 @@ from starlette.responses import JSONResponse, StreamingResponse
 import rag
 import usage
 from auth import require_auth
+from http_utils import read_json_object
+from rate_limit import SlidingWindowLimiter
+from session_cache import (
+    TEXTBOOK_CAP,
+    bump_tick,
+    cache_textbook,
+    get_summary,
+    get_textbook,
+    set_summary,
+    valid_session_id,
+)
 
 CHUNK = 6          # 直答模式每帧字符数(配合浏览器端 ~24ms 渲染节流)
 FRAME_MS = 0.02    # 帧间隔(秒),模拟真实模型逐字输出
@@ -107,27 +119,13 @@ def _pick_role(question: str) -> str:
     """按需路由 LLM 角色:证明/竞赛 → deep,其余 main(节省成本,好钢用在刀刃上)"""
     q = question.lower()
     role = rag.llm.pick("deep") if any(m in q for m in _DEEP_MARKERS) else "main"
-    print(f"[chat] 角色路由 {role} | {question[:20]}")
+    print(f"[chat] 角色路由 {role} | 问题长度 {len(question)}")
     return role
 
 
-# 教材缓存:章节导航列表生成时按会话暂存教材文本,后续章节指引按 sessionId 取用,
-# 点击章节只发章节名即可(服务重启缓存失效,指引自动降级为通用知识作答)
-_TEXTBOOKS: dict[int, str] = {}
-_TEXTBOOK_MAX = 16
-_TEXTBOOK_CAP = 30000  # 长文档教材上限(与前端 FILE_TEXT_MAX 一致,走 long 角色)
-
-
-def _cache_textbook(session_id: object, text: str) -> None:
-    if not isinstance(session_id, int) or not session_id or len(text) < 80:
-        return
-    _TEXTBOOKS[session_id] = text[:_TEXTBOOK_CAP]
-    if len(_TEXTBOOKS) > _TEXTBOOK_MAX:
-        _TEXTBOOKS.pop(next(iter(_TEXTBOOKS)))
-
-
-def _get_textbook(session_id: object) -> str:
-    return _TEXTBOOKS.get(session_id) if isinstance(session_id, int) else ""
+# 教材缓存:章节导航列表生成时按「用户 + 会话」暂存教材文本,后续章节指引按
+# (uid, sessionId) 取用,点击章节只发章节名即可(服务重启缓存失效,指引自动降级为通用知识作答)。
+# 键必须带 uid:sessionId 是客户端自增的小整数,跨用户必然撞号(见 session_cache)。
 
 
 # 会话大脑:同类多条随机轮换,避免机械重复;语气自然、有温度
@@ -301,12 +299,9 @@ def _validated_history(raw: object) -> list[dict]:
     return out
 
 
-# 会话滚动摘要:每 8 次请求压缩一次旧对话(便宜模型,失败静默),长对话保持早期上下文
-_SUMMARIES: dict[int, str] = {}
-_SUM_TICK: dict[int, int] = {}
-
-
-async def _update_summary(sid: int, old_turns: list[dict], prev: str) -> None:
+# 会话滚动摘要:每 8 次请求压缩一次旧对话(便宜模型,失败静默),长对话保持早期上下文。
+# 与教材缓存一样按 (uid, sid) 隔离,避免客户端自增的 sessionId 跨用户撞号。
+async def _update_summary(uid: str, sid: int, old_turns: list[dict], prev: str) -> None:
     system = (
         "你是对话摘要助手。把以下更早的对话压缩成简短摘要(要点式,200 字内),"
         "保留数学概念、未解决问题与用户偏好。只输出摘要本身。"
@@ -324,7 +319,7 @@ async def _update_summary(sid: int, old_turns: list[dict], prev: str) -> None:
         return
     text = "".join(parts).strip()
     if text:
-        _SUMMARIES[sid] = text
+        set_summary(uid, sid, text)
         print(f"[chat] 会话 {sid} 摘要已更新({len(text)} 字)")
 
 
@@ -366,7 +361,7 @@ def _research_reply(outcome: rag.research.SearchOutcome, zh: bool) -> str:
 
 
 # 研究型综合结果缓存:同问题 TTL 内直接回放已综合全文(跳过搜索与 LLM,省时省钱)
-_RESEARCH_ANSWER: dict[str, tuple[float, str]] = {}
+_RESEARCH_ANSWER: OrderedDict[str, tuple[float, str]] = OrderedDict()
 _RESEARCH_TTL = 600.0   # 秒
 _RESEARCH_MAX = 32
 
@@ -389,34 +384,54 @@ def _research_cache_key(question: str, scope: list[str] | None = None) -> str:
 
 PROMPT_MAX = 32000  # 服务端输入上限(字符):覆盖长文档教材(3万字)+ 指令前缀,超出静默截断
 
-# 限流:每用户滑动窗口(防脚本刷接口烧 token 费;正常学习节奏碰不到上限)
+# 限流:每用户滑动窗口(防脚本刷接口烧 token 费;正常学习节奏碰不到上限)。
+# 公共实现会清理不活跃 key,游客登录不断产生新 uid 也不会让内存无界增长。
 _RATE_LIMIT_MAX = 6
 _RATE_WINDOW = 60.0
-_rate_log: dict[str, list[float]] = {}
+_rate_limiter = SlidingWindowLimiter(_RATE_LIMIT_MAX, _RATE_WINDOW)
 
 
 def _rate_check(uid: str) -> None:
-    now = time.monotonic()
-    hits = [t for t in _rate_log.get(uid, []) if now - t < _RATE_WINDOW]
-    if len(hits) >= _RATE_LIMIT_MAX:
+    if not _rate_limiter.allow(uid or "anonymous"):
         raise HTTPException(429, "rate limited")
-    hits.append(now)
-    _rate_log[uid] = hits
+
+
+def _frame_text_len(frame: str | bytes) -> int:
+    """只统计正文帧的字符数:跳过 [DONE]、meta 帧与非 data 帧。
+
+    旧实现按整帧长度记账,把 `data: "`、JSON 引号/转义和结尾换行都算进
+    「回复字数」,成本报表会虚高数倍。帧格式由 `_frames`/`_sse` 统一约定,
+    这里按同一契约解包。
+    """
+    raw = frame if isinstance(frame, str) else frame.decode("utf-8", "ignore")
+    if raw == _DONE or not raw.startswith("data:"):
+        return 0
+    payload = raw[5:].strip()
+    try:
+        value = json.loads(payload)
+    except (json.JSONDecodeError, TypeError):
+        return len(payload)
+    return len(value) if isinstance(value, str) else 0
 
 
 def _meter(resp: StreamingResponse, rec: dict, prompt_len: int, cmd: str,
            meta: dict) -> StreamingResponse:
-    """用量电表:统计回复字数并落盘 usage.json(流结束才记账,客户端中途断开不记)。
-    注意:必须先捕获原迭代器再替换 body_iterator,否则新生成器会自引用死锁"""
+    """用量电表:统计回复字数并落盘 usage.jsonl(流结束才记账,客户端中途断开不记)。
+    注意:必须先捕获原迭代器再替换 body_iterator,否则新生成器会自引用死锁。
+    记账是同步文件写,放线程池执行,避免长记录时阻塞事件循环。"""
     original = resp.body_iterator
 
     async def counted():
         chars = 0
         async for frame in original:
-            chars += len(frame) if isinstance(frame, str) else len(frame.decode("utf-8", "ignore"))
+            chars += _frame_text_len(frame)
             yield frame
-        _record(rec, cmd=cmd, prompt_len=prompt_len, reply_len=chars,
+        try:
+            await asyncio.to_thread(
+                _record, rec, cmd=cmd, prompt_len=prompt_len, reply_len=chars,
                 role=meta["role"], research=meta["research"])
+        except Exception as exc:  # noqa: BLE001 记账失败不能反过来打断已完成的回答
+            print(f"[chat] 用量记账失败(不影响回答): {exc}")
 
     resp.body_iterator = counted()
     return resp
@@ -449,6 +464,12 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
         print(f"[chat] 研究综合失败,降级为来源列表: {exc}")
+        if full:
+            # 已经流出一部分:不能再回放来源列表(用户会看到「半截正文 + 完整兜底」)
+            note = ("\n\n⚠ 综合生成中断,以上内容可能不完整。"
+                    if zh else "\n\n⚠ Synthesis interrupted; the text above may be incomplete.")
+            yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
+            return
         async for frame in _frames(_research_reply(outcome, zh)):
             yield frame
         return
@@ -458,8 +479,9 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
         yield frame
     if ck:
         _RESEARCH_ANSWER[ck] = (time.monotonic(), "".join(full))
-        if len(_RESEARCH_ANSWER) > _RESEARCH_MAX:
-            _RESEARCH_ANSWER.pop(next(iter(_RESEARCH_ANSWER)))
+        _RESEARCH_ANSWER.move_to_end(ck)
+        while len(_RESEARCH_ANSWER) > _RESEARCH_MAX:
+            _RESEARCH_ANSWER.popitem(last=False)
 
 
 def _with_meta(resp: StreamingResponse, meta: dict) -> StreamingResponse:
@@ -536,15 +558,17 @@ async def _verify_answer(question: str, answer: str, role: str) -> str | None:
 
 async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]],
                    history: list[dict] | None = None, role: str = "main", verify: bool = False,
-                   summary: str = "", sid: int | None = None):
+                   summary: str = "", sid: int | None = None, uid: str = ""):
     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
     verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过);
-    summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)"""
+    summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)。
+    已经流出一部分后再失败时不回放直答,只追加中断提示,避免答案被拼接两遍。"""
+    zh = _is_chinese(prompt)
+    answer: list[str] = []
     try:
-        system = rag.build_system(chunks, cmd, zh=_is_chinese(prompt))
+        system = rag.build_system(chunks, cmd, zh=zh)
         if summary:
             system += f"\n\n【更早对话摘要】\n{summary}"
-        answer: list[str] = []
         async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
             answer.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
@@ -556,17 +580,22 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 print(f"[chat] 复核({vrole}): {verdict[:60]}")
                 yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
             # 解答完询问是否收录进问题记录(归纳本):前端渲染为「是/否」按钮
-            nb = ("\n\n[是](cmd://nb/yes) [否](cmd://nb/no)" if _is_chinese(prompt)
+            nb = ("\n\n[是](cmd://nb/yes) [否](cmd://nb/no)" if zh
                   else "\n\n[Yes](cmd://nb/yes) [No](cmd://nb/no)")
             yield f"data: {json.dumps(nb, ensure_ascii=False)}\n\n"
         if sid is not None and history and len(history) >= 16:
             # 每 8 次请求异步压缩一次更早的对话(不阻塞本次响应;失败静默)
-            tick = _SUM_TICK.get(sid, 0) + 1
-            _SUM_TICK[sid] = tick
+            tick = bump_tick(uid, sid)
             if tick % 8 == 0:
-                asyncio.create_task(_update_summary(sid, history[:-8], _SUMMARIES.get(sid, "")))
+                asyncio.create_task(
+                    _update_summary(uid, sid, history[:-8], get_summary(uid, sid)))
     except Exception as exc:  # noqa: BLE001 模型侧错误不区分类型,统一降级
         print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
+        if answer:
+            note = ("\n\n⚠ 模型连接中断,以上回答可能不完整。"
+                    if zh else "\n\n⚠ Model connection lost; the answer above may be incomplete.")
+            yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
+            return
         note = "⚠ 模型调用失败,以下为知识库直答内容:\n\n"
         yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
         async for frame in _frames(_compose_direct(prompt, chunks)):
@@ -596,12 +625,19 @@ def _nav_guide_system():
 
 async def _gen_nav_list(question: str):
     """章节导航:只输出教材章节划分列表(不展示内容);失败时给出明确提示"""
+    emitted = False
     try:
-        async for delta in rag.llm.stream_chat(_nav_system(), question[:_TEXTBOOK_CAP], role=rag.llm.pick("long")):
+        async for delta in rag.llm.stream_chat(_nav_system(), question[:TEXTBOOK_CAP], role=rag.llm.pick("long")):
+            emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
         print(f"[chat] 章节导航调用失败: {exc}")
-        yield f"data: {json.dumps('⚠ 章节导航调用失败,请稍后重试。', ensure_ascii=False)}\n\n"
+        zh = _is_chinese(question)
+        text = (("⚠ 章节导航中断,以上列表可能不完整。" if emitted
+                 else "⚠ 章节导航调用失败,请稍后重试。") if zh else
+                ("⚠ Chapter navigation interrupted; the list above may be incomplete." if emitted
+                 else "⚠ Chapter navigation failed. Please try again."))
+        yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
         return
 
 
@@ -613,12 +649,19 @@ async def _gen_nav_guide(question: str, tb: str = ""):
         prompt += f"\n\n<教材文本>:\n{tb}"
     else:
         prompt += "\n\n(教材内容缓存已失效,请按通用知识作答该章)"
+    emitted = False
     try:
         async for delta in rag.llm.stream_chat(_nav_guide_system(), prompt, role=rag.llm.pick("long")):
+            emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
         print(f"[chat] 章节指引调用失败: {exc}")
-        yield f"data: {json.dumps('⚠ 章节指引调用失败,请稍后重试。', ensure_ascii=False)}\n\n"
+        zh = _is_chinese(question)
+        text = (("⚠ 章节指引中断,以上内容可能不完整。" if emitted
+                 else "⚠ 章节指引调用失败,请稍后重试。") if zh else
+                ("⚠ Chapter guidance interrupted; the text above may be incomplete." if emitted
+                 else "⚠ Chapter guidance failed. Please try again."))
+        yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
         return
     yield f"data: {json.dumps('\n\n[返回](cmd://back)', ensure_ascii=False)}\n\n"
 
@@ -630,12 +673,18 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
         "先用一两句话概括文件主题,再告诉用户可以针对内容提问(如总结、讲解、翻译)。"
         "不要搜索外部资料,不要编造文件里没有的内容;用与文件内容相同的语言回应。"
     ).format(name=name)
+    emitted = False
     try:
-        async for delta in rag.llm.stream_chat(system, body[:_TEXTBOOK_CAP], role=rag.llm.pick("long")):
+        async for delta in rag.llm.stream_chat(system, body[:TEXTBOOK_CAP], role=rag.llm.pick("long")):
+            emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型侧错误统一降级,不让前端假死
         print(f"[chat] 粘贴文本 LLM 调用失败,降级为接收回执: {exc}")
-        note = (ATTACH_FILE_ZH if zh else ATTACH_FILE_EN).format(name=name, size="—")
+        if emitted:
+            note = ("⚠ 文件解读中断,以上内容可能不完整。" if zh
+                    else "⚠ File reading interrupted; the text above may be incomplete.")
+        else:
+            note = (ATTACH_FILE_ZH if zh else ATTACH_FILE_EN).format(name=name, size="—")
         yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
         return
 
@@ -701,6 +750,11 @@ async def _gen_formula_clarify(question: str):
     except Exception as exc:  # noqa: BLE001
         print(f"[chat] 公式手册澄清调用失败,降级为静态提示: {exc}")
         zh = _is_chinese(question)
+        if answer:
+            text = ("⚠ 澄清提问中断,以上内容可能不完整。" if zh
+                    else "⚠ Clarification interrupted; the text above may be incomplete.")
+            yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+            return
         text = ("好的!你想查该领域哪个具体知识点呢?告诉我具体名称"
                 "(比如你最近学到的某个概念或定理),我马上给你对应的公式与定理。") if zh else (
                 "Sure! Which specific topic in this section are you looking for? "
@@ -719,7 +773,7 @@ async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
     """聊天入口(安全外壳):认证 → 输入上限 → 限流 → 路由 → 用量记账"""
     rec = require_auth(request)  # 401: {"detail": "unauthorized"}
 
-    body = await request.json()
+    body = await read_json_object(request)
     prompt = str(body.get("prompt", "")).strip()
     cmd = str(body.get("cmd", ""))[:50] if body.get("cmd") else None
 
@@ -742,9 +796,10 @@ async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
 async def speech_to_math(request: Request) -> StreamingResponse:
     """语音识别文本 → 数学符号转写(SSE 流式:首帧即上屏,前端逐帧替换输入框,
     不用等模型收尾,感知延迟 ≈ 首 token 时间)。
-    失败时回放原文帧,绝不阻断语音输入;计入限流与用量统计"""
+    一字未出时回放原文帧,不阻断语音输入;已输出半截则主动中断流(前端
+    complete=false 回退原文,避免半截转写混进缓存);计入限流与用量统计"""
     rec = require_auth(request)
-    body = await request.json()
+    body = await read_json_object(request)
     text = str(body.get("text", "")).strip()[:6000]
     if not text:
         return _stream_text("")
@@ -769,17 +824,27 @@ async def speech_to_math(request: Request) -> StreamingResponse:
                                                    max_tokens=400):
                 parts.append(delta)
                 yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
-        except Exception:  # noqa: BLE001 转写失败回放原文,不阻断输入
+        except Exception:  # noqa: BLE001
+            if parts:
+                # 已经输出半截:让流异常结束(前端 complete=false 会回退原文)。
+                # 若在这里补发原文,前端会把「半截转写 + 原文」拼在一起写进缓存。
+                raise
+            # 一字未出:回放原文,不阻断语音输入
             yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
             return
-        _record(rec, cmd="语音转写", prompt_len=len(text),
+        try:
+            await asyncio.to_thread(
+                _record, rec, cmd="语音转写", prompt_len=len(text),
                 reply_len=sum(len(p) for p in parts), role="main", research=False)
+        except Exception as exc:  # noqa: BLE001 记账失败不影响转写结果
+            print(f"[chat] 语音转写记账失败: {exc}")
 
     return _sse(gen())
 
 
 async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta: dict):
     """业务路由(与安全外壳分离):欢迎语 / 附件 / 章节导航 / 研究 / LLM / 直答"""
+    uid = str(rec.get("uid") or "")
 
     # 前端新会话会以空 prompt 触发欢迎问候
     if not prompt:
@@ -808,10 +873,10 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         if not rag.llm.is_configured():
             return _stream_text("章节导航需要已配置 LLM,当前未配置。")
         if cmd == "章节知识导航":
-            _cache_textbook(body.get("sessionId"), question)  # 教材入库,后续点击只发章节名
+            cache_textbook(uid, body.get("sessionId"), question)  # 教材入库,后续点击只发章节名
             gen = _gen_nav_list(question)
         else:
-            gen = _gen_nav_guide(question, tb=_get_textbook(body.get("sessionId")))
+            gen = _gen_nav_guide(question, tb=get_textbook(uid, body.get("sessionId")))
         meta["role"] = "long"
         return _sse(gen)
 
@@ -832,7 +897,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         ck = _research_cache_key(question, scope)
         cached = _RESEARCH_ANSWER.get(ck)
         if cached and time.monotonic() - cached[0] < _RESEARCH_TTL:
-            print(f"[chat] 研究综合缓存命中: {question[:24]}")
+            _RESEARCH_ANSWER.move_to_end(ck)  # 命中即刷新 LRU 顺序
+            print(f"[chat] 研究综合缓存命中(问题 {len(question)} 字)")
             meta["role"] = "deep"
             return _stream_text(cached[1])
         outcome = await rag.research.deep_search(question, top_k=3, scope=scope)
@@ -852,12 +918,12 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         # 公式手册第二步(上一条用户消息带澄清标记)强制开启:公式定理作答必须有独立复核
         role = _pick_role(question)
         meta["role"] = role
-        sid = body.get("sessionId")
+        sid = valid_session_id(body.get("sessionId"))
         history = _validated_history(body.get("history"))
         verify = bool(chunks) or rag.is_math_question(question) or _is_formula_followup(history)
-        summary = _SUMMARIES.get(sid, "") if isinstance(sid, int) else ""
+        summary = get_summary(uid, sid) if sid is not None else ""
         return _sse(_gen_llm(question, cmd, chunks, history=history, role=role, verify=verify,
-                             summary=summary, sid=sid if isinstance(sid, int) else None))
+                             summary=summary, sid=sid, uid=uid))
     # 直答模式:
     # ① 检索到相关知识 → 知识直答(专业问询专业回答);
     # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架;

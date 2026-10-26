@@ -20,3 +20,10 @@ dev.bat
 ## 演示
 
 - [DEMO.md](DEMO.md) — 大创展示脚本:环境准备、演示动线、翻车预案、答辩备答
+
+## 测试
+
+```bat
+.venv\Scripts\python.exe -m pytest backend\tests
+pushd frontend && npm test && popd
+```

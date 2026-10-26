@@ -48,21 +48,34 @@ src/
 `backend/README.md`。运行方式:
 
 ```bash
-# 终端 1:后端(8000)
-cd ../backend && D:/code/.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
+# 终端 1:后端(8000,默认只绑本机)
+cd ../backend && ../.venv/Scripts/python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 # 终端 2:前端(5173)
 npm run dev
 ```
 
 Windows 下也可直接双击仓库根目录的 `dev.bat` 一键拉起两个服务
-(后端无 --reload,改动后端代码后需重启后端窗口;前端为热更新)。
+(后端由 `dev_reload.py` 监听 `backend/*.py` 自动重启;前端为 Vite 热更新)。
+
+测试:
+
+```bash
+npm test        # 语音数学编译器 + SSE 收尾契约 + MathText 渲染/链接安全
+npm run build   # vue-tsc 类型检查 + 生产构建
+```
 
 - 开发期由 vite 代理把 `/api` 转发到 `http://127.0.0.1:8000`(见 `vite.config.ts`);
 - 登录与聊天全部走真实后端(LLM 平台密钥在 `backend/.env.local` 配置,见 `backend/.env.local.example`);
 - 登录令牌存于登录态(内存 + localStorage 刷新保持),令牌失效(401)时自动回登录页;
+- **退出登录会清除本机会话、归纳本、回收站与语音缓存**(统一入口
+  `stores/localData.ts`),避免共用设备换账号时看到上一位用户的数据;
+  登录时还会按后端返回的 `accountKey` 校验归属:换账号自动清理,同账号重登
+  (包括 token 过期 401 后)保留;设置 → 隐私与安全 也可手动清理;
 - `src/api/http.ts` 解析 OpenAI 兼容 SSE,**每帧 payload 为 JSON 字符串**(兼容纯文本),
   正文中的 `\n` 由后端转义,流式拼接无丢字;
-- 聊天请求携带最近几轮历史(多轮上下文),会话上下文栈由前端会话系统维护。
+- 聊天请求携带最近几轮历史(多轮上下文),会话上下文栈由前端会话系统维护;
+- 流式正文按稳定段落分块渲染(不切代码围栏/块级公式),已完成块不重复解析,
+  长回答的流式渲染更轻;会话持久化 120ms 合并写,离开页面/附件发送/关闭页签立即 flush。
 
 ## 功能说明
 

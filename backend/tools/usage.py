@@ -1,6 +1,6 @@
 """
 用量报表:打印测试期调用统计 —— 谁问了多少、回复多少字、各模型角色调用多少次。
-数据来源 backend/data/usage.json(每次聊天流结束后由后端落盘)。
+数据来源 backend/data/usage.jsonl(每次聊天流结束后由后端追加;旧 usage.json 自动兼容)。
 
 用法(backend 目录下):
     python tools/usage.py
@@ -29,7 +29,7 @@ def main() -> int:
             label = u.get("phone") or u.get("user") or "访客"
             print(f"{label:<20}{u['calls']:>8}{u['chars']:>10}")
     else:
-        print("暂无记录(还没有人提问,或 usage.json 被清空)")
+        print("暂无记录(还没有人提问,或 usage 数据文件被清空)")
     print()
     if s["roles"]:
         print("按模型角色:")

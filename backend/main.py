@@ -19,6 +19,9 @@ import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
+import asyncio
+import os
+
 import store
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -33,15 +36,29 @@ import doc
 import rag
 import usage
 
+# 先装载本地配置(.env.local,key 不入库),再构造 app/CORS 与数据、知识库。
+# 必须早于 app 构造:MG_CORS_ORIGINS 等配置来自 .env.local。
+config.load_env()
+
+
+def _cors_origins() -> list[str]:
+    """开发默认只放行本机前端;需要别的来源时用 MG_CORS_ORIGINS 显式列出。"""
+    raw = os.getenv(
+        "MG_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    )
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
 
 async def health(request) -> JSONResponse:
     return JSONResponse({"ok": True, "service": "mg-backend"})
 
 
 async def stats(request) -> JSONResponse:
-    """用量统计(需登录):总调用数 / 总字数 / 按用户 / 按模型角色"""
-    auth.require_auth(request)
-    return JSONResponse(usage.summary())
+    """用量统计(仅管理员):总调用数 / 总字数 / 按用户 / 按模型角色"""
+    auth.require_admin(request)
+    # 读取/汇总 JSON 放线程池,避免大文件时阻塞事件循环
+    return JSONResponse(await asyncio.to_thread(usage.summary))
 
 
 routes = [
@@ -60,15 +77,15 @@ app = Starlette(
     middleware=[
         Middleware(
             CORSMiddleware,
-            # 开发期放行所有来源(前端 5173 走 vite 代理同源,直连调试亦可用)
-            allow_origins=["*"],
+            # 开发默认只放行本机前端(vite 5173 走代理同源,直连调试亦可用);
+            # 需要其他来源时在 .env.local 配置 MG_CORS_ORIGINS,不要长期用 "*"。
+            allow_origins=_cors_origins(),
             allow_methods=["*"],
             allow_headers=["*"],
         ),
     ],
 )
 
-# 先装载本地配置(.env.local,key 不入库),再装载数据与知识库(演示单进程足够)
-config.load_env()
+# 再装载数据与知识库(演示单进程足够)
 store.init()
 rag.init()

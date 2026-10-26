@@ -57,6 +57,8 @@ interface PersistedMsg {
   chitchat?: boolean
   nav?: ChatMsg['nav']
   navGuideFor?: string
+  interrupted?: boolean
+  research?: boolean
 }
 
 interface Persisted {
@@ -94,8 +96,8 @@ export const sessionsState = reactive<{
   sessionId: number
 }>(load())
 
-/** 持久化全部会话;返回是否成功(图片 dataURL 等超出 localStorage 配额时为 false) */
-export function persistSessions(): boolean {
+/** 一次完整的序列化 + 写盘;成功/配额失败都更新 lastPersistOk */
+function writeSessionsNow(): boolean {
   try {
     const data: Persisted = {
       sessions: sessionsState.sessions.map((s) => ({
@@ -115,11 +117,50 @@ export function persistSessions(): boolean {
       sessionId: sessionsState.sessionId,
     }
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(data))
+    lastPersistOk = true
     return true
   } catch {
     /* 存储超限(通常是图片附件)时返回 false,由调用方决定是否提示用户 */
+    lastPersistOk = false
     return false
   }
+}
+
+/* 持久化 debounce:流式结束/切换会话等高频路径不立刻做整份序列化;
+   关键节点(附件配额提示、卸载、页面关闭)用 flushSessions() 立即落盘。 */
+const PERSIST_DELAY_MS = 120
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+let pendingPersist = false
+let lastPersistOk = true
+
+/** 合并写盘(默认 120ms)。返回值是「最近一次实际写盘」的结果,不是本次结果 */
+export function persistSessions(): boolean {
+  pendingPersist = true
+  if (persistTimer !== null) clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    if (!pendingPersist) return
+    pendingPersist = false
+    writeSessionsNow()
+  }, PERSIST_DELAY_MS)
+  return lastPersistOk
+}
+
+/** 立即写盘并取消待执行的 debounce;关键路径/卸载前调用 */
+export function flushSessions(): boolean {
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  if (!pendingPersist) return lastPersistOk
+  pendingPersist = false
+  return writeSessionsNow()
+}
+
+if (typeof window !== 'undefined') {
+  // 关闭/刷新/移动端切后台时尽量把最后一次变更落盘
+  window.addEventListener('beforeunload', () => { flushSessions() })
+  window.addEventListener('pagehide', () => { flushSessions() })
 }
 
 export function nextMsgId(): number {
@@ -153,6 +194,13 @@ export function restorePair(item: {
 
 /** 清空全部会话档案(内存 + localStorage;设置 → 隐私与安全使用) */
 export function clearAllSessions(): void {
+  // 取消尚未落盘的 debounce,否则清空后定时器会把旧档案重新写回去
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  pendingPersist = false
+  lastPersistOk = true
   sessionsState.sessions = []
   sessionsState.activeId = 0
   localStorage.removeItem(SESSIONS_KEY)

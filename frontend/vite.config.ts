@@ -8,6 +8,11 @@ export default defineConfig({
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
+    // D:\code 是指向 D:\Works\code 的junction(仓库实际路径)。默认 Vite 会把入口
+    // 解析成 realpath,再按 root 求相对路径,得到 "../../Works/code/frontend/index.html",
+    // vite:build-html 直接报错("fileName must not be absolute or relative path")。
+    // 保留符号链接路径后,从 D:\code 下执行 npm run build 与在真实路径下一致。
+    preserveSymlinks: true,
   },
   server: {
     // 仅本机访问(未设置 host → 默认 localhost,不对外网卡监听)

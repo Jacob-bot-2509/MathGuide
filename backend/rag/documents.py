@@ -78,19 +78,52 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
     return meta, m.group(2).strip()
 
 
+def _normalize_keywords(value: object) -> list[str]:
+    """frontmatter keywords → 小写词表。
+
+    必须是 JSON 数组;写成裸字符串(如 `keywords: 极限`)时按整词处理。
+    旧实现直接迭代字符串,会把「极限」拆成 ['极','限'] 两个单字触发词。
+    """
+    if isinstance(value, str):
+        value = [value]
+    elif not isinstance(value, list):
+        return []
+    return [str(k).strip().lower() for k in value if str(k).strip()]
+
+
 def _split_section(text: str, limit: int) -> list[str]:
-    """长节按段落拆分;含 $$ 的公式块视为整体不切断"""
+    """长节按段落拆分;$$...$$ 公式块内部的空行不作为切分点。
+
+    单段本身超过 limit 时不强行再切:把公式/表格从中间切断比超限更糟。
+    """
     if len(text) <= limit:
         return [text]
-    parts: list[str] = []
-    buf = ""
+
+    # 先按空行聚成「不会被公式块内部空行拆散」的段落
+    paragraphs: list[str] = []
+    buf: list[str] = []
+    in_math = False
     for para in text.split("\n\n"):
-        if buf and len(buf) + len(para) > limit:
-            parts.append(buf)
-            buf = ""
-        buf = f"{buf}\n\n{para}" if buf else para
+        buf.append(para)
+        if para.count("$$") % 2:
+            in_math = not in_math
+        if not in_math:
+            paragraphs.append("\n\n".join(buf))
+            buf = []
     if buf:
-        parts.append(buf)
+        paragraphs.append("\n\n".join(buf))
+
+    # 再按 limit 装箱,段落是原子单位
+    parts: list[str] = []
+    cur = ""
+    for para in paragraphs:
+        if cur and len(cur) + 2 + len(para) > limit:
+            parts.append(cur)
+            cur = para
+        else:
+            cur = f"{cur}\n\n{para}" if cur else para
+    if cur:
+        parts.append(cur)
     return parts
 
 
@@ -99,7 +132,7 @@ def _load_md(path: Path, chunks: list[Chunk]) -> None:
     meta, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
     title = str(meta.get("title", path.stem))
     title_en = str(meta.get("title_en", title))
-    keywords = [str(k).lower() for k in meta.get("keywords", [])]
+    keywords = _normalize_keywords(meta.get("keywords"))
     category = str(meta.get("category", "other"))
     sections = _SECTION_RE.split(body)
     # 首个元素为引言(无 ## 标题),后续按 [标题, 正文] 成对出现
@@ -128,10 +161,16 @@ def _load_txt(path: Path, chunks: list[Chunk]) -> None:
 
 
 def load_knowledge(base: Path) -> list[Chunk]:
-    """装载知识目录下全部 md/txt 文档并切片(新增文档无需改代码)"""
+    """装载知识目录下全部 md/txt 文档并切片(新增文档无需改代码)。
+
+    单个文件坏掉(编码不是 UTF-8、被占用、frontmatter 畸形)只跳过该文件并
+    告警:知识库属于外部数据,一个坏文件不应该让整个后端起不来。
+    """
     chunks: list[Chunk] = []
-    for path in sorted(base.glob("*.md")):
-        _load_md(path, chunks)
-    for path in sorted(base.glob("*.txt")):
-        _load_txt(path, chunks)
+    for pattern, loader in (("*.md", _load_md), ("*.txt", _load_txt)):
+        for path in sorted(base.glob(pattern)):
+            try:
+                loader(path, chunks)
+            except Exception as exc:  # noqa: BLE001 坏文件跳过,但必须留痕
+                print(f"[rag] 跳过无法解析的知识文件 {path.name}: {exc}")
     return chunks

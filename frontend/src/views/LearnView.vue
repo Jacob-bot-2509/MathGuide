@@ -33,6 +33,7 @@ import { settingsState, updateSettings } from '@/stores/settings'
 import { isAllSelected, scopeForRequest, selectedSources } from '@/stores/researchScope'
 import {
   MAX_SESSIONS,
+  flushSessions,
   nextMsgId,
   nextSessionId,
   persistSessions,
@@ -46,6 +47,8 @@ import { addNotebookEntry, notebookState } from '@/stores/notebook'
 import { compressImage } from '@/utils/avatar'
 import { beautifyMath, cachedConvert, normalizeSpeechCase, saveConvert, speechMathConvert } from '@/utils/speechMath'
 import { showToast } from '@/utils/toast'
+import { chapterNameFromCmd } from '@/utils/cmdLink'
+import { splitStableBlocks } from '@/utils/mathBlocks'
 
 const router = useRouter()
 
@@ -159,7 +162,7 @@ function stopAllStreams() {
       m.thinking = false
     }
   }
-  persistSessions()
+  flushSessions()  // 离开学习页前立即落盘,不等 debounce
 }
 
 /* ---------- 对话 ---------- */
@@ -224,6 +227,11 @@ async function doExport(msg: ChatMsg, lang: 'zh' | 'en') {
   } finally {
     exportingMsg.value = null
   }
+}
+
+/** 流式正文按稳定块渲染:已完成的块 props 不变,Vue 跳过重复解析/重渲染 */
+function blocksOf(text: string): string[] {
+  return splitStableBlocks(text)
 }
 
 /** 让某会话的一条助手消息开始流式接收回复(输出在所属会话内进行,切换界面不中断) */
@@ -537,7 +545,9 @@ function onListClick(e: MouseEvent) {
     return
   }
   if (url.startsWith('cmd://chapter/')) {
-    onNavChapter(decodeURIComponent(url.slice('cmd://chapter/'.length)))
+    // 模型输出的百分号编码可能是畸形的:安全解码,失败时保留原文
+    const name = chapterNameFromCmd(url)
+    if (name !== null) onNavChapter(name)
     return
   }
   if (url === 'cmd://nb/yes' || url === 'cmd://nb/no') {
@@ -850,8 +860,9 @@ function attachMessage(attachment: ChatAttachment, content: string) {
   session.messages.push({ id: nextMsgId(), role: 'user', content, attachment })
   pinnedToBottom = true
   scrollBottom()
-  // 图片以 dataURL 随会话持久化:存储超限时明确提示,避免静默丢失记录
-  if (!persistSessions()) showToast(t('learn.toastStorage'))
+  // 图片以 dataURL 随会话持久化:存储超限时明确提示,避免静默丢失记录。
+  // 附件可能很大,必须立即写并拿到真实配额结果,不能等 debounce。
+  if (!flushSessions()) showToast(t('learn.toastStorage'))
 
   const reply: ChatMsg = { id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true }
   session.messages.push(reply)
@@ -932,6 +943,9 @@ function startConvert(raw: string, live: boolean) {
   convLive = live
   convAcc = ''
   const seq = convSeq
+  // 本次转换开始前的输入框内容(live 模式下通常是本地速转结果):
+  // 流式覆盖后若模型半途失败,要能撤回到它,而不是把半截转写留在输入框里
+  const fallbackText = input.value
   // 先本地归一大小写(ASR 大小写是噪声,不刻意念"大"一律小写),
   // 再交 LLM 按数学惯例自动判别(矩阵 A/随机变量 X 等该大写则大写)
   convCancel = speechToMath(normalizeSpeechCase(raw), {
@@ -952,7 +966,13 @@ function startConvert(raw: string, live: boolean) {
       saveConvert(raw, beautifyMath(full), 'llm') // 精修结果(美化后)入缓存:同句再念零请求
     },
     onFail: () => {
-      if (seq === convSeq && !listening.value) showToast(t('learn.toastConvertFail'))
+      if (seq !== convSeq) return
+      // 撤回本次流式覆盖;用户中途手改过输入框则不动,避免吞掉编辑
+      if (convLive && input.value === beautifyMath(convAcc)) {
+        input.value = fallbackText
+        autoGrow()
+      }
+      if (!listening.value) showToast(t('learn.toastConvertFail'))
     },
   }).cancel
 }
@@ -1173,7 +1193,9 @@ onBeforeUnmount(() => {
             </span>
             <template v-if="m.role === 'assistant'">
               <span v-if="m.thinking" class="thinking">{{ t('learn.thinking') }}<span class="dots">···</span></span>
-              <MathText v-if="m.content" :text="m.content" />
+              <div v-if="m.content" class="mg-blocks">
+                <MathText v-for="(block, bi) in blocksOf(m.content)" :key="bi" :text="block" />
+              </div>
               <span v-if="m.streaming && !m.thinking" class="cursor">▍</span>
               <!-- 半截回答的标记:与完整回答同形,不点明用户看不出缺了一段 -->
               <span v-if="m.interrupted" class="cut-note">{{ t('learn.interrupted') }}</span>

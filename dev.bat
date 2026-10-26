@@ -9,5 +9,7 @@ rem them "answer interrupted" (SSE [DONE] contract, see backend/README.md).
 rem To stop the backend cleanly press Ctrl+C in its window; closing with X may leave
 rem an orphan uvicorn (cleaned up automatically on next start).
 
-start "MG Backend  :8000" cmd /k "cd /d D:\code\backend && title MG Backend :8000 && D:\code\.venv\Scripts\python.exe dev_reload.py"
-start "MG Frontend :5173" cmd /k "cd /d D:\code\frontend && npm run dev"
+rem %~sdp0 = 本脚本所在目录的 8.3 短路径(无空格),避免在 cmd /k 的引号里再套引号;
+rem 这样仓库放在含空格的路径下也能一键启动。
+start "MG Backend  :8000" cmd /k "cd /d %~sdp0backend && title MG Backend :8000 && %~sdp0.venv\Scripts\python.exe dev_reload.py"
+start "MG Frontend :5173" cmd /k "cd /d %~sdp0frontend && npm run dev"

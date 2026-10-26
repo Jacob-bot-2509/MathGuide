@@ -26,6 +26,7 @@ from pathlib import Path
 from rag.index import STOPWORDS as _STOPWORDS  # noqa: E402 停用词表唯一真源,不另抄一份
 
 USER_AGENT = "MathGuide-KB-Fetcher/1.0 (competition demo)"
+MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 单篇/单页响应上限,防止异常响应占满内存
 
 # 课程主题词:增量同步时只收录标题/摘要命中这些词的论文(自动入库的质检门)
 COURSE_TERMS = (
@@ -65,7 +66,10 @@ WIKI_TOPICS = [
 def http_get(url: str, timeout: int = 30) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+        raw = resp.read(MAX_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise ValueError(f"响应超过 {MAX_RESPONSE_BYTES} 字节上限")
+    return raw.decode("utf-8", errors="replace")
 
 
 def slugify(text: str, maxlen: int = 40) -> str:
@@ -119,7 +123,7 @@ def fetch_arxiv(out_dir: Path, limit: int, since: str | None = None,
         if since:
             stamp = since.replace("-", "") + "0000"
             q += f"+AND+submittedDate:[{stamp}+TO+now]"
-        url = ("http://export.arxiv.org/api/query?"
+        url = ("https://export.arxiv.org/api/query?"
                f"search_query={urllib.parse.quote(q)}&start=0&max_results={min(10, limit)}&sortBy=submittedDate&sortOrder=descending")
         print(f"[arxiv] {cat}" + (f" since {since}" if since else "") + " ...")
         try:

@@ -59,6 +59,8 @@ export interface AuthUserDto {
   avatar: string
   authMethod: AuthMethod
   phone?: string
+  /** 内部 uid 的不可逆哈希:仅用于判断本机学习数据属于哪个账号 */
+  accountKey?: string
 }
 
 export interface LoginResponse {

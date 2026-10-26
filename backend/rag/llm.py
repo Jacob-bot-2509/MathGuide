@@ -104,6 +104,11 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
             got_content = False
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
+                    # 注释/保活行也会重置 httpx 的 read 超时,不能只盯 data 帧:
+                    # 首字超过硬限时就切 backup,哪怕对端一直在发空保活
+                    if not got_content and time.monotonic() - started > first_token_secs:
+                        raise TimeoutError(
+                            f"首字超时 {first_token_secs}s(慢速期保活帧撑过 read 超时),切换 backup")
                     continue
                 data = line[5:].strip()
                 if not data or data == "[DONE]":
@@ -111,6 +116,9 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
                 try:
                     delta = json.loads(data)["choices"][0]["delta"].get("content")
                 except (json.JSONDecodeError, KeyError, IndexError):
+                    if not got_content and time.monotonic() - started > first_token_secs:
+                        raise TimeoutError(
+                            f"首字超时 {first_token_secs}s(异常帧持续到达),切换 backup")
                     continue
                 if delta:
                     got_content = True
@@ -126,19 +134,25 @@ async def stream_chat(system: str, user: str, role: str = "main",
                       max_tokens: int | None = None) -> AsyncIterator[str]:
     """流式对话;role 失败且 fallback 时自动切 backup(异平台容灾)。
     history:最近几轮对话 [{role, content}](调用方已校验/截断);
-    max_tokens:约束输出长度(短任务转写/复核用,更快收尾)"""
+    max_tokens:约束输出长度(短任务转写/复核用,更快收尾)。
+
+    重要:只有「一字未出」时才允许切 backup。已经向调用方 yield 过内容后再
+    从头重放,会让用户看到「半截 A + 完整 B」的拼接答案;此时直接把异常抛给
+    调用方,由它追加中断提示或整体降级。"""
     spec = resolve(role)
     if spec is None:
         raise RuntimeError(f"LLM 角色 {role} 未配置")
     # 首字上限:fast 角色给 20s(正常 <2s,慢速期实测 70s+);
     # deep/long 有思考阶段(期间只出 reasoning 帧、无 content delta),给 120s 防误伤
     ttft = 120.0 if role in ("deep", "long") else 20.0
+    emitted = False
     try:
         async for delta in _stream_once(*spec, system, user, history, max_tokens, ttft):
+            emitted = True
             yield delta
         return
     except Exception:
-        if not fallback or role == "backup":
+        if not fallback or role == "backup" or emitted:
             raise
         backup = resolve("backup")
         if backup is None:

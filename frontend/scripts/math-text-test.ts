@@ -30,6 +30,9 @@ async function main() {
     server: { middlewareMode: true },
     appType: 'custom',
     logLevel: 'error',
+    // 测试只按需 ssrLoadModule 组件,不需要预扫描 index.html 的依赖;
+    // 关闭自动发现可以避免 server.close() 与依赖扫描竞争产生红色报错
+    optimizeDeps: { noDiscovery: true },
   })
   try {
     const mod = await server.ssrLoadModule('/src/components/chat/MathText.vue')
@@ -80,6 +83,51 @@ async function main() {
     // ⑨ 多公式混排(LLM 典型输出形态)
     html = await renderComp('设 \\(f\\) 在点 \\(x_0\\) 附近光滑,则 $$f(x)=\\sum_{k=0}^{n}\\frac{f^{(k)}(x_0)}{k!}(x-x_0)^k$$ 成立')
     check('混排:三种写法都渲染', (html.match(/class="katex/g) || []).length >= 3, `katex 数量: ${(html.match(/class="katex/g) || []).length}`)
+
+    // ⑩ 非法链接 scheme:只允许 http(s)/cmd://,javascript: 必须退化为纯文本
+    html = await renderComp('[点我](javascript:alert(1))')
+    check('javascript: 链接不渲染为 <a>', !html.includes('<a ') && html.includes('javascript:alert(1)'), `输出: ${html.slice(0, 160)}`)
+
+    // ⑪ 用户/模型输出中的 HTML 标签按文本转义(不能变成真实标签)
+    html = await renderComp('<img src=x onerror=alert(1)>')
+    check('HTML 标签被转义', !html.includes('<img') && html.includes('&lt;img'), `输出: ${html.slice(0, 160)}`)
+
+    // ⑫ KaTeX 默认 trust=false,\\href{javascript:...} 不得生成可点击链接
+    html = await renderComp('$\\href{javascript:alert(1)}{x}$')
+    check('KaTeX href 不生成 javascript 链接', !html.includes('href="javascript:'), `输出: ${html.slice(0, 160)}`)
+
+    // ⑬ cmd://chapter 的畸形百分号编码安全回退(不能抛 URIError)
+    const cmdMod = await server.ssrLoadModule('/src/utils/cmdLink.ts')
+    const { chapterNameFromCmd } = cmdMod as { chapterNameFromCmd: (url: string) => string | null }
+    check('畸形 cmd 链接回退原文', chapterNameFromCmd('cmd://chapter/%E0%A4%A') === '%E0%A4%A', '')
+    check('正常 cmd 链接正确解码', chapterNameFromCmd('cmd://chapter/%E7%AC%AC1%E7%AB%A0') === '第1章', '')
+    check('非章节 cmd 链接返回 null', chapterNameFromCmd('cmd://back') === null, '')
+
+    // ⑭ 稳定块切分:不切代码围栏/块级公式,拼回原文不丢字
+    const blocksMod = await server.ssrLoadModule('/src/utils/mathBlocks.ts')
+    const { splitStableBlocks } = blocksMod as { splitStableBlocks: (text: string) => string[] }
+    const stable = 'a\n\n```\nx\n\ny\n```\n\n$$\nu\n\nv\n$$\n\nb'
+    const parts = splitStableBlocks(stable)
+    check('分块:原文可无损拼回', parts.join('') === stable, `块数 ${parts.length}`)
+    check('分块:代码围栏不被切断', parts.some((p) => p.includes('```\nx\n\ny\n```')), '')
+    check('分块:块级公式不被切断', parts.some((p) => p.includes('$$\nu\n\nv\n$$')), '')
+    check('分块:空文本返回空数组', splitStableBlocks('').length === 0, '')
+
+    const bracket = 'a\n\n\\[\nx\n\ny\n\\]\n\nb'
+    check('分块:\\[...\\] 不被切断',
+      splitStableBlocks(bracket).some((p) => p.includes('\\[\nx\n\ny\n\\]')), '')
+
+    const inline = 'a\n\n\\(\nx\n\ny\n\\)\n\nb'
+    check('分块:\\\\(...\\\\) 不被切断',
+      splitStableBlocks(inline).some((p) => p.includes('\\(\nx\n\ny\n\\)')), '')
+
+    const mixed = '前面 $x$\n\n$$\na\n\nb\n$$\n\n尾 $y$'
+    const whole = await renderComp(mixed)
+    const pieceHtml = await Promise.all(splitStableBlocks(mixed).map((p) => renderComp(p)))
+    const katexCount = (s: string) => (s.match(/class="katex/g) || []).length
+    check('分块:公式数量与整段一致',
+      katexCount(pieceHtml.join('')) === katexCount(whole),
+      `${katexCount(pieceHtml.join(''))} vs ${katexCount(whole)}`)
 
     console.log(`\nMathText 公式渲染自测:${passed}/${passed + failed.length} 通过`)
     for (const f of failed) console.log(f)

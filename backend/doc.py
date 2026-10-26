@@ -14,6 +14,7 @@ import asyncio
 import html as html_mod
 import json
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -24,6 +25,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from chat import _rate_check, _record, require_auth
+from http_utils import read_json_object
 import rag.llm as llm
 
 # Edge 浏览器(Windows 自带,仅调用不改系统文件)
@@ -32,8 +34,20 @@ _EDGE_CANDIDATES = (
     Path("C:/Program Files/Microsoft/Edge/Application/msedge.exe"),
 )
 
-# KaTeX 静态资源(与前端 node_modules 同一份,渲染行为与聊天页一致)
-_KATEX_DIR = Path(__file__).resolve().parent.parent / "frontend" / "node_modules" / "katex" / "dist"
+# KaTeX 静态资源:优先后端自带副本(便于只部署 backend),否则复用前端 node_modules。
+# 两处目录结构都是 katex.min.css / katex.min.js。
+_KATEX_CANDIDATES = (
+    Path(__file__).resolve().parent / "static" / "katex",
+    Path(__file__).resolve().parent.parent / "frontend" / "node_modules" / "katex" / "dist",
+)
+
+
+def _katex_dir() -> Path:
+    for candidate in _KATEX_CANDIDATES:
+        if (candidate / "katex.min.js").is_file():
+            return candidate
+    return _KATEX_CANDIDATES[-1]
+
 
 CONTENT_MAX = 32000  # 与聊天输入上限一致
 
@@ -96,29 +110,57 @@ def _fallback_doc(content: str, lang: str) -> dict:
     }
 
 
+def _safe_url(value: object) -> str:
+    """只允许 http(s) 外链:LLM 输出不可信,file:/javascript: 等一律丢弃。"""
+    url = str(value or "").strip()[:500]
+    return url if re.match(r"^https?://", url, re.IGNORECASE) else ""
+
+
+def _as_list(value: object) -> list:
+    return value if isinstance(value, list) else []
+
+
 def _normalize_doc(obj: dict, content: str, lang: str) -> dict:
-    """把 LLM 输出规整为渲染所需的最小合法结构(缺什么补什么)"""
+    """把 LLM 输出规整为渲染所需的最小合法结构(缺什么补什么)。
+    这里同时是安全边界:id 必须是整数(渲染时还会转义),URL 只留 http(s)。"""
     title = str(obj.get("title") or "").strip()[:120] or (
         "Research Summary" if lang == "en" else "研究综述")
     abstract = str(obj.get("abstract") or "").strip()
-    keywords = [str(k).strip()[:40] for k in (obj.get("keywords") or [])
-                if str(k).strip()][:8]
+
+    raw_keywords = obj.get("keywords")
+    if isinstance(raw_keywords, str):
+        raw_keywords = [raw_keywords]
+    elif not isinstance(raw_keywords, list):
+        raw_keywords = []
+    keywords = [str(k).strip()[:40] for k in raw_keywords if str(k).strip()][:8]
+
     sections = []
-    for s in obj.get("sections") or []:
+    for s in _as_list(obj.get("sections")):
+        if not isinstance(s, dict):
+            continue
         heading = str(s.get("heading") or "").strip()[:100]
-        paras = [str(p).strip()[:8000] for p in (s.get("paragraphs") or [])
+        paras = [str(p).strip()[:8000] for p in _as_list(s.get("paragraphs"))
                  if str(p).strip()]
         if paras:
             sections.append({"heading": heading or title, "paragraphs": paras})
     if not sections:
         sections = [{"heading": title, "paragraphs": [content]}]
+
     refs = []
-    for r in obj.get("references") or []:
+    for r in _as_list(obj.get("references")):
+        if not isinstance(r, dict):
+            continue
+        try:
+            ref_id = int(r.get("id"))
+        except (TypeError, ValueError):
+            ref_id = 0
+        if ref_id <= 0:
+            ref_id = len(refs) + 1
         ref = {
-            "id": r.get("id") or (len(refs) + 1),
+            "id": ref_id,
             "title": str(r.get("title") or "").strip()[:300],
             "source": str(r.get("source") or "").strip()[:40],
-            "url": str(r.get("url") or "").strip()[:500],
+            "url": _safe_url(r.get("url")),
         }
         if ref["title"]:
             refs.append(ref)
@@ -149,6 +191,7 @@ def _render_html(doc: dict, lang: str, katex_dir: Path) -> str:
     zh = lang != "en"
     css = (katex_dir / "katex.min.css").as_uri()
     js = (katex_dir / "katex.min.js").as_uri()
+    nonce = secrets.token_hex(16)  # 只放行本页内联脚本;注入的 <script> 没有 nonce
 
     def esc(s: str) -> str:
         return html_mod.escape(s)
@@ -161,10 +204,15 @@ def _render_html(doc: dict, lang: str, katex_dir: Path) -> str:
 
     refs = ""
     if doc["references"]:
-        items = "\n".join(
-            f'<li>[{r["id"]}] {esc(r["title"])} — {esc(r["source"])}'
-            + (f' <a href="{esc(r["url"])}">{esc(r["url"])}</a>' if r["url"] else "")
-            for r in doc["references"])
+        def ref_line(r: dict) -> str:
+            url = _safe_url(r.get("url"))  # 纵深防御:绕过 _normalize_doc 也过滤 scheme
+            item = (f'<li>[{esc(str(r.get("id", "")))}] '
+                    f'{esc(str(r.get("title", "")))} — {esc(str(r.get("source", "")))}')
+            if url:
+                item += f' <a href="{esc(url)}" rel="noreferrer">{esc(url)}</a>'
+            return item + "</li>"
+
+        items = "\n".join(ref_line(r) for r in doc["references"])
         refs = f'<section class="refs"><h2>{"References" if not zh else "参考文献"}</h2><ol>{items}</ol></section>'
 
     meta_block = ""
@@ -186,6 +234,7 @@ def _render_html(doc: dict, lang: str, katex_dir: Path) -> str:
 <html lang="{lang_attr}">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline' file:; script-src 'nonce-{nonce}' file:; font-src file: data:; base-uri 'none'; form-action 'none'">
 <title>{esc(doc["title"])}</title>
 <link rel="stylesheet" href="{css}">
 <style>
@@ -222,8 +271,8 @@ def _render_html(doc: dict, lang: str, katex_dir: Path) -> str:
   </div>
   {''.join(secs)}
   {refs}
-  <script src="{js}"></script>
-  <script>
+  <script nonce="{nonce}" src="{js}"></script>
+  <script nonce="{nonce}">
     document.querySelectorAll('.mg-math').forEach(function (el) {{
       try {{ katex.render(el.textContent, el, {{ throwOnError: true }}); }}
       catch (e) {{ /* 渲染失败保留源码,与聊天页同口径 */ }}
@@ -266,8 +315,9 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> bytes | None:
 async def export_pdf(request: Request) -> Response | JSONResponse:
     """POST /api/doc/export {content, lang}:研究综述 → 结构化重组 → PDF 下载"""
     rec = require_auth(request)
-    body = await request.json()
-    content = str(body.get("content", "")).strip()[:CONTENT_MAX]
+    body = await read_json_object(request)
+    raw_content = body.get("content", "")
+    content = raw_content.strip()[:CONTENT_MAX] if isinstance(raw_content, str) else ""
     lang = str(body.get("lang", "zh")).strip()[:8]
     if lang not in ("zh", "en"):
         lang = "zh"
@@ -295,17 +345,26 @@ async def export_pdf(request: Request) -> Response | JSONResponse:
         print(f"[doc] LLM 重组失败,降级排版: {exc}")
         doc = _fallback_doc(content, lang)
 
+    katex_dir = _katex_dir()
+    if not (katex_dir / "katex.min.js").is_file():
+        print("[doc] 未找到 KaTeX 资源,PDF 中的公式将以源码展示")
+
     # HTML → PDF(Edge 转码也放线程池,不冻事件循环)
-    with tempfile.TemporaryDirectory(prefix="mg-doc-", dir=Path(__file__).parent) as tmp:
+    with tempfile.TemporaryDirectory(prefix="mg-doc-") as tmp:
         html_path = Path(tmp) / "doc.html"
         pdf_path = Path(tmp) / "out.pdf"
-        html_path.write_text(_render_html(doc, lang, _KATEX_DIR), encoding="utf-8")
+        html_path.write_text(_render_html(doc, lang, katex_dir), encoding="utf-8")
         pdf = await asyncio.to_thread(_html_to_pdf, html_path, pdf_path)
         if pdf is None:
             return JSONResponse({"detail": "pdf render failed"}, status_code=500)
 
-    _record(rec, cmd="导出文档", prompt_len=len(content),
-            reply_len=len(pdf), role="deep", research=True)
+    # 用量:PDF 字节数不是「回复字数」,不混进 totalChars;调用次数仍记账
+    try:
+        await asyncio.to_thread(
+            _record, rec, cmd="导出文档", prompt_len=len(content),
+            reply_len=0, role="deep", research=True)
+    except Exception as exc:  # noqa: BLE001 记账失败不影响下载
+        print(f"[doc] 导出记账失败: {exc}")
     filename = f"mg-survey-{lang}-{time.strftime('%Y%m%d')}.pdf"
     return Response(
         pdf,

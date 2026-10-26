@@ -143,9 +143,9 @@ export function classifyQuestion(text: string): CategoryInfo {
 /** 归纳面板的展示顺序(按教学板块顺序,其他垫底) */
 export const DISPLAY_KEYS = ['analysis', 'algebra', 'numberTheory', 'geometry', 'ode', 'probability', 'complex', 'topology', 'other'] as const
 
-/* ---------- 闲聊识别(与后端 chat.py _QUESTION_RE 保持同一口径) ---------- */
+/* ---------- 闲聊识别(题目措辞与后端 rag.MATH_EXTRA_WORDS 保持同一口径) ---------- */
 
-// 题目措辞(数学问题的形态标记,与后端 chat.py _MATH_EXTRA_WORDS 同一口径)
+// 题目措辞(数学问题的形态标记,与后端 rag.MATH_EXTRA_WORDS 同一口径)
 const MATH_STYLE_RE =
   /(?<![请要])求|证明|计算|求解|求导|求证|这道|这题|例题|题目|公式|定理|数学|怎么做|怎么算|如何求|如何证|solve|prove|compute|evaluate|show that|theorem|equation|problem|math/i
 

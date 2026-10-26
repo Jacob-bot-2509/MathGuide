@@ -4,10 +4,7 @@
  * 以及本地数据管理。
  */
 import { settingsState, updateSettings } from '@/stores/settings'
-import { clearAllSessions } from '@/stores/sessions'
-import { clearNotebook } from '@/stores/notebook'
-import { clearTrash } from '@/stores/trash'
-import { clearConvertCache } from '@/utils/speechMath'
+import { clearLearningData } from '@/stores/localData'
 import SettingsShell from '@/components/common/SettingsShell.vue'
 import MgSwitch from '@/components/common/MgSwitch.vue'
 import { t } from '@/utils/i18n'
@@ -22,14 +19,9 @@ function toggle(key: 'albumAccess' | 'voiceAccess' | 'personalized', on: boolean
 
 function clearLocalData() {
   if (!window.confirm(t('privacy.clearConfirm'))) return
-  // 走 store 清空:localStorage 与内存缓存一并清除,
+  // 走统一入口:localStorage 与内存缓存一并清除,
   // 否则回到学习页时内存档案会被 persistSessions 原样写回
-  clearAllSessions()
-  clearTrash()
-  // 归纳本与语音转写缓存同属本地学习数据:确认框承诺的是"清除归纳数据",
-  // 漏掉这两项等于用户点了删除、最私密的内容却还留在浏览器里
-  clearNotebook()
-  clearConvertCache()
+  clearLearningData()
   showToast(t('privacy.toastCleared'))
 }
 </script>
