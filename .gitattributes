@@ -1,3 +1,4 @@
 # Release artifacts are byte-verified; never apply EOL conversion.
 releases/** -text
 releases/** export-ignore
+NEWRELEASE.md export-ignore
