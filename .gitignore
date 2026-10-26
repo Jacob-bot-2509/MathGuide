@@ -27,3 +27,6 @@ backend/tools/.last_sync
 .math-text-test.cjs
 .sse-stream-test.cjs
 .trash-store-test.cjs
+
+# 编辑器/编码代理本地配置(Serena,勿入库)
+.serena/
