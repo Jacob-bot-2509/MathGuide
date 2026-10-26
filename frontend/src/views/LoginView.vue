@@ -1,16 +1,15 @@
 <script setup lang="ts">
 /**
- * 登录界面:登录方式即实名认证方式。
- * - 手机号 + 密码 / 手机号 + 验证码(演示验证码 123456)
- * - 微信 / QQ:与用户设备上的账号做交接(演示环境模拟授权流程,
- *   真实接入需微信开放平台 / QQ 互联 SDK)
+ * 登录界面:手机号 + 密码 / 验证码,以及微信 / QQ 模拟授权。
+ * 演示环境的手机号仅用于区分账号,不构成法定实名认证。
  */
-import { onBeforeUnmount, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Starfield from '@/components/common/Starfield.vue'
-import { DEMO_CODE, loginWithCode, loginWithPassword, loginWithThirdParty, registerWithPassword } from '@/services/authService'
+import { DEMO_CODE, getAuthMode, loginWithCode, loginWithPassword, loginWithThirdParty, registerWithPassword } from '@/services/authService'
 import { userState } from '@/stores/user'
 import { t } from '@/utils/i18n'
+import { statusOf } from '@/api/http'
 import { showToast } from '@/utils/toast'
 
 const router = useRouter()
@@ -20,10 +19,21 @@ const phone = ref('')
 const password = ref('')
 const confirm = ref('')
 const code = ref('')
+const invite = ref('')
 const countdown = ref(0)
 const authing = ref<'' | 'wechat' | 'qq'>('')
+const demoMode = ref(true)
+const inviteRequired = ref(false)
 
 let cdTimer: ReturnType<typeof setInterval> | null = null
+
+onMounted(async () => {
+  const authMode = await getAuthMode()
+  demoMode.value = authMode.demo
+  inviteRequired.value = authMode.invite
+  if (!authMode.demo && !authMode.invite) mode.value = 'pass'
+  else if (!authMode.demo && mode.value === 'code') mode.value = 'pass'
+})
 
 function validPhone(): boolean {
   return /^1[3-9]\d{9}$/.test(phone.value)
@@ -76,8 +86,9 @@ async function doPhoneLogin() {
     }
     await loginWithCode(phone.value, code.value)
     entered()
-  } catch {
-    showToast(t('login.toastNet'))
+  } catch (err) {
+    if (statusOf(err) === 400) showToast(t('login.toastDemoOff'))
+    else showToast(t('login.toastNet'))
   }
 }
 
@@ -85,10 +96,6 @@ async function doPhoneLogin() {
 async function doRegister() {
   if (!validPhone()) {
     showToast(t('login.toastPhone'))
-    return
-  }
-  if (code.value !== DEMO_CODE) {
-    showToast(t('login.toastCodeErr'))
     return
   }
   if (password.value.length < 6) {
@@ -100,10 +107,19 @@ async function doRegister() {
     return
   }
   try {
-    if (!(await registerWithPassword(phone.value, password.value))) {
+    const result = await registerWithPassword(phone.value, password.value, invite.value)
+    if (result === 'exists') {
       showToast(t('login.toastExists'))
       mode.value = 'pass'
       confirm.value = ''
+      return
+    }
+    if (result === 'invite') {
+      showToast(t('login.toastInvite'))
+      return
+    }
+    if (result === 'closed') {
+      showToast(t('login.toastRegisterClosed'))
       return
     }
     showToast(t('login.toastCreated'))
@@ -121,8 +137,9 @@ function thirdAuth(kind: 'wechat' | 'qq') {
     try {
       await loginWithThirdParty(kind)
       entered()
-    } catch {
-      showToast(t('login.toastNet'))
+    } catch (err) {
+      if (statusOf(err) === 400) showToast(t('login.toastDemoOff'))
+      else showToast(t('login.toastNet'))
     } finally {
       authing.value = ''
     }
@@ -154,8 +171,13 @@ onBeforeUnmount(() => {
       <!-- 手机号登录 -->
       <div class="tabs">
         <button class="tab" :class="{ on: mode === 'pass' }" @click="mode = 'pass'">{{ t('login.tabPass') }}</button>
-        <button class="tab" :class="{ on: mode === 'code' }" @click="mode = 'code'">{{ t('login.tabCode') }}</button>
-        <button class="tab" :class="{ on: mode === 'register' }" @click="mode = 'register'">{{ t('login.tabRegister') }}</button>
+        <button v-if="demoMode" class="tab" :class="{ on: mode === 'code' }" @click="mode = 'code'">{{ t('login.tabCode') }}</button>
+        <button
+          v-if="demoMode || inviteRequired"
+          class="tab"
+          :class="{ on: mode === 'register' }"
+          @click="mode = 'register'"
+        >{{ t('login.tabRegister') }}</button>
       </div>
 
       <div class="field">
@@ -179,25 +201,34 @@ onBeforeUnmount(() => {
       </template>
 
       <template v-else>
-        <div class="field field-code">
-          <input v-model="code" class="input" type="text" maxlength="6" :placeholder="t('login.code')" />
-          <button class="code-btn" :disabled="countdown > 0" @click="sendCode">
-            {{ countdown > 0 ? `${countdown}${t('login.resend')}` : t('login.getCode') }}
-          </button>
-        </div>
         <div class="field">
           <input v-model="password" class="input" type="password" :placeholder="t('login.setPassword')" />
         </div>
         <div class="field">
           <input v-model="confirm" class="input" type="password" :placeholder="t('login.confirm')" />
         </div>
+        <div class="field">
+          <input
+            v-model="invite"
+            class="input"
+            type="text"
+            maxlength="64"
+            autocomplete="off"
+            :placeholder="t('login.invitePh')"
+          />
+        </div>
       </template>
+
+      <p v-if="!demoMode" class="eval-note">
+        {{ inviteRequired ? t('login.evalInvite') : t('login.evalClosed') }}
+      </p>
 
       <button class="login-btn" @click="mode === 'register' ? doRegister() : doPhoneLogin()">
         {{ mode === 'pass' ? t('login.submitLogin') : mode === 'code' ? t('login.submitAuto') : t('login.submitRegister') }}
       </button>
 
-      <!-- 第三方登录 -->
+      <!-- 第三方登录(仅演示环境) -->
+      <template v-if="demoMode">
       <div class="divider"><span>{{ t('login.third') }}</span></div>
       <div class="third">
         <button class="third-btn wechat" @click="thirdAuth('wechat')">
@@ -207,8 +238,15 @@ onBeforeUnmount(() => {
           <span class="icon">Q</span>{{ t('login.qq') }}
         </button>
       </div>
+      </template>
 
-      <p class="agreement">{{ t('login.agreement') }}</p>
+      <p class="agreement">
+        {{ t('login.agreementPrefix') }}<RouterLink to="/settings/terms">{{ t('login.terms') }}</RouterLink>{{
+          t('login.agreementAnd')
+        }}<RouterLink :to="{ path: '/settings/terms', query: { tab: 'privacy' } }">{{
+          t('login.privacy')
+        }}</RouterLink>{{ t('login.agreementSuffix') }}
+      </p>
     </main>
 
     <!-- 第三方授权交接模拟层 -->
@@ -375,6 +413,14 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
+.eval-note {
+  margin: 10px 0 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.6;
+  text-align: center;
+}
+
 .login-btn {
   width: 100%;
   background: rgba(77, 214, 255, 0.12);
@@ -468,6 +514,16 @@ onBeforeUnmount(() => {
   color: var(--text-dim);
   font-size: 11px;
   margin: 18px 0 0;
+}
+
+.agreement a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agreement a:hover {
+  color: var(--cyan);
 }
 
 /* ---------- 授权交接模拟层 ---------- */

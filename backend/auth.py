@@ -28,8 +28,10 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import config
 import session_cache
 import store
+import usage
 from http_utils import read_json_object
 from rate_limit import SlidingWindowLimiter
 
@@ -47,9 +49,31 @@ _AUTH_RATE_WINDOW = 60.0
 _auth_limiter = SlidingWindowLimiter(_AUTH_RATE_MAX, _AUTH_RATE_WINDOW)
 
 
+def _env_number(name: str, default: float, minimum: float) -> float:
+    """读取数值环境变量;非法/过小回退默认,不让配置错误把限流关掉。"""
+    raw = os.getenv(name, "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
+def configure_rate_limit() -> None:
+    """按环境变量重建认证限流器(测评多人共用一个出口 IP 时调大)。
+
+    MG_AUTH_RATE_MAX     默认 10 次
+    MG_AUTH_RATE_WINDOW  默认 60 秒
+    """
+    global _AUTH_RATE_MAX, _AUTH_RATE_WINDOW, _auth_limiter
+    _AUTH_RATE_MAX = int(_env_number("MG_AUTH_RATE_MAX", 10, 1))
+    _AUTH_RATE_WINDOW = _env_number("MG_AUTH_RATE_WINDOW", 60.0, 1.0)
+    _auth_limiter = SlidingWindowLimiter(_AUTH_RATE_MAX, _AUTH_RATE_WINDOW)
+
+
 def _demo_mode() -> bool:
     """演示通道开关:默认开启(本机演示);显式设 0/false/off/no 关闭。"""
-    return os.getenv("MG_DEMO_MODE", "1").strip().lower() not in ("0", "false", "off", "no")
+    return config.demo_mode()
 
 
 def _guest_max() -> int:
@@ -105,6 +129,16 @@ def user_dto(rec: dict) -> dict:
     return dto
 
 
+def _issue_for(uid: str) -> str:
+    """签发 token 并刷新最近活动时间(留存清理依据)。"""
+    try:
+        store.touch_user(uid)
+    except OSError:
+        # 用户表只读/占用时不能反过来阻止登录;留存时间下次再更新
+        pass
+    return store.issue_token(uid)
+
+
 def _new_user(uid: str, phone: str | None, method: str, password: tuple[str, str] | None,
               nickname: str | None, avatar: str | None) -> dict:
     return {
@@ -115,6 +149,7 @@ def _new_user(uid: str, phone: str | None, method: str, password: tuple[str, str
         "nickname": nickname or f"MG用户_{uid[-4:]}",
         "avatar": avatar or DEFAULT_AVATAR,
         "createdAt": datetime.now().isoformat(timespec="seconds"),
+        "lastActiveAt": datetime.now().isoformat(timespec="seconds"),
     }
 
 
@@ -154,11 +189,16 @@ def _valid_phone(phone: str) -> bool:
 
 async def register(request: Request) -> JSONResponse:
     _auth_rate_check(request)
-    if not _demo_mode():
-        # 没有真实短信校验前,开放注册等于允许抢占任意手机号;
-        # 非演示模式应由真实验证流程/管理端创建账号
-        raise HTTPException(400, "registration disabled")
     body = await read_json_object(request)
+    if not _demo_mode():
+        # 非演示模式:开放注册会允许抢占任意手机号;只放行持测评邀请码的注册。
+        codes = config.invite_codes()
+        if not codes:
+            raise HTTPException(400, "registration disabled")
+        invite = body.get("invite")
+        supplied = invite.strip() if isinstance(invite, str) else ""
+        if not supplied or not any(secrets.compare_digest(supplied, code) for code in codes):
+            return JSONResponse({"error": "invite"}, status_code=403)
     phone = body.get("phone", "")
     password = body.get("password", "")
     phone = phone.strip() if isinstance(phone, str) else ""
@@ -177,8 +217,9 @@ async def register(request: Request) -> JSONResponse:
     uid = f"u-{phone}"
     rec = _new_user(uid, phone, "phone-pass", (salt, digest), None, None)
     store.create_user(rec)
-    return JSONResponse({"token": store.issue_token(uid),
-                         "user": user_dto(rec)})
+    return JSONResponse({"token": _issue_for(uid),
+                         "user": user_dto(rec)},
+                        headers={"Cache-Control": "no-store"})
 
 
 async def login(request: Request) -> JSONResponse:
@@ -227,8 +268,9 @@ async def login(request: Request) -> JSONResponse:
                 store.create_user(rec)
             else:
                 uid, rec = found
-        return JSONResponse({"token": store.issue_token(uid),
-                             "user": user_dto(rec)})
+        return JSONResponse({"token": _issue_for(uid),
+                             "user": user_dto(rec)},
+                            headers={"Cache-Control": "no-store"})
 
     # ---- 微信 / QQ(guest 登录,昵称与头像由前端模拟授权后提供)----
     if method in ("wechat", "qq"):
@@ -252,7 +294,8 @@ async def login(request: Request) -> JSONResponse:
         uid = f"guest-{method}-{secrets.token_hex(8)}"
         rec = _new_user(uid, None, method, None, nickname or None, avatar or None)
         store.create_user(rec)
-        return JSONResponse({"token": store.issue_token(uid), "user": user_dto(rec)})
+        return JSONResponse({"token": _issue_for(uid), "user": user_dto(rec)},
+                            headers={"Cache-Control": "no-store"})
 
     raise HTTPException(400, "unknown method")
 
@@ -269,3 +312,51 @@ async def logout(request: Request) -> JSONResponse:
             # 会话级教材/摘要缓存按 uid 存,登出即清理,避免残留
             session_cache.clear_user(rec.get("uid"))
     return JSONResponse({"ok": True})
+
+
+async def export_account(request: Request) -> JSONResponse:
+    """导出后端持有的账号与用量元数据(学习正文在浏览器,由前端合并导出)。"""
+    _auth_rate_check(request)
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    phone = str(rec.get("phone") or "")
+    account = user_dto(rec)
+    if rec.get("createdAt"):
+        account["createdAt"] = rec["createdAt"]
+    return JSONResponse({
+        "exportedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "account": account,
+        "usage": usage.for_user(uid, phone),
+        "note": "学习会话、归纳本与待办保存在浏览器本地,导出文件会由前端一并合并。",
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def delete_account(request: Request) -> JSONResponse:
+    """注销账号:校验后删除后端账号、全部 token 与该账号用量记录。
+
+    - 手机号密码账号:必须再输一次当前密码,避免 token 被借用后一键注销;
+    - 验证码/微信/QQ 账号没有密码:输入 DELETE / 注销 作为二次确认。
+    本机学习数据由前端注销流程清理。
+    """
+    _auth_rate_check(request)
+    rec = require_auth(request)
+    body = await read_json_object(request)
+    stored_password = rec.get("password_hash")
+    if stored_password:
+        password = body.get("password")
+        if not isinstance(password, str) or not _password_matches(password, stored_password)[0]:
+            return JSONResponse({"error": "wrong"}, status_code=401)
+    else:
+        confirm = body.get("confirm")
+        if confirm not in ("DELETE", "注销"):
+            raise HTTPException(400, "confirmation required")
+
+    uid = str(rec.get("uid") or "")
+    phone = str(rec.get("phone") or "")
+    if not uid:
+        raise HTTPException(400, "invalid account")
+    # 先删用量再删账号:用量写盘失败时账号仍在,用户可以重试,不会留下孤儿日志
+    usage.delete_user(uid, phone)
+    store.delete_user(uid)
+    session_cache.clear_user(uid)
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})

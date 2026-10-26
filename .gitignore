@@ -22,11 +22,13 @@ dist/
 .bridge-poll/
 backend/tools/eval_report.txt
 backend/tools/eval_search_report.txt
+backend/reports/
 backend/tools/.last_sync
 .speech-math-test.cjs
 .math-text-test.cjs
 .sse-stream-test.cjs
 .trash-store-test.cjs
+.todo-test.cjs
 
 # 编辑器/编码代理本地配置(Serena,勿入库)
 .serena/

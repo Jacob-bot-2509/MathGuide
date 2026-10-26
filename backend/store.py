@@ -9,6 +9,7 @@ import hashlib
 import json
 import secrets
 import time
+from datetime import datetime
 from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -22,6 +23,7 @@ _tokens: dict[str, dict] = {}
 _phone_index: dict[str, str] = {}
 
 TOKEN_TTL_HOURS = 24  # 演示 token 有效期(测试期安全):验证时逐条检查过期,签发时顺带清理过期项
+TOKEN_KEY_PREFIX = "sha256:"
 GUEST_UID_PREFIX = "guest-"
 
 # 密码哈希:新记录用 PBKDF2-HMAC-SHA256(stdlib,无新依赖);
@@ -53,18 +55,35 @@ def _save(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
+def _token_key(token: str) -> str:
+    """token 落盘键:只存 SHA-256,文件泄露拿不到可直接使用的 bearer token。
+
+    token 本身是 24 字节随机值,不需要加盐;加前缀便于启动时识别旧明文键。
+    """
+    return TOKEN_KEY_PREFIX + hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def init() -> None:
-    """启动时装载数据文件;顺带把旧格式 token(token -> uid 字符串)迁移为带签发时间的记录"""
+    """启动时装载数据文件;顺带迁移旧格式 token 与明文 token 键。"""
     global _users, _tokens, _phone_index
     # 顶层是对象不代表每个用户记录都合法:手改/写坏成字符串的条目直接丢弃,
     # 否则 _phone_index 的 rec.get 与 user_dto 的 rec["nickname"] 会在请求期抛 500
     _users = {uid: rec for uid, rec in _load(USERS_PATH).items() if isinstance(rec, dict)}
     _tokens = _load(TOKENS_PATH)
     migrated = False
+    normalized: dict[str, dict] = {}
     for token, entry in list(_tokens.items()):
         if isinstance(entry, str):
-            _tokens[token] = {"uid": entry, "issued": time.time()}
+            entry = {"uid": entry, "issued": time.time()}
             migrated = True
+        if not isinstance(entry, dict):
+            migrated = True  # 损坏条目直接丢弃
+            continue
+        key = token if token.startswith(TOKEN_KEY_PREFIX) else _token_key(token)
+        if key != token:
+            migrated = True
+        normalized[key] = entry
+    _tokens = normalized
     if migrated:
         try:
             _save(TOKENS_PATH, _tokens)
@@ -139,6 +158,21 @@ def create_user(rec: dict) -> str:
     return uid
 
 
+def touch_user(uid: str) -> bool:
+    """记录最近登录时间(用于留存清理);只改用户表,不碰 token。"""
+    rec = _users.get(uid)
+    if rec is None:
+        return False
+    rec["lastActiveAt"] = datetime.now().isoformat(timespec="seconds")
+    _save(USERS_PATH, _users)
+    return True
+
+
+def users_snapshot() -> dict[str, dict]:
+    """用户表浅拷贝;留存清理需要遍历,但不暴露内部可变表。"""
+    return dict(_users)
+
+
 def update_password_hash(uid: str, password_hash: tuple[str, str]) -> bool:
     """替换用户密码哈希(旧格式登录成功后升级用)。"""
     rec = _users.get(uid)
@@ -147,6 +181,72 @@ def update_password_hash(uid: str, password_hash: tuple[str, str]) -> bool:
     rec["password_hash"] = password_hash
     _save(USERS_PATH, _users)
     return True
+
+
+def phone_uid_map() -> dict[str, str]:
+    """手机号 → uid 的只读副本;供 usage 身份迁移使用,不暴露内部表。"""
+    return dict(_phone_index)
+
+
+def prune_inactive(days: float, exempt_uids: set[str] | None = None,
+                   now: datetime | None = None) -> list[dict]:
+    """删除超过 days 天未活动的账号及其 token;返回被删记录列表。
+
+    lastActiveAt 缺失时回退 createdAt;两者都不可解析的记录跳过,
+    宁可少删,也不误删手工改坏的账号。exempt_uids 用于保护管理员。
+    """
+    if days <= 0:
+        return []
+    exempt = exempt_uids or set()
+    current = now or datetime.now()
+    cutoff = current.timestamp() - days * 86400
+    removed: list[dict] = []
+    for uid, rec in list(_users.items()):
+        if uid in exempt:
+            continue
+        stamp = rec.get("lastActiveAt") or rec.get("createdAt")
+        if not isinstance(stamp, str) or not stamp:
+            continue
+        try:
+            active = datetime.fromisoformat(stamp)
+        except ValueError:
+            continue
+        if active.timestamp() >= cutoff:
+            continue
+        _users.pop(uid, None)
+        phone = rec.get("phone")
+        if isinstance(phone, str) and _phone_index.get(phone) == uid:
+            _phone_index.pop(phone, None)
+        removed.append(rec)
+    if not removed:
+        return []
+    removed_uids = {str(rec.get("uid") or "") for rec in removed}
+    for token in [t for t, entry in _tokens.items() if _token_uid(entry) in removed_uids]:
+        _tokens.pop(token, None)
+    _save(USERS_PATH, _users)
+    _save(TOKENS_PATH, _tokens)
+    return removed
+
+
+def delete_user(uid: str) -> dict | None:
+    """删除账号及其全部 token;返回被删记录(不存在返回 None)。
+
+    不删除本地学习数据 —— 那在浏览器里,由前端注销流程清理。
+    """
+    rec = _users.pop(uid, None)
+    if rec is None:
+        return None
+    phone = rec.get("phone")
+    if isinstance(phone, str) and _phone_index.get(phone) == uid:
+        _phone_index.pop(phone, None)
+    removed_tokens = [token for token, entry in _tokens.items()
+                      if _token_uid(entry) == uid]
+    for token in removed_tokens:
+        _tokens.pop(token, None)
+    _save(USERS_PATH, _users)
+    if removed_tokens:
+        _save(TOKENS_PATH, _tokens)
+    return rec
 
 
 # ---------- 游客账号 ----------
@@ -219,27 +319,23 @@ def _sweep_tokens() -> None:
 def issue_token(uid: str) -> str:
     _sweep_tokens()
     token = secrets.token_hex(24)
-    _tokens[token] = {"uid": uid, "issued": time.time()}
+    _tokens[_token_key(token)] = {"uid": uid, "issued": time.time()}
     _save(TOKENS_PATH, _tokens)
     return token
 
 
 def resolve_token(token: str) -> dict | None:
-    """token -> 用户记录(兼容旧格式 token -> uid 字符串);
-    过期 token 视为无效(旧格式无签发时间按当前时间起算)"""
-    entry = _tokens.get(token)
-    if entry is None:
+    """token -> 用户记录;内存里按 SHA-256 键查找,文件不存明文 token。"""
+    entry = _tokens.get(_token_key(token))
+    if not isinstance(entry, dict):
         return None
-    if isinstance(entry, dict):
-        issued = entry.get("issued")
-        # 缺签发时间 = 损坏/手工编辑的记录,不能当成永久 token
-        if not isinstance(issued, (int, float)):
-            return None
-        if time.time() - issued > TOKEN_TTL_HOURS * 3600:
-            return None
-        uid = entry.get("uid")
-    else:
-        uid = entry
+    issued = entry.get("issued")
+    # 缺签发时间 = 损坏/手工编辑的记录,不能当成永久 token
+    if not isinstance(issued, (int, float)):
+        return None
+    if time.time() - issued > TOKEN_TTL_HOURS * 3600:
+        return None
+    uid = entry.get("uid")
     return _users.get(uid) if uid else None
 
 
@@ -249,8 +345,9 @@ def revoke_token(token: str) -> bool:
     没删到就不写盘:否则任意伪造 token 调一次 /api/auth/logout 都能触发
     全量 tokens.json 重写(几千条 token 时是几百 KB 的写放大,可被用来刷盘)。
     """
-    if token not in _tokens:
+    key = _token_key(token)
+    if key not in _tokens:
         return False
-    del _tokens[token]
+    del _tokens[key]
     _save(TOKENS_PATH, _tokens)
     return True

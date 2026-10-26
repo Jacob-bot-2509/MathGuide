@@ -4,22 +4,37 @@
  * 实名认证状态与实名信息补全。
  */
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import UserAvatar from '@/components/common/UserAvatar.vue'
 import { updateUser, userState } from '@/stores/user'
+import { clearAllTodoData } from '@/stores/todo'
 import { settingsState } from '@/stores/settings'
+import { deleteAccount, exportAccountData } from '@/services/accountService'
+import { logout } from '@/services/authService'
 import { AVATAR_PRESETS, fileToAvatar } from '@/utils/avatar'
 import SettingsShell from '@/components/common/SettingsShell.vue'
 import { authName, realnameText, t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 
 
+const router = useRouter()
 const nickname = ref(userState.info?.nickname ?? '')
 const pickingAvatar = ref(false)
 const fileEl = ref<HTMLInputElement | null>(null)
 const realName = ref('')
 const realId = ref('')
+const dataBusy = ref(false)
+const deleting = ref(false)
+const deletePassword = ref('')
+const deleteWord = ref('')
 
 const user = computed(() => userState.info)
+const en = computed(() => settingsState.language === 'en')
+const needsPassword = computed(() => user.value?.authMethod === 'phone-pass')
+const expectedWord = computed(() => (en.value ? 'DELETE' : '注销'))
+const canDelete = computed(() => (
+  needsPassword.value ? deletePassword.value.length > 0 : deleteWord.value.trim() === expectedWord.value
+))
 
 function maskPhone(p?: string): string {
   return p ? `${p.slice(0, 3)}****${p.slice(-4)}` : t('acc.unbound')
@@ -77,6 +92,60 @@ function saveRealName() {
   }
   updateUser({ realName: { name, idMasked: `${id.slice(0, 3)}***********${id.slice(-4)}` } })
   showToast(t('acc.toastRealSaved'))
+}
+
+async function exportData() {
+  if (dataBusy.value) return
+  dataBusy.value = true
+  try {
+    const mode = await exportAccountData()
+    showToast(mode === 'full' ? t('acc.exportDone') : t('acc.exportLocalOnly'))
+  } catch {
+    showToast(t('acc.exportFail'))
+  } finally {
+    dataBusy.value = false
+  }
+}
+
+function openDelete() {
+  deleting.value = true
+  deletePassword.value = ''
+  deleteWord.value = ''
+}
+
+function cancelDelete() {
+  deleting.value = false
+  deletePassword.value = ''
+  deleteWord.value = ''
+}
+
+async function confirmDelete() {
+  if (!canDelete.value) {
+    showToast(t('acc.deleteNeedConfirm'))
+    return
+  }
+  dataBusy.value = true
+  try {
+    const result = await deleteAccount(
+      needsPassword.value
+        ? { password: deletePassword.value }
+        : { confirm: deleteWord.value.trim() },
+    )
+    if (result === 'wrong') {
+      showToast(t('acc.deleteWrong'))
+      return
+    }
+    // 后端已删除账号与全部 token;本机学习数据也要一起清掉
+    logout()
+    clearAllTodoData()
+    deleting.value = false
+    router.push('/login')
+    showToast(t('acc.deleteDone'))
+  } catch {
+    showToast(t('acc.deleteFail'))
+  } finally {
+    dataBusy.value = false
+  }
 }
 </script>
 
@@ -149,6 +218,57 @@ function saveRealName() {
         </div>
         <p class="note">{{ t('acc.note') }}</p>
       </template>
+    </div>
+
+    <!-- 数据与账号 -->
+    <p class="section tech-label">{{ t('acc.data') }}</p>
+    <div class="info-card">
+      <div class="action-row">
+        <div class="action-text">
+          <span class="k">{{ t('acc.export') }}</span>
+          <span class="desc">{{ t('acc.exportDesc') }}</span>
+        </div>
+        <button class="ghost-btn" :disabled="dataBusy" @click="exportData">
+          {{ dataBusy ? t('acc.processing') : t('acc.exportBtn') }}
+        </button>
+      </div>
+      <div class="action-row">
+        <div class="action-text">
+          <span class="k">{{ t('acc.delete') }}</span>
+          <span class="desc">{{ t('acc.deleteDesc') }}</span>
+        </div>
+        <button class="danger-btn" :disabled="dataBusy" @click="openDelete">{{ t('acc.deleteBtn') }}</button>
+      </div>
+    </div>
+
+    <div v-if="deleting" class="delete-panel">
+      <p class="delete-warn">
+        {{ needsPassword ? t('acc.deleteWarnPass') : t('acc.deleteWarnWord', { word: expectedWord }) }}
+      </p>
+      <input
+        v-if="needsPassword"
+        v-model="deletePassword"
+        class="input"
+        type="password"
+        autocomplete="current-password"
+        :placeholder="t('acc.deletePasswordPh')"
+        @keyup.enter="confirmDelete"
+      />
+      <input
+        v-else
+        v-model="deleteWord"
+        class="input"
+        type="text"
+        autocomplete="off"
+        :placeholder="t('acc.deleteWordPh', { word: expectedWord })"
+        @keyup.enter="confirmDelete"
+      />
+      <div class="delete-actions">
+        <button class="danger-btn" :disabled="dataBusy || !canDelete" @click="confirmDelete">
+          {{ dataBusy ? t('acc.processing') : t('acc.deleteConfirmBtn') }}
+        </button>
+        <button class="ghost-btn" :disabled="dataBusy" @click="cancelDelete">{{ t('acc.cancel') }}</button>
+      </div>
     </div>
   </SettingsShell>
 </template>
@@ -284,6 +404,90 @@ function saveRealName() {
 
 .real-form .save-btn {
   align-self: flex-start;
+}
+
+.action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.action-row:last-child {
+  border-bottom: none;
+}
+
+.action-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.action-text .desc {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.action-row .ghost-btn,
+.action-row .danger-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.danger-btn {
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  flex-shrink: 0;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.danger-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+.ghost-btn:disabled,
+.danger-btn:disabled,
+.save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.delete-panel {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 5%, var(--bg-card));
+}
+
+.delete-warn {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.delete-panel .input {
+  width: 100%;
+  box-sizing: border-box;
+  flex: none;
+  background: var(--bg-void);
+}
+
+.delete-actions {
+  display: flex;
+  gap: 9px;
+  margin-top: 11px;
 }
 
 .note {

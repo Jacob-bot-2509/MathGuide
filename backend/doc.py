@@ -332,12 +332,12 @@ async def export_pdf(request: Request) -> Response | JSONResponse:
         full: list[str] = []
         async for delta in llm.stream_chat(
                 _system_prompt(lang), content, role=llm.pick("deep"),
-                fallback=True, max_tokens=6000):
+                fallback=True, max_tokens=6000, thinking=False):
             full.append(delta)
         raw = "".join(full)
         parsed = _extract_json(raw)
         if parsed is None:
-            print(f"[doc] LLM 输出非 JSON(前 80 字): {raw[:80]!r},降级排版")
+            print(f"[doc] LLM 输出非 JSON({len(raw)} 字),降级排版")
             doc = _fallback_doc(content, lang)
         else:
             doc = _normalize_doc(parsed, content, lang)

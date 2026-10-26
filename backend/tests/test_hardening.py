@@ -69,10 +69,10 @@ def test_revoke_unknown_token_does_not_write(temp_store, monkeypatch):
 def test_revoke_known_token_writes_once(temp_store, monkeypatch):
     calls = []
     monkeypatch.setattr(store, "_save", lambda path, data: calls.append(path))
-    store._tokens["real-token"] = {"uid": "u-1", "issued": 0}
+    store._tokens[store._token_key("real-token")] = {"uid": "u-1", "issued": 0}
     assert store.revoke_token("real-token") is True
     assert len(calls) == 1
-    assert "real-token" not in store._tokens
+    assert store._token_key("real-token") not in store._tokens
 
 
 def test_logout_is_rate_limited(temp_store):

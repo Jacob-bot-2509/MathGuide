@@ -17,6 +17,7 @@ if str(BACKEND_DIR) not in sys.path:
 import auth  # noqa: E402
 import session_cache  # noqa: E402
 import store  # noqa: E402
+import usage  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -44,3 +45,14 @@ def temp_store(tmp_path, monkeypatch):
     store._users = {}
     store._tokens = {}
     store._phone_index = {}
+
+
+@pytest.fixture()
+def temp_usage(tmp_path, monkeypatch):
+    """独立 usage 文件与空内存缓存,避免测试碰 backend/data/usage.jsonl。"""
+    monkeypatch.setattr(usage, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(usage, "PATH", tmp_path / "usage.jsonl")
+    monkeypatch.setattr(usage, "LEGACY_PATH", tmp_path / "usage.json")
+    usage.reset_for_tests()
+    yield usage
+    usage.reset_for_tests()

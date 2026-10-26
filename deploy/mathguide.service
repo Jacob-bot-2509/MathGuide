@@ -1,0 +1,28 @@
+# MathGuide 后端 systemd 示例。
+# 路径按实际部署修改:User / WorkingDirectory / EnvironmentFile / ExecStart。
+# data/ 是唯一需要写的目录,其余只读;umask 让数据文件默认不对其他用户开放。
+
+[Unit]
+Description=MathGuide backend
+After=network.target
+
+[Service]
+Type=simple
+User=mathguide
+Group=mathguide
+WorkingDirectory=/srv/mathguide/backend
+EnvironmentFile=/srv/mathguide/backend/.env.local
+ExecStart=/srv/mathguide/.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/mathguide/backend/data
+StandardOutput=append:/var/log/mathguide/backend.log
+StandardError=append:/var/log/mathguide/backend.log
+
+[Install]
+WantedBy=multi-user.target

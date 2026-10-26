@@ -194,13 +194,13 @@ def test_usage_compacts_corrupt_line_after_reload(tmp_path, monkeypatch):
     monkeypatch.setattr(usage, "LEGACY_PATH", tmp_path / "usage.json")
     usage.reset_for_tests()
 
-    usage.record(user="u", phone="", cmd="c", prompt_len=1, reply_len=2,
+    usage.record(uid="u", cmd="c", prompt_len=1, reply_len=2,
                  role="main", research=False, ts=time.time())
     with usage.PATH.open("a", encoding="utf-8") as fh:
         fh.write("{oops not json\n")   # 模拟写一半/外部手改
 
     usage.reset_for_tests()            # 模拟进程重启(下次读取时才发现坏行)
-    usage.record(user="u", phone="", cmd="c", prompt_len=1, reply_len=2,
+    usage.record(uid="u", cmd="c", prompt_len=1, reply_len=2,
                  role="main", research=False, ts=time.time())
 
     text = usage.PATH.read_text(encoding="utf-8")
@@ -227,7 +227,7 @@ def test_usage_migrates_legacy_json(tmp_path, monkeypatch):
     before = usage.summary()
     assert before["calls"] == 2 and before["totalChars"] == 15, "旧数据没被读出来"
 
-    usage.record(user="c", phone="", cmd="z", prompt_len=1, reply_len=3,
+    usage.record(uid="c", cmd="z", prompt_len=1, reply_len=3,
                  role="main", research=False, ts=time.time())
 
     lines = [ln for ln in usage.PATH.read_text(encoding="utf-8").splitlines() if ln.strip()]

@@ -20,6 +20,9 @@ export interface ChatMeta {
   history?: ChatRequest['history']
   /** 研究型提问的搜索范围(平台名列表;缺省 = 全平台) */
   sources?: string[]
+  /** 续写被停止的回答 */
+  resume?: boolean
+  partial?: string
 }
 
 function authHeaders(): Record<string, string> {
@@ -89,6 +92,8 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
     categoryKey: meta?.categoryKey,
     history: meta?.history,
     sources: meta?.sources,
+    resume: meta?.resume,
+    partial: meta?.partial,
   }
 
   postSSE(

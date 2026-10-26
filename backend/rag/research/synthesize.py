@@ -45,7 +45,8 @@ async def synthesize_stream(question: str, hits: list[SearchHit], zh: bool,
                             role: str = "main", fallback: bool = True) -> AsyncIterator[str]:
     """流式生成综合解答(正文);引用区由 citations_block 单独拼装"""
     system = SYSTEM_ZH if zh else SYSTEM_EN
-    async for delta in llm.stream_chat(system, _user_prompt(question, hits), role=role, fallback=fallback):
+    async for delta in llm.stream_chat(system, _user_prompt(question, hits), role=role,
+                                       fallback=fallback, thinking=False):
         yield delta
 
 

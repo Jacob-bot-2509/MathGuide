@@ -1,12 +1,15 @@
 """
 MathGuide 后端(RAG 检索增强生成骨架)
-启动:python -m uvicorn main:app --host 0.0.0.0 --port 8000
+启动:python -m uvicorn main:app --host 127.0.0.1 --port 8000
+(MG_DEMO_MODE=1 时只允许本机绑定;公网部署先设 MG_DEMO_MODE=0)
 
 接口一览(契约详见各模块注释与 backend/README.md):
     GET  /api/health                         健康检查
     POST /api/auth/register                  注册(手机号 + 密码)
     POST /api/auth/login                     登录(password / code / wechat / qq)
     POST /api/auth/logout                    登出(需 token)
+    POST /api/account/export                 导出账号与用量元数据(需 token)
+    POST /api/account/delete                 注销账号并级联删除令牌/用量(需 token)
     POST /api/chat/stream                    聊天流式回复(需 token,OpenAI 兼容 SSE)
 
 知识库:knowledge/*.md → rag 切片索引 → 检索 → LLM(未配置则直答)。
@@ -20,7 +23,6 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 import asyncio
-import os
 
 import store
 from starlette.applications import Starlette
@@ -34,24 +36,32 @@ import chat
 import config
 import doc
 import rag
+import retention
 import usage
+from security_headers import SecurityHeadersMiddleware
 
 # 先装载本地配置(.env.local,key 不入库),再构造 app/CORS 与数据、知识库。
 # 必须早于 app 构造:MG_CORS_ORIGINS 等配置来自 .env.local。
 config.load_env()
+# 演示模式默认只允许本机;`--host 0.0.0.0` 或公网 CORS 来源会直接拒绝启动
+config.assert_safe_demo_mode()
+# .env.local 装载后再读限流配置(模块导入时 env 还没加载)
+auth.configure_rate_limit()
 
 
 def _cors_origins() -> list[str]:
     """开发默认只放行本机前端;需要别的来源时用 MG_CORS_ORIGINS 显式列出。"""
-    raw = os.getenv(
-        "MG_CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
-    )
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return config.cors_origins()
 
 
 async def health(request) -> JSONResponse:
-    return JSONResponse({"ok": True, "service": "mg-backend"})
+    # demo/invite 供登录页隐藏演示通道;不涉及账号或密钥
+    return JSONResponse({
+        "ok": True,
+        "service": "mg-backend",
+        "demo": config.demo_mode(),
+        "invite": bool(config.invite_codes()),
+    })
 
 
 async def stats(request) -> JSONResponse:
@@ -66,6 +76,8 @@ routes = [
     Route("/api/auth/register", auth.register, methods=["POST"]),
     Route("/api/auth/login", auth.login, methods=["POST"]),
     Route("/api/auth/logout", auth.logout, methods=["POST"]),
+    Route("/api/account/export", auth.export_account, methods=["POST"]),
+    Route("/api/account/delete", auth.delete_account, methods=["POST"]),
     Route("/api/chat/stream", chat.chat_stream, methods=["POST"]),
     Route("/api/speech/math", chat.speech_to_math, methods=["POST"]),
     Route("/api/doc/export", doc.export_pdf, methods=["POST"]),
@@ -83,9 +95,21 @@ app = Starlette(
             allow_methods=["*"],
             allow_headers=["*"],
         ),
+        Middleware(SecurityHeadersMiddleware),
     ],
 )
 
 # 再装载数据与知识库(演示单进程足够)
 store.init()
+# 旧 usage 记录只有 phone/user:启动时换成 uid 并清掉 PII(失败不阻断服务)
+try:
+    usage.migrate_identity(store.phone_uid_map())
+except OSError as exc:
+    print(f"[usage] 旧用量身份迁移失败(不影响启动): {exc}")
+try:
+    pruned = retention.run()
+    if pruned["accounts"] or pruned["usage"]:
+        print(f"[retention] 已清理账号 {pruned['accounts']} 个、用量 {pruned['usage']} 条")
+except OSError as exc:
+    print(f"[retention] 留存清理失败(不影响启动): {exc}")
 rag.init()

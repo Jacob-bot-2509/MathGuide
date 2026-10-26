@@ -11,7 +11,7 @@
 
 ```bash
 cd backend
-# 默认只绑本机;需要局域网演示时再显式用 --host 0.0.0.0(并先关闭 MG_DEMO_MODE)
+# 演示模式只允许本机:--host 0.0.0.0 会被拒绝启动;公网部署必须 MG_DEMO_MODE=0
 ../.venv/Scripts/python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 # 前端开发模式(5173)已配置 vite 代理 /api → 8000,直连 8000 亦可调试
 ```
@@ -31,14 +31,14 @@ Windows 下也可用仓库根目录 `dev.bat` 一键启动前后端(脚本按自
 ```
 backend/
   main.py      # 应用入口 + 路由表 + CORS(默认只放行本机前端)+ UTF-8 输出修复
-  store.py     # JSON 持久化 + PBKDF2 密码哈希(旧格式登录时自动升级),token 24h 过期
-  auth.py      # 注册 / 登录 / 登出 + require_auth(401) / require_admin(403) + 认证限流
+  store.py     # JSON 持久化 + PBKDF2 密码哈希(旧格式登录时自动升级),token 24h 过期,账号删除级联 token
+  auth.py      # 注册 / 登录 / 登出 / 数据导出 / 注销 + require_auth(401) / require_admin(403) + 认证限流
   session_cache.py # 教材/摘要缓存,键 = (uid, sessionId),防止跨用户撞号
   http_utils.py    # JSON 请求体解析:2 MiB 上限(413)与 400 语义
   rate_limit.py    # 滑动窗口限流(聊天/认证共用,自动清理不活跃 key)
   chat.py      # POST /api/chat/stream:SSE 流式下发 + RAG 编排
                # (安全外壳:输入上限/限流/用量记账 → 路由 → LLM/直答)
-  usage.py     # 用量统计(电表):调用记录追加到 usage.jsonl,支撑 /api/stats 与报表
+  usage.py     # 用量统计(电表):按 uid 记账、旧记录 PII 迁移、按账号导出/删除
   rag/
     documents.py  # 知识文档加载与切片(markdown + frontmatter)
     index.py      # 检索索引:关键词 + bigram + 向量混合打分(闲聊噪声门限)
@@ -143,7 +143,7 @@ MG_ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 MG_ZHIPU_API_KEY=xxx                # 智谱开放平台(GLM 系列)
 MG_ROLE_MAIN=aliyun:qwen3.8-flash   # 主力:日常问答 / 改写 / 复核 / 摘要
 MG_ROLE_BACKUP=zhipu:glm-5.2        # 备胎:主力失败自动切换(异平台容灾)
-MG_ROLE_DEEP=aliyun:qwen3-235b-a22b # 深答:证明 / 竞赛 / 研究综合
+MG_ROLE_DEEP=aliyun:qwen3.8-max     # 深答:证明 / 竞赛 / 研究综合
 MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
 ```
 
@@ -166,13 +166,15 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/health` | 健康检查 `{ok, service}`(公开) |
-| POST | `/api/auth/register` | 手机号 + 密码注册 → `200 {token, user}` / `409 {error:"exists"}` |
+| POST | `/api/auth/register` | 手机号 + 密码注册(`demo=1` 或带 `invite` 邀请码)→ `200 {token, user}` / `403 {error:"invite"}` / `409 {error:"exists"}` |
 | POST | `/api/auth/login` | 四种方式,见下 → 一律 `200 {token, user}` |
 | POST | `/api/auth/logout` | 吊销当前 token 并清理该用户会话缓存 → `200 {ok:true}` |
+| POST | `/api/account/export` | 导出账号与用量元数据 → `200 {exportedAt, account, usage}` |
+| POST | `/api/account/delete` | 注销账号(密码或 `confirm` 二次确认),级联删 token/用量 → `200 {ok:true}` |
 | POST | `/api/chat/stream` | 聊天流式回复(SSE) |
 | POST | `/api/speech/math` | 语音识别文本 → 数学符号转写(SSE) |
 | POST | `/api/doc/export` | 研究综述 → 结构化 → PDF 下载 |
-| GET | `/api/stats` | 用量统计(**仅管理员**):总调用数 / 回复字数 / 按用户 / 按模型角色 |
+| GET | `/api/stats` | 用量统计(**仅管理员**):总调用数 / 回复字数 / 按 uid / 按模型角色 |
 
 登录请求体:
 
@@ -197,6 +199,9 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
   只适合本机演示;真实部署必须设 `MG_DEMO_MODE=0`(关闭固定验证码、访客登录与
   `/register`),账号由真实短信/第三方流程或管理端创建,并配合 HTTPS。
   游客账号受 `MG_GUEST_MAX`(默认 500,0=禁止)约束,超出时先清理无有效 token 的最旧游客。
+- **演示模式守卫**:`MG_DEMO_MODE=1` 时只允许绑定 `127.0.0.1` / `localhost` / `::1`,
+  CORS 也只能是本机来源;`--host 0.0.0.0`、公网 CORS 或 `*` 会直接拒绝启动。
+  公网部署必须显式 `MG_DEMO_MODE=0`(反向代理场景无法仅靠绑定地址识别)。
 - **CORS**:默认只放行 `http://localhost:5173` 与 `http://127.0.0.1:5173`;
   其他来源用 `MG_CORS_ORIGINS` 显式列出,不要长期使用 `*`。
 - **管理员**:`/api/stats` 需要手机号或 uid 命中 `MG_ADMIN_PHONES` / `MG_ADMIN_UIDS`
@@ -207,8 +212,22 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
   否则所有请求会被当成同一个 IP。
 - **密码**:新账号用 PBKDF2-HMAC-SHA256(20 万轮);旧版单轮 SHA-256 记录在登录成功后
   自动升级,并全程用 `secrets.compare_digest` 比较。
+- **token 落盘**:`tokens.json` 只存 token 的 SHA-256(`sha256:` 前缀),不存明文;
+  旧明文键在启动时自动迁移,已签发 token 不需要重新登录。
+- **测评注册**:`MG_DEMO_MODE=0` 后开放注册关闭;配置 `MG_INVITE_CODES` 后,
+  持邀请码的手机号仍可注册。固定验证码与游客登录保持关闭。
+- **认证限流**:`MG_AUTH_RATE_MAX` / `MG_AUTH_RATE_WINDOW` 可调;多人共用出口 IP 时调大。
+- **留存清理**:`MG_ACCOUNT_TTL_DAYS` 删除长期未登录账号(管理员白名单保留),
+  `MG_USAGE_TTL_DAYS` 清理过期用量;默认 `0` 关闭,启动时执行。
+- **安全响应头**:API 统一加 `X-Content-Type-Options` / `Referrer-Policy` /
+  `X-Frame-Options` / `Permissions-Policy`;HTTPS 或 `MG_ENABLE_HSTS=1` 时加 HSTS。
+- **前端 CSP 与反代**:见仓库 `deploy/Caddyfile` / `deploy/nginx.conf`;前端主题脚本已拆成
+  `theme-init.js`,CSP 不需要放开 `script-src 'unsafe-inline'`。
 - **会话缓存**:教材/滚动摘要按 `(uid, sessionId)` 隔离;`sessionId` 由客户端提供,
   绝不能当作全局唯一键使用。
+- **账号数据**:`POST /api/account/export` 导出账号与用量元数据(不含口令/令牌);
+  `POST /api/account/delete` 需要当前密码(验证码/第三方账号需输入 `DELETE`/`注销`),
+  删除账号、全部 token 与该账号用量记录。前端同时清理本机学习数据。
 
 ### 聊天流(SSE)
 
@@ -230,6 +249,8 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
   `[章节](cmd://chapter/…)`,教材按 `(用户, sessionId)` 缓存;`cmd=章节知识指引` 只发章节名,
   返回指引并附 `[返回](cmd://back)`(缓存失效时按通用知识作答);
 - **附件契约**:`[attach:image|file]文件名`,文本文件可带正文(空行分隔)交 LLM 阅读理解;
+- **续写契约**:`resume: true` + `partial: 已生成正文`,配合 `prompt` 原问题使用;
+  走后端专用续写分支,不重新检索/复核,只输出断点后的内容(最多取正文末尾 24000 字);
 - **安全底座**:prompt 服务端截断 3.2 万字;每用户 60 秒内最多 6 问(超出 429);
   token 24 小时过期;每次调用自动记账(用量统计见下);
 - 响应为 OpenAI 兼容 SSE,**每帧 payload 是 JSON 字符串**(正文含换行、LaTeX 反斜杠时仍为单行,不会拆碎 data 行):
@@ -254,13 +275,14 @@ data: [DONE]
 
 ## 用量统计(测试期成本可见)
 
-每次聊天流结束后自动记账到 `data/usage.jsonl`(谁、什么指令、回复字数、模型角色;
-内存保留最近 2000 条,磁盘追加写入、超过 2200 行时压实一次;兼容旧
-`data/usage.json` 数组并在下次写入时迁移,旧文件保留作备份)。
+每次聊天流结束后自动记账到 `data/usage.jsonl`(**只记 uid**,不记手机号/昵称;
+字段:时间、指令、字符数、模型角色;内存保留最近 2000 条,磁盘追加写入、超过 2200 行时
+压实一次;兼容旧 `data/usage.json` 数组并在下次写入时迁移,旧文件保留作备份但会先清洗 phone/user)。
+服务启动时 `usage.migrate_identity()` 会把 JSONL 与 `usage.json` 备份里的 `phone`/`user` 都换成 uid 并删除 PII。
 PDF 导出只记调用次数,不把文件字节数混进「回复字数」:
 
 ```bash
-../.venv/Scripts/python.exe tools/usage.py   # 终端报表:总调用/回复字数/按用户/按模型角色
+../.venv/Scripts/python.exe tools/usage.py   # 终端报表:总调用/回复字数/按账号/按模型角色
 # 或接口查询(需管理员 token):GET /api/stats → {calls, totalChars, users, roles}
 ```
 
@@ -271,14 +293,16 @@ PDF 导出只记调用次数,不把文件字节数混进「回复字数」:
 cd ../frontend && npm test                   # 前端自测(编译器/SSE/MathText 安全用例)
 ```
 
-后端测试覆盖:store 密码与 token 生命周期、auth 注册/登录/演示模式/管理员/限流/
-游客上限、请求体 413/400、会话缓存跨用户隔离、embedding 冷启动降级、LLM 半截输出不回放、
-文档切片、排序/精排、arXiv HTTPS/响应上限/请求取消、usage JSONL 迁移与压实、PDF 消毒。
+后端测试覆盖:store 密码/token 哈希与生命周期、账号删除、auth 注册/登录/邀请码/
+演示模式/管理员/限流/游客上限/数据导出/注销、演示模式部署守卫、安全响应头、
+请求体 413/400、会话缓存跨用户隔离、embedding 冷启动降级、LLM 半截输出不回放、
+文档切片、排序/精排、arXiv HTTPS/响应上限/请求取消、usage JSONL 迁移/PII 清洗/压实、
+留存 TTL 清理、PDF 消毒。
 
 ## 演示账号
 
-验证码登录演示码固定 `123456`。注册产生的数据落盘于 `data/`(users.json 存加盐口令摘要,
-tokens.json 存令牌);清空这两个文件即可重置演示环境。
+验证码登录演示码固定 `123456`(仅 `MG_DEMO_MODE=1` 且本机绑定时可用)。注册产生的数据
+落盘于 `data/`(users.json 存加盐口令摘要,tokens.json 存令牌);清空这两个文件即可重置演示环境。
 `tools/preflight.py` 在演示账号不存在时会自动注册,新 clone 也能直接自检。
 
 ## 质检工具(tools/)

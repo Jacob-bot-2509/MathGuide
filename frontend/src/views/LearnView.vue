@@ -20,6 +20,8 @@ import { useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
+import TodoPanel from '@/components/chat/TodoPanel.vue'
+import TodoReminder from '@/components/chat/TodoReminder.vue'
 import NotebookPanel from '@/components/chat/NotebookPanel.vue'
 import FormulaPanel from '@/components/chat/FormulaPanel.vue'
 import SpeechTips from '@/components/chat/SpeechTips.vue'
@@ -70,7 +72,7 @@ const activeId = toRef(sessionsState, 'activeId')
 const input = ref('')
 /** 浮层面板统一开关:同一时间只允许一个面板展开(点开新的自动收起旧的),
     关闭后其余按钮才可点(全屏遮罩拦截) */
-type PanelKind = 'summary' | 'scope' | 'notebook' | 'formula'
+type PanelKind = 'summary' | 'scope' | 'notebook' | 'formula' | 'todo'
 const activePanel = ref<PanelKind | null>(null)
 
 function togglePanel(kind: PanelKind) {
@@ -200,7 +202,7 @@ function autoGrow() {
 function buildHistory(session: ChatSession): ChatMeta['history'] {
   return session.messages
     .slice(0, -1)
-    .filter((m) => !m.streaming && m.content && !m.interrupted)
+    .filter((m) => !m.streaming && m.content && !m.interrupted && !m.stopped)
     .slice(-16)
     .map((m) => ({ role: m.role, content: (m.attachment?.text || m.content).slice(0, 400) }))
 }
@@ -347,13 +349,45 @@ function stopGenerating() {
   if (!session) return
   for (const m of session.messages) {
     if (!m.streaming) continue
+    const hadContent = !!m.content
     cancelReply(m.id)
     m.thinking = false
     if (!streams.has(m.id)) {
       m.streaming = false
       if (!m.content) m.content = t('learn.stoppedNote')
     }
+    // 有已生成内容才允许续写;空回答只显示停止提示
+    m.stopped = hadContent && !!m.content
   }
+  persistSessions()
+}
+
+/** 续写被「停止生成」截断的回答:原问题 + 已生成正文发给后端,增量追加到同一条消息 */
+function resumeReply(msg: ChatMsg) {
+  const session = activeSession.value
+  if (!session || msg.streaming || !msg.content) return
+  if (session.messages.some((m) => m.streaming)) {
+    showToast(t('learn.toastBusy'))
+    return
+  }
+  const idx = session.messages.findIndex((m) => m.id === msg.id)
+  if (idx < 0) return
+  const question = [...session.messages.slice(0, idx)].reverse().find((m) => m.role === 'user')
+  if (!question) return
+
+  const partial = msg.content
+  msg.stopped = false
+  msg.interrupted = false
+  msg.thinking = true
+  msg.streaming = true
+  streamInto(session, msg, question.content, {
+    sessionId: session.id,
+    categoryKey: session.cat?.key,
+    resume: true,
+    partial,
+  })
+  pinnedToBottom = true
+  scrollBottom()
   persistSessions()
 }
 
@@ -450,6 +484,12 @@ function runCommand(cmd: string) {
   if (cmd === '公式查询手册') {
     anchorTo('.cmd[data-cmd="公式查询手册"]')
     togglePanel('formula')
+    return
+  }
+  // 待办清单 = 本地任务面板:草稿/日程,不发请求
+  if (cmd === '待办清单') {
+    anchorTo('.cmd[data-cmd="待办清单"]')
+    togglePanel('todo')
     return
   }
   // 输入为空用指令默认问题;不清空输入,由 send 在成功发出后统一清空
@@ -1215,6 +1255,12 @@ onBeforeUnmount(() => {
                   <button type="button" @click="doExport(m, 'en')">{{ t('learn.exportLangEn') }}</button>
                 </div>
               </template>
+              <!-- 用户停止生成后的续写入口:右下角小按钮 -->
+              <div v-if="m.stopped && m.content && !m.streaming" class="resume-row">
+                <button class="resume-btn" type="button" :title="t('learn.resumeHint')" @click.stop="resumeReply(m)">
+                  {{ t('learn.resume') }}
+                </button>
+              </div>
             </template>
             <template v-else>{{ m.content }}</template>
           </div>
@@ -1315,6 +1361,14 @@ onBeforeUnmount(() => {
           @close="activePanel = null"
         />
       </Transition>
+      <Transition name="nb-rise">
+        <TodoPanel
+          v-if="activePanel === 'todo'"
+          :left="panelAnchor?.left"
+          :width="panelAnchor?.width"
+          @close="activePanel = null"
+        />
+      </Transition>
 
       <div class="commands">
         <span class="tech-label cmd-label">{{ t('learn.cmdLabel') }}</span>
@@ -1348,6 +1402,9 @@ onBeforeUnmount(() => {
     <Transition name="mask-fade">
       <div v-if="activePanel" class="panel-overlay" @click="activePanel = null"></div>
     </Transition>
+
+    <!-- 待办提醒:仅在学习辅助页挂载,满足“开场+登录+进入本页”后才提醒 -->
+    <TodoReminder />
   </div>
 </template>
 
@@ -1601,6 +1658,29 @@ onBeforeUnmount(() => {
   color: var(--text-dim);
   font-size: 11.5px;
   line-height: 1.5;
+}
+
+/* 停止生成后的续写入口:气泡右下角 */
+.resume-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.resume-btn {
+  padding: 3px 12px;
+  border: 1px solid var(--line-bright);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cyan) 8%, transparent);
+  color: var(--cyan);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.resume-btn:hover {
+  background: color-mix(in srgb, var(--cyan) 16%, transparent);
+  box-shadow: var(--glow-cyan);
 }
 
 /* 研究综述导出:小按钮 + 语言选择菜单 */

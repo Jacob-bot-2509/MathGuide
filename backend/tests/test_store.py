@@ -68,13 +68,16 @@ def test_init_migrates_legacy_string_token(temp_store):
 
     temp_store.init()
 
-    entry = temp_store._tokens["tok"]
+    key = temp_store._token_key("tok")
+    entry = temp_store._tokens[key]
     assert isinstance(entry, dict)
     assert entry["uid"] == "u-1"
     assert isinstance(entry["issued"], float)
     assert temp_store.resolve_token("tok")["uid"] == "u-1"
-    # 迁移结果已写回磁盘
-    assert isinstance(json.loads(temp_store.TOKENS_PATH.read_text(encoding="utf-8"))["tok"], dict)
+    # 迁移结果已写回磁盘,且文件里不再有明文 token
+    saved = json.loads(temp_store.TOKENS_PATH.read_text(encoding="utf-8"))
+    assert isinstance(saved[key], dict)
+    assert "tok" not in saved
 
 
 def test_corrupt_json_is_treated_as_empty(temp_store):
@@ -109,9 +112,9 @@ def test_token_without_issued_is_invalid(temp_store):
     temp_store.init()
     assert temp_store.resolve_token("tok") is None
 
-    # 下一次签发会顺带清掉损坏记录
+    # 下一次签发会顺带清掉损坏记录(键已迁移为哈希)
     temp_store.issue_token("u-1")
-    assert "tok" not in temp_store._tokens
+    assert temp_store._token_key("tok") not in temp_store._tokens
 
 
 def test_save_is_atomic_and_leaves_no_tmp_file(temp_store):
@@ -162,3 +165,36 @@ def test_prune_guests_keeps_active_guests(temp_store):
     assert temp_store.prune_guests(2) == 1
     assert "guest-a" in temp_store._users
     assert temp_store.resolve_token(token)["uid"] == "guest-a"
+
+
+def test_delete_user_removes_phone_index_and_all_tokens(temp_store):
+    temp_store.create_user(_user("u-1", "13800138000"))
+    temp_store.create_user(_user("u-2", "13900139000"))
+    token1 = temp_store.issue_token("u-1")
+    token2 = temp_store.issue_token("u-1")
+    other = temp_store.issue_token("u-2")
+
+    rec = temp_store.delete_user("u-1")
+    assert rec and rec["phone"] == "13800138000"
+    assert temp_store.find_user_by_phone("13800138000") is None
+    assert temp_store.find_user_by_phone("13900139000")[0] == "u-2"
+    assert temp_store.resolve_token(token1) is None
+    assert temp_store.resolve_token(token2) is None
+    assert temp_store.resolve_token(other)["uid"] == "u-2"
+    assert temp_store.delete_user("missing") is None
+
+
+def test_phone_uid_map_is_a_copy(temp_store):
+    temp_store.create_user(_user("u-1", "13800138000"))
+    mapping = temp_store.phone_uid_map()
+    mapping["13800138000"] = "tampered"
+    assert temp_store.find_user_by_phone("13800138000")[0] == "u-1"
+
+
+def test_token_is_hashed_at_rest(temp_store):
+    temp_store.create_user(_user("u-1"))
+    token = temp_store.issue_token("u-1")
+    raw = temp_store.TOKENS_PATH.read_text(encoding="utf-8")
+    assert token not in raw, "tokens.json 仍含明文 token"
+    assert temp_store._token_key(token) in raw
+    assert temp_store.resolve_token(token)["uid"] == "u-1"

@@ -23,11 +23,11 @@ def main() -> int:
     print(f"总调用 {s['calls']} 次 | 回复总字数 {s['totalChars']}")
     print()
     if s["users"]:
-        print(f"{'用户':<20}{'提问数':>8}{'回复字数':>10}")
-        print("-" * 38)
+        print(f"{'账号标识':<24}{'提问数':>8}{'回复字数':>10}")
+        print("-" * 42)
         for u in s["users"]:
-            label = u.get("phone") or u.get("user") or "访客"
-            print(f"{label:<20}{u['calls']:>8}{u['chars']:>10}")
+            label = u.get("uid") or "anonymous"
+            print(f"{label:<24}{u['calls']:>8}{u['chars']:>10}")
     else:
         print("暂无记录(还没有人提问,或 usage 数据文件被清空)")
     print()

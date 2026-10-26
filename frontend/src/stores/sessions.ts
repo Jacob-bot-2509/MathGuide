@@ -33,6 +33,8 @@ export interface ChatMsg {
   /** 回答被中断(连接断在后端 [DONE] 之前),内容可能不完整。
    * 必须随档案一起存:刷新后这半截回答还在,得让用户知道它缺了一段 */
   interrupted?: boolean
+  /** 用户主动点「停止生成」截断:保留已生成内容,并显示「回复」续写按钮 */
+  stopped?: boolean
   /** 研究型回答(后端 meta 帧标记,非前端猜测):导出 PDF 入口只对它显示 */
   research?: boolean
 }
@@ -59,6 +61,7 @@ interface PersistedMsg {
   navGuideFor?: string
   interrupted?: boolean
   research?: boolean
+  stopped?: boolean
 }
 
 interface Persisted {
@@ -109,6 +112,7 @@ function writeSessionsNow(): boolean {
             attachment: m.attachment, chitchat: m.chitchat,
             nav: m.nav, navGuideFor: m.navGuideFor,
             interrupted: m.interrupted, research: m.research,
+            stopped: m.stopped,
           }))
           .slice(-120),
       })),

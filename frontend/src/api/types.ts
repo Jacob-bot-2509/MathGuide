@@ -24,6 +24,9 @@ export interface ChatRequest {
   history?: ChatHistoryItem[]
   /** 研究型提问的搜索范围(平台名列表;缺省 = 全平台) */
   sources?: string[]
+  /** 续写被用户中断的回答:prompt 为原问题,partial 为已生成正文 */
+  resume?: boolean
+  partial?: string
 }
 
 /** 流式回调(OpenAI 兼容 SSE 的通用形态) */

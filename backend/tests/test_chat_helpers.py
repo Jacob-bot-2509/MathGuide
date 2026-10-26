@@ -108,6 +108,19 @@ def test_meter_counts_visible_text_not_sse_framing(monkeypatch):
     assert captured["role"] == "main"
 
 
+def test_record_uses_uid_without_identity_fields(monkeypatch):
+    captured: dict = {}
+
+    def fake_usage_record(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(chat.usage, "record", fake_usage_record)
+    chat._record({"uid": "u-1", "nickname": "private", "phone": "13800138000"},
+                 cmd="提问", prompt_len=3, reply_len=4, role="main", research=False)
+    assert captured["uid"] == "u-1"
+    assert "user" not in captured and "phone" not in captured
+
+
 def test_formula_followup_detection():
     history = [
         {"role": "user", "content": "请先询问我想查哪个具体知识点"},
@@ -115,3 +128,24 @@ def test_formula_followup_detection():
     ]
     assert chat._is_formula_followup(history) is True
     assert chat._is_formula_followup([{"role": "assistant", "content": "x"}]) is False
+
+
+def test_gen_continue_uses_original_question_and_partial(monkeypatch):
+    captured: dict = {}
+
+    async def fake_stream(system, user, role="main", fallback=True, history=None, max_tokens=None):
+        captured.update(system=system, user=user, role=role)
+        yield "续写内容"
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat, "_pick_role", lambda question: "main")
+
+    async def collect():
+        return [frame async for frame in chat._gen_continue("原问题", "已经写了一半", True)]
+
+    frames = asyncio.run(collect())
+    assert "续写内容" in frames[0]
+    assert "已经写了一半" in captured["user"]
+    assert "原问题" in captured["user"]
+    assert "续写" in captured["system"]
+    assert captured["role"] == "main"

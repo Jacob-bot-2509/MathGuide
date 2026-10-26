@@ -1,10 +1,14 @@
 /**
  * 前端自测统一入口:`npm test`。
  *
- * 三个脚本都是「esbuild 打包 → node 执行」的轻量测试,不引入测试框架:
+ * 每个脚本都是「esbuild 打包 → node 执行」的轻量测试,不引入测试框架:
  *   - 语音数学编译器(纯函数)
  *   - SSE 收尾契约(postSSE)
  *   - MathText 公式渲染 + 链接/转义安全(Vite SSR 真实渲染)
+ *   - 回收站/本地数据/会话持久化
+ *   - 待办清单时间与状态规则
+ *   - 关于 MG 的版本记录与协议正文双语完整性
+ *   - 账号导出:token 与内部标记不落进导出文件
  *
  * 每个套件跑完都清理生成的临时 bundle,避免污染工作区。
  */
@@ -35,6 +39,24 @@ const CASES = [
     bundle: 'npx esbuild scripts/trash-store-test.ts --bundle --format=cjs --platform=node --outfile=.trash-store-test.cjs',
     run: 'node .trash-store-test.cjs',
     artifact: '.trash-store-test.cjs',
+  },
+  {
+    name: '待办清单时间/状态',
+    bundle: 'npx esbuild scripts/todo-test.ts --bundle --format=cjs --platform=node --outfile=.todo-test.cjs',
+    run: 'node .todo-test.cjs',
+    artifact: '.todo-test.cjs',
+  },
+  {
+    name: '关于 MG 内容完整性',
+    bundle: 'npx esbuild scripts/about-content-test.ts --bundle --format=cjs --platform=node --outfile=.about-content-test.cjs',
+    run: 'node .about-content-test.cjs',
+    artifact: '.about-content-test.cjs',
+  },
+  {
+    name: '账号导出本机数据',
+    bundle: 'npx esbuild scripts/account-export-test.ts --bundle --format=cjs --platform=node --define:import.meta.env={} --outfile=.account-export-test.cjs',
+    run: 'node .account-export-test.cjs',
+    artifact: '.account-export-test.cjs',
   },
 ]
 

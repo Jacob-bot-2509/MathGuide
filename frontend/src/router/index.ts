@@ -49,10 +49,22 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/settings/feedback',
+      name: 'settings-feedback',
+      component: () => import('@/views/settings/SettingsFeedbackView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/settings/about',
       name: 'settings-about',
       component: () => import('@/views/settings/SettingsAboutView.vue'),
       meta: { requiresAuth: true },
+    },
+    {
+      // 协议页允许未登录访问:登录页的《用户协议》《隐私政策》链接要在登录前可读
+      path: '/settings/terms',
+      name: 'settings-terms',
+      component: () => import('@/views/settings/SettingsTermsView.vue'),
     },
     {
       path: '/settings/trash',

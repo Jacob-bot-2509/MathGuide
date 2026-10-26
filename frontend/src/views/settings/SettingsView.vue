@@ -84,12 +84,16 @@ function doLogout() {
 
     <!-- 关于 -->
     <p class="section tech-label">{{ t('settings.sectionAbout') }}</p>
-    <button class="row" @click="router.push('/settings/about')">
+    <button class="row" @click="router.push('/settings/feedback')">
       <span class="row-label">{{ t('settings.feedback') }}</span>
       <span class="row-value"><span class="chev">›</span></span>
     </button>
     <button class="row" @click="router.push('/settings/about')">
       <span class="row-label">{{ t('settings.about') }}</span>
+      <span class="row-value"><span class="chev">›</span></span>
+    </button>
+    <button class="row" @click="router.push('/settings/terms')">
+      <span class="row-label">{{ t('settings.terms') }}</span>
       <span class="row-value"><span class="chev">›</span></span>
     </button>
 

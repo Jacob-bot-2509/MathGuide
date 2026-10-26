@@ -21,7 +21,7 @@ async def _collect(async_gen) -> list[str]:
 
 def _fake_stream(primary_behavior):
     async def fake(base, key, model, system, user, history=None, max_tokens=None,
-                   first_token_secs=20.0):
+                   first_token_secs=20.0, thinking=True):
         if model == "primary":
             async for delta in primary_behavior():
                 yield delta
@@ -91,3 +91,39 @@ def test_unconfigured_role_raises(monkeypatch):
     monkeypatch.setattr(llm, "resolve", lambda role: None)
     with pytest.raises(RuntimeError):
         asyncio.run(_collect(llm.stream_chat("system", "user", role="main")))
+
+
+def test_fast_roles_disable_thinking_deep_keeps_it(monkeypatch):
+    seen: dict[str, bool] = {}
+
+    async def fake(base, key, model, system, user, history=None, max_tokens=None,
+                   first_token_secs=20.0, thinking=True):
+        seen[model] = thinking
+        yield "ok"
+
+    monkeypatch.setattr(llm, "resolve", lambda role: {
+        "main": ("b", "k", "m"),
+        "deep": ("b", "k", "d"),
+    }.get(role))
+    monkeypatch.setattr(llm, "_stream_once", fake)
+
+    asyncio.run(_collect(llm.stream_chat("s", "u", role="main")))
+    asyncio.run(_collect(llm.stream_chat("s", "u", role="deep")))
+
+    assert seen == {"m": False, "d": True}
+
+
+def test_explicit_thinking_override_wins(monkeypatch):
+    seen: dict[str, bool] = {}
+
+    async def fake(base, key, model, system, user, history=None, max_tokens=None,
+                   first_token_secs=20.0, thinking=True):
+        seen[model] = thinking
+        yield "ok"
+
+    monkeypatch.setattr(llm, "resolve", lambda role: ("b", "k", "d"))
+    monkeypatch.setattr(llm, "_stream_once", fake)
+
+    asyncio.run(_collect(llm.stream_chat("s", "u", role="deep", thinking=False)))
+
+    assert seen == {"d": False}

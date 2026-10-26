@@ -24,7 +24,7 @@ const router = useRouter()
   <div class="settings-page">
     <header class="head">
       <button class="back" @click="router.back()">{{ t('common.back') }}</button>
-      <span class="title">{{ title }}</span>
+      <h1 class="title">{{ title }}</h1>
       <!-- 页眉右侧的补充说明(如设置首页的 MG SYSTEM 标记) -->
       <slot name="extra" />
     </header>
@@ -67,8 +67,10 @@ const router = useRouter()
 }
 
 .title {
+  margin: 0;
   color: var(--text-hi);
   font-size: 16px;
+  font-weight: 500;
   letter-spacing: 0.1em;
 }
 

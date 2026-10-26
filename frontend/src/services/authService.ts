@@ -6,13 +6,28 @@ import type { UserInfo } from '@/stores/user'
 import { getToken, login as setUser, logout as clearUser } from '@/stores/user'
 import { claimLocalData, clearLearningData } from '@/stores/localData'
 import type { AuthUserDto, LoginResponse } from '@/api/types'
-import { post, statusOf } from '@/api/http'
+import { get, post, statusOf } from '@/api/http'
 import { AVATAR_PRESETS } from '@/utils/avatar'
 
 /** 演示验证码(与后端 auth.py DEMO_CODE 一致;正式环境由短信服务下发) */
 export const DEMO_CODE = '123456'
 
 type LoginResult = 'ok' | 'notfound' | 'wrong'
+
+export interface AuthMode {
+  demo: boolean
+  invite: boolean
+}
+
+/** 登录页读取后端模式:测评环境隐藏固定验证码与游客登录入口。 */
+export async function getAuthMode(): Promise<AuthMode> {
+  try {
+    const res = await get<{ demo?: boolean; invite?: boolean }>('/api/health')
+    return { demo: res.demo !== false, invite: res.invite === true }
+  } catch {
+    return { demo: true, invite: false }
+  }
+}
 
 /** 写入登录态(token 一并持久化,请求层取用) */
 async function applyLogin(user: AuthUserDto, token: string): Promise<UserInfo> {
@@ -42,14 +57,27 @@ export async function loginWithCode(phone: string, code: string): Promise<void> 
   await applyLogin(res.user, res.token)
 }
 
-/** 创建账户(注册);手机号已存在返回 false */
-export async function registerWithPassword(phone: string, password: string): Promise<boolean> {
+export type RegisterResult = 'ok' | 'exists' | 'invite' | 'closed'
+
+/** 创建账户(注册);非演示模式需要测评邀请码 */
+export async function registerWithPassword(
+  phone: string,
+  password: string,
+  invite = '',
+): Promise<RegisterResult> {
   try {
-    const res = await post<LoginResponse>('/api/auth/register', { phone, password })
+    const res = await post<LoginResponse>('/api/auth/register', {
+      phone,
+      password,
+      invite: invite.trim() || undefined,
+    })
     await applyLogin(res.user, res.token)
-    return true
+    return 'ok'
   } catch (err) {
-    if (statusOf(err) === 409) return false
+    const status = statusOf(err)
+    if (status === 409) return 'exists'
+    if (status === 403) return 'invite'
+    if (status === 400) return 'closed'
     throw err
   }
 }

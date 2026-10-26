@@ -25,6 +25,12 @@ export function statusOf(err: unknown): number | undefined {
   return typeof (err as HttpError | null)?.status === 'number' ? (err as HttpError).status : undefined
 }
 
+export async function get<T>(path: string, headers?: Record<string, string>): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, { headers })
+  if (!res.ok) throw httpError(res)
+  return (await res.json()) as T
+}
+
 export async function post<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',

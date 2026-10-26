@@ -16,6 +16,7 @@ dev.bat
 
 - [backend/README.md](backend/README.md) — 后端架构、接口契约、RAG 与检索说明
 - [frontend/README.md](frontend/README.md) — 前端结构与组件说明
+- [deploy/README.md](deploy/README.md) — 实验测评上线清单:HTTPS、CSP、邀请码注册、数据留存
 
 ## 演示
 

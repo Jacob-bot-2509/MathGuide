@@ -55,7 +55,7 @@ _DONE = "data: [DONE]\n\n"  # SSE 收尾标记(由 _sse 统一补,生成器不�
 WELCOME_ZH = (
     "**欢迎回到 MATHGUIDE · 学习辅助**\n\n"
     "我是 MG,你的高等数学学习与研究助手。直接提问即可,或用下方指令:"
-    "概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围。\n\n"
+    "概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围 / 待办清单。\n\n"
     "问题的**板块我会自动识别**,先给严谨的专业表述,再给形象化理解,并带上公式推演;"
     "中文、英文提问都可以。\n\n"
     "(Welcome to MATHGUIDE · Learn. You can also ask in English, e.g. \"explain limits with intuition\".)"
@@ -311,7 +311,8 @@ async def _update_summary(uid: str, sid: int, old_turns: list[dict], prev: str) 
         f"{'用户' if t['role'] == 'user' else 'MG'}: {t['content']}" for t in old_turns)
     parts: list[str] = []
     try:
-        async for delta in rag.llm.stream_chat(system, user, role="main", fallback=False):
+        async for delta in rag.llm.stream_chat(system, user, role="main", fallback=False,
+                                               thinking=False):
             parts.append(delta)
             if sum(len(p) for p in parts) >= 400:
                 break
@@ -439,10 +440,12 @@ def _meter(resp: StreamingResponse, rec: dict, prompt_len: int, cmd: str,
 
 def _record(rec: dict, *, cmd: str, prompt_len: int, reply_len: int,
             role: str, research: bool) -> None:
-    """用量记账统一入口(聊天链路与语音转写共用,字段口径不会各写各的)"""
+    """用量记账统一入口(聊天链路与语音转写共用,字段口径不会各写各的)。
+
+    只写 uid:手机号/昵称属于身份信息,成本日志不需要。
+    """
     usage.record(
-        user=str(rec.get("nickname") or rec.get("uid") or "访客"),
-        phone=str(rec.get("phone") or ""),
+        uid=str(rec.get("uid") or "anonymous"),
         cmd=cmd,
         prompt_len=prompt_len,
         reply_len=reply_len,
@@ -546,7 +549,7 @@ async def _verify_answer(question: str, answer: str, role: str) -> str | None:
     user = f"问题:{question[:300]}\n\n解答:\n{answer[:1500]}"
     parts: list[str] = []
     try:
-        async for delta in rag.llm.stream_chat(system, user, role=role):
+        async for delta in rag.llm.stream_chat(system, user, role=role, thinking=False):
             parts.append(delta)
             if sum(len(p) for p in parts) >= 300:
                 break
@@ -577,7 +580,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             vrole = "main" if role == "deep" else rag.llm.pick("deep")
             verdict = await _verify_answer(prompt, "".join(answer), vrole)
             if verdict:
-                print(f"[chat] 复核({vrole}): {verdict[:60]}")
+                print(f"[chat] 复核({vrole}): {len(verdict)} 字")
                 yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
             # 解答完询问是否收录进问题记录(归纳本):前端渲染为「是/否」按钮
             nb = ("\n\n[是](cmd://nb/yes) [否](cmd://nb/no)" if zh
@@ -601,6 +604,37 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
         async for frame in _frames(_compose_direct(prompt, chunks)):
             yield frame
         return
+
+
+async def _gen_continue(question: str, partial: str, zh: bool):
+    """续写被用户中断的回答:只输出后续内容,不重复已有部分,不重复检索/复核。
+
+    前端把已生成正文放在 partial;这里只取末尾 24000 字(续写最依赖靠近中断点的
+    上下文),并保留原问题帮助模型保持同一题意。
+    """
+    system = (
+        "你是 MathGuide。用户中断了你上一条回答,现在要求从断点继续。"
+        "只输出续写的后续内容:不要重复已生成的内容,不要重写开头,不要解释,"
+        "不要输出「继续」「好的」等元话语。保持原回答的语言、语气和数学格式。"
+        if zh else
+        "You are MathGuide. The user interrupted your previous answer and now asks "
+        "you to continue. Output ONLY the continuation: do not repeat generated "
+        "content, do not restart, do not explain, and do not add meta phrases such "
+        "as 'continuing'. Keep the original language, tone and math formatting."
+    )
+    tail = partial.strip()[-24000:]
+    user = (
+        f"原问题:\n{question[:2000]}\n\n已生成内容:\n{tail}\n\n请从中断处继续。"
+    )
+    role = _pick_role(question)
+    try:
+        async for delta in rag.llm.stream_chat(system, user, role=role):
+            yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+    except Exception as exc:  # noqa: BLE001 续写失败只提示,不改动已有内容
+        print(f"[chat] 续写失败: {exc}")
+        note = ("⚠ 续写失败,请稍后重试。" if zh
+                else "⚠ Continuation failed. Please try again.")
+        yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
 
 
 # 章节链接契约:[章节名](cmd://chapter/<名称>) —— 前端 MathText 渲染为可点击章节;
@@ -627,7 +661,8 @@ async def _gen_nav_list(question: str):
     """章节导航:只输出教材章节划分列表(不展示内容);失败时给出明确提示"""
     emitted = False
     try:
-        async for delta in rag.llm.stream_chat(_nav_system(), question[:TEXTBOOK_CAP], role=rag.llm.pick("long")):
+        async for delta in rag.llm.stream_chat(_nav_system(), question[:TEXTBOOK_CAP], role=rag.llm.pick("long"),
+                                               thinking=False):
             emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
@@ -651,7 +686,8 @@ async def _gen_nav_guide(question: str, tb: str = ""):
         prompt += "\n\n(教材内容缓存已失效,请按通用知识作答该章)"
     emitted = False
     try:
-        async for delta in rag.llm.stream_chat(_nav_guide_system(), prompt, role=rag.llm.pick("long")):
+        async for delta in rag.llm.stream_chat(_nav_guide_system(), prompt, role=rag.llm.pick("long"),
+                                               thinking=False):
             emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
@@ -675,7 +711,8 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
     ).format(name=name)
     emitted = False
     try:
-        async for delta in rag.llm.stream_chat(system, body[:TEXTBOOK_CAP], role=rag.llm.pick("long")):
+        async for delta in rag.llm.stream_chat(system, body[:TEXTBOOK_CAP], role=rag.llm.pick("long"),
+                                               thinking=False):
             emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型侧错误统一降级,不让前端假死
@@ -721,7 +758,7 @@ async def _verify_clarify(question: str, answer: str, role: str) -> str | None:
     user = f"用户请求:{question[:300]}\n\n助手回复:\n{answer[:600]}"
     parts: list[str] = []
     try:
-        async for delta in rag.llm.stream_chat(system, user, role=role):
+        async for delta in rag.llm.stream_chat(system, user, role=role, thinking=False):
             parts.append(delta)
             if sum(len(p) for p in parts) >= 300:
                 break
@@ -765,7 +802,7 @@ async def _gen_formula_clarify(question: str):
     vrole = rag.llm.pick("deep")
     verdict = await _verify_clarify(question, "".join(answer), vrole)
     if verdict:
-        print(f"[chat] 公式手册澄清复核({vrole}): {verdict[:60]}")
+        print(f"[chat] 公式手册澄清复核({vrole}): {len(verdict)} 字")
         yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
 
 
@@ -849,6 +886,16 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # 前端新会话会以空 prompt 触发欢迎问候
     if not prompt:
         return _stream_text(WELCOME_ZH)
+
+    # 用户点「回复」续写被中断的回答:只用原问题 + 已生成正文,不重新检索/复核
+    if body.get("resume"):
+        partial = str(body.get("partial", "")).strip()
+        if not partial:
+            return _stream_text("没有可续写的内容。" if _is_chinese(prompt) else "Nothing to continue.")
+        question = _strip_meta(prompt, cmd)
+        zh = _is_chinese(question or partial)
+        meta["role"] = _pick_role(question)
+        return _sse(_gen_continue(question, partial, zh))
 
     # 附件消息(前缀契约 [attach:image|file]文件名;粘贴导入的文本文件带正文:
     # [attach:file]名\n\n内容 —— 正文交给 LLM 阅读理解,旧格式仍走接收回执)

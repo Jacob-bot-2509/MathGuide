@@ -5,6 +5,7 @@
  */
 import { settingsState, updateSettings } from '@/stores/settings'
 import { clearLearningData } from '@/stores/localData'
+import { clearAllTodoData } from '@/stores/todo'
 import SettingsShell from '@/components/common/SettingsShell.vue'
 import MgSwitch from '@/components/common/MgSwitch.vue'
 import { t } from '@/utils/i18n'
@@ -22,6 +23,7 @@ function clearLocalData() {
   // 走统一入口:localStorage 与内存缓存一并清除,
   // 否则回到学习页时内存档案会被 persistSessions 原样写回
   clearLearningData()
+  clearAllTodoData()
   showToast(t('privacy.toastCleared'))
 }
 </script>
@@ -74,6 +76,9 @@ function clearLocalData() {
     </div>
 
     <p class="foot-note">{{ t('privacy.foot') }}</p>
+    <RouterLink class="policy-link" :to="{ path: '/settings/terms', query: { tab: 'privacy' } }">
+      {{ t('privacy.policyLink') }} <span aria-hidden="true">↗</span>
+    </RouterLink>
   </SettingsShell>
 </template>
 
@@ -137,5 +142,17 @@ function clearLocalData() {
   line-height: 1.7;
   margin-top: 30px;
   padding: 0 6px;
+}
+
+.policy-link {
+  display: inline-block;
+  margin: 8px 6px 0;
+  color: var(--cyan);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.policy-link:hover {
+  text-shadow: 0 0 10px rgba(77, 214, 255, 0.5);
 }
 </style>
