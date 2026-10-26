@@ -109,6 +109,12 @@
   git diff --check                          无空白错误
 ```
 
+> **GitHub Actions 说明**：发布时仓库账户处于 billing lock，CI 的两个 job 在启动前
+> 被拒绝（"The job was not started because your account is locked due to a billing
+> issue"），因此以上结果均为本地实测（Windows 11 / Python 3.13 / Node 24）。
+> 工作流文件 `.github/workflows/ci.yml` 已随本版本发布；计费恢复后可在 Actions 页面
+> 对提交 `b6d55fc` / `b1553d9` 执行 Rerun。
+
 ## 六、行为变更与配置
 
 | 项目 | 变更 | 默认/迁移 |
