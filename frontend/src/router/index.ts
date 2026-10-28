@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import IntroView from '@/views/IntroView.vue'
 import { isLoggedIn } from '@/stores/user'
 import { t } from '@/utils/i18n'
+import { hostWorkspace, workspaceOfRoute } from '@/utils/workspace'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -28,6 +29,19 @@ const router = createRouter({
       path: '/research',
       name: 'research',
       component: () => import('@/views/ResearchView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      // 科研区 search-first:先检索本地论文全文,再基于结果提问
+      path: '/research/search',
+      name: 'research-search',
+      component: () => import('@/views/ResearchSearchView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/graph',
+      name: 'graph',
+      component: () => import('@/views/GraphView.vue'),
       meta: { requiresAuth: true },
     },
     {
@@ -77,6 +91,12 @@ const router = createRouter({
 
 // 登录守卫:需要登录的页面未登录 → 登录页;已登录访问登录页 → 首页
 router.beforeEach((to) => {
+  // 双域部署:子域固定工作区,禁止在本区域名下打开另一区的聊天页
+  const host = hostWorkspace()
+  const target = workspaceOfRoute(to.path)
+  if (host && target && target !== host) {
+    return { path: host === 'research' ? '/research' : '/learn' }
+  }
   const authed = isLoggedIn()
   if (to.meta.requiresAuth && !authed) return { path: '/login' }
   if (to.path === '/login' && authed) return { path: '/home' }

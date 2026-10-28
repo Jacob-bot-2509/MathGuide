@@ -28,16 +28,19 @@ src/
   │ http.ts     #   fetch 封装 + OpenAI 兼容 SSE 流解析
   services/     # 业务服务:页面唯一依赖(全部走真实后端)
   │ chatService.ts / authService.ts / accountService.ts
+  │ graphService.ts #  知识图谱数据(GET /api/graph)
   stores/       # 全局状态:user / settings / sessions(会话栈)
   │ notebook.ts #   问题记录(归纳本)
   │ todo.ts     #   待办清单(草稿/日程/过期,按 accountKey 分桶)
   utils/        # 纯工具:toast / tex2svg / classifier / commands / avatar
   │ speechTips.ts # 语音念法速查贴士数据(中英双语)
   │ todoTime.ts  # 待办日期/重复/状态纯规则
+  │ graphLayout.ts # 知识图谱最长路径分层布局(纯函数)
   components/
   ├─ common/    # Starfield、UserAvatar、ModulePlaceholder
   └─ chat/      # MathText、MathFormula、CategoryPanel、SpeechTips、TodoPanel、TodoReminder
   views/        # 页面;settings/ 下为设置中心与子页
+  │ GraphView.vue # 知识图谱:缩放/拖拽、章节聚焦、搜索与点选详情
   router/       # 路由(含登录守卫)
   styles/       # tokens.css 设计令牌 + base.css 全局样式
 ```

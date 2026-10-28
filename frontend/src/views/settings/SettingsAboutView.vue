@@ -8,7 +8,6 @@ import { useRouter } from 'vue-router'
 import SettingsShell from '@/components/common/SettingsShell.vue'
 import { settingsState } from '@/stores/settings'
 import {
-  APP_RELEASES_URL,
   APP_STABLE_DATE,
   APP_STABLE_VERSION,
   APP_VERSION,
@@ -22,6 +21,7 @@ import { t } from '@/utils/i18n'
 const router = useRouter()
 const en = computed(() => settingsState.language === 'en')
 const tr = (value: Bi): string => (en.value ? value.en : value.zh)
+const currentRelease = RELEASES.find((release) => release.version === APP_VERSION) ?? RELEASES[0]
 </script>
 
 <template>
@@ -60,26 +60,18 @@ const tr = (value: Bi): string => (en.value ? value.en : value.zh)
 
     <p class="section tech-label">{{ t('about.updatesTitle') }}</p>
     <div class="timeline">
-      <article
-        v-for="release in RELEASES"
-        :key="release.version"
-        class="release"
-        :class="{ 'release--current': release.status !== 'released' }"
-      >
+      <article v-if="currentRelease" class="release release--current">
         <div class="release-head">
-          <span class="release-version">{{ release.version }}</span>
-          <span v-if="release.status === 'dev'" class="badge badge--dev">{{ t('about.devBadge') }}</span>
-          <span v-else-if="release.status === 'latest'" class="badge">{{ t('about.latestBadge') }}</span>
-          <span v-if="release.date" class="release-date">{{ release.date }}</span>
+          <span class="release-version">{{ currentRelease.version }}</span>
+          <span v-if="currentRelease.status === 'dev'" class="badge badge--dev">{{ t('about.devBadge') }}</span>
+          <span v-else-if="currentRelease.status === 'latest'" class="badge">{{ t('about.latestBadge') }}</span>
+          <span v-if="currentRelease.date" class="release-date">{{ currentRelease.date }}</span>
         </div>
         <ul class="release-items">
-          <li v-for="(item, index) in release.items" :key="index">{{ tr(item) }}</li>
+          <li v-for="(item, index) in currentRelease.items" :key="index">{{ tr(item) }}</li>
         </ul>
       </article>
     </div>
-    <a class="text-link" :href="APP_RELEASES_URL" target="_blank" rel="noopener noreferrer">
-      {{ t('about.viewReleases') }} <span aria-hidden="true">↗</span>
-    </a>
 
     <p class="section tech-label">{{ t('about.legalTitle') }}</p>
     <p class="legal-summary">{{ t('about.legalSummary') }}</p>
@@ -397,18 +389,6 @@ const tr = (value: Bi): string => (en.value ? value.en : value.zh)
 
 .release-items li::marker {
   color: var(--text-dim);
-}
-
-.text-link {
-  display: inline-block;
-  margin-top: 9px;
-  color: var(--cyan);
-  font-size: 12px;
-  text-decoration: none;
-}
-
-.text-link:hover {
-  text-shadow: 0 0 10px rgba(77, 214, 255, 0.5);
 }
 
 .legal-summary {

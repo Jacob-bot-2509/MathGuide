@@ -39,6 +39,12 @@ backend/
   chat.py      # POST /api/chat/stream:SSE 流式下发 + RAG 编排
                # (安全外壳:输入上限/限流/用量记账 → 路由 → LLM/直答)
   usage.py     # 用量统计(电表):按 uid 记账、旧记录 PII 迁移、按账号导出/删除
+  knowledge_graph/  # 知识点知识图谱:data/knowledge_points.csv(80 点,难度/前置)
+                    # 加载时校验重复/缺失/自依赖/难度/无环,并计算核心度
+  diagnosis.py      # 掌握度诊断:LLM 评分或自评 → data/diagnoses.jsonl(按 uid)
+  recommendation.py # 学习路径推荐:前置门控 + 难度/核心度双策略
+  graph_api.py      # GET /api/graph:节点、依赖边、章节与个人掌握度
+  profile.py        # GET /api/profile:诊断次数、掌握/薄弱、章节分布、最近记录
   rag/
     documents.py  # 知识文档加载与切片(markdown + frontmatter)
     index.py      # 检索索引:关键词 + bigram + 向量混合打分(闲聊噪声门限)
@@ -161,17 +167,30 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
 
 ## 接口契约
 
-统一前缀 `/api`;除健康检查、注册、登录外均需请求头 `Authorization: Bearer <token>`。
+统一前缀 `/api`;除健康检查、注册、登录外均需认证:请求头 `Authorization: Bearer <token>`,
+或 HttpOnly 会话 Cookie `mg_session`(双域部署下由父域共享,登录一次两区通用)。
+Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.*` 子域由服务端按 Host 固定工作区。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/health` | 健康检查 `{ok, service}`(公开) |
 | POST | `/api/auth/register` | 手机号 + 密码注册(`demo=1` 或带 `invite` 邀请码)→ `200 {token, user}` / `403 {error:"invite"}` / `409 {error:"exists"}` |
 | POST | `/api/auth/login` | 四种方式,见下 → 一律 `200 {token, user}` |
+| GET | `/api/auth/session` | 用 Bearer 或 Cookie 恢复登录态 → `200 {user}` / `401` |
 | POST | `/api/auth/logout` | 吊销当前 token 并清理该用户会话缓存 → `200 {ok:true}` |
-| POST | `/api/account/export` | 导出账号与用量元数据 → `200 {exportedAt, account, usage}` |
-| POST | `/api/account/delete` | 注销账号(密码或 `confirm` 二次确认),级联删 token/用量 → `200 {ok:true}` |
+| POST | `/api/account/export` | 导出账号、用量元数据与诊断记录 → `200 {exportedAt, account, usage, diagnoses}` |
+| POST | `/api/account/delete` | 注销账号(密码或 `confirm` 二次确认),级联删 token/用量/诊断 → `200 {ok:true}` |
 | POST | `/api/chat/stream` | 聊天流式回复(SSE) |
+| POST | `/api/research/docs?name=文件名` | 上传论文(PDF/文本原始字节),按内容哈希去重、按用户隔离 → `{docId, duplicate, pages, chunks}` |
+| GET | `/api/research/docs` | 当前用户的论文列表(元数据) |
+| DELETE | `/api/research/docs/{doc_id}` | 删除论文、切片、章节树与原文件 |
+| POST | `/api/research/search` | 全文检索 `{query, topK?, docId?, tree?}` → `{hits, mode, elapsed}`;BM25 + embedding 混合,未配置向量时纯 BM25 |
+| GET | `/api/research/tree?docId=` | 论文章节树(节点扁平列表,`parentId` 组树) |
+| POST | `/api/diagnosis` | 掌握度诊断:`{pointId, answer}` 走模型评分,或 `{pointId, selfRating}` 自评 |
+| GET | `/api/diagnosis/report` | 薄弱点报告(低于 3 分,按分数升序/核心度降序) |
+| GET | `/api/recommendation` | 学习路径推荐:`?strategy=difficulty|coreness&limit=5` |
+| GET | `/api/graph` | 知识图谱节点、依赖边、章节与当前账号掌握度 |
+| GET | `/api/profile` | 学习画像:诊断次数、掌握/薄弱、章节分布与最近 10 条 |
 | POST | `/api/speech/math` | 语音识别文本 → 数学符号转写(SSE) |
 | POST | `/api/doc/export` | 研究综述 → 结构化 → PDF 下载 |
 | GET | `/api/stats` | 用量统计(**仅管理员**):总调用数 / 回复字数 / 按 uid / 按模型角色 |
@@ -273,6 +292,26 @@ data: [DONE]
 让前端回退原文,避免半截转写写进本地缓存。
 改后端时若绕过 `_sse` 直接返回 `StreamingResponse`,这条判定就失效了。
 
+## 知识图谱、诊断与推荐
+
+- **知识图谱真源** `knowledge_graph/data/knowledge_points.csv`:列为
+  `id,name,chapter,difficulty,prerequisites`(前置用分号分隔)。加载时校验重复 id、
+  缺失前置、自依赖、难度 1~5 与无环;核心度 = 传递后继数。当前覆盖高数上册 80 个知识点。
+- **掌握度诊断** `POST /api/diagnosis`:带 `answer` 时由模型按助教口径输出
+  `{"score": 1~5, "comment": "..."}`(解析失败返回 503,不写脏数据);带 `selfRating`
+  时直接用自评。记录落 `data/diagnoses.jsonl`,只存 uid / 知识点 id / 分数 / 短评语 / 来源 / 时间。
+- **薄弱点** 分数 `< 3` 记为薄弱;`GET /api/diagnosis/report` 按分数升序、核心度降序返回。
+- **推荐** 前置知识点全部 `≥ 3` 才进入候选:未诊断 = 新学,已诊断但 `< 3` = 复习,
+  已达标不推荐。`difficulty` 策略难度升序,`coreness` 策略核心度降序,同分按拓扑序。
+- **学习画像** `GET /api/profile` 聚合诊断次数、掌握/薄弱数、章节均分、薄弱前 5 与最近 10 条;
+  提问历史仍保存在浏览器本地,随账号导出由前端合并。
+- **50 题评测集** `evaluation/data/course-50.jsonl`(概念/计算/证明/选择/不可答):
+
+```bash
+../.venv/Scripts/python.exe tools/eval_qa.py --data evaluation/data/course-50.jsonl --stage retrieval
+../.venv/Scripts/python.exe tools/eval_qa.py --data evaluation/data/course-50.jsonl --stage all
+```
+
 ## 用量统计(测试期成本可见)
 
 每次聊天流结束后自动记账到 `data/usage.jsonl`(**只记 uid**,不记手机号/昵称;
@@ -297,7 +336,8 @@ cd ../frontend && npm test                   # 前端自测(编译器/SSE/MathTe
 演示模式/管理员/限流/游客上限/数据导出/注销、演示模式部署守卫、安全响应头、
 请求体 413/400、会话缓存跨用户隔离、embedding 冷启动降级、LLM 半截输出不回放、
 文档切片、排序/精排、arXiv HTTPS/响应上限/请求取消、usage JSONL 迁移/PII 清洗/压实、
-留存 TTL 清理、PDF 消毒。
+留存 TTL 清理、PDF 消毒、知识图谱 CSV 校验与拓扑排序、诊断评分解析/持久化/弱项报告、
+推荐前置门控与双策略、图谱接口、画像聚合、50 题评测集结构。
 
 ## 演示账号
 

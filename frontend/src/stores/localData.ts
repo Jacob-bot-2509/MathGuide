@@ -1,5 +1,5 @@
 /**
- * 本机学习数据清理统一入口。
+ * 本机数据清理统一入口(学习辅助与科学研究两区)。
  *
  * 会话、归纳本、回收站与语音转写缓存都只存在 localStorage,不带服务端归属;
  * 退出登录或用户主动「清除本地数据」时必须一起清掉,否则同一台设备换账号
@@ -7,16 +7,18 @@
  */
 import { clearConvertCache } from '@/utils/speechMath'
 import { clearNotebook } from './notebook'
+import { clearResearchArchive } from './researchArchive'
 import { clearAllSessions } from './sessions'
 import { clearTrash } from './trash'
 
-/** 本机学习数据当前归属的 accountKey;只存 16 位 uid 哈希,不含账号原文 */
+/** 本机数据当前归属的 accountKey;只存 16 位 uid 哈希,不含账号原文 */
 const OWNER_KEY = 'mg-data-owner'
 
 export function clearLearningData(): void {
   clearAllSessions()
   clearTrash()
   clearNotebook()
+  clearResearchArchive()
   clearConvertCache()
   try {
     localStorage.removeItem(OWNER_KEY)

@@ -1,17 +1,27 @@
-# MathGuide 生产部署示例(Caddy)
+# MathGuide 生产部署示例(Caddy)· 双域隔离
+#
+# 部署形态:
+#   learn.example.com     学习辅助
+#   research.example.com  科学研究
+# 两个子域服务同一份前端构建与同一个后端;浏览器 storage 按 origin 天然隔离。
+# 登录态由后端写入父域 Cookie(MG_COOKIE_DOMAIN=.example.com),两边共享登录。
 #
 # 用法:
 #   1. 前端 npm run build,把 frontend/dist 放到 /srv/mathguide/frontend/dist
-#   2. 后端只绑 127.0.0.1:8000,并设置 MG_DEMO_MODE=0 / MG_CORS_ORIGINS=https://你的域名
-#   3. 把 mg.example.com 换成真实域名,用 caddy run --config deploy/Caddyfile
+#   2. 后端只绑 127.0.0.1:8000,并设置:
+#        MG_DEMO_MODE=0
+#        MG_COOKIE_DOMAIN=.example.com
+#      (CORS 不需要配置:两个子域的 /api 都同域反代,浏览器视为同源)
+#   3. 把 example.com 换成真实域名,用 caddy run --config deploy/Caddyfile
 #
 # Caddy 自动申请/续期 TLS;HSTS 只在确认 HTTPS 正常后保留。
 
-mg.example.com {
+# 双域:同一站点配置服务两个子域。后端按 Host 固定工作区
+# (learn.* / research.*),前端 storage 按子域各自隔离。
+learn.example.com, research.example.com {
 	encode zstd gzip
 	root * /srv/mathguide/frontend/dist
 
-	# API 同域反代:前端不需要跨域,connect-src 'self' 就够
 	@api path /api/*
 	reverse_proxy @api 127.0.0.1:8000
 
@@ -21,8 +31,6 @@ mg.example.com {
 		Referrer-Policy "no-referrer"
 		X-Frame-Options "DENY"
 		Permissions-Policy "camera=(), geolocation=(), microphone=(self)"
-		# KaTeX 会写内联 style,因此保留 style-src 'unsafe-inline';
-		# 脚本与连接都限制在自身域名,前端已无内联脚本。
 		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
 		-Server
 	}

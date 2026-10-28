@@ -2,3 +2,4 @@ starlette==1.6.0
 uvicorn==0.52.4
 httpx==0.28.1
 watchfiles==1.2.0  # 仅开发用(dev_reload.py 热重载守护;生产 uvicorn 直跑不需要)
+pypdf==6.21.3

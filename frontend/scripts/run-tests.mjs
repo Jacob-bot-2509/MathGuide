@@ -47,6 +47,12 @@ const CASES = [
     artifact: '.todo-test.cjs',
   },
   {
+    name: '知识图谱分层布局',
+    bundle: 'npx esbuild scripts/graph-layout-test.ts --bundle --format=cjs --outfile=.graph-layout-test.cjs',
+    run: 'node .graph-layout-test.cjs',
+    artifact: '.graph-layout-test.cjs',
+  },
+  {
     name: '关于 MG 内容完整性',
     bundle: 'npx esbuild scripts/about-content-test.ts --bundle --format=cjs --platform=node --outfile=.about-content-test.cjs',
     run: 'node .about-content-test.cjs',

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /**
  * 首页:两大功能板块入口(学习辅助 / 科学研究)。
- * 科学研究暂未开放,占位展示。
+ * 两区界面一致、数据完全独立:学习区只走学习链路,科研区独占研究检索链路。
  */
 import { useRouter } from 'vue-router'
 import Starfield from '@/components/common/Starfield.vue'
 import UserAvatar from '@/components/common/UserAvatar.vue'
 import { userState } from '@/stores/user'
 import { t } from '@/utils/i18n'
+import { crossWorkspaceHref, workspaceOfRoute } from '@/utils/workspace'
 
 const router = useRouter()
 
@@ -26,14 +27,34 @@ const MODULES = [
     icon: '∇',
     titleKey: 'home.researchTitle',
     descKey: 'home.researchDesc',
-    statusKey: 'home.researchPending',
+    statusKey: 'home.open',
     route: '/research',
-    disabled: true,
+    disabled: false,
+  },
+  {
+    cls: 'card-graph',
+    icon: '◇',
+    titleKey: 'home.graphTitle',
+    descKey: 'home.graphDesc',
+    statusKey: 'home.open',
+    route: '/graph',
+    disabled: false,
   },
 ]
 
+/** 两区聊天页在双域部署下跨子域跳转;单域部署仍走 SPA 路由 */
+function hrefFor(path: string): string {
+  const ws = workspaceOfRoute(path)
+  return ws ? crossWorkspaceHref(ws, path) : path
+}
+
 function open(m: (typeof MODULES)[number]) {
   if (m.disabled) return
+  const href = hrefFor(m.route)
+  if (href !== m.route) {
+    window.location.assign(href)
+    return
+  }
   router.push(m.route)
 }
 </script>
@@ -49,8 +70,9 @@ function open(m: (typeof MODULES)[number]) {
       </div>
       <div class="nav-right">
         <nav class="links">
-          <RouterLink class="link" to="/learn">{{ t('home.learnTitle') }}</RouterLink>
-          <RouterLink class="link link-pending" to="/research">{{ t('home.researchTitle') }}</RouterLink>
+          <a class="link" :href="hrefFor('/learn')">{{ t('home.learnTitle') }}</a>
+          <a class="link" :href="hrefFor('/research')">{{ t('home.researchTitle') }}</a>
+          <RouterLink class="link" to="/graph">{{ t('home.graphTitle') }}</RouterLink>
         </nav>
         <button class="dots" :title="t('common.settings')" @click="router.push('/settings')">···</button>
         <button class="avatar-btn" :title="userState.info?.nickname" @click="router.push('/settings')">
@@ -256,8 +278,8 @@ function open(m: (typeof MODULES)[number]) {
 .modules {
   margin-top: 8vh;
   display: grid;
-  grid-template-columns: repeat(2, minmax(240px, 340px));
-  gap: 34px;
+  grid-template-columns: repeat(3, minmax(200px, 300px));
+  gap: 30px;
 }
 
 .card {
@@ -291,6 +313,11 @@ function open(m: (typeof MODULES)[number]) {
 .card-research {
   --card-accent: var(--magenta);
   --card-glow: var(--glow-magenta);
+}
+
+.card-graph {
+  --card-accent: var(--violet);
+  --card-glow: var(--glow-violet);
 }
 
 .card:hover {
@@ -398,7 +425,7 @@ function open(m: (typeof MODULES)[number]) {
   z-index: 2;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .modules {
     grid-template-columns: 1fr;
   }

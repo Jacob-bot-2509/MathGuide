@@ -7,10 +7,16 @@ MathGuide 后端(RAG 检索增强生成骨架)
     GET  /api/health                         健康检查
     POST /api/auth/register                  注册(手机号 + 密码)
     POST /api/auth/login                     登录(password / code / wechat / qq)
+    GET  /api/auth/session                   当前登录态(Cookie 共享登录)
     POST /api/auth/logout                    登出(需 token)
     POST /api/account/export                 导出账号与用量元数据(需 token)
     POST /api/account/delete                 注销账号并级联删除令牌/用量(需 token)
     POST /api/chat/stream                    聊天流式回复(需 token,OpenAI 兼容 SSE)
+    POST /api/diagnosis                      掌握度诊断(需 token;答题或自评)
+    GET  /api/diagnosis/report               薄弱点报告(需 token)
+    GET  /api/recommendation                 学习路径推荐(需 token)
+    GET  /api/graph                          知识图谱节点/边/掌握度(需 token)
+    GET  /api/profile                        学习画像聚合(需 token)
 
 知识库:knowledge/*.md → rag 切片索引 → 检索 → LLM(未配置则直答)。
 """
@@ -34,8 +40,13 @@ from starlette.routing import Route
 import auth
 import chat
 import config
+import diagnosis
 import doc
+import graph_api
+import profile
 import rag
+import recommendation
+import research_corpus
 import retention
 import usage
 from security_headers import SecurityHeadersMiddleware
@@ -75,10 +86,21 @@ routes = [
     Route("/api/health", health),
     Route("/api/auth/register", auth.register, methods=["POST"]),
     Route("/api/auth/login", auth.login, methods=["POST"]),
+    Route("/api/auth/session", auth.session),
     Route("/api/auth/logout", auth.logout, methods=["POST"]),
     Route("/api/account/export", auth.export_account, methods=["POST"]),
     Route("/api/account/delete", auth.delete_account, methods=["POST"]),
     Route("/api/chat/stream", chat.chat_stream, methods=["POST"]),
+    Route("/api/research/docs", research_corpus.upload_doc, methods=["POST"]),
+    Route("/api/research/docs", research_corpus.list_docs),
+    Route("/api/research/docs/{doc_id}", research_corpus.delete_doc, methods=["DELETE"]),
+    Route("/api/research/search", research_corpus.search_docs, methods=["POST"]),
+    Route("/api/research/tree", research_corpus.tree),
+    Route("/api/diagnosis", diagnosis.diagnose, methods=["POST"]),
+    Route("/api/diagnosis/report", diagnosis.weak_points),
+    Route("/api/recommendation", recommendation.recommend_points),
+    Route("/api/graph", graph_api.graph_data),
+    Route("/api/profile", profile.learning_profile),
     Route("/api/speech/math", chat.speech_to_math, methods=["POST"]),
     Route("/api/doc/export", doc.export_pdf, methods=["POST"]),
     Route("/api/stats", stats),

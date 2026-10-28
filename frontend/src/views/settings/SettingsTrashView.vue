@@ -36,6 +36,7 @@ function purge(id: number) {
         <div class="text">
           <span class="q">{{ item.question || t('trash.emptyQuestion') }}</span>
           <span class="meta">
+            <span class="ws">{{ t(item.workspace === 'research' ? 'trash.wsResearch' : 'trash.wsLearn') }}</span> ·
             {{ item.cat ? catName(item.cat.key) : catName('other') }} ·
             {{ t('trash.deletedOn', { d: fmtDate(item.deletedAt), n: daysLeft(item.deletedAt) }) }}
           </span>
@@ -116,6 +117,11 @@ function purge(id: number) {
 .meta {
   color: var(--text-dim);
   font-size: 11.5px;
+}
+
+/* 来源工作区标签:恢复去向一眼可辨 */
+.ws {
+  color: var(--cyan);
 }
 
 .act {

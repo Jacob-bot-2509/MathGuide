@@ -16,6 +16,8 @@ export interface ChatHistoryItem {
 export interface ChatRequest {
   /** 会话 id(上下文栈) */
   sessionId?: number
+  /** 工作区:学习辅助 learn / 科学研究 research;缺省按 learn */
+  workspace?: 'learn' | 'research'
   /** 板块 key */
   categoryKey?: string
   prompt: string

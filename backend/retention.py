@@ -11,6 +11,7 @@ import os
 from datetime import datetime
 
 import auth
+import research_corpus
 import session_cache
 import store
 import usage
@@ -41,6 +42,7 @@ def run(now: datetime | None = None) -> dict[str, int]:
             if uid:
                 removed_usage += usage.delete_user(uid, phone)
                 session_cache.clear_user(uid)
+                research_corpus.delete_user(uid)
         removed_accounts = len(removed)
 
     if usage_days > 0:

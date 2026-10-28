@@ -322,8 +322,8 @@ export const PRIVACY: LegalDoc = {
           en: 'Browser localStorage holds the sign-in token and profile (mg-user), conversations (mg-learn-sessions), notebook (mg-notebook), settings (mg-settings), to-dos (mg-todo:<accountKey>), trash and search scope. Sign-in tokens expire after 24 hours.',
         },
         {
-          zh: '后端 backend/data/ 保存 users.json(手机号、口令摘要、昵称、头像)、tokens.json(token 的 SHA-256 映射,24 小时)与 usage.jsonl(按 uid 的用量元数据,约保留最近 2000 条)。',
-          en: 'The backend backend/data/ directory holds users.json (phone, password digest, nickname, avatar), tokens.json (SHA-256 token hashes, 24 hours) and usage.jsonl (uid-keyed usage metadata, roughly the latest 2,000 records).',
+          zh: '后端 backend/data/ 保存 users.json(手机号、口令摘要、昵称、头像)、tokens.json(token 的 SHA-256 映射,24 小时)、usage.jsonl(按 uid 的用量元数据,约保留最近 2000 条)与 diagnoses.jsonl(按 uid 的知识点诊断:知识点 id、1~5 分、短评语与时间)。',
+          en: 'The backend backend/data/ directory holds users.json (phone, password digest, nickname, avatar), tokens.json (SHA-256 token hashes, 24 hours), usage.jsonl (uid-keyed usage metadata, roughly the latest 2,000 records) and diagnoses.jsonl (uid-keyed concept diagnoses: concept id, 1–5 score, short comment and timestamp).',
         },
         {
           zh: '演示部署使用 JSON 文件存储,未启用独立的静态加密。生产部署应补充磁盘加密、目录权限、备份访问控制与密钥管理。',

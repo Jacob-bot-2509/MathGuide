@@ -9,7 +9,10 @@
 ```ini
 MG_DEMO_MODE=0
 MG_INVITE_CODES=eval-2026-a,eval-2026-b
-MG_CORS_ORIGINS=https://mg.example.com
+# 双域隔离:两个子域共享登录 Cookie(Cookie 只作用于父域)
+MG_COOKIE_DOMAIN=.example.com
+# 前端经各子域 /api 同域反代时不需要 CORS;只在直连 API 域名时配置
+# MG_CORS_ORIGINS=https://learn.example.com,https://research.example.com
 MG_AUTH_RATE_MAX=30
 MG_AUTH_RATE_WINDOW=60
 # 管理员白名单,否则 /api/stats 无人可访问,留存清理也不会保护管理员

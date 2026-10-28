@@ -26,7 +26,7 @@ export function statusOf(err: unknown): number | undefined {
 }
 
 export async function get<T>(path: string, headers?: Record<string, string>): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, { headers })
+  const res = await fetch(`${BASE_URL}${path}`, { headers, credentials: 'include' })
   if (!res.ok) throw httpError(res)
   return (await res.json()) as T
 }
@@ -36,6 +36,34 @@ export async function post<T>(path: string, body: unknown, headers?: Record<stri
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(headers ?? {}) },
     body: JSON.stringify(body),
+    credentials: 'include',
+  })
+  if (!res.ok) throw httpError(res)
+  return (await res.json()) as T
+}
+
+/** 原始文件上传:body 直接是文件字节,类型与文件名由调用方给(不走 multipart) */
+export async function upload<T>(
+  path: string,
+  file: Blob,
+  contentType: string,
+  headers?: Record<string, string>,
+): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': contentType, ...(headers ?? {}) },
+    body: file,
+    credentials: 'include',
+  })
+  if (!res.ok) throw httpError(res)
+  return (await res.json()) as T
+}
+
+export async function del<T>(path: string, headers?: Record<string, string>): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'DELETE',
+    headers,
+    credentials: 'include',
   })
   if (!res.ok) throw httpError(res)
   return (await res.json()) as T
@@ -58,6 +86,7 @@ export async function postSSE(
     headers: { 'Content-Type': 'application/json', ...(opts?.headers ?? {}) },
     body: JSON.stringify(body),
     signal: ac.signal,
+    credentials: 'include',
   })
   if (!res.ok) throw httpError(res)
   if (!res.body) throw httpError(res)

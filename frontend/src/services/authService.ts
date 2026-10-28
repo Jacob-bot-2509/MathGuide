@@ -38,6 +38,22 @@ async function applyLogin(user: AuthUserDto, token: string): Promise<UserInfo> {
   return info
 }
 
+/** 启动时恢复登录态:双域部署下登录凭据在父域 Cookie 里,
+ *  本子域的 localStorage 可能还没有用户档案(session 端点补发)。
+ *  - 401:凭据确实失效 → 清本地登录态;
+ *  - 网络错误:保留现状,离线打开不至于被踢回登录页。 */
+export async function bootstrapSession(): Promise<void> {
+  try {
+    const res = await get<{ user?: AuthUserDto }>('/api/auth/session')
+    if (res?.user) {
+      setUser({ ...res.user })
+      claimLocalData(res.user.accountKey)
+    }
+  } catch (err) {
+    if (statusOf(err) === 401) clearUser()
+  }
+}
+
 /** 手机号 + 密码登录 */
 export async function loginWithPassword(phone: string, password: string): Promise<LoginResult> {
   try {

@@ -52,7 +52,10 @@ export function collectLocalData(): Record<string, unknown> {
   const local: Record<string, unknown> = {}
   const keys = [
     'mg-learn-sessions',
+    'mg-research-sessions',
     'mg-notebook',
+    'mg-research-notebook',
+    'mg-research-archive',
     'mg-settings',
     'mg-trash',
     'mg-research-scope',

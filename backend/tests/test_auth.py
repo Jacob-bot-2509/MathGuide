@@ -26,6 +26,7 @@ def client(temp_store, temp_usage, monkeypatch):
     app = Starlette(routes=[
         Route("/api/auth/register", auth.register, methods=["POST"]),
         Route("/api/auth/login", auth.login, methods=["POST"]),
+        Route("/api/auth/session", auth.session),
         Route("/api/auth/logout", auth.logout, methods=["POST"]),
         Route("/api/account/export", auth.export_account, methods=["POST"]),
         Route("/api/account/delete", auth.delete_account, methods=["POST"]),
@@ -73,6 +74,24 @@ def test_register_login_logout(client):
     res = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 200
     assert store.resolve_token(token) is None
+
+
+def test_register_sets_shared_cookie_and_session_restores(client):
+    """跨子域共享登录:注册即下发 HttpOnly Cookie,session 端点免 Bearer 恢复登录。"""
+    res = client.post("/api/auth/register", json={"phone": PHONE, "password": PASSWORD})
+    assert res.status_code == 200
+    cookie = res.headers.get("set-cookie", "")
+    assert auth.COOKIE_NAME in cookie
+    assert "httponly" in cookie.lower()
+    assert "samesite=lax" in cookie.lower()
+
+    restored = client.get("/api/auth/session")
+    assert restored.status_code == 200
+    assert restored.json()["user"]["phone"] == PHONE
+
+    # 登出只靠 Cookie 也必须生效:共享凭据在服务端被吊销
+    assert client.post("/api/auth/logout").status_code == 200
+    assert client.get("/api/auth/session").status_code == 401
 
 
 def test_login_errors(client):

@@ -54,6 +54,8 @@ def test_research_cache_key_is_scope_order_independent():
     b = chat._research_cache_key("泰勒展开", ["zbMATH", "arXiv"])
     assert a == b
     assert chat._research_cache_key("泰勒展开") == chat._research_cache_key("泰勒展开", [])
+    # 用户语料私有:不同用户的答案不得互相复用
+    assert chat._research_cache_key("q", None, "u1") != chat._research_cache_key("q", None, "u2")
 
 
 def test_rate_check_raises_429(monkeypatch):
@@ -119,6 +121,79 @@ def test_record_uses_uid_without_identity_fields(monkeypatch):
                  cmd="提问", prompt_len=3, reply_len=4, role="main", research=False)
     assert captured["uid"] == "u-1"
     assert "user" not in captured and "phone" not in captured
+
+
+def _stub_learn_pipeline(monkeypatch):
+    """让非研究链路可跑完:不命中知识库、未配置 LLM、非数学题。"""
+    monkeypatch.setattr(chat.rag.route, "is_research_intent", lambda q: True)
+    monkeypatch.setattr(chat.rag, "search", lambda *a, **k: [])
+    monkeypatch.setattr(chat.rag.llm, "is_configured", lambda: False)
+    monkeypatch.setattr(chat.rag, "is_math_question", lambda q: False)
+
+
+def test_learn_workspace_never_enters_research_chain(monkeypatch):
+    """学习区即使命中研究型措辞,也不得进入跨文献库检索链路。"""
+    _stub_learn_pipeline(monkeypatch)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("learn workspace entered research chain")
+
+    monkeypatch.setattr(chat.rag.research, "deep_search", forbidden)
+
+    resp = asyncio.run(chat._route_chat(
+        "泰勒展开的最新研究进展", None, {"sessionId": 1}, {"uid": "u"},
+        {"role": "main", "research": False}, "learn"))
+    frames = asyncio.run(_collect(resp))
+    assert frames, "学习区应正常返回普通回答帧"
+
+
+def test_research_workspace_enters_research_chain(monkeypatch):
+    """科研区才允许触发 deep_search(研究检索链路)。"""
+    _stub_learn_pipeline(monkeypatch)
+    called: dict[str, bool] = {}
+
+    class Outcome:
+        any_hit = False
+
+    async def fake_deep_search(question, top_k=3, scope=None):
+        called["yes"] = True
+        return Outcome()
+
+    monkeypatch.setattr(chat.rag.research, "deep_search", fake_deep_search)
+    monkeypatch.setattr(chat, "_research_reply", lambda outcome, zh: "研究结果")
+    chat._RESEARCH_ANSWER.clear()
+
+    resp = asyncio.run(chat._route_chat(
+        "泰勒展开的最新研究进展", None, {"sessionId": 1}, {"uid": "u"},
+        {"role": "main", "research": False}, "research"))
+    frames = asyncio.run(_collect(resp))
+    assert called.get("yes") is True
+    assert any("研究结果" in f for f in frames)
+
+
+def test_workspace_from_host():
+    import config
+
+    assert config.workspace_from_host("research.mg.example.com") == "research"
+    assert config.workspace_from_host("learn.mg.example.com:443") == "learn"
+    assert config.workspace_from_host("mg.example.com") == ""
+    assert config.workspace_from_host("localhost:5173") == ""
+    assert config.workspace_from_host(None) == ""
+
+
+def test_session_cache_isolates_workspaces():
+    import session_cache
+
+    session_cache.reset()
+    session_cache.cache_textbook("u", 1, "教材" * 50, workspace="learn")
+    assert session_cache.get_textbook("u", 1, workspace="learn")
+    assert session_cache.get_textbook("u", 1, workspace="research") == ""
+
+    session_cache.set_summary("u", 1, "摘要", workspace="research")
+    assert session_cache.get_summary("u", 1, workspace="research") == "摘要"
+    assert session_cache.get_summary("u", 1, workspace="learn") == ""
+    assert session_cache.valid_workspace("bogus") == "learn"
+    assert session_cache.valid_workspace(None) == "learn"
 
 
 def test_formula_followup_detection():

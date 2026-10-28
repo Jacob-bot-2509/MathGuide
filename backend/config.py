@@ -42,6 +42,21 @@ def cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
+def workspace_from_host(host: str | None) -> str:
+    """按子域判定工作区:learn.* / research.* → 固定工作区。
+
+    返回空字符串表示当前主机没有区分子域(本机开发、单域部署),
+    由调用方退回请求体里的 workspace 字段。子域一旦命中,服务端
+    以 Host 为准,客户端无法通过改请求体跨区。
+    """
+    name = (host or "").split(":", 1)[0].strip().lower()
+    if name.startswith("research."):
+        return "research"
+    if name.startswith("learn."):
+        return "learn"
+    return ""
+
+
 def invite_codes() -> set[str]:
     """测评邀请码;关闭演示模式后,只有持有效邀请码的手机号可注册。"""
     raw = os.getenv("MG_INVITE_CODES", "")

@@ -4,7 +4,7 @@
  * 超期记录自动清除。
  */
 import { reactive } from 'vue'
-import { restorePair, type ChatSession } from './sessions'
+import { sessionStore, type ChatSession, type Workspace } from './sessions'
 
 export interface TrashItem {
   /** 原问题消息 id */
@@ -14,6 +14,8 @@ export interface TrashItem {
   cat: ChatSession['cat']
   sessionId: number
   deletedAt: number
+  /** 原工作区;旧记录没有该字段,按学习区处理 */
+  workspace?: Workspace
 }
 
 export const TRASH_RETENTION_DAYS = 30
@@ -64,11 +66,11 @@ export function removeFromTrash(id: number) {
   persistTrash()
 }
 
-/** 恢复记录:写回会话档案(原会话或按原板块重建),并从回收站移除 */
+/** 恢复记录:写回原工作区的会话档案(原会话或按原板块重建),并从回收站移除 */
 export function restoreTrashItem(id: number): boolean {
   const item = trashState.items.find((t) => t.id === id)
   if (!item) return false
-  restorePair(item)
+  sessionStore(item.workspace ?? 'learn').restorePair(item)
   removeFromTrash(id)
   return true
 }

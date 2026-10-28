@@ -102,8 +102,9 @@ def _append_locked(entry: dict) -> None:
 
 
 def record(*, uid: str, cmd: str, prompt_len: int, reply_len: int,
-           role: str, research: bool, ts: float) -> None:
-    """追加一条调用记录;只存 uid,不存手机号/昵称。"""
+           role: str, research: bool, ts: float, workspace: str = "learn") -> None:
+    """追加一条调用记录;只存 uid,不存手机号/昵称。
+    workspace 区分学习辅助与科学研究,旧调用方不传按 learn 记。"""
     entry = {
         "ts": round(ts, 1),
         "uid": uid or "anonymous",
@@ -112,6 +113,7 @@ def record(*, uid: str, cmd: str, prompt_len: int, reply_len: int,
         "reply_len": reply_len,
         "role": role,
         "research": research,
+        "workspace": workspace if workspace in ("learn", "research") else "learn",
     }
     global _calls, _file_lines, _needs_compact
     with _lock:
@@ -250,7 +252,7 @@ def for_user(uid: str, phone: str = "") -> list[dict]:
     with _lock:
         _ensure_loaded()
         calls = list(_calls or [])
-    fields = ("ts", "cmd", "prompt_len", "reply_len", "role", "research")
+    fields = ("ts", "cmd", "prompt_len", "reply_len", "role", "research", "workspace")
     out: list[dict] = []
     for entry in calls:
         if entry.get("uid") == uid or (phone and entry.get("phone") == phone):

@@ -33,10 +33,13 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
+import config
 import rag
+import research_corpus
 import usage
 from auth import require_auth
 from http_utils import read_json_object
+from rag.research.types import SearchHit
 from rate_limit import SlidingWindowLimiter
 from session_cache import (
     TEXTBOOK_CAP,
@@ -46,6 +49,7 @@ from session_cache import (
     get_textbook,
     set_summary,
     valid_session_id,
+    valid_workspace,
 )
 
 CHUNK = 6          # 直答模式每帧字符数(配合浏览器端 ~24ms 渲染节流)
@@ -59,6 +63,15 @@ WELCOME_ZH = (
     "问题的**板块我会自动识别**,先给严谨的专业表述,再给形象化理解,并带上公式推演;"
     "中文、英文提问都可以。\n\n"
     "(Welcome to MATHGUIDE · Learn. You can also ask in English, e.g. \"explain limits with intuition\".)"
+)
+
+WELCOME_RESEARCH_ZH = (
+    "**欢迎回到 MATHGUIDE · 科学研究**\n\n"
+    "我是 MG,你的科研工作区助手。本区会话、归纳本与检索范围与学习辅助完全独立,"
+    "可直接提问,或用下方指令:概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围 / 待办清单。\n\n"
+    "提出研究型问题时,我会按选定的**搜索范围**跨文献库检索,并给出带编号引用的综合解答;"
+    "中文、英文提问都可以。\n\n"
+    "(Welcome to MATHGUIDE · Research. This workspace is isolated from Learn; ask in English if you prefer.)"
 )
 
 FALLBACK_ZH = (
@@ -300,8 +313,9 @@ def _validated_history(raw: object) -> list[dict]:
 
 
 # 会话滚动摘要:每 8 次请求压缩一次旧对话(便宜模型,失败静默),长对话保持早期上下文。
-# 与教材缓存一样按 (uid, sid) 隔离,避免客户端自增的 sessionId 跨用户撞号。
-async def _update_summary(uid: str, sid: int, old_turns: list[dict], prev: str) -> None:
+# 与教材缓存一样按 (uid, workspace, sid) 隔离,避免客户端自增的 sessionId 跨用户/跨区撞号。
+async def _update_summary(uid: str, sid: int, old_turns: list[dict], prev: str,
+                          workspace: str = "learn") -> None:
     system = (
         "你是对话摘要助手。把以下更早的对话压缩成简短摘要(要点式,200 字内),"
         "保留数学概念、未解决问题与用户偏好。只输出摘要本身。"
@@ -320,7 +334,7 @@ async def _update_summary(uid: str, sid: int, old_turns: list[dict], prev: str) 
         return
     text = "".join(parts).strip()
     if text:
-        set_summary(uid, sid, text)
+        set_summary(uid, sid, text, workspace=workspace)
         print(f"[chat] 会话 {sid} 摘要已更新({len(text)} 字)")
 
 
@@ -375,10 +389,12 @@ def _clean_scope(raw: object) -> list[str] | None:
     return [s for s in out if s] or None
 
 
-def _research_cache_key(question: str, scope: list[str] | None = None) -> str:
-    """范围参与缓存键:同一问题换了检索平台必须重新检索"""
+def _research_cache_key(question: str, scope: list[str] | None = None,
+                        uid: str = "") -> str:
+    """范围与用户参与缓存键:同一问题换了检索平台、或换了人的论文库,
+    必须重新检索/综合。用户语料是私有的,不能复用别人的答案。"""
     tag = "all" if not scope else ",".join(sorted(scope))
-    return f"{tag}|{question.strip().lower()}"
+    return f"{uid}|{tag}|{question.strip().lower()}"
 
 
 # ---------- 安全与用量(测试期防护) ----------
@@ -430,7 +446,8 @@ def _meter(resp: StreamingResponse, rec: dict, prompt_len: int, cmd: str,
         try:
             await asyncio.to_thread(
                 _record, rec, cmd=cmd, prompt_len=prompt_len, reply_len=chars,
-                role=meta["role"], research=meta["research"])
+                role=meta["role"], research=meta["research"],
+                workspace=meta.get("workspace", "learn"))
         except Exception as exc:  # noqa: BLE001 记账失败不能反过来打断已完成的回答
             print(f"[chat] 用量记账失败(不影响回答): {exc}")
 
@@ -439,10 +456,11 @@ def _meter(resp: StreamingResponse, rec: dict, prompt_len: int, cmd: str,
 
 
 def _record(rec: dict, *, cmd: str, prompt_len: int, reply_len: int,
-            role: str, research: bool) -> None:
+            role: str, research: bool, workspace: str = "learn") -> None:
     """用量记账统一入口(聊天链路与语音转写共用,字段口径不会各写各的)。
 
     只写 uid:手机号/昵称属于身份信息,成本日志不需要。
+    workspace 区分学习辅助与科学研究;语音转写始终记 learn。
     """
     usage.record(
         uid=str(rec.get("uid") or "anonymous"),
@@ -452,6 +470,7 @@ def _record(rec: dict, *, cmd: str, prompt_len: int, reply_len: int,
         role=role,
         research=research,
         ts=time.time(),
+        workspace=workspace,
     )
 
 
@@ -561,7 +580,8 @@ async def _verify_answer(question: str, answer: str, role: str) -> str | None:
 
 async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]],
                    history: list[dict] | None = None, role: str = "main", verify: bool = False,
-                   summary: str = "", sid: int | None = None, uid: str = ""):
+                   summary: str = "", sid: int | None = None, uid: str = "",
+                   workspace: str = "learn"):
     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
     verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过);
     summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)。
@@ -582,16 +602,20 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             if verdict:
                 print(f"[chat] 复核({vrole}): {len(verdict)} 字")
                 yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
-            # 解答完询问是否收录进问题记录(归纳本):前端渲染为「是/否」按钮
-            nb = ("\n\n[是](cmd://nb/yes) [否](cmd://nb/no)" if zh
-                  else "\n\n[Yes](cmd://nb/yes) [No](cmd://nb/no)")
-            yield f"data: {json.dumps(nb, ensure_ascii=False)}\n\n"
+            # 解答完询问是否收录进问题记录(归纳本):前端渲染为「是/否」按钮。
+            # 科研区不设问题归纳,不追加该入口。
+            if workspace == "learn":
+                nb = ("\n\n[是](cmd://nb/yes) [否](cmd://nb/no)" if zh
+                      else "\n\n[Yes](cmd://nb/yes) [No](cmd://nb/no)")
+                yield f"data: {json.dumps(nb, ensure_ascii=False)}\n\n"
         if sid is not None and history and len(history) >= 16:
             # 每 8 次请求异步压缩一次更早的对话(不阻塞本次响应;失败静默)
-            tick = bump_tick(uid, sid)
+            tick = bump_tick(uid, sid, workspace=workspace)
             if tick % 8 == 0:
                 asyncio.create_task(
-                    _update_summary(uid, sid, history[:-8], get_summary(uid, sid)))
+                    _update_summary(uid, sid, history[:-8],
+                                    get_summary(uid, sid, workspace=workspace),
+                                    workspace=workspace))
     except Exception as exc:  # noqa: BLE001 模型侧错误不区分类型,统一降级
         print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
         if answer:
@@ -813,6 +837,12 @@ async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
     body = await read_json_object(request)
     prompt = str(body.get("prompt", "")).strip()
     cmd = str(body.get("cmd", ""))[:50] if body.get("cmd") else None
+    # 工作区:学习辅助 / 科学研究。两区会话、教材缓存、检索链路互不相通,
+    # 只共享同一套后端服务与用户库。
+    # 双域部署时以 Host 为准(learn.* / research.*),服务端固定工作区,
+    # 客户端改请求体也跨不了区;单域/本机开发退回请求体字段(未知值按 learn)。
+    host_workspace = config.workspace_from_host(request.headers.get("host"))
+    workspace = host_workspace or valid_workspace(body.get("workspace"))
 
     # 服务端输入上限:前端限制之外的最后保险(超出静默截断,防误传大文本烧 token 费)
     if len(prompt) > PROMPT_MAX:
@@ -822,8 +852,8 @@ async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
     if prompt:
         _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
 
-    meta = {"role": "main", "research": False}
-    resp = await _route_chat(prompt, cmd, body, rec, meta)
+    meta = {"role": "main", "research": False, "workspace": workspace}
+    resp = await _route_chat(prompt, cmd, body, rec, meta, workspace)
     if not isinstance(resp, StreamingResponse):
         return resp
     resp = _meter(resp, rec, len(prompt), cmd or "", meta)
@@ -879,13 +909,14 @@ async def speech_to_math(request: Request) -> StreamingResponse:
     return _sse(gen())
 
 
-async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta: dict):
+async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta: dict,
+                      workspace: str = "learn"):
     """业务路由(与安全外壳分离):欢迎语 / 附件 / 章节导航 / 研究 / LLM / 直答"""
     uid = str(rec.get("uid") or "")
 
-    # 前端新会话会以空 prompt 触发欢迎问候
+    # 前端新会话会以空 prompt 触发欢迎问候;两区文案按工作区区分
     if not prompt:
-        return _stream_text(WELCOME_ZH)
+        return _stream_text(WELCOME_RESEARCH_ZH if workspace == "research" else WELCOME_ZH)
 
     # 用户点「回复」续写被中断的回答:只用原问题 + 已生成正文,不重新检索/复核
     if body.get("resume"):
@@ -920,10 +951,12 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         if not rag.llm.is_configured():
             return _stream_text("章节导航需要已配置 LLM,当前未配置。")
         if cmd == "章节知识导航":
-            cache_textbook(uid, body.get("sessionId"), question)  # 教材入库,后续点击只发章节名
+            # 教材入库,后续点击只发章节名;缓存键带 workspace,两区同号 sessionId 不串档
+            cache_textbook(uid, body.get("sessionId"), question, workspace=workspace)
             gen = _gen_nav_list(question)
         else:
-            gen = _gen_nav_guide(question, tb=get_textbook(uid, body.get("sessionId")))
+            gen = _gen_nav_guide(question, tb=get_textbook(uid, body.get("sessionId"),
+                                                          workspace=workspace))
         meta["role"] = "long"
         return _sse(gen)
 
@@ -937,11 +970,13 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走跨论文库深度搜索)
     # 必须先判意图、后检索:深度搜索内部自会检索知识库,
     # 这里若先检一遍,研究型提问就要白付一份 embedding 开销(结果还被丢掉)
-    if rag.route.is_research_intent(question):
+    # 只允许科学研究工作区进入该链路:学习辅助区不跨区查文献
+    if workspace == "research" and rag.route.is_research_intent(question):
         meta["research"] = True
         # 搜索范围(前端勾选的平台;缺省/空 = 全平台);非法名白名单校验在 deep_search 内
         scope = _clean_scope(body.get("sources"))
-        ck = _research_cache_key(question, scope)
+        ck = _research_cache_key(question, scope,
+                                 f"{uid}|{research_corpus.corpus_stamp(uid)}")
         cached = _RESEARCH_ANSWER.get(ck)
         if cached and time.monotonic() - cached[0] < _RESEARCH_TTL:
             _RESEARCH_ANSWER.move_to_end(ck)  # 命中即刷新 LRU 顺序
@@ -949,6 +984,20 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             meta["role"] = "deep"
             return _stream_text(cached[1])
         outcome = await rag.research.deep_search(question, top_k=3, scope=scope)
+        # 用户自己的论文库排在外部来源之前:个人语料与问题最对口,
+        # 也是引用页码的唯一来源。语料库为空时行为不变。
+        try:
+            local = await asyncio.to_thread(research_corpus.chat_hits, uid, question, 4)
+        except Exception as exc:  # noqa: BLE001 语料检索失败不阻断外部检索
+            print(f"[chat] 科研语料检索失败(继续外部来源): {exc}")
+            local = []
+        if local:
+            outcome.hits = [
+                SearchHit("我的论文", f'{h["docName"]} · {h["section"]}',
+                          h["snippet"], "", 0, "", 0)
+                for h in local
+            ] + outcome.hits
+            outcome.sources["我的论文"] = len(local)
         # P2c:LLM 已配置 → 综合解答 + 编号引用 + 后端拼装引用区;
         # 未配置 → 来源列表(现有行为)
         if outcome.any_hit and rag.llm.is_configured():
@@ -960,6 +1009,21 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # 不阻塞事件循环(否则这段等待会冻住所有并发会话)
     chunks = await asyncio.to_thread(rag.search, question, 3)
 
+    # 科研区:无论是否命中研究意图,都先查用户自己的论文库。
+    # 个人论文是私有且最对口的证据,排在公共知识库之前进入上下文。
+    if workspace == "research":
+        try:
+            local = await asyncio.to_thread(research_corpus.chat_hits, uid, question, 4)
+        except Exception as exc:  # noqa: BLE001 语料检索失败不影响主链路
+            print(f"[chat] 科研语料检索失败(继续公共知识库): {exc}")
+            local = []
+        if local:
+            chunks = [
+                (rag.Chunk(h["nodeId"], h["docName"], "", h["section"],
+                           h.get("text") or h["snippet"]), 6.0)
+                for h in local
+            ] + chunks
+
     if rag.llm.is_configured():
         # 双角色验证仅对数学题(命中知识库或题目措辞)开启;闲聊不浪费复核调用。
         # 公式手册第二步(上一条用户消息带澄清标记)强制开启:公式定理作答必须有独立复核
@@ -968,9 +1032,9 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         sid = valid_session_id(body.get("sessionId"))
         history = _validated_history(body.get("history"))
         verify = bool(chunks) or rag.is_math_question(question) or _is_formula_followup(history)
-        summary = get_summary(uid, sid) if sid is not None else ""
+        summary = get_summary(uid, sid, workspace=workspace) if sid is not None else ""
         return _sse(_gen_llm(question, cmd, chunks, history=history, role=role, verify=verify,
-                             summary=summary, sid=sid, uid=uid))
+                             summary=summary, sid=sid, uid=uid, workspace=workspace))
     # 直答模式:
     # ① 检索到相关知识 → 知识直答(专业问询专业回答);
     # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架;

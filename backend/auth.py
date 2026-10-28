@@ -12,7 +12,12 @@
     {method: "wechat" | "qq", nickname?, avatar?}
         访客式登录(演示:模拟与设备账号授权交接),创建 guest 用户
     统一返回 200 {token, user}
-- POST /api/auth/logout  (需 Bearer token) → 200 {ok: true}
+- POST /api/auth/session  (Bearer 或 Cookie) → 200 {user} | 401
+- POST /api/auth/logout  (Bearer 或 Cookie) → 200 {ok: true}
+
+双域部署:登录成功同时下发 HttpOnly 会话 Cookie(mg_session,作用域由
+MG_COOKIE_DOMAIN 控制);learn/research 两个子域共享登录,浏览器存储仍按
+origin 各自隔离。Authorization: Bearer 继续兼容,旧客户端不需要改。
 
 演示模式:MG_DEMO_MODE 默认 1,允许固定验证码、访客登录与开放注册;设为 0/off 后
 这些演示通道与 /register 直接拒绝,真实部署必须关闭。认证接口按客户端 IP 限流。
@@ -36,6 +41,11 @@ from http_utils import read_json_object
 from rate_limit import SlidingWindowLimiter
 
 DEMO_CODE = "123456"
+
+# 跨子域共享登录:Cookie 作用域设为父域(MG_COOKIE_DOMAIN),learn/research
+# 两个子域都能读到;localStorage 仍按 origin 各自隔离,数据不会因此串区。
+COOKIE_NAME = "mg_session"
+COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 天,与 token 的实际留存策略同量级
 
 DEFAULT_AVATAR = "preset:sum"  # 与前端 AVATAR_PRESETS[0] 对应
 NICKNAME_MAX = 40
@@ -169,9 +179,49 @@ def _password_matches(password: str, stored: object) -> tuple[bool, bool]:
 
 
 def _bearer_token(request: Request) -> str:
-    """从 Authorization 头提取 Bearer token(require_auth 与 logout 共用,解析规则不重复)"""
+    """取登录 token:优先 Authorization 头,其次 HttpOnly 会话 Cookie。
+
+    双域部署下 Cookie 由父域共享,两个子域自动同登录;旧的 Bearer 方式
+    保留,既有客户端与本地开发不需要改。
+    """
     header = request.headers.get("authorization", "")
-    return header[7:] if header.lower().startswith("bearer ") else ""
+    if header.lower().startswith("bearer "):
+        return header[7:]
+    return request.cookies.get(COOKIE_NAME, "")
+
+
+def _cookie_domain() -> str | None:
+    """Cookie 作用域:仅当显式配置 MG_COOKIE_DOMAIN 时跨子域共享。
+
+    空值 = host-only(本机开发/单域部署),不会把凭据扩散到其他服务。
+    """
+    value = os.getenv("MG_COOKIE_DOMAIN", "").strip()
+    return value or None
+
+
+def _is_https(request: Request) -> bool:
+    proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    return proto == "https" or request.url.scheme == "https"
+
+
+def _set_session_cookie(response: JSONResponse, token: str, request: Request) -> None:
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        max_age=COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=_is_https(request),
+        domain=_cookie_domain(),
+        path="/",
+    )
+
+
+def _auth_json(payload: dict, request: Request, token: str) -> JSONResponse:
+    """认证成功响应:下发 token(兼容旧客户端)并写共享会话 Cookie。"""
+    response = JSONResponse(payload, headers={"Cache-Control": "no-store"})
+    _set_session_cookie(response, token, request)
+    return response
 
 
 def require_auth(request: Request) -> dict:
@@ -217,9 +267,8 @@ async def register(request: Request) -> JSONResponse:
     uid = f"u-{phone}"
     rec = _new_user(uid, phone, "phone-pass", (salt, digest), None, None)
     store.create_user(rec)
-    return JSONResponse({"token": _issue_for(uid),
-                         "user": user_dto(rec)},
-                        headers={"Cache-Control": "no-store"})
+    token = _issue_for(uid)
+    return _auth_json({"token": token, "user": user_dto(rec)}, request, token)
 
 
 async def login(request: Request) -> JSONResponse:
@@ -268,9 +317,8 @@ async def login(request: Request) -> JSONResponse:
                 store.create_user(rec)
             else:
                 uid, rec = found
-        return JSONResponse({"token": _issue_for(uid),
-                             "user": user_dto(rec)},
-                            headers={"Cache-Control": "no-store"})
+        token = _issue_for(uid)
+        return _auth_json({"token": token, "user": user_dto(rec)}, request, token)
 
     # ---- 微信 / QQ(guest 登录,昵称与头像由前端模拟授权后提供)----
     if method in ("wechat", "qq"):
@@ -294,10 +342,25 @@ async def login(request: Request) -> JSONResponse:
         uid = f"guest-{method}-{secrets.token_hex(8)}"
         rec = _new_user(uid, None, method, None, nickname or None, avatar or None)
         store.create_user(rec)
-        return JSONResponse({"token": _issue_for(uid), "user": user_dto(rec)},
-                            headers={"Cache-Control": "no-store"})
+        token = _issue_for(uid)
+        return _auth_json({"token": token, "user": user_dto(rec)}, request, token)
 
     raise HTTPException(400, "unknown method")
+
+
+async def session(request: Request) -> JSONResponse:
+    """当前登录态(供跨子域启动时恢复登录):
+
+    - Cookie 有效 → 返回 user,并顺带续期 Cookie(共享登录保持滑动有效);
+    - 只有旧 Bearer token → 补发 Cookie,升级到跨子域登录;
+    - 都没有 → 401,前端回登录页。
+    """
+    rec = require_auth(request)
+    token = _bearer_token(request)
+    response = JSONResponse({"user": user_dto(rec)}, headers={"Cache-Control": "no-store"})
+    if token:
+        _set_session_cookie(response, token, request)
+    return response
 
 
 async def logout(request: Request) -> JSONResponse:
@@ -311,7 +374,10 @@ async def logout(request: Request) -> JSONResponse:
         if rec:
             # 会话级教材/摘要缓存按 uid 存,登出即清理,避免残留
             session_cache.clear_user(rec.get("uid"))
-    return JSONResponse({"ok": True})
+    response = JSONResponse({"ok": True})
+    # 共享登录 Cookie 一并失效;Bearer token 删除逻辑保持不变
+    response.delete_cookie(COOKIE_NAME, domain=_cookie_domain(), path="/")
+    return response
 
 
 async def export_account(request: Request) -> JSONResponse:
@@ -323,10 +389,16 @@ async def export_account(request: Request) -> JSONResponse:
     account = user_dto(rec)
     if rec.get("createdAt"):
         account["createdAt"] = rec["createdAt"]
+    # 诊断记录与用量同口径:随账号导出,注销时级联删除(局部导入避免循环依赖)
+    import diagnosis
+    import research_corpus
+
     return JSONResponse({
         "exportedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
         "account": account,
         "usage": usage.for_user(uid, phone),
+        "diagnoses": diagnosis.for_user(uid),
+        "researchDocs": research_corpus.docs_for_export(uid),
         "note": "学习会话、归纳本与待办保存在浏览器本地,导出文件会由前端一并合并。",
     }, headers={"Cache-Control": "no-store"})
 
@@ -357,6 +429,15 @@ async def delete_account(request: Request) -> JSONResponse:
         raise HTTPException(400, "invalid account")
     # 先删用量再删账号:用量写盘失败时账号仍在,用户可以重试,不会留下孤儿日志
     usage.delete_user(uid, phone)
+    import diagnosis
+
+    diagnosis.delete_user(uid)
     store.delete_user(uid)
     session_cache.clear_user(uid)
-    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+    # 科研语料是服务端持久数据,注销时必须一起删,否则删号后论文仍留在磁盘
+    import research_corpus
+
+    research_corpus.delete_user(uid)
+    response = JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+    response.delete_cookie(COOKIE_NAME, domain=_cookie_domain(), path="/")
+    return response

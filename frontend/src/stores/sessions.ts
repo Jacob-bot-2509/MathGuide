@@ -1,10 +1,19 @@
 /**
- * 会话上下文栈(共享状态):学习辅助的多会话档案。
- * - LearnView 使用它做会话切换与归档;
- * - 回收站恢复也写入同一份数据,回到聊天页即可见。
+ * 会话上下文栈(共享状态):按工作区独立的多会话档案。
+ * - 学习辅助(learn)与科学研究(research)各持一份,互不相通;
+ * - 同一套代码由 createSessionStore 按工作区实例化,localStorage 键前缀区分;
+ * - 回收站恢复按记录的 workspace 写回对应工作区。
  * 持久化于 localStorage(演示环境)。
  */
 import { reactive } from 'vue'
+
+/** 工作区:学习辅助 / 科学研究。两个板块的数据完全隔离,只共享后端基础设施 */
+export type Workspace = 'learn' | 'research'
+
+export const SESSIONS_KEYS: Record<Workspace, string> = {
+  learn: 'mg-learn-sessions',
+  research: 'mg-research-sessions',
+}
 
 export interface ChatAttachment {
   kind: 'image' | 'file'
@@ -45,7 +54,12 @@ export interface ChatSession {
   messages: ChatMsg[]
 }
 
-const SESSIONS_KEY = 'mg-learn-sessions'
+export interface SessionsState {
+  sessions: ChatSession[]
+  activeId: number
+  msgId: number
+  sessionId: number
+}
 
 /** 会话档案数量上限(createSession 与 restorePair 共同遵守,勿在多处重定义) */
 export const MAX_SESSIONS = 20
@@ -71,9 +85,27 @@ interface Persisted {
   sessionId: number
 }
 
-function load(): Persisted {
+export interface RestoreItem {
+  sessionId: number
+  question: string
+  answer: string
+  cat: ChatSession['cat']
+}
+
+export interface SessionStore {
+  readonly workspace: Workspace
+  readonly state: SessionsState
+  persistSessions(): boolean
+  flushSessions(): boolean
+  nextMsgId(): number
+  nextSessionId(): number
+  restorePair(item: RestoreItem): void
+  clear(): void
+}
+
+function load(key: string): Persisted {
   try {
-    const raw = localStorage.getItem(SESSIONS_KEY)
+    const raw = localStorage.getItem(key)
     if (raw) {
       const p = JSON.parse(raw) as Partial<Persisted> | null
       // 形状校验:字段缺失/被写坏(手改、旧版本、异常写入)时回退空档案,避免 /learn 挂掉
@@ -92,120 +124,151 @@ function load(): Persisted {
   return { sessions: [], activeId: 0, msgId: 0, sessionId: 0 }
 }
 
-export const sessionsState = reactive<{
-  sessions: ChatSession[]
-  activeId: number
-  msgId: number
-  sessionId: number
-}>(load())
+function createSessionStore(workspace: Workspace): SessionStore {
+  const storageKey = SESSIONS_KEYS[workspace]
+  const state = reactive<SessionsState>(load(storageKey))
 
-/** 一次完整的序列化 + 写盘;成功/配额失败都更新 lastPersistOk */
-function writeSessionsNow(): boolean {
-  try {
-    const data: Persisted = {
-      sessions: sessionsState.sessions.map((s) => ({
-        id: s.id,
-        cat: s.cat,
-        messages: s.messages
-          .map((m) => ({
-            id: m.id, role: m.role, content: m.content, cmd: m.cmd,
-            attachment: m.attachment, chitchat: m.chitchat,
-            nav: m.nav, navGuideFor: m.navGuideFor,
-            interrupted: m.interrupted, research: m.research,
-            stopped: m.stopped,
-          }))
-          .slice(-120),
-      })),
-      activeId: sessionsState.activeId,
-      msgId: sessionsState.msgId,
-      sessionId: sessionsState.sessionId,
+  let persistTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingPersist = false
+  let lastPersistOk = true
+
+  /** 一次完整的序列化 + 写盘;成功/配额失败都更新 lastPersistOk */
+  function writeSessionsNow(): boolean {
+    try {
+      const data: Persisted = {
+        sessions: state.sessions.map((s) => ({
+          id: s.id,
+          cat: s.cat,
+          messages: s.messages
+            .map((m) => ({
+              id: m.id, role: m.role, content: m.content, cmd: m.cmd,
+              attachment: m.attachment, chitchat: m.chitchat,
+              nav: m.nav, navGuideFor: m.navGuideFor,
+              interrupted: m.interrupted, research: m.research,
+              stopped: m.stopped,
+            }))
+            .slice(-120),
+        })),
+        activeId: state.activeId,
+        msgId: state.msgId,
+        sessionId: state.sessionId,
+      }
+      localStorage.setItem(storageKey, JSON.stringify(data))
+      lastPersistOk = true
+      return true
+    } catch {
+      /* 存储超限(通常是图片附件)时返回 false,由调用方决定是否提示用户 */
+      lastPersistOk = false
+      return false
     }
-    localStorage.setItem(SESSIONS_KEY, JSON.stringify(data))
-    lastPersistOk = true
-    return true
-  } catch {
-    /* 存储超限(通常是图片附件)时返回 false,由调用方决定是否提示用户 */
-    lastPersistOk = false
-    return false
   }
-}
 
-/* 持久化 debounce:流式结束/切换会话等高频路径不立刻做整份序列化;
-   关键节点(附件配额提示、卸载、页面关闭)用 flushSessions() 立即落盘。 */
-const PERSIST_DELAY_MS = 120
-let persistTimer: ReturnType<typeof setTimeout> | null = null
-let pendingPersist = false
-let lastPersistOk = true
+  /* 持久化 debounce:流式结束/切换会话等高频路径不立刻做整份序列化;
+     关键节点(附件配额提示、卸载、页面关闭)用 flushSessions() 立即落盘。 */
+  const PERSIST_DELAY_MS = 120
 
-/** 合并写盘(默认 120ms)。返回值是「最近一次实际写盘」的结果,不是本次结果 */
-export function persistSessions(): boolean {
-  pendingPersist = true
-  if (persistTimer !== null) clearTimeout(persistTimer)
-  persistTimer = setTimeout(() => {
-    persistTimer = null
-    if (!pendingPersist) return
+  /** 合并写盘(默认 120ms)。返回值是「最近一次实际写盘」的结果,不是本次结果 */
+  function persistSessions(): boolean {
+    pendingPersist = true
+    if (persistTimer !== null) clearTimeout(persistTimer)
+    persistTimer = setTimeout(() => {
+      persistTimer = null
+      if (!pendingPersist) return
+      pendingPersist = false
+      writeSessionsNow()
+    }, PERSIST_DELAY_MS)
+    return lastPersistOk
+  }
+
+  /** 立即写盘并取消待执行的 debounce;关键路径/卸载前调用 */
+  function flushSessions(): boolean {
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    if (!pendingPersist) return lastPersistOk
     pendingPersist = false
-    writeSessionsNow()
-  }, PERSIST_DELAY_MS)
-  return lastPersistOk
-}
-
-/** 立即写盘并取消待执行的 debounce;关键路径/卸载前调用 */
-export function flushSessions(): boolean {
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer)
-    persistTimer = null
+    return writeSessionsNow()
   }
-  if (!pendingPersist) return lastPersistOk
-  pendingPersist = false
-  return writeSessionsNow()
-}
 
-if (typeof window !== 'undefined') {
-  // 关闭/刷新/移动端切后台时尽量把最后一次变更落盘
-  window.addEventListener('beforeunload', () => { flushSessions() })
-  window.addEventListener('pagehide', () => { flushSessions() })
-}
-
-export function nextMsgId(): number {
-  return ++sessionsState.msgId
-}
-
-export function nextSessionId(): number {
-  return ++sessionsState.sessionId
-}
-
-/** 恢复回收站记录:找回原会话;原会话已删除则按原板块重建 */
-export function restorePair(item: {
-  sessionId: number
-  question: string
-  answer: string
-  cat: ChatSession['cat']
-}): void {
-  let session = sessionsState.sessions.find((s) => s.id === item.sessionId)
-  if (!session) {
-    session = { id: item.sessionId, cat: item.cat, messages: [] }
-    sessionsState.sessions.push(session)
-    if (sessionsState.sessions.length > MAX_SESSIONS) sessionsState.sessions.shift()
-    sessionsState.sessionId = Math.max(sessionsState.sessionId, item.sessionId)
+  function nextMsgId(): number {
+    return ++state.msgId
   }
-  session.messages.push(
-    { id: nextMsgId(), role: 'user', content: item.question },
-    { id: nextMsgId(), role: 'assistant', content: item.answer },
-  )
-  persistSessions()
+
+  function nextSessionId(): number {
+    return ++state.sessionId
+  }
+
+  /** 恢复回收站记录:找回原会话;原会话已删除则按原板块重建 */
+  function restorePair(item: RestoreItem): void {
+    let session = state.sessions.find((s) => s.id === item.sessionId)
+    if (!session) {
+      session = { id: item.sessionId, cat: item.cat, messages: [] }
+      state.sessions.push(session)
+      if (state.sessions.length > MAX_SESSIONS) state.sessions.shift()
+      state.sessionId = Math.max(state.sessionId, item.sessionId)
+    }
+    session.messages.push(
+      { id: nextMsgId(), role: 'user', content: item.question },
+      { id: nextMsgId(), role: 'assistant', content: item.answer },
+    )
+    persistSessions()
+  }
+
+  /** 清空本工作区全部会话档案(内存 + localStorage) */
+  function clear(): void {
+    // 取消尚未落盘的 debounce,否则清空后定时器会把旧档案重新写回去
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    pendingPersist = false
+    lastPersistOk = true
+    state.sessions = []
+    state.activeId = 0
+    localStorage.removeItem(storageKey)
+  }
+
+  if (typeof window !== 'undefined') {
+    // 关闭/刷新/移动端切后台时尽量把最后一次变更落盘
+    window.addEventListener('beforeunload', () => { flushSessions() })
+    window.addEventListener('pagehide', () => { flushSessions() })
+  }
+
+  return {
+    workspace,
+    state,
+    persistSessions,
+    flushSessions,
+    nextMsgId,
+    nextSessionId,
+    restorePair,
+    clear,
+  }
 }
 
-/** 清空全部会话档案(内存 + localStorage;设置 → 隐私与安全使用) */
+const registry: Record<Workspace, SessionStore> = {
+  learn: createSessionStore('learn'),
+  research: createSessionStore('research'),
+}
+
+/** 按工作区取会话仓库;两个工作区的状态互不相通 */
+export function sessionStore(workspace: Workspace): SessionStore {
+  return registry[workspace]
+}
+
+/** 清空全部工作区的会话档案(设置 → 隐私与安全使用) */
 export function clearAllSessions(): void {
-  // 取消尚未落盘的 debounce,否则清空后定时器会把旧档案重新写回去
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer)
-    persistTimer = null
-  }
-  pendingPersist = false
-  lastPersistOk = true
-  sessionsState.sessions = []
-  sessionsState.activeId = 0
-  localStorage.removeItem(SESSIONS_KEY)
+  registry.learn.clear()
+  registry.research.clear()
+}
+
+/* 兼容旧引用:默认指向学习区。新代码请显式使用 sessionStore(workspace) */
+export const sessionsState = registry.learn.state
+export const persistSessions = registry.learn.persistSessions
+export const flushSessions = registry.learn.flushSessions
+export const nextMsgId = registry.learn.nextMsgId
+export const nextSessionId = registry.learn.nextSessionId
+export function restorePair(item: RestoreItem): void {
+  registry.learn.restorePair(item)
 }

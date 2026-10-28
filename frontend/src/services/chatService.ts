@@ -16,6 +16,8 @@ export type { ChatStreamHandle, StreamCallbacks }
 export interface ChatMeta {
   cmd?: string
   sessionId?: number
+  /** 工作区:会话/检索/导出按区隔离;缺省 learn */
+  workspace?: 'learn' | 'research'
   categoryKey?: string
   history?: ChatRequest['history']
   /** 研究型提问的搜索范围(平台名列表;缺省 = 全平台) */
@@ -89,6 +91,7 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
     prompt,
     cmd: meta?.cmd,
     sessionId: meta?.sessionId,
+    workspace: meta?.workspace,
     categoryKey: meta?.categoryKey,
     history: meta?.history,
     sources: meta?.sources,
