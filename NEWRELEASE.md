@@ -1,190 +1,213 @@
-# MathGuide v1.10.0 — 待办、续写、隐私加固与测评支持
+# MathGuide v1.11.0 — 双工作区、科研语料库、实验数据表与文献发现
 
-发布日期：2026-10-27
-发布类型：功能 + 隐私/安全加固 + 测评支持
-代码快照：`13296dc169d840e2cce2964324939a124bb53fac`
-基线版本：`v1.9.0`（`b6d55fca648e2ba3a49bd27b72fc13396b7fd68d`）
-标签：`v1.10.0`（指向上述代码快照）
+发布日期：2026-10-29
+发布类型：功能版本（科研工作区独立 + 论文检索 + 实验数据表 + 学习图谱/诊断）
+代码快照：`0257ff8`（标签 `v1.11.0` 指向该提交）
+基线版本：`v1.10.0`（`13296dc169d840e2cce2964324939a124bb53fac`）
 
-本版本增加待办清单与停止后续写，重做「关于 MG」与服务协议/隐私政策，
-补齐账号数据导出与自助注销；同时把演示模式守卫、token 哈希、用量 PII 清洗、
-邀请码注册、安全响应头、CSP 部署模板和留存清理落到代码与部署清单。
-另包含 LLM 思考模式控制与正确率/幻觉率评测框架。
+本版本把「学习辅助」和「科学研究」拆成两个互不共享数据的独立工作区，
+科研区新增服务端研究档案、按用户隔离的论文语料库、多格式入库、外部文献发现，
+实验数据表支持模板导入、Excel 公式、合并拆分、WPS 打印与图片公式识别；
+学习区补充知识图谱、掌握度诊断、学习路径推荐和文档生成。
+同时修复待办跨区泄漏、表格键盘导航与列宽拖拽等问题。
 
-## 一、新功能
+## 一、双工作区隔离
 
-### 1. 待办清单
+- 学习区与科研区使用独立子域（`learn.*` / `research.*`）与共享登录 Cookie；
+  后端按 Host 判定工作区，页面不能靠前端参数跨区。
+- 会话、笔记本、待办、回收站按工作区分别存储：
+  学习区沿用旧键，科研区使用 `mg-research-*` / `:research` 后缀，旧数据自动兼容。
+- 待办清单修复跨区泄漏：学习区创建的任务不会出现在科研区。
+- 科研区指令栏移除「章节知识导航」「公式查询手册」，保留
+  「研究档案 / 搜索范围 / 待办清单」；学习区指令保持不变。
+- 科研区不再显示「问题归纳」，改为服务端研究档案。
 
-- 指令栏「待办清单」打开面板，支持一次性 / 每天 / 每周任务（周一至周日多选）。
-- 日期精确到年月日，时间到时分；保存先入草稿，点「设置好了」转日程。
-- 当天最早任务到点弹一次高亮提醒面板（无关闭按钮，只能点「好的，我开始做」）；
-  页面隐藏时发浏览器系统通知。
-- 未到点显示「在表」，到点「进行中」，点击「进行中」变「已完成」；
-  跨天未完成变「已过期」，弹「我已知晓」面板。
-- 状态色：进行中红色、已完成绿色、已过期灰色。
-- 支持暂停/恢复、退回草稿、删除；数据按 `accountKey` 分桶，同账号退出重登保留。
-- 实现：`frontend/src/utils/todoTime.ts`、`frontend/src/stores/todo.ts`、
-  `frontend/src/components/chat/TodoPanel.vue`、`TodoReminder.vue`。
+实现：`frontend/src/utils/workspace.ts`、`stores/{sessions,notebook,todo}.ts`、
+`router/index.ts`、`components/chat/ChatWorkspace.vue`、`backend/auth.py`。
 
-### 2. 停止生成后「回复」
+## 二、科研工作区
 
-- 点「停止生成」且有已生成正文时，消息右下角出现「回复」按钮。
-- 点击后把原问题 + 已生成正文作为 `resume: true` + `partial` 发给后端。
-- 后端专用续写分支：不重新检索/复核，只输出断点后的内容（最多取正文末尾 24000 字）；
-  增量追加到同一条消息，不新建气泡。
-- `stopped` 随会话持久化，刷新后仍可续写；续写过的消息不再进入后续历史。
-- 实现：`backend/chat.py` 的 `_gen_continue` / `resume` 分支，
-  `frontend/src/services/chatService.ts`、`stores/sessions.ts`、`views/LearnView.vue`。
+### 1. 研究档案
 
-### 3. 设置改版
+- 项目（标题、研究目标、思路、备注、状态）存服务端 SQLite，按 uid 隔离。
+- 论文、实验数据表挂在项目下；删除项目可选择保留或级联删除附件。
+- 支持导入旧版浏览器研究档案，原备份不删除；接口幂等，重复导入不重复建项。
+- 实现：`backend/research_corpus.py`、`backend/research_legacy.py`、
+  `frontend/src/components/chat/ResearchArchivePanel.vue`。
 
-- 拆分三个入口：
-  - `/settings/feedback`：功能与改进，提交时在 GitHub 打开预填 issue；
-  - `/settings/about`：关于 MG，展示当前/稳定版本、版本记录、用途、协议入口、开源许可；
-  - `/settings/terms`：服务协议 / 隐私政策双标签页，未登录也可读取。
-- 登录页《用户协议》《隐私政策》可点击；隐私与安全页增加政策入口。
-- 修正不实表述：
-  - 登录页不再写“登录方式即实名认证方式”；
-  - 隐私页不再写“所有数据只在浏览器”，明确 `backend/data/` 与模型/检索平台流向；
-  - 语音识别说明为“浏览器提供，音频不经过 MG 服务器；部分浏览器会发给其自有语音服务”；
-  - CSP 限定为“导出文档 CSP”，不再暗示主应用已有 CSP。
-- 实现：`SettingsAboutView.vue`、`SettingsFeedbackView.vue`、`SettingsTermsView.vue`、
-  `utils/aboutContent.ts`、`router/index.ts`、`utils/i18n.ts`。
+### 2. 论文语料库
 
-### 4. 账号数据导出与注销
+- 入库格式：PDF、DOCX、EPUB、HTML/JATS、RTF、TXT/MD/TeX/CSV/JSON。
+- 按文件头识别类型，扩展名只兜底：网页另存为 `.pdf` 也能按 HTML 解析。
+- PDF 先走 pypdf；抽不到文字自动切 PDFium（`pypdfium2`），并加入 `fonttools`
+  处理 CID/子集字体；两者都为空才判定为扫描件并提示 OCR。
+- 单文件默认上限 20MB → 100MB（`MG_RESEARCH_MAX_UPLOAD_MB` 可调），
+  单篇页数上限 300 → 600，支持百页级长文与学位论文。
+- 非分页格式按段落打包成近似页，切片仍带位置与标题；标题中的 Markdown 标记会清理。
+- 检索：BM25 + embedding 向量，RRF 融合；未配置 embedding 或服务失败时退化为纯 BM25。
+- 章节树：标题层级 + 章节摘要；默认关闭，需要时在检索页勾选或传 `tree=true`。
+- 命中结果带论文名、章节、页码与高亮片段，可一键把命中资料作为上下文提问。
+- 评测工具：`backend/tools/eval_research.py`，样本集见
+  `D:\Works\research-samples`（仓库外）。
+- 实现：`backend/research_corpus.py`、`frontend/src/views/ResearchSearchView.vue`。
 
-- `POST /api/account/export`：导出账号信息与用量元数据（不含口令摘要、token、内部 uid）。
-- `POST /api/account/delete`：
-  - 手机号密码账号需再输当前密码；
-  - 验证码/微信/QQ 账号需输入 `DELETE` 或 `注销`；
-  - 级联删除账号、全部 token、usage JSONL 与旧 `usage.json` 备份。
-- 前端导出会把后端数据与浏览器会话、归纳、设置、回收站、搜索范围、语音缓存、
-  当前账号待办合并为 JSON；`mg-user` 会去掉 token。
-- 注销成功后清理本机学习数据与待办并回登录页。
-- 实现：`backend/auth.py`、`frontend/src/services/accountService.ts`、
-  `SettingsAccountView.vue`。
+### 3. 外部文献发现
 
-## 二、隐私与安全
+- 新接口：
+  - `GET /api/research/literature?q=&limit=`：Crossref、arXiv、Europe PMC 并行检索，
+    DOI 去重、按被引数排序；8 秒死线，慢源自动取消。
+  - `GET /api/research/literature/related?doi=|title=`：按 DOI 取 Crossref 参考文献，
+    并做标题相似检索。
+  - `POST /api/research/literature/open-pdf`：下载开放获取 PDF 并用本机默认程序打开。
+- 可选数据源：`MG_OPENALEX_API_KEY`（引用图）、`MG_S2_API_KEY`、
+  `MG_LITERATURE_MAILTO`（Crossref 礼貌池）。
+- 检索页新增「全网相关论文」面板；库内每篇论文有「相关」按钮。
+- PDF 按钮只在有开放获取 PDF 时出现；下载地址仅允许 arXiv/Europe PMC/PMC 白名单、
+  仅 HTTPS、限制重定向次数与大小、校验 `%PDF-` 文件头，防止 SSRF。
+- 只返回元数据与摘要，不抓取或转存付费全文；本机 `.pdf` 默认关联 WPS 时直接由 WPS 打开。
+- 实现：`backend/research_lit.py`、`frontend/src/services/literatureService.ts`。
 
-- **演示模式守卫**：`MG_DEMO_MODE=1` 时只允许绑定 `127.0.0.1` / `localhost` / `::1`；
-  CORS 只能本机来源；`--host 0.0.0.0`、公网 CORS 或 `*` 直接拒绝启动。
-- **token 哈希落盘**：`tokens.json` 只存 `sha256:<digest>`，不存明文 bearer token；
-  旧明文键启动时自动迁移，已签发 token 不需要重新登录。
-- **用量最小化**：`usage.jsonl` 新记录只写 uid，不写手机号/昵称；
-  启动时把旧 JSONL 与 `usage.json` 备份里的 `phone`/`user` 换成 uid 并删除 PII。
-- **留存清理**：`MG_ACCOUNT_TTL_DAYS` 删除长期未登录账号（管理员白名单保留），
-  `MG_USAGE_TTL_DAYS` 清理过期用量；默认 `0` 关闭。
-- **安全响应头**：`X-Content-Type-Options`、`Referrer-Policy`、`X-Frame-Options`、
-  `Permissions-Policy`；HTTPS 或 `X-Forwarded-Proto: https` 时发 HSTS。
-- **CSP 部署模板**：`deploy/Caddyfile` / `deploy/nginx.conf` 提供 HTTPS、HSTS、CSP、
-  SSE 不缓冲与 SPA fallback；主题预加载拆到 `frontend/public/theme-init.js`，
-  CSP 不需要放开 `script-src 'unsafe-inline'`。
-- **登录响应不缓存**：登录/注册/导出/注销响应加 `Cache-Control: no-store`。
-- **日志脱敏**：复核日志与 PDF 重排失败日志不再输出模型内容片段，只记长度/数量。
-- **限流可配置**：`MG_AUTH_RATE_MAX` / `MG_AUTH_RATE_WINDOW`；多人共用出口 IP 时可调大。
-- **邀请码注册**：`MG_DEMO_MODE=0` 后固定验证码/游客登录/开放注册关闭；
-  配置 `MG_INVITE_CODES` 后持邀请码可注册，邀请码比较用 `secrets.compare_digest`。
-- **登录页适配**：读取 `/api/health` 的 `demo`/`invite`；测评环境自动隐藏验证码与
-  微信/QQ 入口，无邀请码时隐藏创建账户。
+### 4. 实验数据表
 
-## 三、LLM 与评测
+- 模板导入：XLSX / DOCX / CSV；单元格上限 200 行 × 30 列。
+- 表格由结构化 schema 渲染，模型不生成表格代码，也不参与数值计算。
+- 公式：Excel 风格（`=A2*B2`、`SUM(A2:A10)`、`$A$2:$A$4` 绝对引用），
+  后端 `Decimal` + 白名单 AST 执行，禁止 `eval`；中间全精度，
+  输出 `ROUND_HALF_UP` 保留 4 位小数。
+- 逐格错误：空值、除零、循环引用、指数越界均定位到行列并标红。
+- 录入体验：Excel 多格粘贴（含引号/换行单元格）、方向键移动单元格，
+  左右键在文本内先移动光标、到行首/行尾再跳格。
+- 合并/拆分单元格；合并块可跨方向跳过；列宽/行高可拖拽，表头与表体竖边框都可拖；
+  表格总宽按列宽精确计算，拖多少像素变多少。
+- 最左列可编辑行名；导出首列即行名。
+- 「恢复默认」一键清除合并、列宽回 120px、行高回 30px，保留内容与公式。
+- 计算列可手动删除；窄列时删除按钮固定在表头右上角，不会被挤出。
+- 导出 CSV / XLSX；「打印」保存草稿后生成 xlsx 并用本机 WPS/Excel 打开，
+  打印选项沿用 WPS 原生对话框；远端访问返回 403，避免在服务器弹程序。
+- 图片公式识别：最多 4 张图，阿里云兼容接口，默认模型 `qwen3.8-omni-flash`；
+  识别结果按组展示、变量映射到列、预览编译后的 Excel 公式后写入。
+- 实现：`backend/research_tables.py`、`backend/research_vision.py`、
+  `frontend/src/views/ResearchTablesView.vue`、
+  `frontend/src/components/chat/FormulaImportDialog.vue`。
 
-- **思考模式控制**：`rag/llm.py` 增加 `thinking` 参数；`main`/`backup` 默认关闭
-  `enable_thinking`，`deep`/`long` 保留。首字看门狗把 `reasoning_content` 视为有效
-  首帧，避免思考型模型被误切备胎；综合、导航、复核、PDF 重排等机械任务显式关闭思考。
-- **默认深答模型**更新为 `aliyun:qwen3.8-max`。
-- **评测框架**：新增 `backend/evaluation/` 与 `backend/tools/eval_qa.py`。
-  - 指标：正确率、答案级/断言级幻觉率、不可答编造率、hit@k、recall@k、MRR@k。
-  - 支持检索阶段、回答阶段、异源 LLM 评审；输出 `records.jsonl`、`summary.json`、
-    `report.md` 到已忽略的 `backend/reports/`。
-  - 新增 `sympy>=1.12` 开发依赖；新增 `test_eval_extract.py`、`test_eval_metrics.py`。
+## 三、学习辅助
 
-## 四、验证
+- 知识图谱：`GET /api/graph`，80 个知识点、前置依赖与章节分布；
+  前端支持缩放、拖拽、章节聚焦、搜索与点选详情。
+- 掌握度诊断：`POST /api/diagnosis`，模型评分或自评，记录按 uid 持久化。
+- 学习路径推荐：前置知识点全部达标才进入候选，支持难度/核心度两种策略。
+- 学习画像：`GET /api/profile`，返回诊断次数、掌握/薄弱、章节分布与最近记录。
+- 文档生成：问答导出、大纲、分节生成，输出 PDF / Markdown / Word；
+  前端新增 `DocModal.vue` 与 `docgenService.ts`。
+- 实现：`backend/{knowledge_graph,diagnosis,recommendation,profile,docgen}.py`、
+  `frontend/src/views/GraphView.vue`。
 
-```text
-backend pytest                         171 passed
-frontend npm test
-  语音数学编译器                       80/80
-  SSE 收尾契约                         17/17
-  MathText 渲染与链接安全              24/24
-  回收站/本地数据/会话持久化           15/15
-  待办清单时间/状态                    24/24
-  关于 MG 内容完整性                   127/127
-  账号导出本机数据                     7/7
-npm run build                          通过（仅 tex2svg 分块 >1800kB 的既有告警）
-```
+## 四、评测与工具
 
-手工验证：
+- `docs/EVAL_REPORT.md`：course-50 与 hallucination-50 两套评测报告。
+  - course-50：正确率 1.000（48/48），检索 hit@3 0.667，答案级幻觉率 0.583。
+  - hallucination-50：不可答编造率 0.000（0/50）。
+  - 报告明确标注：样本为项目组自编，幻觉指标依赖模型评审，尚未人工盲标与 kappa 校准。
+- 新增 `backend/tools/eval_research.py`：科研检索样本评测，支持 `--samples`、
+  `--no-embed`、`--tree`。
+- 新增 `backend/tools/research_backup.py`：按用户导出/恢复 tar.gz，含 tar 路径安全校验。
+- `backend/tools/preflight.py` 增加语料库、数据表接口检查。
+- 评测数据集补充 `backend/evaluation/data/hallucination-50.jsonl`。
 
-- CSP 下加载构建产物：开场 MathJax、登录、聊天 SSE 正常，控制台无 CSP violation。
-- 测评模式（`MG_DEMO_MODE=0` + `MG_INVITE_CODES`）：登录页隐藏验证码/第三方入口，
-  邀请码注册可用。
-- token 哈希迁移后旧 token 仍可访问 `/api/account/export`；`tokens.json` 22 条全部为
-  `sha256:` 键。
-- `usage.jsonl` 302 条、`usage.json` 275 条，PII 字段均为 0。
-- `MG_DEMO_MODE=1` + `--host 0.0.0.0` 启动退出码 1。
-- API 基础安全头存在；带 `X-Forwarded-Proto: https` 时 HSTS 存在。
-- `git diff --check` 无空白错误。
+## 五、修复清单
 
-## 五、行为变更与配置
+- 待办清单跨工作区泄漏：科研区不再看到学习区任务。
+- 方向键改为四键移动单元格；左右键先移动文本光标，到边界再跳格；
+  合并块按方向跨过，不再卡在锚点。
+- 列宽拖拽补到表体竖边框；取消表格拉伸，列宽像素级生效。
+- 计算列删除按钮不再被计算标签挤出列外。
+- 上传失败直接显示后端原因（扫描件、格式不支持、超限等），不再统一提示“检查文本层”。
+- 非 PDF 文档标题不再带 Markdown `#`。
+- 研究档案从 localStorage 迁到服务端，修复多端不同步与删除不彻底。
+
+## 六、行为变更与配置
 
 | 项目 | 变更 | 默认/迁移 |
 | --- | --- | --- |
-| 演示模式 | 公网绑定/公网 CORS 拒绝启动 | `MG_DEMO_MODE=1` 仅本机；公网必须 `0` |
-| 测评注册 | 关闭演示后只放行邀请码 | `MG_INVITE_CODES` 逗号分隔；不配则注册关闭 |
-| token 存储 | 明文键 → SHA-256 键 | 启动自动迁移，旧 token 继续有效 |
-| 用量身份 | `phone`/`user` → `uid` | 启动清洗 JSONL 与旧备份 |
-| 认证限流 | 可配置 | `MG_AUTH_RATE_MAX=10` / `MG_AUTH_RATE_WINDOW=60` |
-| 留存清理 | 默认关闭 | `MG_ACCOUNT_TTL_DAYS` / `MG_USAGE_TTL_DAYS` |
-| HSTS | 仅 HTTPS 或显式开启 | `MG_ENABLE_HSTS=1` 可强制 |
-| 登录页 | 读取后端模式 | `/api/health` 返回 `demo` / `invite` |
-| 注册表单 | 加入邀请码；移除未使用的验证码字段 | 演示环境邀请码可留空 |
-| 默认深答模型 | `qwen3-235b-a22b` → `qwen3.8-max` | 可用 `MG_ROLE_DEEP` 覆盖 |
+| 版本号 | `1.10.0` → `1.11.0` | `package.json`、`package-lock.json`、关于页 |
+| 论文上传上限 | 20MB → 100MB | `MG_RESEARCH_MAX_UPLOAD_MB` 可调 |
+| 论文页数上限 | 300 → 600 | 常量 `MAX_PAGES` |
+| 入库格式 | PDF/文本 → PDF/DOCX/EPUB/HTML/JATS/RTF/文本 | 文件头识别 |
+| PDF 解析 | 仅 pypdf → pypdf + PDFium 兜底 | 新增依赖 `pypdfium2`、`fonttools` |
+| 科研指令 | 移除章节导航、公式查询手册 | 学习区不受影响 |
+| 检索默认 | 章节树默认关闭 | 评测显示树筛降召回 |
+| 文献发现 | 新增 | `MG_OPENALEX_API_KEY`、`MG_S2_API_KEY`、`MG_LITERATURE_MAILTO` 可选 |
+| 图片公式 | 新增 | `MG_VISION_MODEL` 默认 `qwen3.8-omni-flash`，复用 `MG_ALIYUN_*` |
+| 本地打印/PDF | 新增 | 仅本机 Host 可用；`MG_PRINT_OPEN=1` 可强制放开 |
 
-## 六、完整代码与溯源附件
+## 七、验证
 
-本版本把**完整源码快照**与**完整变更补丁**一并入库，位于 `releases/v1.10.0/`，
+```text
+backend pytest                     299 passed
+frontend npm test                  9 套自测全部通过
+npm run build                      通过（仅 tex2svg 分块 >1800kB 的既有告警）
+```
+
+前端自测覆盖：SSE 收尾、MathText 公式渲染、回收站/本地数据隔离/会话持久化、
+研究档案异步保存、研究表格保存竞态、待办清单、图谱布局、关于页内容、账号导出。
+
+手工验证：
+
+- 数字版 PDF（Viazovska 2017）入库成功并正确识别标题；扫描版 PDF 被拒绝并提示 OCR。
+- HTML 改名 `.pdf` 仍按 HTML 正确解析；DOCX 入库成功。
+- 168 页长文本入库、分页与检索正常。
+- 外部文献检索返回 20 条结果，arXiv 结果可点「查看 PDF」下载并由本机 WPS 打开。
+- 数据表：Excel 粘贴、方向键/光标、合并拆分、行列拖拽、恢复默认、打印、
+  计算列删除、图片公式识别均通过浏览器实测。
+
+## 八、完整代码与溯源附件
+
+本版本把**完整源码快照**与**完整变更补丁**一并入库，位于 `releases/v1.11.0/`，
 也会作为 GitHub Release 资产上传：
 
 | 附件 | 内容 | SHA-256 |
 | --- | --- | --- |
-| `MathGuide-v1.10.0-source.tar.gz` | **完整源码快照**（246 个文件，1,264,352 字节），由 `git archive` 从代码提交 `13296dc` 生成；解压即完整可运行源码 | `9864dde09ee1969dc149cb29858552e7e303c4e84a2cbed03d00281631593f26` |
-| `v1.10.0.patch` | 相对 `v1.9.0` 的完整二进制补丁（358,672 字节，排除 `releases/` 附件） | `3f7071db044225a1c9961e0e6878477a1206aa7b54cf3dbee2558112b63f2325` |
-| `MANIFEST.sha256` | 源码快照 246 个文件的逐文件 SHA-256（按归档内真实字节生成） | `03dea0c563585355322091ce022c7d5462f0b63f89512545f1d8b38b2f3d5e81` |
-| `SHA256SUMS` | 上述附件 + 校验脚本的 SHA-256 | `12e0fdcfe9537ea2c494568497675ca40cc2dfca11d324f234d09033e01a5bdb` |
-| `verify_manifest.py` | 跨平台逐文件校验脚本 | `5e05564aa48880428c447a837bb4a121c63cd63a28897e4c9cd8dbc98480c2c7` |
+| `MathGuide-v1.11.0-source.tar.gz` | **完整源码快照**（296 个文件，1,412,633 字节），由 `git archive` 从代码提交 `0257ff8` 生成 | `3a3431cd42b852727adea26265e2c575d43d594a189fd4b88d07cd334d70e11f` |
+| `v1.11.0.patch` | 相对 `v1.10.0` 的完整二进制补丁（845,629 字节，排除 `releases/` 附件） | `d1b445549168fb3c1472ba817484bbed49c14e0558557b83293eeb773d5bd99f` |
+| `MANIFEST.sha256` | 源码快照 296 个文件的逐文件 SHA-256（按归档内真实字节生成） | `a1f36ff757fb95c23e817e18a8f1db6ebf5f65e24b73b04598a87a47457a6487` |
+| `SHA256SUMS` | 上述附件 + 校验脚本的 SHA-256 | 见文件本身 |
+| `verify_manifest.py` | 跨平台逐文件校验脚本 | `f3f99970b378ec198c63eaff357ee3bcf2c350cab5d5fe50b8950c17c730a6f7` |
 
 复核步骤：
 
 ```bash
-cd releases/v1.10.0
+cd releases/v1.11.0
 sha256sum -c SHA256SUMS
-tar -xzf MathGuide-v1.10.0-source.tar.gz
-python verify_manifest.py MathGuide-v1.10.0   # checked=246 failures=0
+tar -xzf MathGuide-v1.11.0-source.tar.gz
+python verify_manifest.py MathGuide-v1.11.0   # checked=296 failures=0
 ```
 
 源码包不包含 `.git`、`backend/.env.local`、`backend/data/`、`.venv/`、`node_modules/`
-和运行时缓存；这些均被 `.gitignore` 排除。`releases/**` 在 `.gitattributes` 中标记为
-`-text` 和 `export-ignore`，因此源码包/补丁不会重复携带旧发布附件，clone 后附件字节与
-校验和不变。`MANIFEST.sha256` 按源码包内真实字节生成，请以解压后的源码目录为准。
+和运行时缓存；`releases/**` 与 `NEWRELEASE.md` 在 `.gitattributes` 中标记为
+`export-ignore`。`MANIFEST.sha256` 按源码包内真实字节生成，Windows 工作树的
+CRLF 转换不影响归档校验，请以解压后的源码目录为准。
 
-## 七、已知限制
+## 九、已知限制
 
-- 实际 HTTPS 证书与域名需部署时填写；仓库提供 Caddy/Nginx 模板，不包含证书。
-- 自动留存清理只在启动时执行；如需按小时级清理，需要额外 cron/定时任务。
-- 磁盘加密、备份访问控制、模型厂商零留存/不训练设置属于部署环境事项，代码侧只提供
-  最小化与文档清单。
-- 单进程 JSON/JSONL 存储与限流：多 worker 部署前需换数据库/Redis。
-- 评测框架当前样本集很小，只用于框架冒烟；对外报准确率前需人工盲标并计算 kappa。
-- 待办提醒依赖页面打开或浏览器通知权限；浏览器完全关闭时不会唤醒 Service Worker。
+- 扫描件/纯图片 PDF 仍需先 OCR；当前不会自动识别图片文字。
+- 外部文献 PDF：Europe PMC 与 PMC 有反爬（403），目前「查看 PDF」实际只覆盖 arXiv；
+  付费墙论文只提供标题/DOI 链接，不给全文。
+- 未配置 OpenAlex/Semantic Scholar key 时，引用图与被引数据不完整，相关论文偏标题相似。
+- 外部文献检索尚未接入科研对话：只能在 `/research/search` 页面使用；
+  自然语言描述也未做检索式改写与相关性重排。
+- 本机环境 embedding 端点 403，实际检索为纯 BM25；配置可用 embedding 后自动恢复混合召回。
+- 章节树筛选在样本评测中会降低召回，默认关闭；长文定向查找时再开。
+- 数据库仍为按用户 SQLite + 单进程缓存，多 worker 部署前需要重新评估锁与缓存一致性。
 
-## 八、升级步骤
+## 十、升级步骤
 
-1. 拉取 `v1.10.0`，按 `backend/requirements.txt` / `frontend/package-lock.json` 安装依赖。
+1. 拉取 `v1.11.0`，安装依赖：
+   `pip install -r backend/requirements.txt`（新增 `pypdfium2`、`fonttools`）
+   与 `cd frontend && npm ci`。
 2. 在 `backend/.env.local` 按需配置：
-   `MG_DEMO_MODE`、`MG_INVITE_CODES`、`MG_CORS_ORIGINS`、`MG_ADMIN_PHONES`、
-   `MG_AUTH_RATE_MAX`、`MG_AUTH_RATE_WINDOW`、`MG_ACCOUNT_TTL_DAYS`、`MG_USAGE_TTL_DAYS`。
-3. 重启后端：会自动迁移 token 哈希、清洗 usage PII，并按配置执行留存清理。
-4. 前端 `npm run build`；按 `deploy/README.md` 配置 HTTPS/CSP 反向代理。
+   `MG_RESEARCH_MAX_UPLOAD_MB`、`MG_OPENALEX_API_KEY`、`MG_S2_API_KEY`、
+   `MG_LITERATURE_MAILTO`、`MG_VISION_MODEL`、`MG_PRINT_OPEN`。
+3. 重启后端；语料库/数据表会在首次访问时自动建表。
+4. 前端 `npm run build`；按 `deploy/README.md` 配置 HTTPS/CSP 与双域 Cookie。
 5. 运行 `python -m pytest` 与 `npm test` 确认环境。
-6. 需要核对发布包时，按第六节命令执行 SHA-256 与逐文件校验。
+6. 需要核对发布包时，按第八节命令执行 SHA-256 与逐文件校验。
