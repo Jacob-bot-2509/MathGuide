@@ -25,6 +25,10 @@ export interface ChatMeta {
   /** 续写被停止的回答 */
   resume?: boolean
   partial?: string
+  /** 阅读器当前论文:后端只在这篇论文内取语料 */
+  paperId?: string
+  /** 当前数据表:后端把表结构与数据带入上下文 */
+  tableId?: string
 }
 
 function authHeaders(): Record<string, string> {
@@ -97,6 +101,8 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
     sources: meta?.sources,
     resume: meta?.resume,
     partial: meta?.partial,
+    paperId: meta?.paperId,
+    tableId: meta?.tableId,
   }
 
   postSSE(

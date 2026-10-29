@@ -1,5 +1,5 @@
 /** 外部文献发现:Crossref / arXiv / Europe PMC / OpenAlex / Semantic Scholar */
-import { get, post } from '@/api/http'
+import { del, get, post } from '@/api/http'
 import { getToken } from '@/stores/user'
 
 function authHeaders(): Record<string, string> {
@@ -18,12 +18,50 @@ export interface LiteratureItem {
   abstract: string
   citations: number
   sources: string[]
+  docId?: string
+  tempDocId?: string
+  imported?: boolean
 }
 
 export interface OpenPdfResult {
   ok: boolean
   opened: boolean
   file: string
+}
+
+export interface TempPaperResult {
+  docId: string
+  duplicate: boolean
+  status: string
+  pages: number
+  title?: string
+  doi?: string
+}
+
+/** 打开外部论文前先临时入库,阅读器用同源文件接口 */
+export async function createTempPaper(url: string): Promise<TempPaperResult> {
+  return post<TempPaperResult>(
+    '/api/research/papers/temp', { url }, authHeaders())
+}
+
+export interface ImportPaperResult {
+  docId: string
+  duplicate: boolean
+  status: string
+  annotationsKept?: boolean
+}
+
+/** 临时论文转为正式入库;keepAnnotations=false 时丢弃批注 */
+export async function importTempPaper(
+  docId: string,
+  projectId?: string,
+  keepAnnotations = true,
+): Promise<ImportPaperResult> {
+  return post<ImportPaperResult>('/api/research/papers/import', {
+    docId,
+    projectId: projectId || undefined,
+    keepAnnotations,
+  }, authHeaders())
 }
 
 /** 下载开放获取 PDF 并交给本机默认阅读器(WPS/PDF 程序)打开 */
@@ -36,14 +74,28 @@ export interface LiteratureSearchResult {
   query: string
   results: LiteratureItem[]
   warnings: string[]
+  identifier?: { type: string; value: string } | null
+}
+
+export interface LiteratureQuery {
+  limit?: number
+  author?: string
+  yearFrom?: number | null
+  yearTo?: number | null
 }
 
 export async function searchLiterature(
   query: string,
-  limit = 10,
+  opts: LiteratureQuery = {},
 ): Promise<LiteratureSearchResult> {
+  const params = new URLSearchParams()
+  params.set('q', query)
+  params.set('limit', String(opts.limit ?? 10))
+  if (opts.author) params.set('author', opts.author)
+  if (opts.yearFrom) params.set('yearFrom', String(opts.yearFrom))
+  if (opts.yearTo) params.set('yearTo', String(opts.yearTo))
   return get<LiteratureSearchResult>(
-    `/api/research/literature?q=${encodeURIComponent(query)}&limit=${limit}`,
+    `/api/research/literature?${params.toString()}`,
     authHeaders())
 }
 
@@ -55,5 +107,42 @@ export async function relatedLiterature(
   if (opts.title) params.set('title', opts.title)
   return get<LiteratureSearchResult>(
     `/api/research/literature/related?${params.toString()}`,
+    authHeaders())
+}
+
+export interface HistoryItem {
+  id: string
+  title: string
+  name: string
+  pages: number
+  doi: string
+  year: number
+  createdAt: number
+  lastViewedAt: number
+  annotations: number
+  originUrl: string
+  deletedAt?: number
+  purgeAfter?: number
+  daysLeft?: number
+}
+
+export async function listPaperHistory(): Promise<HistoryItem[]> {
+  const res = await get<{ items: HistoryItem[] }>(
+    '/api/research/history', authHeaders())
+  return res.items
+}
+
+export async function listPaperTrash(): Promise<HistoryItem[]> {
+  const res = await get<{ items: HistoryItem[] }>(
+    '/api/research/history/trash', authHeaders())
+  return res.items
+}
+
+export async function deletePaperHistory(docId: string): Promise<void> {
+  await del(`/api/research/history/${encodeURIComponent(docId)}`, authHeaders())
+}
+
+export async function restorePaperHistory(docId: string): Promise<void> {
+  await post(`/api/research/history/${encodeURIComponent(docId)}/restore`, {},
     authHeaders())
 }

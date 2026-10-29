@@ -127,6 +127,158 @@ def test_merge_labels_widths_roundtrip(tables):
     assert "B2:B3" in {str(rng) for rng in ws.merged_cells.ranges}
 
 
+def test_source_roundtrip_and_preserve_on_autosave(tables):
+    source = {"docId": "doc-1", "docName": "paper.pdf", "page": 3, "quote": "Table 1"}
+    table = rt._create_table("u-src", {
+        "title": "转录",
+        "columns": [{"key": "A", "label": "x", "type": "number"}],
+        "rows": [["1"]],
+        "formulas": {},
+        "source": source,
+    }, None)
+    loaded = rt._get_table("u-src", table["id"])
+    assert loaded["source"]["docId"] == "doc-1"
+    assert loaded["source"]["page"] == 3
+
+    # 旧客户端不带 source:自动保存不得抹掉来源
+    rt._save_table("u-src", table["id"], {
+        "title": "转录 2",
+        "columns": [{"key": "A", "label": "x", "type": "number"}],
+        "rows": [["2"]],
+        "formulas": {},
+    })
+    loaded = rt._get_table("u-src", table["id"])
+    assert loaded["title"] == "转录 2"
+    assert loaded["source"]["docId"] == "doc-1"
+
+
+def test_row_sources_roundtrip_and_preserve(tables):
+    sources = [
+        {"docId": "d1", "docName": "A.pdf", "page": 2},
+        {"docId": "d2", "docName": "B.pdf", "page": 7},
+    ]
+    table = rt._create_table("u-rows", {
+        "title": "对比",
+        "columns": [{"key": "A", "label": "方法", "type": "text"}],
+        "rows": [["方法一"], ["方法二"]],
+        "formulas": {},
+        "rowSources": sources,
+    }, None)
+    loaded = rt._get_table("u-rows", table["id"])
+    assert [s["docId"] for s in loaded["rowSources"]] == ["d1", "d2"]
+    assert loaded["rowSources"][1]["page"] == 7
+
+    rt._save_table("u-rows", table["id"], {
+        "title": "对比 2",
+        "columns": [{"key": "A", "label": "方法", "type": "text"}],
+        "rows": [["方法一"], ["方法二"]],
+        "formulas": {},
+    })
+    loaded = rt._get_table("u-rows", table["id"])
+    assert loaded["rowSources"][0]["docId"] == "d1"
+
+
+def test_analyze_descriptive_stats_and_correlation():
+    columns = [
+        {"key": "A", "label": "x", "type": "number"},
+        {"key": "B", "label": "y", "type": "number"},
+        {"key": "C", "label": "double", "type": "computed"},
+    ]
+    rows = [["1", "2"], ["2", "4"], ["3", "6"], ["4", "8"]]
+    result = rt.analyze(columns, rows, {"C": "=A2*2"}, ["一", "二", "三", "四"])
+    stats = {s["key"]: s for s in result["stats"]}
+    assert stats["A"]["n"] == 4
+    assert stats["A"]["mean"] == "2.5000"
+    assert stats["A"]["median"] == "2.5000"
+    assert stats["A"]["stdev"] == "1.2910"
+    assert stats["A"]["q1"] == "1.7500"
+    assert stats["A"]["q3"] == "3.2500"
+    assert stats["C"]["mean"] == "5.0000"
+    r = next(c for c in result["correlations"] if {c["x"], c["y"]} == {"A", "B"})
+    assert r["r"] == "1.0000"
+    series = {s["key"]: s for s in result["series"]}
+    assert series["C"]["values"] == [2, 4, 6, 8]
+    assert result["rowLabels"] == ["一", "二", "三", "四"]
+
+
+def test_analyze_skips_text_and_counts_missing():
+    columns = [
+        {"key": "A", "label": "group", "type": "text"},
+        {"key": "B", "label": "x", "type": "number"},
+    ]
+    rows = [["ctrl", "1"], ["ctrl", ""], ["drug", "3"]]
+    result = rt.analyze(columns, rows, {})
+    assert [s["key"] for s in result["stats"]] == ["B"]
+    assert result["stats"][0]["n"] == 2
+    assert result["stats"][0]["missing"] == 1
+
+
+def test_context_text_contains_data_and_truncation():
+    columns = [{"key": "A", "label": "x", "type": "number"}]
+    rows = [[str(i)] for i in range(60)]
+    table = {
+        "title": "长表", "columns": columns, "rows": rows, "formulas": {},
+        "rowLabels": [], "source": {"docId": "d", "docName": "p.pdf", "page": 2},
+    }
+    text = rt.context_text(table, max_rows=40)
+    assert "长表" in text and "60 行" in text
+    assert "| 40 |" in text and "| 41 |" not in text
+    assert "仅列出前 40 行" in text
+    assert "描述性统计" in text and "均值=29.5000" in text
+    assert "p.pdf" in text and "第 2 页" in text
+
+
+def test_stats_api_rejects_unknown_table(tables, monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-stats"})
+    app = Starlette(routes=[
+        Route("/api/research/tables/{table_id}/stats", rt.stats_table, methods=["POST"]),
+    ])
+    client = TestClient(app)
+    res = client.post("/api/research/tables/nope/stats", json={
+        "columns": [{"key": "A"}], "rows": [["1"]], "formulas": {},
+    })
+    assert res.status_code == 404
+
+
+def test_stats_api_returns_stats_for_saved_table(tables, monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-stats"})
+    app = Starlette(routes=[
+        Route("/api/research/tables/{table_id}/stats", rt.stats_table, methods=["POST"]),
+    ])
+    client = TestClient(app)
+    created = rt._create_table("u-stats", {
+        "title": "s",
+        "columns": [
+            {"key": "A", "label": "x", "type": "number"},
+            {"key": "B", "label": "y", "type": "computed"},
+        ],
+        "rows": [["1", ""], ["2", ""], ["3", ""]],
+        "formulas": {"B": "=A2*2"},
+    }, None)
+    res = client.post(f"/api/research/tables/{created['id']}/stats", json={
+        "columns": [
+            {"key": "A", "label": "x", "type": "number"},
+            {"key": "B", "label": "y", "type": "computed"},
+        ],
+        "rows": [["1", ""], ["2", ""], ["3", ""]],
+        "formulas": {"B": "=A2*2"},
+        "rowLabels": ["a", "b", "c"],
+    })
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["stats"][1]["mean"] == "4.0000"
+    assert body["rowLabels"] == ["a", "b", "c"]
+    assert body["computed"]["B"] == ["2.0000", "4.0000", "6.0000"]
+
+
 def test_overlapping_merges_rejected(tables):
     with pytest.raises(ValueError):
         rt._create_table("u-1", {

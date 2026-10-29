@@ -18,8 +18,8 @@
  * 回复由后端 LLM 流式生成(services/chatService,SSE 契约);
  * 问题分类由前端关键词预判,后端路由做最终裁决。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
@@ -34,6 +34,7 @@ import MgSwitch from '@/components/common/MgSwitch.vue'
 import { COMMANDS, RESEARCH_COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
 import { speechToMath, streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
+import { getResearchTable } from '@/services/researchTableService'
 import { downloadBlob, exportSurveyPdf } from '@/services/docService'
 import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyQuestion, isChitchat } from '@/utils/classifier'
 import { settingsState, updateSettings } from '@/stores/settings'
@@ -59,6 +60,123 @@ import { splitStableBlocks } from '@/utils/mathBlocks'
 const props = withDefaults(defineProps<{ workspace?: Workspace }>(), { workspace: 'learn' })
 
 const router = useRouter()
+const route = useRoute()
+
+/** 科研检索分栏:懒加载整页检索组件,分栏与独立页共用同一套逻辑 */
+const ResearchSearchView = defineAsyncComponent(
+  () => import('@/views/ResearchSearchView.vue'),
+)
+
+const SPLIT_KEY = 'mg-research-split'
+const SPLIT_DEFAULT = 0.4
+const SEARCH_MIN_PX = 320
+const CHAT_MIN_PX = 380
+const SPLIT_MIN_WIDTH = 1100
+
+const searchOpen = ref(false)
+const splitResizing = ref(false)
+const workspaceBodyRef = ref<HTMLElement | null>(null)
+const splitRatio = ref(loadSplitRatio())
+const searchPaneRef = ref<{ locateForQuestion: (q: string) => Promise<void> } | null>(null)
+const currentPaper = ref<{ docId: string; title: string } | null>(null)
+/** 从数据表页带过来的表:作为对话上下文,随消息发送 tableId */
+const tableContext = ref<{ id: string; title: string } | null>(null)
+
+function onPaperChange(paper: { docId: string; title: string } | null): void {
+  currentPaper.value = paper
+}
+
+async function loadTableContext(): Promise<void> {
+  const tableId = typeof route.query.tableId === 'string' ? route.query.tableId : ''
+  if (!tableId || !isResearch.value) return
+  try {
+    const table = await getResearchTable(tableId)
+    tableContext.value = { id: table.id, title: table.title }
+  } catch {
+    tableContext.value = null
+  }
+}
+
+function loadSplitRatio(): number {
+  try {
+    const value = Number(localStorage.getItem(SPLIT_KEY))
+    return Number.isFinite(value) && value > 0 ? clampSplit(value) : SPLIT_DEFAULT
+  } catch {
+    return SPLIT_DEFAULT
+  }
+}
+
+function clampSplit(value: number, width = workspaceBodyRef.value?.clientWidth ?? 0): number {
+  if (width >= SEARCH_MIN_PX + CHAT_MIN_PX) {
+    const min = SEARCH_MIN_PX / width
+    const max = 1 - CHAT_MIN_PX / width
+    return Math.min(max, Math.max(min, value))
+  }
+  return Math.min(0.6, Math.max(0.4, value))
+}
+
+function saveSplitRatio(): void {
+  try {
+    localStorage.setItem(SPLIT_KEY, String(splitRatio.value))
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 检索按钮:按设置与本机宽度选择分栏或独立页 */
+function openResearchSearch(): void {
+  if (!isResearch.value) return
+  if (settingsState.researchSearchMode === 'page' || window.innerWidth < SPLIT_MIN_WIDTH) {
+    router.push('/research/search')
+    return
+  }
+  searchOpen.value = !searchOpen.value
+  if (searchOpen.value) {
+    nextTick(() => {
+      splitRatio.value = clampSplit(
+        splitRatio.value, workspaceBodyRef.value?.clientWidth ?? 0)
+    })
+  }
+}
+
+function startSplitDrag(e: PointerEvent): void {
+  const body = workspaceBodyRef.value
+  if (!body) return
+  e.preventDefault()
+  splitResizing.value = true
+  const rect = body.getBoundingClientRect()
+  const move = (ev: PointerEvent) => {
+    const ratio = (rect.right - ev.clientX) / rect.width
+    splitRatio.value = clampSplit(ratio, rect.width)
+  }
+  const up = () => {
+    splitResizing.value = false
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+    saveSplitRatio()
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+}
+
+function nudgeSplit(delta: number): void {
+  splitRatio.value = clampSplit(splitRatio.value + delta)
+  saveSplitRatio()
+}
+
+function resetSplit(): void {
+  splitRatio.value = clampSplit(SPLIT_DEFAULT)
+  saveSplitRatio()
+}
+
+function onSplitAsk(prompt: string): void {
+  if (prompt) send(prompt)
+}
+
+/** 窗口变窄时收起分栏,避免聊天区被压到不可用 */
+function onWorkspaceResize(): void {
+  if (searchOpen.value && window.innerWidth < SPLIT_MIN_WIDTH) searchOpen.value = false
+}
 
 /** 科研区:独占研究检索链路与搜索范围面板;学习区不跨区查文献 */
 const isResearch = computed(() => props.workspace === 'research')
@@ -425,6 +543,10 @@ function resumeReply(msg: ChatMsg) {
 function send(text?: string, cmd?: string) {
   let content = (text ?? input.value).trim()
   if (!content) return
+  // 阅读器打开时:先请求当前论文的命中段落,阅读器会滚到对应页并高亮
+  if (isResearch.value && currentPaper.value && !cmd) {
+    void searchPaneRef.value?.locateForQuestion(content)
+  }
 
   // 寒暄/闲聊:不分类、不切换或新开会话,只就话答话
   const chitchat = isChitchat(content)
@@ -495,6 +617,8 @@ function send(text?: string, cmd?: string) {
     history,
     // 搜索范围只属于科研链路:学习区不传,避免误触发跨区文献检索
     sources: isResearch.value ? scopeForRequest() : undefined,
+    paperId: isResearch.value ? currentPaper.value?.docId : undefined,
+    tableId: isResearch.value ? tableContext.value?.id : undefined,
   })
 }
 
@@ -685,12 +809,6 @@ function showNotebook() {
 function toggleSummaryPanel() {
   anchorTo('.sum-btn')
   togglePanel('summary')
-}
-
-/** 打开研究档案面板(顶部「研究档案」按钮):科研区替代问题归纳 */
-function toggleArchivePanel() {
-  anchorTo('.sum-btn')
-  togglePanel('archive')
 }
 
 /** 面板选中词条:关面板,跳回原问答上下文(会话/消息已不存在的给提示) */
@@ -1186,10 +1304,13 @@ onMounted(() => {
       sessionStorage.removeItem('mg-research-seed')
       nextTick(() => send(seed))
     }
+    void loadTableContext()
   }
+  window.addEventListener('resize', onWorkspaceResize)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', onWorkspaceResize)
   stopAllStreams()
   sr?.stop()
   cancelConvert()
@@ -1207,7 +1328,12 @@ onBeforeUnmount(() => {
         <span class="tech-label sub">{{ isResearch ? 'MODULE 02 · RESEARCH' : 'MODULE 01 · LEARN' }}</span>
       </div>
       <div class="right">
-        <button v-if="isResearch" class="new-btn" @click="router.push('/research/search')">
+        <button
+          v-if="isResearch"
+          class="new-btn"
+          :class="{ 'new-btn--active': searchOpen }"
+          @click="openResearchSearch"
+        >
           {{ t('search.button') }}
         </button>
         <button v-if="isResearch" class="new-btn" @click="router.push('/research/tables')">
@@ -1220,10 +1346,7 @@ onBeforeUnmount(() => {
           {{ catName(activeSession.cat.key) }}{{ t('learn.context') }}
         </span>
         <span v-else-if="!activeSession?.cat" class="session-chip session-chip--dim">{{ t('learn.newSession') }}</span>
-        <button v-if="isResearch" class="sum-btn" @click="toggleArchivePanel()">
-          {{ t('archive.title') }}
-        </button>
-        <button v-else class="sum-btn" @click="toggleSummaryPanel()">
+        <button v-if="!isResearch" class="sum-btn" @click="toggleSummaryPanel()">
           {{ t('learn.archive') }}<span v-if="questionCount" class="sum-badge">{{ questionCount }}</span>
         </button>
         <span class="badge tech-label">{{ t(isResearch ? 'common.mgResearch' : 'common.mgLearn') }}</span>
@@ -1251,7 +1374,9 @@ onBeforeUnmount(() => {
     <SpeechTips v-if="tipsOpen" @close="tipsOpen = false" />
 
     <!-- 对话区(当前会话) -->
-    <div ref="listEl" class="chat-list" @scroll="onListScroll" @click="onListClick">
+    <div ref="workspaceBodyRef" class="workspace-body" :class="{ 'with-search': searchOpen }">
+      <div class="chat-pane">
+        <div ref="listEl" class="chat-list" @scroll="onListScroll" @click="onListClick">
       <template v-if="activeSession">
         <div
           v-for="m in activeSession.messages"
@@ -1331,6 +1456,15 @@ onBeforeUnmount(() => {
 
     <!-- 输入区:输入行 + 指令栏 -->
     <footer class="input-bar">
+      <div v-if="isResearch && tableContext" class="context-chip">
+        <span class="context-label">{{ t('chat.tableContext') }}</span>
+        <span class="context-name" :title="tableContext.title">{{ tableContext.title }}</span>
+        <button
+          class="context-remove"
+          :title="t('chat.removeTable')"
+          @click="tableContext = null"
+        >✕</button>
+      </div>
       <div class="input-row">
         <!-- 附件:相册照片 / 拍照 / 文件 -->
         <div class="attach-wrap">
@@ -1462,6 +1596,33 @@ onBeforeUnmount(() => {
         </span>
       </div>
     </footer>
+      </div><!-- /chat-pane -->
+
+      <div
+        v-if="searchOpen"
+        class="split-divider"
+        :class="{ dragging: splitResizing }"
+        role="separator"
+        aria-orientation="vertical"
+        tabindex="0"
+        @pointerdown="startSplitDrag"
+        @dblclick="resetSplit"
+        @keydown.left.prevent="nudgeSplit(-0.02)"
+        @keydown.right.prevent="nudgeSplit(0.02)"
+      ></div>
+      <aside
+        v-if="searchOpen"
+        class="search-pane"
+        :style="{ width: `${splitRatio * 100}%` }"
+      >
+        <ResearchSearchView
+          ref="searchPaneRef"
+          embedded
+          @ask="onSplitAsk"
+          @paper-change="onPaperChange"
+        />
+      </aside>
+    </div><!-- /workspace-body -->
 
     <!-- 浮层面板统一遮罩:压暗全屏,点任意暗处收起当前面板(收起后按钮才可点) -->
     <Transition name="mask-fade">
@@ -1487,6 +1648,44 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   position: relative;
+}
+
+.workspace-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.chat-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.split-divider {
+  flex: none;
+  width: 6px;
+  cursor: col-resize;
+  background: var(--line);
+  position: relative;
+  z-index: 3;
+  touch-action: none;
+}
+
+.split-divider:hover,
+.split-divider:focus-visible,
+.split-divider.dragging {
+  background: color-mix(in srgb, var(--cyan) 55%, transparent);
+  outline: none;
+}
+
+.search-pane {
+  flex: none;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .chat-header {
@@ -1582,6 +1781,11 @@ onBeforeUnmount(() => {
 
 .new-btn:hover {
   background: color-mix(in srgb, var(--cyan) 16%, transparent);
+  box-shadow: var(--glow-cyan);
+}
+
+.new-btn--active {
+  background: color-mix(in srgb, var(--cyan) 18%, transparent);
   box-shadow: var(--glow-cyan);
 }
 
@@ -1825,6 +2029,47 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.context-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--line-bright);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cyan) 7%, transparent);
+  font-size: 11px;
+}
+
+.context-label {
+  color: var(--cyan);
+  font-family: var(--font-tech);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+}
+
+.context-name {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-hi);
+}
+
+.context-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.context-remove:hover {
+  color: var(--cyan);
 }
 
 /* 浮层面板统一全屏遮罩:压暗其余界面,面板浮在其上(两层效果),

@@ -36,6 +36,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 import config
 import rag
 import research_corpus
+import research_tables
 import usage
 from auth import require_auth
 from http_utils import read_json_object
@@ -67,8 +68,8 @@ WELCOME_ZH = (
 
 WELCOME_RESEARCH_ZH = (
     "**欢迎回到 MATHGUIDE · 科学研究**\n\n"
-    "我是 MG,你的科研工作区助手。本区会话、归纳本与检索范围与学习辅助完全独立,"
-    "可直接提问,或用下方指令:章节知识导航 / 研究档案 / 公式查询手册 / 搜索范围 / 待办清单。\n\n"
+    "我是 MG,你的科研工作区助手。本区会话、研究档案与检索范围与学习辅助完全独立,"
+    "可直接提问,或用下方指令:研究档案 / 搜索范围 / 待办清单。\n\n"
     "提出研究型问题时,我会按选定的**搜索范围**跨文献库检索,并给出带编号引用的综合解答;"
     "中文、英文提问都可以。\n\n"
     "(Welcome to MATHGUIDE · Research. This workspace is isolated from Learn; ask in English if you prefer.)"
@@ -475,13 +476,14 @@ def _record(rec: dict, *, cmd: str, prompt_len: int, reply_len: int,
 
 
 async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: bool,
-                        ck: str | None = None):
+                        ck: str | None = None, extra: str = ""):
     """研究型 LLM 综合:正文流式 + 引用区(后端拼装,不经过模型);
     模型失败自动降级为来源列表;ck 非空时全文入库缓存供重复问题秒回"""
     full: list[str] = []
     try:
         async for delta in rag.research.synthesize.synthesize_stream(
-                question, outcome.hits, zh, role=rag.llm.pick("deep")):
+                question, outcome.hits, zh, role=rag.llm.pick("deep"),
+                extra=extra):
             full.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
@@ -495,10 +497,12 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
         async for frame in _frames(_research_reply(outcome, zh)):
             yield frame
         return
-    citations = rag.research.synthesize.citations_block(outcome.hits, zh)
-    full.append(citations)
-    async for frame in _frames(citations, pace=False):
-        yield frame
+    citations = (rag.research.synthesize.citations_block(outcome.hits, zh)
+                 if outcome.hits else "")
+    if citations:
+        full.append(citations)
+        async for frame in _frames(citations, pace=False):
+            yield frame
     if ck:
         _RESEARCH_ANSWER[ck] = (time.monotonic(), "".join(full))
         _RESEARCH_ANSWER.move_to_end(ck)
@@ -927,6 +931,31 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                       workspace: str = "learn"):
     """业务路由(与安全外壳分离):欢迎语 / 附件 / 章节导航 / 研究 / LLM / 直答"""
     uid = str(rec.get("uid") or "")
+    paper_id = ""
+    raw_paper = body.get("paperId")
+    if workspace == "research" and isinstance(raw_paper, str) and raw_paper:
+        candidate = raw_paper[:64]
+        try:
+            doc = research_corpus._doc_row(uid, candidate)
+            if doc and not doc["deletedAt"]:
+                paper_id = candidate
+        except Exception:  # noqa: BLE001 文档校验失败不影响普通对话
+            paper_id = ""
+
+    # 数据表上下文:从数据表页「在对话中分析」带入,只在本用户科研工作区生效。
+    # 表格是用户自己的数据,原文进上下文,数值仍由服务端计算,模型只解读。
+    table_context = ""
+    table_stamp = ""
+    raw_table = body.get("tableId")
+    if workspace == "research" and isinstance(raw_table, str) and raw_table:
+        candidate = raw_table[:64]
+        try:
+            table = await asyncio.to_thread(research_tables._get_table, uid, candidate)
+            if table:
+                table_context = research_tables.context_text(table)
+                table_stamp = f"{candidate}:{int(table.get('updatedAt') or 0)}"
+        except Exception as exc:  # noqa: BLE001 表格校验失败不影响普通对话
+            print(f"[chat] 数据表上下文读取失败(忽略): {exc}")
 
     # 前端新会话会以空 prompt 触发欢迎问候;两区文案按工作区区分
     if not prompt:
@@ -985,12 +1014,13 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # 必须先判意图、后检索:深度搜索内部自会检索知识库,
     # 这里若先检一遍,研究型提问就要白付一份 embedding 开销(结果还被丢掉)
     # 只允许科学研究工作区进入该链路:学习辅助区不跨区查文献
-    if workspace == "research" and rag.route.is_research_intent(question):
+    if workspace == "research" and (
+            paper_id or table_context or rag.route.is_research_intent(question)):
         meta["research"] = True
         # 搜索范围(前端勾选的平台;缺省/空 = 全平台);非法名白名单校验在 deep_search 内
         scope = _clean_scope(body.get("sources"))
         ck = _research_cache_key(question, scope,
-                                 f"{uid}|{research_corpus.corpus_stamp(uid)}")
+                                 f"{uid}|{research_corpus.corpus_stamp(uid)}|{paper_id}|{table_stamp}")
         cached = _RESEARCH_ANSWER.get(ck)
         if cached and time.monotonic() - cached[0] < _RESEARCH_TTL:
             _RESEARCH_ANSWER.move_to_end(ck)  # 命中即刷新 LRU 顺序
@@ -1001,7 +1031,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         # 用户自己的论文库排在外部来源之前:个人语料与问题最对口,
         # 也是引用页码的唯一来源。语料库为空时行为不变。
         try:
-            local = await asyncio.to_thread(research_corpus.chat_hits, uid, question, 4)
+            local = await asyncio.to_thread(
+                research_corpus.chat_hits, uid, question, 4, paper_id or None)
         except Exception as exc:  # noqa: BLE001 语料检索失败不阻断外部检索
             print(f"[chat] 科研语料检索失败(继续外部来源): {exc}")
             local = []
@@ -1014,10 +1045,11 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             ] + outcome.hits
             outcome.sources["我的论文"] = len(local)
         # P2c:LLM 已配置 → 综合解答 + 编号引用 + 后端拼装引用区;
-        # 未配置 → 来源列表(现有行为)
-        if outcome.any_hit and rag.llm.is_configured():
+        # 未配置 → 来源列表(现有行为)。只有数据表上下文时也走综合,先解读表内数据。
+        if (outcome.any_hit or table_context) and rag.llm.is_configured():
             meta["role"] = "deep"
-            return _sse(_gen_research(question, outcome, zh, ck=ck))
+            return _sse(_gen_research(
+                question, outcome, zh, ck=ck, extra=table_context))
         return _stream_text(_research_reply(outcome, zh))
 
     # 检索含 embedding 请求(同步、冷启动可达数十秒)→ 线程池执行,
@@ -1028,7 +1060,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # 个人论文是私有且最对口的证据,排在公共知识库之前进入上下文。
     if workspace == "research":
         try:
-            local = await asyncio.to_thread(research_corpus.chat_hits, uid, question, 4)
+            local = await asyncio.to_thread(
+                research_corpus.chat_hits, uid, question, 4, paper_id or None)
         except Exception as exc:  # noqa: BLE001 语料检索失败不影响主链路
             print(f"[chat] 科研语料检索失败(继续公共知识库): {exc}")
             local = []
@@ -1039,6 +1072,12 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                            h.get("text") or h["snippet"]), 6.0)
                 for h in local
             ] + chunks
+
+    if workspace == "research" and table_context:
+        chunks = [
+            (rag.Chunk("research-table", "研究数据表", "",
+                       "用户当前数据表(数值以此为准)", table_context), 7.0),
+        ] + chunks
 
     if rag.llm.is_configured():
         # 双角色验证仅对数学题(命中知识库或题目措辞)开启;闲聊不浪费复核调用。

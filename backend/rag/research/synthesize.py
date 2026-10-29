@@ -19,7 +19,9 @@ SYSTEM_ZH = (
     "2. 资料不足以回答时,如实说明\"现有资料不足以回答\",不得编造内容或引用;\n"
     "3. 数学公式使用 LaTeX(行内 $...$,块级 $$...$$);\n"
     "4. 回答用简体中文,结构:先给结论,再分点展开,最后一段为小结;\n"
-    "5. 不要输出\"参考来源\"列表,引用区由系统自动附加。"
+    "5. 不要输出\"参考来源\"列表,引用区由系统自动附加;\n"
+    "6. 若提供【研究数据表】,表中数值是用户原始数据:引用时必须与表一致,"
+    "不得改写、编造或用外部资料替代;不要给数据表编造引用编号。"
 )
 SYSTEM_EN = (
     "You are MathGuide's research assistant. Answer based ONLY on the provided sources.\n"
@@ -28,25 +30,30 @@ SYSTEM_EN = (
     "2. If the sources are insufficient, say so honestly — never fabricate;\n"
     "3. Use LaTeX for formulas (inline $...$, display $$...$$);\n"
     "4. Reply in English; structure: conclusion first, then points, then a short summary;\n"
-    "5. Do NOT print a reference list — the system appends it automatically."
+    "5. Do NOT print a reference list — the system appends it automatically;\n"
+    "6. If a [Research data table] block is provided, its numbers are the user's raw data: "
+    "quote them exactly and never replace them with external values or assign them citation numbers."
 )
 
 
-def _user_prompt(question: str, hits: list[SearchHit]) -> str:
+def _user_prompt(question: str, hits: list[SearchHit], extra: str = "") -> str:
     lines = [f"问题:{question}", "", "【资料】"]
     for i, h in enumerate(hits, 1):
         meta = f"{h.authors} · {h.year}" if h.authors else str(h.year or "")
         lines.append(f"[{i}] 标题:{h.title}({h.source}{' · ' + meta if meta else ''})")
         lines.append(f"    摘要:{h.snippet[:400]}")
+    if extra:
+        lines += ["", "【研究数据表(用户自己的数据,不参与编号引用)】", extra]
     return "\n".join(lines)
 
 
 async def synthesize_stream(question: str, hits: list[SearchHit], zh: bool,
-                            role: str = "main", fallback: bool = True) -> AsyncIterator[str]:
+                            role: str = "main", fallback: bool = True,
+                            extra: str = "") -> AsyncIterator[str]:
     """流式生成综合解答(正文);引用区由 citations_block 单独拼装"""
     system = SYSTEM_ZH if zh else SYSTEM_EN
-    async for delta in llm.stream_chat(system, _user_prompt(question, hits), role=role,
-                                       fallback=fallback, thinking=False):
+    async for delta in llm.stream_chat(system, _user_prompt(question, hits, extra),
+                                       role=role, fallback=fallback, thinking=False):
         yield delta
 
 

@@ -59,90 +59,210 @@ def _doi(raw: str | None) -> str:
     return value[:200]
 
 
+_DOI_IN_TEXT = re.compile(r"\b10\.\d{4,9}/[^\s\"'<>]+", re.IGNORECASE)
+_ARXIV_ID = re.compile(r"(?:arxiv:\s*)?(\d{4}\.\d{4,5})(?:v\d+)?\b", re.IGNORECASE)
+_PMCID = re.compile(r"\b(PMC\d{6,})\b", re.IGNORECASE)
+_PMID = re.compile(r"\bPMID[:\s]*(\d{6,9})\b", re.IGNORECASE)
+
+
+def _detect_identifier(query: str) -> tuple[str, str] | None:
+    """识别 DOI / arXiv / PMCID / PMID;命中后跳过关键词检索。"""
+    match = _DOI_IN_TEXT.search(query)
+    if match:
+        doi = _doi(match.group(0).rstrip(".,;)]}"))
+        if doi:
+            return ("doi", doi)
+    match = _ARXIV_ID.search(query)
+    if match:
+        return ("arxiv", match.group(1))
+    match = _PMCID.search(query)
+    if match:
+        return ("pmcid", match.group(1).upper())
+    match = _PMID.search(query)
+    if match:
+        return ("pmid", match.group(1))
+    return None
+
+
 def _result(**kwargs) -> dict:
-    return {
+    result = {
         "title": "", "authors": "", "year": 0, "venue": "", "doi": "",
         "url": "", "pdfUrl": "", "abstract": "", "citations": 0, "sources": [],
+        "docId": "", "tempDocId": "", "imported": False,
         **kwargs,
     }
+    for key in ("url", "pdfUrl"):
+        value = result[key]
+        try:
+            parsed = urlparse(value) if isinstance(value, str) else None
+            if (not parsed or parsed.scheme not in {"http", "https"} or not parsed.hostname
+                    or parsed.username or parsed.password or any(c.isspace() or ord(c) < 32 for c in value)):
+                result[key] = ""
+        except ValueError:
+            result[key] = ""
+    return result
 
 
-async def _crossref(client: httpx.AsyncClient, query: str, limit: int) -> list[dict]:
+def _mark_local(uid: str, results: list[dict]) -> list[dict]:
+    """标记结果是否已在论文库(imported)或已临时入库(tempDocId)。"""
+    dois = {r["doi"] for r in results if r.get("doi")}
+    known = rc._docs_by_doi(uid, dois)
+    for item in results:
+        hit = known.get(str(item.get("doi") or "").lower())
+        if not hit:
+            continue
+        if hit["status"] == "temp":
+            item["tempDocId"] = hit["id"]
+        else:
+            item["docId"] = hit["id"]
+            item["imported"] = True
+    return results
+
+
+def _crossref_item(item: dict) -> dict | None:
+    if item.get("type") in {"component", "dataset"}:
+        return None
+    title = _clean((item.get("title") or [""])[0], 300)
+    if not title:
+        return None
+    authors = ", ".join(
+        a.get("family") or a.get("name") or "" for a in item.get("author", []))
+    issued = item.get("issued", {}).get("date-parts") or [[0]]
+    year = issued[0][0] if issued and issued[0] else 0
+    doi = _doi(item.get("DOI"))
+    return _result(
+        title=title, authors=authors[:300], year=year,
+        venue=_clean((item.get("container-title") or [""])[0], 160),
+        doi=doi, url=item.get("URL") or (f"https://doi.org/{doi}" if doi else ""),
+        abstract=_clean(item.get("abstract")),
+        citations=int(item.get("is-referenced-by-count") or 0),
+        sources=["crossref"],
+    )
+
+
+async def _crossref(client: httpx.AsyncClient, query: str, limit: int,
+                    filters: dict | None = None) -> list[dict]:
+    filters = filters or {}
     params = {
         "query.bibliographic": query, "rows": limit,
         "select": "DOI,title,author,issued,container-title,abstract,"
                   "is-referenced-by-count,URL,type",
     }
+    if filters.get("author"):
+        params["query.author"] = filters["author"]
+    date_filters = []
+    if filters.get("yearFrom"):
+        date_filters.append(f"from-pub-date:{filters['yearFrom']}-01-01")
+    if filters.get("yearTo"):
+        date_filters.append(f"until-pub-date:{filters['yearTo']}-12-31")
+    if date_filters:
+        params["filter"] = ",".join(date_filters)
     mailto = os.getenv("MG_LITERATURE_MAILTO", "").strip()
     if mailto:
         params["mailto"] = mailto
     res = await client.get("https://api.crossref.org/works", params=params)
     res.raise_for_status()
-    items = res.json().get("message", {}).get("items", [])
     out = []
-    for item in items:
-        if item.get("type") in {"component", "dataset"}:
-            continue
-        title = _clean((item.get("title") or [""])[0], 300)
-        if not title:
-            continue
-        authors = ", ".join(
-            a.get("family") or a.get("name") or "" for a in item.get("author", []))
-        issued = item.get("issued", {}).get("date-parts") or [[0]]
-        year = issued[0][0] if issued and issued[0] else 0
-        doi = _doi(item.get("DOI"))
-        out.append(_result(
-            title=title, authors=authors[:300], year=year,
-            venue=_clean((item.get("container-title") or [""])[0], 160),
-            doi=doi, url=item.get("URL") or (f"https://doi.org/{doi}" if doi else ""),
-            abstract=_clean(item.get("abstract")),
-            citations=int(item.get("is-referenced-by-count") or 0),
-            sources=["crossref"],
-        ))
+    for item in res.json().get("message", {}).get("items", []):
+        parsed = _crossref_item(item)
+        if parsed:
+            out.append(parsed)
     return out
 
 
-async def _arxiv(client: httpx.AsyncClient, query: str, limit: int) -> list[dict]:
+async def _crossref_doi(client: httpx.AsyncClient, doi: str) -> list[dict]:
+    res = await client.get(f"https://api.crossref.org/works/{doi}")
+    if res.status_code == 404:
+        return []
+    res.raise_for_status()
+    parsed = _crossref_item(res.json().get("message", {}))
+    return [parsed] if parsed else []
+
+
+def _arxiv_entry(entry) -> dict | None:  # noqa: ANN001
+    title = _clean(entry.findtext(f"{_ATOM}title"), 300)
+    if not title:
+        return None
+    authors = ", ".join(
+        name.text or "" for name in entry.findall(f"{_ATOM}author/{_ATOM}name"))
+    published = entry.findtext(f"{_ATOM}published") or ""
+    year = int(published[:4]) if published[:4].isdigit() else 0
+    link = ""
+    for candidate in entry.findall(f"{_ATOM}link"):
+        if candidate.get("rel") == "alternate":
+            link = candidate.get("href") or ""
+            break
+    if not link:
+        link = _clean(entry.findtext(f"{_ATOM}id"), 300)
+    pdf_url = ""
+    if "arxiv.org/abs/" in link:
+        pdf_url = link.replace("/abs/", "/pdf/").replace("http://", "https://", 1)
+        if not pdf_url.endswith(".pdf"):
+            pdf_url += ".pdf"
+    return _result(
+        title=title, authors=authors[:300], year=year, venue="arXiv",
+        doi=_doi(entry.findtext(f"{_ARXIV}doi")), url=link,
+        pdfUrl=pdf_url,
+        abstract=_clean(entry.findtext(f"{_ATOM}summary")),
+        sources=["arxiv"],
+    )
+
+
+async def _arxiv(client: httpx.AsyncClient, query: str, limit: int,
+                 filters: dict | None = None) -> list[dict]:
+    filters = filters or {}
+    parts = [f"all:{query}"] if query else []
+    if filters.get("author"):
+        parts.append(f'au:"{filters["author"]}"')
+    if filters.get("yearFrom") or filters.get("yearTo"):
+        start = f"{filters.get('yearFrom') or 1990}01010000"
+        end = f"{filters.get('yearTo') or time.localtime().tm_year}12312359"
+        parts.append(f"submittedDate:[{start} TO {end}]")
+    search_query = " AND ".join(f"({part})" for part in parts) or f"all:{query}"
     res = await client.get(
         "https://export.arxiv.org/api/query",
-        params={"search_query": f"all:{query}", "max_results": limit},
+        params={"search_query": search_query, "max_results": limit},
     )
     res.raise_for_status()
     root = ElementTree.fromstring(res.text)
     out = []
     for entry in root.findall(f"{_ATOM}entry"):
-        title = _clean(entry.findtext(f"{_ATOM}title"), 300)
-        if not title:
-            continue
-        authors = ", ".join(
-            name.text or "" for name in entry.findall(f"{_ATOM}author/{_ATOM}name"))
-        published = entry.findtext(f"{_ATOM}published") or ""
-        year = int(published[:4]) if published[:4].isdigit() else 0
-        link = ""
-        for candidate in entry.findall(f"{_ATOM}link"):
-            if candidate.get("rel") == "alternate":
-                link = candidate.get("href") or ""
-                break
-        if not link:
-            link = _clean(entry.findtext(f"{_ATOM}id"), 300)
-        pdf_url = ""
-        if "arxiv.org/abs/" in link:
-            pdf_url = link.replace("/abs/", "/pdf/").replace("http://", "https://", 1)
-            if not pdf_url.endswith(".pdf"):
-                pdf_url += ".pdf"
-        out.append(_result(
-            title=title, authors=authors[:300], year=year, venue="arXiv",
-            doi=_doi(entry.findtext(f"{_ARXIV}doi")), url=link,
-            pdfUrl=pdf_url,
-            abstract=_clean(entry.findtext(f"{_ATOM}summary")),
-            sources=["arxiv"],
-        ))
+        parsed = _arxiv_entry(entry)
+        if parsed:
+            out.append(parsed)
+    return out
+
+
+async def _arxiv_by_id(client: httpx.AsyncClient, arxiv_id: str) -> list[dict]:
+    res = await client.get(
+        "https://export.arxiv.org/api/query",
+        params={"id_list": arxiv_id, "max_results": 3},
+    )
+    res.raise_for_status()
+    root = ElementTree.fromstring(res.text)
+    out = []
+    for entry in root.findall(f"{_ATOM}entry"):
+        parsed = _arxiv_entry(entry)
+        if parsed:
+            out.append(parsed)
     return out
 
 
 async def _europe_pmc(client: httpx.AsyncClient, query: str, limit: int,
+                      filters: dict | None = None,
                       title_only: bool = False) -> list[dict]:
-    search = f'TITLE:"{query[:150]}"' if title_only else query
+    filters = filters or {}
+    if title_only:
+        search = f'TITLE:"{query[:150]}"'
+    else:
+        parts = [query] if query else []
+        if filters.get("author"):
+            parts.append(f'AUTH:"{filters["author"]}"')
+        if filters.get("yearFrom") or filters.get("yearTo"):
+            start = filters.get("yearFrom") or 1900
+            end = filters.get("yearTo") or time.localtime().tm_year
+            parts.append(f"PUB_YEAR:[{start} TO {end}]")
+        search = " AND ".join(parts) or query
     res = await client.get(
         "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
         params={"query": search, "format": "json", "pageSize": limit,
@@ -186,17 +306,26 @@ def _openalex_abstract(item: dict) -> str:
     return " ".join(positions[i] for i in sorted(positions))[:1200]
 
 
-async def _openalex(client: httpx.AsyncClient, query: str, limit: int) -> list[dict]:
+async def _openalex(client: httpx.AsyncClient, query: str, limit: int,
+                    filters: dict | None = None) -> list[dict]:
     key = os.getenv("MG_OPENALEX_API_KEY", "").strip()
     if not key:
         return []
-    res = await client.get(
-        "https://api.openalex.org/works",
-        params={"search": query, "per-page": limit, "api_key": key,
-                "select": "id,doi,title,publication_year,authorships,"
-                          "primary_location,abstract_inverted_index,"
-                          "cited_by_count"},
-    )
+    filters = filters or {}
+    params = {"search": query, "per-page": limit, "api_key": key,
+              "select": "id,doi,title,publication_year,authorships,"
+                        "primary_location,abstract_inverted_index,"
+                        "cited_by_count"}
+    pieces = []
+    if filters.get("author"):
+        pieces.append(f'raw_author_name.search:{filters["author"]}')
+    if filters.get("yearFrom"):
+        pieces.append(f"from_publication_date:{filters['yearFrom']}-01-01")
+    if filters.get("yearTo"):
+        pieces.append(f"to_publication_date:{filters['yearTo']}-12-31")
+    if pieces:
+        params["filter"] = ",".join(pieces)
+    res = await client.get("https://api.openalex.org/works", params=params)
     res.raise_for_status()
     out = []
     for item in res.json().get("results", []):
@@ -220,15 +349,20 @@ async def _openalex(client: httpx.AsyncClient, query: str, limit: int) -> list[d
     return out
 
 
-async def _semantic_scholar(client: httpx.AsyncClient, query: str, limit: int) -> list[dict]:
+async def _semantic_scholar(client: httpx.AsyncClient, query: str, limit: int,
+                            filters: dict | None = None) -> list[dict]:
     key = os.getenv("MG_S2_API_KEY", "").strip()
     if not key:
         return []
+    filters = filters or {}
+    params = {"query": query, "limit": limit,
+              "fields": "title,abstract,year,venue,authors,externalIds,"
+                        "url,citationCount"}
+    if filters.get("yearFrom") or filters.get("yearTo"):
+        params["year"] = f"{filters.get('yearFrom') or 1900}-{filters.get('yearTo') or time.localtime().tm_year}"
     res = await client.get(
         "https://api.semanticscholar.org/graph/v1/paper/search",
-        params={"query": query, "limit": limit,
-                "fields": "title,abstract,year,venue,authors,externalIds,"
-                          "url,citationCount"},
+        params=params,
         headers={"x-api-key": key},
     )
     res.raise_for_status()
@@ -273,10 +407,10 @@ def _merge(results: list[dict]) -> list[dict]:
 
 
 async def _run_providers(client: httpx.AsyncClient, providers, query: str,
-                         limit: int) -> list[tuple[str, object]]:
+                         limit: int, filters: dict | None = None) -> list[tuple[str, object]]:
     """并行检索;超过 DEADLINE 的慢源直接取消,不让一个源拖住整页。"""
     tasks = {
-        asyncio.create_task(fn(client, query, limit)): name
+        asyncio.create_task(fn(client, query, limit, filters)): name
         for name, fn in providers
     }
     done, pending = await asyncio.wait(tasks, timeout=DEADLINE)
@@ -311,6 +445,47 @@ async def search(request: Request) -> JSONResponse:
     if not _limiter.allow(uid):
         raise HTTPException(429, "检索过于频繁,请稍后再试")
 
+    author = (request.query_params.get("author") or "").strip()[:100]
+
+    def _year(name: str) -> int | None:
+        raw = (request.query_params.get(name) or "").strip()
+        if not raw.isdigit():
+            return None
+        value = int(raw)
+        return value if 1900 <= value <= time.localtime().tm_year + 1 else None
+
+    year_from, year_to = _year("yearFrom"), _year("yearTo")
+    if year_from and year_to and year_from > year_to:
+        raise HTTPException(400, "起始年份不能晚于结束年份")
+    filters = {"author": author, "yearFrom": year_from, "yearTo": year_to}
+    has_filters = bool(author or year_from or year_to)
+
+    identifier = _detect_identifier(query)
+    if identifier:
+        kind, value = identifier
+        async with httpx.AsyncClient(
+            timeout=TIMEOUT, follow_redirects=True,
+            headers={"User-Agent": "MathGuide/1.11 (research literature identifier)"},
+        ) as client:
+            try:
+                if kind == "doi":
+                    exact = await _crossref_doi(client, value)
+                elif kind == "arxiv":
+                    exact = await _arxiv_by_id(client, value)
+                elif kind == "pmcid":
+                    exact = await _europe_pmc(client, f"PMCID:{value}", limit)
+                else:
+                    exact = await _europe_pmc(
+                        client, f"EXT_ID:{value} AND SRC:MED", limit)
+            except httpx.HTTPError as exc:
+                raise HTTPException(
+                    502, f"编号检索失败: {type(exc).__name__}") from exc
+        results = _mark_local(uid, _merge(exact)[:limit])
+        return JSONResponse({
+            "query": query, "results": results, "warnings": [],
+            "identifier": {"type": kind, "value": value},
+        })
+
     providers = [
         ("crossref", _crossref),
         ("arxiv", _arxiv),
@@ -321,17 +496,21 @@ async def search(request: Request) -> JSONResponse:
     warnings: list[str] = []
     gathered: list[dict] = []
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True,
-                                 headers={"User-Agent": "MathGuide/1.10 "
+                                 headers={"User-Agent": "MathGuide/1.11 "
                                           "(research literature search)"}) as client:
-        outcomes = await _run_providers(client, providers, query, limit)
+        outcomes = await _run_providers(
+            client, providers, query, limit, filters if has_filters else None)
     for name, outcome in outcomes:
         if isinstance(outcome, Exception):
             warnings.append(f"{name}: {type(outcome).__name__}")
             continue
         gathered.extend(outcome)  # type: ignore[arg-type]
 
-    results = _merge(gathered)[:limit]
-    return JSONResponse({"query": query, "results": results, "warnings": warnings})
+    results = _mark_local(uid, _merge(gathered)[:limit])
+    return JSONResponse({
+        "query": query, "results": results, "warnings": warnings,
+        "identifier": None,
+    })
 
 
 async def related(request: Request) -> JSONResponse:
@@ -372,8 +551,9 @@ async def related(request: Request) -> JSONResponse:
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"crossref-reference: {type(exc).__name__}")
         try:
-            async def epmc_title(c: httpx.AsyncClient, q: str, n: int) -> list[dict]:
-                return await _europe_pmc(c, q, n, title_only=True)
+            async def epmc_title(c: httpx.AsyncClient, q: str, n: int,
+                                 f: dict | None = None) -> list[dict]:
+                return await _europe_pmc(c, q, n, f, title_only=True)
 
             outcomes = await _run_providers(client, [
                 ("crossref", _crossref),
@@ -394,6 +574,7 @@ async def related(request: Request) -> JSONResponse:
         if (not doi or i["doi"] != doi)
         and re.sub(r"\W+", "", i["title"].lower()) != norm_query
     ][:20]
+    items = _mark_local(uid, items)
     return JSONResponse({"query": query, "results": items, "warnings": warnings})
 
 
@@ -442,6 +623,17 @@ async def _download_pdf(client: httpx.AsyncClient, url: str) -> bytes:
             raise ValueError("该链接不是 PDF 文件")
         return data
     raise ValueError("重定向次数过多")
+
+
+async def download_allowed_pdf(url: str) -> bytes:
+    """供临时入库复用:严格白名单下载,返回 PDF 字节。"""
+    if not _pdf_url_allowed(url):
+        raise ValueError("该论文没有可用的开放获取 PDF")
+    async with httpx.AsyncClient(
+        timeout=30, follow_redirects=False,
+        headers={"User-Agent": "MathGuide/1.11 (open access PDF)"},
+    ) as client:
+        return await _download_pdf(client, url)
 
 
 def _save_pdf(uid: str, data: bytes) -> Path:

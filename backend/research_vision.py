@@ -187,6 +187,176 @@ def _call_model(images: list[tuple[str, bytes]], columns: list[dict]) -> dict[st
     return _clean_result(_parse_json(text))
 
 
+def explain_image(mime: str, data: bytes, question: str) -> str:
+    """解释论文中的图表/公式截图;只依据图片,不给无依据数值。"""
+    if mime not in _ALLOWED_MIME:
+        raise ValueError("不支持的图片类型")
+    if not data or len(data) > MAX_IMAGE_BYTES:
+        raise ValueError("图片为空或超过 8MB")
+    cfg = _cfg()
+    if not (cfg["base"] and cfg["key"]):
+        raise RuntimeError("视觉模型未配置")
+    uri = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+    prompt = question.strip()[:1000] or "解释这张图表或公式的含义、变量和结论。"
+    system = (
+        "你是学术论文阅读助手。只依据用户给的截图回答,解释图表/公式的含义、"
+        "坐标轴、变量与结论。看不清或信息不足时明确说明,不要猜测具体数值;"
+        "数值以论文原文为准。用简洁的中文回答,必要时分点。"
+    )
+    payload = {
+        "model": cfg["model"],
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"{system}\n\n问题: {prompt}"},
+                {"type": "image_url", "image_url": {"url": uri}},
+            ],
+        }],
+        "temperature": 0.2,
+    }
+    resp = httpx.post(
+        cfg["base"] + "/chat/completions",
+        headers={"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=TIMEOUT,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"视觉模型返回 HTTP {resp.status_code}: {resp.text[:200]}")
+    body = resp.json()
+    try:
+        message = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("视觉模型返回格式异常") from exc
+    if isinstance(message, list):
+        text = "".join(
+            part.get("text", "") for part in message
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    else:
+        text = str(message)
+    return text.strip()[:4000]
+
+
+TABLE_SYSTEM = (
+    "你是学术论文表格转录器。读取用户框选的论文表格截图,把它完整转录为结构化 JSON。"
+    "只输出 JSON,不要解释,不要输出 Markdown 代码块。\n"
+    "输出格式:\n"
+    '{"title":"表格标题","columns":["列1","列2"],"rows":[["单元格","单元格"]],'
+    '"notes":"表注/单位/条件","warnings":[]}\n'
+    "规则:\n"
+    "1. 严格按截图逐格转录,数字、小数点、正负号、单位保持原样,不做换算,不补算缺失值;\n"
+    "2. 第一行表头放入 columns;数据行放入 rows;合并单元格在覆盖位置留空字符串;\n"
+    "3. 看不清的单元格留空,并在 warnings 里说明,不要猜测;\n"
+    "4. 只转录一张表;若截图里有多张,转录最完整的一张并写入 warnings;\n"
+    "5. 最多 30 列、200 行,超出部分截断。"
+)
+
+
+def _chat_text(cfg: dict[str, str], prompt: str, mime: str, data: bytes,
+               temperature: float = 0.0) -> str:
+    uri = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+    payload = {
+        "model": cfg["model"],
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": uri}},
+            ],
+        }],
+        "temperature": temperature,
+    }
+    resp = httpx.post(
+        cfg["base"] + "/chat/completions",
+        headers={"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=TIMEOUT,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"视觉模型返回 HTTP {resp.status_code}: {resp.text[:200]}")
+    body = resp.json()
+    try:
+        message = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("视觉模型返回格式异常") from exc
+    if isinstance(message, list):
+        return "".join(
+            part.get("text", "") for part in message
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    return str(message)
+
+
+def _clean_table_result(raw: dict[str, Any]) -> dict[str, Any]:
+    title = str(raw.get("title") or "论文表格").strip()[:120]
+    warnings = raw.get("warnings")
+    warnings = [str(w)[:200] for w in warnings][:10] if isinstance(warnings, list) else []
+
+    rows_raw = raw.get("rows")
+    if not isinstance(rows_raw, list):
+        raise ValueError("模型未返回 rows")
+    rows: list[list[str]] = []
+    for item in rows_raw[:200]:
+        if not isinstance(item, list):
+            continue
+        rows.append([str(v).strip()[:200] for v in item[:30]])
+    if not rows:
+        raise ValueError("没有识别到表格数据")
+
+    cols_raw = raw.get("columns")
+    columns = ([str(v).strip()[:60] for v in cols_raw[:30]]
+               if isinstance(cols_raw, list) else [])
+    width = max(len(r) for r in rows)
+    width = max(width, len(columns))
+    if not columns and len(rows) > 1:
+        # 模型漏给表头:首行全为文本时按表头处理,避免把表头当数据
+        first = rows[0]
+        if all(v and not _looks_numeric(v) for v in first):
+            columns = first
+            rows = rows[1:]
+    while len(columns) < width:
+        columns.append(f"列{len(columns) + 1}")
+    columns = columns[:30]
+    width = min(len(columns), 30)
+    padded: list[list[str]] = []
+    for row in rows[:200]:
+        out = (row + [""] * width)[:width]
+        padded.append(out)
+    if not padded:
+        raise ValueError("没有识别到表格数据")
+    if len(rows_raw) > 200 or any(len(r) > 30 for r in rows_raw if isinstance(r, list)):
+        warnings.append("表格过大,已按 30 列 / 200 行截断")
+    notes = str(raw.get("notes") or "").strip()[:500]
+    return {
+        "title": title,
+        "columns": columns,
+        "rows": padded,
+        "notes": notes,
+        "warnings": warnings,
+    }
+
+
+def _looks_numeric(text: str) -> bool:
+    try:
+        float(text.replace(",", "").replace("%", "").strip())
+        return True
+    except ValueError:
+        return False
+
+
+def extract_table(mime: str, data: bytes) -> dict[str, Any]:
+    """论文表格截图 → 结构化表格;只转录,不做数值推断。"""
+    if mime not in _ALLOWED_MIME:
+        raise ValueError("不支持的图片类型")
+    if not data or len(data) > MAX_IMAGE_BYTES:
+        raise ValueError("图片为空或超过 8MB")
+    cfg = _cfg()
+    if not (cfg["base"] and cfg["key"]):
+        raise RuntimeError("视觉模型未配置")
+    text = _chat_text(cfg, TABLE_SYSTEM + "\n请转录这张表。", mime, data)
+    return _clean_table_result(_parse_json(text))
+
+
 def _decode_image(item: object) -> tuple[str, bytes]:
     if not isinstance(item, dict):
         raise ValueError("图片格式错误")

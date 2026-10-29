@@ -6,9 +6,9 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.11.0'
-export const APP_STABLE_VERSION = 'v1.11.0'
-export const APP_STABLE_DATE = '2026-10-27'
+export const APP_VERSION = 'v1.12.0'
+export const APP_STABLE_VERSION = 'v1.12.0'
+export const APP_STABLE_DATE = '2026-10-30'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
 export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
@@ -53,24 +53,24 @@ export const RELEASES: ReleaseEntry[] = [
     status: 'latest',
     items: [
       {
-        zh: '待办清单:一次性 / 每天 / 每周任务,到点高亮提醒、浏览器通知、过期补看与暂停。',
-        en: 'To-do list: one-off, daily and weekly tasks with timed reminders, browser notifications, expired-task review and pause.',
+        zh: '科研阅读器:PDF 画布/文本层、批注、区域解释与论文内定位高亮;关闭前统一保存或丢弃批注。',
+        en: 'Research reader: PDF canvas and text layer, annotations, region explanations and in-paper passage highlighting, with save-or-discard on close.',
       },
       {
-        zh: '停止生成后可点「回复」,从截断处续写,不重复已生成的内容。',
-        en: 'After stopping a reply, press “Resume” to continue from the cut-off point without repeating existing text.',
+        zh: '论文表格转录:框选论文表格,视觉模型逐格转录,预览校对后存入数据表并保留来源页码。',
+        en: 'Paper table transcription: select a table in the reader, transcribe it cell by cell, review it and save it as a data table with its source page.',
       },
       {
-        zh: '设置改版:拆分「功能与改进」与「关于 MG」,新增服务协议与隐私政策。',
-        en: 'Settings redesign: split Feedback from About MG, and add Terms of Service and Privacy Policy.',
+        zh: '数据表联动:项目归属、统计与相关分析、折线/散点/柱状图、多文献对比表,以及在对话中分析当前数据表。',
+        en: 'Data-table integration: project assignment, descriptive statistics and correlations, line/scatter/bar charts, multi-paper comparison tables and in-chat analysis.',
       },
       {
-        zh: '数据与账号:导出账号、用量与本地学习数据;自助注销会级联删除账号、令牌与用量记录。',
-        en: 'Data and account: export account, usage and local learning data; self-service deletion cascades through the account, tokens and usage records.',
+        zh: '项目报告:按项目导出 DOCX,包含研究目标、思路、数据表、统计结果与来源,不调用模型二次生成。',
+        en: 'Project report: export a DOCX with goals, approach, data tables, statistics and sources — generated deterministically without a second LLM pass.',
       },
       {
-        zh: '测评安全:token 只存 SHA-256、邀请码注册、API 安全响应头与 CSP 部署模板。',
-        en: 'Evaluation security: SHA-256 token hashes, invite-code registration, API security headers and a CSP deployment template.',
+        zh: '科研浏览历史与回收站:未入库的外部论文保留批注,删除后 30 天内可恢复。',
+        en: 'Research reading history and recycle bin: annotations on unimported external papers are kept, with 30-day restore after deletion.',
       },
     ],
   },

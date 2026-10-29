@@ -5,12 +5,13 @@
  * 换设备登录仍可见。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import { userState } from '@/stores/user'
 import {
   createResearchProject,
+  downloadResearchReport,
   importLegacyResearchArchive,
   deleteResearchDoc,
   deleteResearchProject,
@@ -22,14 +23,22 @@ import {
   type ResearchProject,
   type ResearchStatus,
 } from '@/services/researchService'
+import {
+  listResearchTables,
+  type TableSummary,
+} from '@/services/researchTableService'
 
 const props = defineProps<{ left?: number; width?: number }>()
 const emit = defineEmits<{ close: [] }>()
+const router = useRouter()
 
-const tab = ref<'goal' | 'files'>('goal')
+const tab = ref<'goal' | 'files' | 'tables'>('goal')
 const fileEl = ref<HTMLInputElement | null>(null)
 const projects = ref<ResearchProject[]>([])
 const docs = ref<ResearchDoc[]>([])
+const tables = ref<TableSummary[]>([])
+const tablesLoading = ref(false)
+const reportExporting = ref(false)
 const activeId = ref<string | null>(null)
 const loading = ref(false)
 const uploading = ref(false)
@@ -49,6 +58,46 @@ const project = computed(() => projects.value.find((p) => p.id === activeId.valu
 const files = computed(() =>
   docs.value.filter((d) => !project.value || d.projectId === null || d.projectId === project.value.id),
 )
+
+/** 数据表标签:只在切到时拉取,避免打开档案面板就多一次请求 */
+async function setTab(next: 'goal' | 'files' | 'tables'): Promise<void> {
+  tab.value = next
+  if (next === 'tables') await loadTables()
+}
+
+async function loadTables(): Promise<void> {
+  if (!project.value) {
+    tables.value = []
+    return
+  }
+  tablesLoading.value = true
+  try {
+    tables.value = await listResearchTables(project.value.id)
+  } catch {
+    tables.value = []
+  } finally {
+    tablesLoading.value = false
+  }
+}
+
+function openTable(item: TableSummary): void {
+  const query: Record<string, string> = { tableId: item.id }
+  if (project.value) query.projectId = project.value.id
+  emit('close')
+  void router.push({ path: '/research/tables', query })
+}
+
+async function exportReport(): Promise<void> {
+  if (!project.value || reportExporting.value) return
+  reportExporting.value = true
+  try {
+    await downloadResearchReport(project.value.id)
+  } catch {
+    showToast(t('archive.exportFail'))
+  } finally {
+    reportExporting.value = false
+  }
+}
 
 const statuses: { key: ResearchStatus; label: string }[] = [
   { key: 'exploring', label: 'archive.statusExploring' },
@@ -82,6 +131,7 @@ async function load(): Promise<void> {
     })
     docs.value = ds
     if (!activeId.value && ps.length) activeId.value = ps[0].id
+    if (tab.value === 'tables') await loadTables()
   } catch {
     /* 未登录/网络失败时保持空白,操作时会再提示 */
   } finally {
@@ -113,6 +163,8 @@ async function onDelete(): Promise<void> {
     delete pendingPatches[id]
     delete failedProjects[id]
     if (activeId.value === id) activeId.value = projects.value[0]?.id ?? null
+    tables.value = tables.value.filter((item) => item.projectId !== id)
+    if (tab.value === 'tables') await loadTables()
   } catch {
     showToast(t('archive.saveFail'))
   } finally {
@@ -123,6 +175,7 @@ async function onDelete(): Promise<void> {
 function onPickProject(e: Event): void {
   const value = (e.target as HTMLSelectElement).value
   activeId.value = value || null
+  if (tab.value === 'tables') void loadTables()
 }
 
 /** 失焦即存:先本地生效,服务端失败再回滚并提示 */
@@ -248,11 +301,14 @@ onBeforeRouteLeave(() => confirmClose())
     <section class="ra-panel">
       <header class="panel-head">
         <span class="tech-label panel-title">◫ {{ t('archive.title') }}</span>
-        <button class="tab" :class="{ on: tab === 'goal' }" @click="tab = 'goal'">
+        <button class="tab" :class="{ on: tab === 'goal' }" @click="setTab('goal')">
           {{ t('archive.tabGoal') }}
         </button>
-        <button class="tab" :class="{ on: tab === 'files' }" @click="tab = 'files'">
+        <button class="tab" :class="{ on: tab === 'files' }" @click="setTab('files')">
           {{ t('archive.tabFiles') }}<span v-if="files.length" class="count">{{ files.length }}</span>
+        </button>
+        <button class="tab" :class="{ on: tab === 'tables' }" @click="setTab('tables')">
+          {{ t('archive.tabTables') }}<span v-if="tables.length" class="count">{{ tables.length }}</span>
         </button>
         <button class="close" aria-label="close" @click="emit('close')">✕</button>
       </header>
@@ -264,6 +320,9 @@ onBeforeRouteLeave(() => confirmClose())
           <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.title }}</option>
         </select>
         <button class="mini" @click="onCreate">{{ t('archive.newProject') }}</button>
+        <button v-if="project" class="mini" :disabled="reportExporting" @click="exportReport">
+          {{ reportExporting ? t('archive.exportingReport') : t('archive.exportReport') }}
+        </button>
         <button v-if="project" class="mini danger" :disabled="savingProjects[project.id] || deletingProjects[project.id]" @click="onDelete">{{ t('archive.deleteProject') }}</button>
       </div>
 
@@ -323,7 +382,7 @@ onBeforeRouteLeave(() => confirmClose())
       </div>
 
       <!-- 资料库:与服务端论文库同一份数据 -->
-      <div v-else class="body">
+      <div v-else-if="tab === 'files'" class="body">
         <div class="files-head">
           <span class="lbl">{{ t('archive.files') }}</span>
           <button class="mini" :disabled="uploading" @click="onImport">
@@ -351,6 +410,25 @@ onBeforeRouteLeave(() => confirmClose())
               </span>
             </div>
             <button class="mini danger" @click="removeFile(f)">{{ t('archive.removeFile') }}</button>
+          </li>
+        </ul>
+      </div>
+
+      <!-- 数据表:与实验数据表页同一份数据,项目内直接跳转 -->
+      <div v-else class="body">
+        <p v-if="!project" class="empty">{{ t('archive.emptyProjects') }}</p>
+        <p v-else-if="tablesLoading" class="empty">…</p>
+        <p v-else-if="!tables.length" class="empty">{{ t('archive.emptyTables') }}</p>
+        <ul v-else class="file-list">
+          <li v-for="item in tables" :key="item.id" class="file-item">
+            <div class="file-main">
+              <span class="file-name">{{ item.title }}</span>
+              <span class="file-meta">
+                {{ t('archive.tableMeta', { r: item.rows, c: item.columns }) }}
+                · {{ fmtDate(item.updatedAt) }}
+              </span>
+            </div>
+            <button class="mini" @click="openTable(item)">{{ t('archive.openTable') }}</button>
           </li>
         </ul>
       </div>

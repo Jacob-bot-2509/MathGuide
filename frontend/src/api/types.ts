@@ -29,6 +29,10 @@ export interface ChatRequest {
   /** 续写被用户中断的回答:prompt 为原问题,partial 为已生成正文 */
   resume?: boolean
   partial?: string
+  /** 阅读器里的当前论文:只在该篇论文内检索 */
+  paperId?: string
+  /** 当前数据表:作为用户原始数据带入对话上下文 */
+  tableId?: string
 }
 
 /** 流式回调(OpenAI 兼容 SSE 的通用形态) */

@@ -31,10 +31,11 @@ import zipfile
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import quote
 
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse
 
 from auth import require_auth
 from http_utils import read_json_object
@@ -46,6 +47,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data" / "research"
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 默认单文件 100MB(MG_RESEARCH_MAX_UPLOAD_MB 可调)
 MAX_DOCS = 200                         # 默认每用户论文数上限(MG_RESEARCH_MAX_DOCS 可调)
 MAX_PAGES = 600                        # 单篇页数上限(支持百页级长文/学位论文)
+TEMP_DOC_LIMIT = 200                   # 临时论文(浏览历史)上限,超出淘汰最旧无批注记录
 CHUNK_CHARS = 900                      # 切片目标长度
 SUMMARY_CHARS = 220                    # 节点摘要长度
 SNIPPET_CHARS = 320
@@ -159,7 +161,27 @@ def _connect(uid: str) -> sqlite3.Connection:
     ):
         if column not in columns:
             conn.execute(f"ALTER TABLE docs ADD COLUMN {column} {decl}")
+    for column, decl in (
+        ("status", "TEXT NOT NULL DEFAULT 'uploaded'"),
+        ("origin_url", "TEXT"),
+        ("last_viewed_at", "REAL"),
+        ("deleted_at", "REAL"),
+        ("purge_after", "REAL"),
+    ):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE docs ADD COLUMN {column} {decl}")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS annotations("
+        "id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, page INTEGER NOT NULL,"
+        " quote TEXT NOT NULL DEFAULT '', rects TEXT NOT NULL DEFAULT '[]',"
+        " note TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT 'yellow',"
+        " created_at REAL NOT NULL, updated_at REAL NOT NULL)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_annotations_doc ON annotations(doc_id)"
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_project ON docs(project_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_status ON docs(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_nodes_doc ON nodes(doc_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id)")
     return conn
@@ -948,21 +970,25 @@ class UserIndex:
         return subtree or None
 
     def search(self, query: str, top_k: int = 8, doc_id: str | None = None,
-               use_tree: bool = False, project_id: str | None = None) -> dict:
+               use_tree: bool = False, project_id: str | None = None,
+               doc_ids: set[str] | None = None) -> dict:
         """默认不做章节树筛选:评测集上树筛会漏掉正确切片(BM25+向量已足够);
         需要 PageIndex 式走树时由调用方显式打开(MG_TREE_WALK=1 + tree=true)。"""
         self._ensure_vectors()
         project_docs: set[str] | None = None
         if project_id:
             project_docs = {d["id"] for d in self.docs if d.get("projectId") == project_id}
+        scope: set[str] | None = doc_ids if doc_ids is not None else (
+            {doc_id} if doc_id else {
+                d["id"] for d in self.docs if d.get("status") != "temp"})
         allowed_chunks = [
             i for i, c in enumerate(self.chunks)
-            if (doc_id is None or c.doc_id == doc_id)
+            if (scope is None or c.doc_id in scope)
             and (project_docs is None or c.doc_id in project_docs)
         ]
         allowed_nodes = [
             i for i, n in enumerate(self.nodes)
-            if (doc_id is None or n.doc_id == doc_id)
+            if (scope is None or n.doc_id in scope)
             and (project_docs is None or n.doc_id in project_docs)
         ]
 
@@ -991,7 +1017,7 @@ class UserIndex:
             # 树筛完没有命中就退回全库,避免"节点分错 → 永远搜不到"
             if use_tree and top_node_ids:
                 return self.search(query, top_k=top_k, doc_id=doc_id,
-                                   use_tree=False, project_id=project_id)
+                                   use_tree=False, project_id=project_id, doc_ids=doc_ids)
             return {"hits": [], "total": 0, "query": query}
 
         docs_by_id = {d["id"]: d for d in self.docs}
@@ -1022,6 +1048,12 @@ class UserIndex:
 _indexes: dict[str, UserIndex] = {}
 _index_paths: dict[str, int] = {}
 _index_lock = threading.Lock()
+# shortcut: this guards the documented single-worker deployment; use cross-process locks for multiple workers.
+_mutation_locks = tuple(threading.RLock() for _ in range(64))
+
+
+def _mutation_lock(uid: str):
+    return _mutation_locks[hash(_safe_uid(uid)) % len(_mutation_locks)]
 
 
 def _load_rows(uid: str) -> tuple[list[dict], list[NodeRec], list[ChunkRec]]:
@@ -1031,10 +1063,13 @@ def _load_rows(uid: str) -> tuple[list[dict], list[NodeRec], list[ChunkRec]]:
             {"id": r[0], "name": r[1], "size": r[2], "pages": r[4],
              "createdAt": r[5], "projectId": r[6], "doi": r[7] or "",
              "title": r[8] or r[1], "authors": r[9] or "",
-             "year": r[10] or 0, "venue": r[11] or ""}
+             "year": r[10] or 0, "venue": r[11] or "",
+             "status": r[12] or "uploaded", "originUrl": r[13] or "",
+             "lastViewedAt": r[14] or 0, "deletedAt": r[15] or 0}
             for r in conn.execute(
                 "SELECT id, name, size, sha, pages, created_at, project_id, doi,"
-                " title, authors, year, venue FROM docs ORDER BY created_at DESC")
+                " title, authors, year, venue, status, origin_url, last_viewed_at,"
+                " deleted_at FROM docs ORDER BY created_at DESC")
         ]
         nodes = [NodeRec(*r) for r in conn.execute(
             "SELECT id, doc_id, parent_id, title, summary, page_start, page_end, text FROM nodes")]
@@ -1068,6 +1103,10 @@ def _get_index(uid: str) -> UserIndex:
             _index_paths[uid] = version
             return empty
         docs, nodes, chunks = _load_rows(uid)
+        live = {d["id"] for d in docs if not d.get("deletedAt")}
+        docs = [d for d in docs if d["id"] in live]
+        nodes = [n for n in nodes if n.doc_id in live]
+        chunks = [c for c in chunks if c.doc_id in live]
         embedder = None
         if embed_mod.is_configured():
             try:
@@ -1082,8 +1121,21 @@ def _get_index(uid: str) -> UserIndex:
 
 # ---------- 入库 / 删除 ----------
 
+def _check_formal_capacity(conn: sqlite3.Connection, additional_size: int) -> None:
+    count, used = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM docs"
+        " WHERE status != 'temp' AND deleted_at IS NULL").fetchone()
+    if count >= _max_docs():
+        raise ValueError(f"论文数量达到上限 {_max_docs()}")
+    if used + additional_size > _max_total_bytes():
+        raise ValueError(f"论文库总容量达到上限 {_max_total_bytes() // (1024 * 1024)}MB")
+
+
 def _ingest(uid: str, name: str, data: bytes, mime: str,
-            project_id: str | None = None) -> dict:
+            project_id: str | None = None, *, status: str = "uploaded",
+            origin_url: str = "", analyze: bool = True) -> dict:
+    if status not in ("uploaded", "temp", "imported"):
+        raise ValueError("未知的文档状态")
     if not name or len(name) > 200:
         raise ValueError("文件名缺失或过长")
     limit = _max_upload_bytes()
@@ -1104,112 +1156,529 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
     doi = _extract_doi(pages)
 
     sections = _sections(pages)
-    # 一次模型调用同时产出章节摘要与元数据;未配置/失败时走启发式
-    summaries, meta = _analyze_document(name, pages, sections)
-    conn = _connect(uid)
-    try:
-        if project_id:
-            found_project = conn.execute(
-                "SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
-            if not found_project:
-                raise ValueError("研究项目不存在")
-        exists = conn.execute("SELECT id FROM docs WHERE id = ?", (doc_id,)).fetchone()
-        if not exists and doi:
-            # 同一篇论文的另一个 PDF(排版/压缩不同,内容哈希不同)按 DOI 去重
-            exists = conn.execute(
-                "SELECT id FROM docs WHERE doi = ? LIMIT 1", (doi,)).fetchone()
-        if exists:
-            # 同一篇论文再次导入到别的项目:直接改归属,不重复存正文
-            doc_id = str(exists[0])
-            if project_id:
-                conn.execute("UPDATE docs SET project_id = ? WHERE id = ?",
-                             (project_id, doc_id))
-                _bump_version(conn)
-                conn.commit()
-            return {"docId": doc_id, "duplicate": True, "doi": doi}
-        count = conn.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
-        if count >= _max_docs():
-            raise ValueError(f"论文数量达到上限 {_max_docs()}")
-        used = conn.execute("SELECT COALESCE(SUM(size), 0) FROM docs").fetchone()[0]
-        if used + len(data) > _max_total_bytes():
-            raise ValueError(
-                f"论文库总容量达到上限 {_max_total_bytes() // (1024 * 1024)}MB")
-        now = time.time()
-        conn.execute(
-            "INSERT INTO docs(id, name, size, sha, pages, created_at, mime, project_id,"
-            " doi, title, authors, year, venue)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (doc_id, name, len(data), sha, len(pages), now, mime, project_id,
-             doi, meta["title"], meta["authors"], meta["year"], meta["venue"]))
-        nodes: list[tuple] = []
-        chunks: list[tuple] = []
-        stack: list[tuple[int, str]] = []
-        for si, section in enumerate(sections, start=1):
-            node_id = f"{doc_id}#s{si}"
-            level = _heading_level(section.title)
-            while stack and stack[-1][0] >= level:
-                stack.pop()
-            parent_id = stack[-1][1] if stack else None
-            stack.append((level, node_id))
-            summary = summaries[si - 1] if si - 1 < len(summaries) else _clean_line(section.text)[:SUMMARY_CHARS]
-            nodes.append((node_id, doc_id, parent_id, section.title, summary,
-                          section.page_start, section.page_end, section.text[:20000]))
-            for ci, (text, p_start, p_end) in enumerate(_chunk_section(section), start=1):
-                chunks.append((f"{doc_id}#s{si}c{ci}", doc_id, node_id,
-                               p_start, p_end, section.title, text))
-        conn.executemany(
-            "INSERT INTO nodes(id, doc_id, parent_id, title, summary, page_start, page_end, text)"
-            " VALUES (?,?,?,?,?,?,?,?)", nodes)
-        conn.executemany(
-            "INSERT INTO chunks(id, doc_id, node_id, page_start, page_end, section, text)"
-            " VALUES (?,?,?,?,?,?,?)", chunks)
-        _bump_version(conn)
-        conn.commit()
-    finally:
-        conn.close()
-
-    # 原文件落盘(只存一份;重名不覆盖,doc_id 已按内容去重)
-    suffix = {
-        "pdf": ".pdf", "docx": ".docx", "epub": ".epub",
-        "rtf": ".rtf", "html": ".html", "xml": ".xml",
-    }.get(kind) or Path(name).suffix.lower()[:10] or ".txt"
-    try:
-        (_user_dir(uid) / "files" / f"{doc_id}{suffix}").write_bytes(data)
-    except OSError as exc:
-        print(f"[research] 原文件保存失败(索引已入库): {exc}")
-
-    with _index_lock:
-        _indexes.pop(uid, None)
-    return {"docId": doc_id, "duplicate": False, "pages": len(pages),
-            "sections": len(sections), "chunks": len(chunks)}
-
-
-def _delete(uid: str, doc_id: str) -> bool:
-    conn = _connect(uid)
-    try:
-        found = conn.execute("SELECT id FROM docs WHERE id = ?", (doc_id,)).fetchone()
-        if not found:
-            return False
-        conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
-        conn.execute("DELETE FROM nodes WHERE doc_id = ?", (doc_id,))
-        conn.execute("DELETE FROM docs WHERE id = ?", (doc_id,))
-        _bump_version(conn)
-        conn.commit()
-    finally:
-        conn.close()
-    for path in (_user_dir(uid) / "files").glob(f"{doc_id}.*"):
+    # 一次模型调用同时产出章节摘要与元数据;临时论文跳过模型,减少等待与费用
+    if analyze:
+        summaries, meta = _analyze_document(name, pages, sections)
+    else:
+        summaries = [_clean_line(s.text)[:SUMMARY_CHARS] for s in sections]
+        meta = _heuristic_meta(name, pages)
+    with _mutation_lock(uid):
+        purge_expired_history(uid)
+        conn = _connect(uid)
         try:
-            path.unlink()
-        except OSError:
-            pass
-    with _index_lock:
-        _indexes.pop(uid, None)
-    return True
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            if project_id:
+                found_project = conn.execute(
+                    "SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+                if not found_project:
+                    raise ValueError("研究项目不存在")
+            exists = conn.execute(
+                "SELECT id, status, deleted_at, purge_after, size FROM docs WHERE id = ?", (doc_id,)).fetchone()
+            if not exists and doi:
+                # 同一篇论文的另一个 PDF(排版/压缩不同,内容哈希不同)按 DOI 去重
+                exists = conn.execute(
+                    "SELECT id, status, deleted_at, purge_after, size FROM docs WHERE doi = ? LIMIT 1",
+                    (doi,)).fetchone()
+            if exists:
+                doc_id = str(exists[0])
+                current = str(exists[1] or "uploaded")
+                now = time.time()
+                if exists[2]:
+                    if exists[3] is None or exists[3] <= now:
+                        raise ValueError("浏览历史已过期，请重试")
+                    conn.execute(
+                        "UPDATE docs SET deleted_at = NULL, purge_after = NULL WHERE id = ?",
+                        (doc_id,))
+                    _bump_version(conn)
+                if status in ("uploaded", "imported") and current == "temp":
+                    _check_formal_capacity(conn, int(exists[4] or 0))
+                    conn.execute(
+                        "UPDATE docs SET status = ?, project_id = COALESCE(?, project_id),"
+                        " origin_url = COALESCE(?, origin_url) WHERE id = ?",
+                        (status if status == "imported" else "uploaded", project_id,
+                         origin_url or None, doc_id))
+                    current = status if status == "imported" else "uploaded"
+                    _bump_version(conn)
+                elif project_id:
+                    conn.execute("UPDATE docs SET project_id = ? WHERE id = ?",
+                                 (project_id, doc_id))
+                    _bump_version(conn)
+                if current == "temp":
+                    conn.execute(
+                        "UPDATE docs SET last_viewed_at = ?, origin_url = COALESCE(?, origin_url)"
+                        " WHERE id = ?", (now, origin_url or None, doc_id))
+                conn.commit()
+                return {"docId": doc_id, "duplicate": True, "doi": doi,
+                        "status": current, "pages": len(pages)}
+            evicted: list[str] = []
+            if status == "temp":
+                used = conn.execute(
+                    "SELECT COALESCE(SUM(size), 0) FROM docs"
+                    " WHERE status = 'temp' AND deleted_at IS NULL").fetchone()[0]
+                temp_count = conn.execute(
+                    "SELECT COUNT(*) FROM docs WHERE status = 'temp' AND deleted_at IS NULL"
+                ).fetchone()[0]
+                over_docs = temp_count >= TEMP_DOC_LIMIT
+                over_bytes = used + len(data) > _max_total_bytes()
+                if over_docs or over_bytes:
+                    # 自动淘汰最旧的无批注临时论文;有批注的永不自动删除
+                    rows = conn.execute(
+                        "SELECT d.id, d.size FROM docs d"
+                        " WHERE d.status = 'temp' AND d.deleted_at IS NULL"
+                        " AND NOT EXISTS (SELECT 1 FROM annotations a WHERE a.doc_id = d.id)"
+                        " ORDER BY COALESCE(d.last_viewed_at, d.created_at) ASC"
+                    ).fetchall()
+                    freed = 0
+                    for old_id, old_size in rows:
+                        if temp_count - len(evicted) < TEMP_DOC_LIMIT and used - freed + len(data) <= _max_total_bytes():
+                            break
+                        evicted.append(str(old_id))
+                        freed += int(old_size or 0)
+                    if temp_count - len(evicted) >= TEMP_DOC_LIMIT:
+                        raise ValueError(
+                            f"临时论文数量达到上限 {TEMP_DOC_LIMIT},且没有可自动清理的无批注记录;"
+                            "请导入或手动删除历史")
+                    if used - freed + len(data) > _max_total_bytes():
+                        raise ValueError(
+                            f"临时论文总容量达到上限 {_max_total_bytes() // (1024 * 1024)}MB,"
+                            "且没有可自动清理的无批注记录")
+                    if evicted:
+                        marks = ",".join("?" for _ in evicted)
+                        conn.execute(f"DELETE FROM chunks WHERE doc_id IN ({marks})", evicted)
+                        conn.execute(f"DELETE FROM nodes WHERE doc_id IN ({marks})", evicted)
+                        conn.execute(f"DELETE FROM docs WHERE id IN ({marks})", evicted)
+                        used -= freed
+            else:
+                _check_formal_capacity(conn, len(data))
+            now = time.time()
+            conn.execute(
+                "INSERT INTO docs(id, name, size, sha, pages, created_at, mime, project_id,"
+                " doi, title, authors, year, venue, status, origin_url, last_viewed_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (doc_id, name, len(data), sha, len(pages), now, mime, project_id,
+                 doi, meta["title"], meta["authors"], meta["year"], meta["venue"],
+                 status, origin_url, now if status == "temp" else None))
+            nodes: list[tuple] = []
+            chunks: list[tuple] = []
+            stack: list[tuple[int, str]] = []
+            for si, section in enumerate(sections, start=1):
+                node_id = f"{doc_id}#s{si}"
+                level = _heading_level(section.title)
+                while stack and stack[-1][0] >= level:
+                    stack.pop()
+                parent_id = stack[-1][1] if stack else None
+                stack.append((level, node_id))
+                summary = summaries[si - 1] if si - 1 < len(summaries) else _clean_line(section.text)[:SUMMARY_CHARS]
+                nodes.append((node_id, doc_id, parent_id, section.title, summary,
+                              section.page_start, section.page_end, section.text[:20000]))
+                for ci, (text, p_start, p_end) in enumerate(_chunk_section(section), start=1):
+                    chunks.append((f"{doc_id}#s{si}c{ci}", doc_id, node_id,
+                                   p_start, p_end, section.title, text))
+            conn.executemany(
+                "INSERT INTO nodes(id, doc_id, parent_id, title, summary, page_start, page_end, text)"
+                " VALUES (?,?,?,?,?,?,?,?)", nodes)
+            conn.executemany(
+                "INSERT INTO chunks(id, doc_id, node_id, page_start, page_end, section, text)"
+                " VALUES (?,?,?,?,?,?,?)", chunks)
+            _bump_version(conn)
+            conn.commit()
+        finally:
+            conn.close()
+
+        # 原文件落盘(只存一份;重名不覆盖,doc_id 已按内容去重)
+        for old_id in evicted:
+            for path in (_user_dir(uid) / "files").glob(f"{old_id}.*"):
+                try:
+                    path.unlink()
+                except OSError:
+                    continue
+        suffix = {
+            "pdf": ".pdf", "docx": ".docx", "epub": ".epub",
+            "rtf": ".rtf", "html": ".html", "xml": ".xml",
+        }.get(kind) or Path(name).suffix.lower()[:10] or ".txt"
+        try:
+            (_user_dir(uid) / "files" / f"{doc_id}{suffix}").write_bytes(data)
+        except OSError as exc:
+            print(f"[research] 原文件保存失败(索引已入库): {exc}")
+
+        with _index_lock:
+            _indexes.pop(uid, None)
+        return {"docId": doc_id, "duplicate": False, "pages": len(pages),
+                "sections": len(sections), "chunks": len(chunks),
+                "status": status, "title": meta["title"], "doi": doi}
+
+
+def _delete(uid: str, doc_id: str, *, expired_before: float | None = None) -> bool:
+    with _mutation_lock(uid):
+        conn = _connect(uid)
+        try:
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            if expired_before is None:
+                found = conn.execute("SELECT id FROM docs WHERE id = ?", (doc_id,)).fetchone()
+            else:
+                found = conn.execute(
+                    "SELECT id FROM docs WHERE id = ? AND status = 'temp'"
+                    " AND deleted_at IS NOT NULL AND purge_after IS NOT NULL AND purge_after <= ?",
+                    (doc_id, expired_before)).fetchone()
+            if not found:
+                return False
+            conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+            conn.execute("DELETE FROM nodes WHERE doc_id = ?", (doc_id,))
+            conn.execute("DELETE FROM annotations WHERE doc_id = ?", (doc_id,))
+            conn.execute("DELETE FROM docs WHERE id = ?", (doc_id,))
+            _bump_version(conn)
+            if expired_before is not None:
+                # Keep the write lock until old files are gone, so a new upload cannot reuse this id.
+                for path in (_user_dir(uid) / "files").glob(f"{doc_id}.*"):
+                    path.unlink(missing_ok=True)
+            conn.commit()
+        finally:
+            conn.close()
+        if expired_before is None:
+            for path in (_user_dir(uid) / "files").glob(f"{doc_id}.*"):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+        with _index_lock:
+            _indexes.pop(uid, None)
+        return True
 
 
 def corpus_stamp(uid: str) -> str:
     """语料版本(DB 内的 version):上传/删除后让研究答案缓存失效。库不存在返回 0。"""
     return str(_corpus_version(uid))
+
+
+def _doc_row(uid: str, doc_id: str) -> dict | None:
+    conn = _connect(uid)
+    try:
+        row = conn.execute(
+            "SELECT id, name, pages, mime, status, deleted_at FROM docs WHERE id = ?",
+            (doc_id,)).fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "name": row[1], "pages": row[2], "mime": row[3] or "",
+                "status": row[4] or "uploaded", "deletedAt": row[5] or 0}
+    finally:
+        conn.close()
+
+
+def _annotation_row(row: tuple) -> dict:
+    import json as _json
+
+    try:
+        rects = _json.loads(row[4] or "[]")
+    except (TypeError, ValueError):
+        rects = []
+    return {
+        "id": row[0], "docId": row[1], "page": row[2], "quote": row[3] or "",
+        "rects": rects if isinstance(rects, list) else [],
+        "note": row[5] or "", "color": row[6] or "yellow",
+        "createdAt": row[7], "updatedAt": row[8],
+    }
+
+
+def _list_annotations(uid: str, doc_id: str) -> list[dict]:
+    conn = _connect(uid)
+    try:
+        rows = conn.execute(
+            "SELECT id, doc_id, page, quote, rects, note, color, created_at,"
+            " updated_at FROM annotations WHERE doc_id = ? ORDER BY page, created_at",
+            (doc_id,)).fetchall()
+        return [_annotation_row(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _clean_rects(value: object) -> list[list[float]]:
+    if not isinstance(value, list):
+        return []
+    out: list[list[float]] = []
+    for item in value[:300]:
+        if not isinstance(item, (list, tuple)) or len(item) != 4:
+            continue
+        try:
+            nums = [float(x) for x in item]
+        except (TypeError, ValueError):
+            continue
+        if any(x < 0 or x > 1 for x in nums):
+            continue
+        out.append([round(x, 5) for x in nums])
+    return out
+
+
+def _save_annotation(uid: str, doc_id: str, body: dict) -> dict:
+    import json as _json
+
+    page = body.get("page")
+    quote = str(body.get("quote") or "")[:2000]
+    note = str(body.get("note") or "")[:4000]
+    color = str(body.get("color") or "yellow")[:20]
+    if not isinstance(page, int) or page < 1:
+        raise ValueError("页码无效")
+    if not quote and not note:
+        raise ValueError("批注内容为空")
+    rects = _clean_rects(body.get("rects"))
+    now = time.time()
+    conn = _connect(uid)
+    try:
+        doc = conn.execute(
+            "SELECT id FROM docs WHERE id = ? AND deleted_at IS NULL", (doc_id,)
+        ).fetchone()
+        if not doc:
+            raise FileNotFoundError("文档不存在")
+        aid = str(body.get("id") or "")[:64]
+        row = None
+        if aid:
+            row = conn.execute(
+                "SELECT id FROM annotations WHERE id = ? AND doc_id = ?",
+                (aid, doc_id)).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE annotations SET page = ?, quote = ?, rects = ?, note = ?,"
+                " color = ?, updated_at = ? WHERE id = ? AND doc_id = ?",
+                (page, quote, _json.dumps(rects), note, color, now, aid, doc_id))
+        else:
+            aid = aid or secrets.token_hex(10)
+            conn.execute(
+                "INSERT INTO annotations(id, doc_id, page, quote, rects, note,"
+                " color, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (aid, doc_id, page, quote, _json.dumps(rects), note, color,
+                 now, now))
+        conn.commit()
+        data = conn.execute(
+            "SELECT id, doc_id, page, quote, rects, note, color, created_at,"
+            " updated_at FROM annotations WHERE id = ?", (aid,)).fetchone()
+        return _annotation_row(data)  # type: ignore[arg-type]
+    finally:
+        conn.close()
+
+
+def _delete_annotation(uid: str, doc_id: str, annotation_id: str) -> bool:
+    conn = _connect(uid)
+    try:
+        cur = conn.execute(
+            "DELETE FROM annotations WHERE id = ? AND doc_id = ?",
+            (annotation_id, doc_id))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def _docs_by_doi(uid: str, dois: set[str]) -> dict[str, dict]:
+    if not dois:
+        return {}
+    picked = list(dois)[:100]
+    marks = ",".join("?" for _ in picked)
+    conn = _connect(uid)
+    try:
+        rows = conn.execute(
+            "SELECT id, doi, status FROM docs WHERE deleted_at IS NULL"
+            f" AND lower(doi) IN ({marks})", [d.lower() for d in picked]).fetchall()
+        result: dict[str, dict] = {}
+        for doc_id, doi, status in rows:
+            key = str(doi or "").lower()
+            current = result.get(key)
+            # 已入库优先于临时文档
+            if current is None or (current["status"] == "temp" and status != "temp"):
+                result[key] = {"id": doc_id, "status": status or "uploaded"}
+        return result
+    finally:
+        conn.close()
+
+
+def _import_temp(uid: str, doc_id: str, project_id: str | None,
+                 keep_annotations: bool = True) -> dict:
+    conn = _connect(uid)
+    try:
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status, deleted_at, size FROM docs WHERE id = ?", (doc_id,)).fetchone()
+        if not row or row[1]:
+            raise FileNotFoundError("文档不存在")
+        status = str(row[0] or "uploaded")
+        if status != "temp":
+            return {"docId": doc_id, "duplicate": True, "status": status}
+        if project_id:
+            project = conn.execute(
+                "SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+            if not project:
+                raise ValueError("研究项目不存在")
+        _check_formal_capacity(conn, int(row[2] or 0))
+        if not keep_annotations:
+            conn.execute("DELETE FROM annotations WHERE doc_id = ?", (doc_id,))
+        conn.execute(
+            "UPDATE docs SET status = 'imported', project_id = COALESCE(?, project_id),"
+            " last_viewed_at = ? WHERE id = ?",
+            (project_id, time.time(), doc_id))
+        _bump_version(conn)
+        conn.commit()
+        return {"docId": doc_id, "duplicate": False, "status": "imported",
+                "annotationsKept": keep_annotations}
+    finally:
+        conn.close()
+
+
+HISTORY_TTL_DAYS = 30
+
+
+def _history_item(row: tuple) -> dict:
+    return {
+        "id": row[0], "title": row[1] or row[2], "name": row[2],
+        "pages": row[3], "doi": row[4] or "", "year": row[5] or 0,
+        "createdAt": row[6], "lastViewedAt": row[7] or 0,
+        "annotations": row[8] or 0, "originUrl": row[9] or "",
+    }
+
+
+def _history_items(uid: str) -> list[dict]:
+    conn = _connect(uid)
+    try:
+        rows = conn.execute(
+            "SELECT d.id, d.title, d.name, d.pages, d.doi, d.year, d.created_at,"
+            " d.last_viewed_at,"
+            " (SELECT COUNT(*) FROM annotations a WHERE a.doc_id = d.id),"
+            " d.origin_url FROM docs d"
+            " WHERE d.status = 'temp' AND d.deleted_at IS NULL"
+            " ORDER BY COALESCE(d.last_viewed_at, d.created_at) DESC").fetchall()
+        return [_history_item(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _history_trash(uid: str) -> list[dict]:
+    now = time.time()
+    conn = _connect(uid)
+    try:
+        rows = conn.execute(
+            "SELECT d.id, d.title, d.name, d.pages, d.doi, d.year, d.created_at,"
+            " d.last_viewed_at,"
+            " (SELECT COUNT(*) FROM annotations a WHERE a.doc_id = d.id),"
+            " d.origin_url, d.deleted_at, d.purge_after FROM docs d"
+            " WHERE d.status = 'temp' AND d.deleted_at IS NOT NULL"
+            " ORDER BY d.deleted_at DESC").fetchall()
+        items = []
+        for row in rows:
+            item = _history_item(row[:10])
+            purge = float(row[11] or 0)
+            item["deletedAt"] = row[10] or 0
+            item["purgeAfter"] = purge
+            item["daysLeft"] = max(0, int((purge - now + 86399) // 86400))
+            items.append(item)
+        return items
+    finally:
+        conn.close()
+
+
+def _history_delete(uid: str, doc_id: str) -> bool:
+    now = time.time()
+    conn = _connect(uid)
+    try:
+        cur = conn.execute(
+            "UPDATE docs SET deleted_at = ?, purge_after = ?"
+            " WHERE id = ? AND status = 'temp' AND deleted_at IS NULL",
+            (now, now + HISTORY_TTL_DAYS * 86400, doc_id))
+        if cur.rowcount:
+            _bump_version(conn)
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def _history_restore(uid: str, doc_id: str) -> bool:
+    conn = _connect(uid)
+    try:
+        cur = conn.execute(
+            "UPDATE docs SET deleted_at = NULL, purge_after = NULL"
+            " WHERE id = ? AND status = 'temp' AND deleted_at IS NOT NULL"
+            " AND purge_after IS NOT NULL AND purge_after > ?",
+            (doc_id, time.time()))
+        if cur.rowcount:
+            _bump_version(conn)
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def purge_expired_history(uid: str) -> int:
+    """删除回收站中超过 30 天的临时论文;返回清理数量。"""
+    now = time.time()
+    conn = _connect(uid)
+    try:
+        ids = [r[0] for r in conn.execute(
+            "SELECT id FROM docs WHERE status = 'temp' AND deleted_at IS NOT NULL"
+            " AND purge_after IS NOT NULL AND purge_after <= ?", (now,))]
+    finally:
+        conn.close()
+    return sum(_delete(uid, doc_id, expired_before=now) for doc_id in ids)
+
+
+def purge_expired_history_all() -> int:
+    if not DATA_DIR.exists():
+        return 0
+    total = 0
+    for folder in DATA_DIR.iterdir():
+        if not folder.is_dir() or not (folder / "index.sqlite3").exists():
+            continue
+        try:
+            total += purge_expired_history(folder.name)
+        except Exception:  # noqa: BLE001 单个用户库损坏不阻断启动
+            continue
+    return total
+
+
+def _doc_file_path(uid: str, doc_id: str) -> Path | None:
+    for path in sorted((_user_dir(uid) / "files").glob(f"{doc_id}.*")):
+        if path.name.endswith(".pages.json"):
+            continue
+        return path
+    return None
+
+
+_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
+    ".epub": "application/epub+zip",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".rtf": "application/rtf",
+}
+
+
+def _doc_text_cache(uid: str, doc_id: str) -> list[list]:
+    folder = _user_dir(uid) / "files"
+    cache = folder / f"{doc_id}.pages.json"
+    if cache.exists():
+        try:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+        except (OSError, json.JSONDecodeError):
+            pass
+    source = _doc_file_path(uid, doc_id)
+    if source is None:
+        raise FileNotFoundError("原始文件不存在")
+    data = source.read_bytes()
+    kind = _detect_format(source.name, data, "")
+    if kind == "pdf":
+        raise ValueError("PDF 使用文件接口,不走文本接口")
+    pages = _extract_pages(kind, data, source.name)
+    payload = [[number, text] for number, text in pages]
+    try:
+        cache.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    return payload
 
 
 PROJECT_STATUSES = {"exploring", "active", "paused", "done"}
@@ -1306,34 +1775,43 @@ def _delete_project(uid: str, project_id: str) -> bool:
 
 
 def _clear_all(uid: str) -> int:
-    """清空用户论文库(保留空 DB 目录);返回删除的论文数。"""
-    conn = _connect(uid)
-    try:
-        count = conn.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
-        conn.execute("DELETE FROM chunks")
-        conn.execute("DELETE FROM nodes")
-        conn.execute("DELETE FROM docs")
-        _bump_version(conn)
-        conn.commit()
-    finally:
-        conn.close()
-    for path in (_user_dir(uid) / "files").glob("*"):
+    """清空用户论文库(保留临时论文与空 DB 目录);返回删除的论文数。"""
+    with _mutation_lock(uid):
+        conn = _connect(uid)
         try:
-            path.unlink()
-        except OSError:
-            pass
-    with _index_lock:
-        _indexes.pop(uid, None)
-        _index_paths.pop(uid, None)
-    return count
+            ids = [r[0] for r in conn.execute(
+                "SELECT id FROM docs WHERE status != 'temp'")]
+            if ids:
+                marks = ",".join("?" for _ in ids)
+                conn.execute(f"DELETE FROM chunks WHERE doc_id IN ({marks})", ids)
+                conn.execute(f"DELETE FROM nodes WHERE doc_id IN ({marks})", ids)
+                conn.execute(f"DELETE FROM annotations WHERE doc_id IN ({marks})", ids)
+                conn.execute(f"DELETE FROM docs WHERE id IN ({marks})", ids)
+            count = len(ids)
+            _bump_version(conn)
+            conn.commit()
+        finally:
+            conn.close()
+        for path in (_user_dir(uid) / "files").glob("*"):
+            if path.stem.split(".")[0] in ids:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+        with _index_lock:
+            _indexes.pop(uid, None)
+            _index_paths.pop(uid, None)
+        return count
 
 
-def chat_hits(uid: str, question: str, top_k: int = 4) -> list[dict]:
-    """科研对话用:返回用户自己论文的命中片段;库空时返回空列表。"""
+def chat_hits(uid: str, question: str, top_k: int = 4,
+              doc_id: str | None = None) -> list[dict]:
+    """科研对话用:返回用户自己论文的命中片段;库空时返回空列表。
+    传 doc_id 时只在该篇论文内检索(阅读器里针对当前论文提问)。"""
     index = _get_index(uid)
     if not index.chunks:
         return []
-    return index.search(question, top_k=top_k)["hits"]
+    return index.search(question, top_k=top_k, doc_id=doc_id)["hits"]
 
 def docs_for_export(uid: str) -> list[dict]:
     """账号导出用:只含论文元数据,不含正文与原文件。"""
@@ -1405,6 +1883,10 @@ async def list_docs(request: Request) -> JSONResponse:
     rec = require_auth(request)
     uid = str(rec.get("uid") or "")
     docs, _, _ = await asyncio.to_thread(_load_rows, uid)
+    docs = [
+        d for d in docs
+        if d.get("status") != "temp" and not d.get("deletedAt")
+    ]
     return JSONResponse({"docs": docs}, headers={"Cache-Control": "no-store"})
 
 
@@ -1418,12 +1900,99 @@ async def delete_doc(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+async def doc_file(request: Request) -> FileResponse:
+    """返回本人论文的原始文件,供阅读器同源加载(支持 PDF Range)。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    doc_id = str(request.path_params.get("doc_id") or "")
+    doc = await asyncio.to_thread(_doc_row, uid, doc_id)
+    if doc is None or doc["deletedAt"]:
+        raise HTTPException(404, "not found")
+    path = await asyncio.to_thread(_doc_file_path, uid, doc_id)
+    if path is None:
+        raise HTTPException(404, "原始文件不存在")
+    active_content = path.suffix.lower() in {".html", ".htm", ".xml"}
+    media = "application/octet-stream" if active_content else _MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    disposition = "attachment" if active_content else "inline"
+    return FileResponse(
+        path, media_type=media,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{quote(path.name)}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+async def doc_text(request: Request) -> JSONResponse:
+    """非 PDF 文档的分页正文:文本阅读器用,带页码与总页数。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    doc_id = str(request.path_params.get("doc_id") or "")
+    doc = await asyncio.to_thread(_doc_row, uid, doc_id)
+    if doc is None or doc["deletedAt"]:
+        raise HTTPException(404, "not found")
+    try:
+        page = int(request.query_params.get("page") or 1)
+    except ValueError:
+        page = 1
+    try:
+        payload = await asyncio.to_thread(_doc_text_cache, uid, doc_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "原始文件不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    total = len(payload)
+    page = max(1, min(page, total or 1))
+    item = payload[page - 1] if payload else [1, ""]
+    return JSONResponse({
+        "docId": doc_id, "name": doc["name"], "page": page, "total": total,
+        "text": item[1],
+    }, headers={"Cache-Control": "no-store"})
+
+
 async def clear_docs(request: Request) -> JSONResponse:
     """清空我的论文库:删除全部论文、切片、章节树与原文件。"""
     rec = require_auth(request)
     uid = str(rec.get("uid") or "")
     removed = await asyncio.to_thread(_clear_all, uid)
     return JSONResponse({"ok": True, "removed": removed})
+
+
+async def list_annotations(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    doc_id = str(request.path_params.get("doc_id") or "")
+    doc = await asyncio.to_thread(_doc_row, uid, doc_id)
+    if doc is None or doc["deletedAt"]:
+        raise HTTPException(404, "not found")
+    items = await asyncio.to_thread(_list_annotations, uid, doc_id)
+    return JSONResponse({"annotations": items}, headers={"Cache-Control": "no-store"})
+
+
+async def save_annotation(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    doc_id = str(request.path_params.get("doc_id") or "")
+    body = await read_json_object(request)
+    try:
+        item = await asyncio.to_thread(_save_annotation, uid, doc_id, body)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "not found") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return JSONResponse({"annotation": item})
+
+
+async def delete_annotation(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    doc_id = str(request.path_params.get("doc_id") or "")
+    annotation_id = str(request.path_params.get("annotation_id") or "")
+    ok = await asyncio.to_thread(_delete_annotation, uid, doc_id, annotation_id)
+    if not ok:
+        raise HTTPException(404, "not found")
+    return JSONResponse({"ok": True})
 
 
 async def list_projects(request: Request) -> JSONResponse:
@@ -1475,13 +2044,20 @@ async def search_docs(request: Request) -> JSONResponse:
     top_k = max(1, min(int(top_k) if isinstance(top_k, int) else 8, 20))
     doc_id = body.get("docId")
     doc_id = str(doc_id) if isinstance(doc_id, str) and doc_id else None
+    raw_ids = body.get("docIds")
+    if raw_ids is not None and not isinstance(raw_ids, list):
+        raise HTTPException(400, "docIds must be a list")
+    doc_ids: set[str] | None = None
+    if isinstance(raw_ids, list):
+        picked = {str(x) for x in raw_ids if isinstance(x, str) and x}
+        doc_ids = set(list(picked)[:MAX_DOCS])
     project_id = body.get("projectId")
     project_id = str(project_id) if isinstance(project_id, str) and project_id else None
     use_tree = body.get("tree", False) is True
     started = time.monotonic()
     index = await asyncio.to_thread(_get_index, uid)
     result = await asyncio.to_thread(index.search, query, top_k, doc_id,
-                                     use_tree, project_id)
+                                     use_tree, project_id, doc_ids)
     result["elapsed"] = round(time.monotonic() - started, 3)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 

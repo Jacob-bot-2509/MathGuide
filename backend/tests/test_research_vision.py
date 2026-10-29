@@ -40,6 +40,68 @@ def test_clean_result_rejects_empty():
         rv._clean_result({"formulas": []})
 
 
+def test_clean_table_result_pads_and_caps():
+    out = rv._clean_table_result({
+        "title": "表 1",
+        "columns": ["t", "x"],
+        "rows": [["1", "2", "extra"], ["3"]],
+        "notes": "单位:s",
+        "warnings": ["轻微模糊"],
+    })
+    assert out["title"] == "表 1"
+    assert out["columns"] == ["t", "x", "列3"]
+    assert out["rows"] == [["1", "2", "extra"], ["3", "", ""]]
+    assert out["notes"] == "单位:s"
+    assert out["warnings"] == ["轻微模糊"]
+
+
+def test_clean_table_result_uses_text_first_row_as_header():
+    out = rv._clean_table_result({
+        "rows": [["时间", "位移"], ["1", "2"], ["3", "4"]],
+    })
+    assert out["columns"] == ["时间", "位移"]
+    assert out["rows"] == [["1", "2"], ["3", "4"]]
+
+
+def test_clean_table_result_rejects_empty():
+    with pytest.raises(ValueError):
+        rv._clean_table_result({"columns": ["a"], "rows": []})
+
+
+def test_extract_table_endpoint_with_mocked_model(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    import research_papers as rp
+
+    monkeypatch.setattr(rp, "require_auth", lambda request: {"uid": "u-vision"})
+    monkeypatch.setattr(rp.rc, "_doc_row", lambda uid, doc_id: {
+        "id": doc_id, "name": "paper.pdf", "pages": 5, "mime": "application/pdf",
+        "status": "uploaded", "deletedAt": 0,
+    })
+    monkeypatch.setattr(rp.vision, "is_configured", lambda: True)
+    monkeypatch.setattr(rp.vision, "_limiter", rv.SlidingWindowLimiter(100, 60))
+    monkeypatch.setattr(rp.vision, "extract_table", lambda mime, data: {
+        "title": "表 1", "columns": ["t", "x"], "rows": [["1", "2"]],
+        "notes": "", "warnings": [],
+    })
+    app = Starlette(routes=[
+        Route("/api/research/papers/{doc_id}/extract-table", rp.extract_table,
+              methods=["POST"]),
+    ])
+    client = TestClient(app)
+    res = client.post("/api/research/papers/doc-1/extract-table", json={
+        "image": {"mime": "image/png", "data": PNG},
+        "page": 3,
+    })
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["table"]["rows"] == [["1", "2"]]
+    assert body["docName"] == "paper.pdf"
+    assert body["page"] == 3
+
+
 def test_decode_image():
     mime, data = rv._decode_image({"mime": "image/png", "data": PNG})
     assert mime == "image/png" and data[:8] == b"\x89PNG\r\n\x1a\n"

@@ -20,6 +20,15 @@ export interface TableMerge {
   c2: number
 }
 
+/** 数据表来源:论文表格转录后保留原文位置,便于复核 */
+export interface TableSource {
+  docId: string
+  docName: string
+  page: number
+  quote?: string
+  kind?: 'paper'
+}
+
 export interface ResearchTable {
   id: string
   projectId?: string | null
@@ -31,6 +40,8 @@ export interface ResearchTable {
   merges: TableMerge[]
   colWidths: number[]
   rowHeights: number[]
+  source?: TableSource | null
+  rowSources?: (TableSource | null)[]
   createdAt?: number
   updatedAt?: number
 }
@@ -67,6 +78,45 @@ export interface TablePayload {
   colWidths: number[]
   rowHeights: number[]
   projectId?: string | null
+  source?: TableSource | null
+  rowSources?: (TableSource | null)[]
+}
+
+export interface TableStat {
+  key: string
+  label: string
+  n: number
+  missing: number
+  mean: string
+  median: string
+  stdev: string
+  min: string
+  max: string
+  q1: string
+  q3: string
+}
+
+export interface TableCorrelation {
+  x: string
+  y: string
+  r: string
+}
+
+export interface TableSeries {
+  key: string
+  label: string
+  values: (number | null)[]
+}
+
+export interface TableStatsResult {
+  stats: TableStat[]
+  correlations: TableCorrelation[]
+  series: TableSeries[]
+  labels: string[]
+  rowLabels: string[]
+  computed: Record<string, string[]>
+  errors: TableError[]
+  columns?: TableColumn[]
 }
 
 export interface ExtractedFormula {
@@ -142,6 +192,15 @@ export interface TablePrintResult {
   ok: boolean
   opened: boolean
   file: string
+}
+
+/** 描述性统计 + 相关性 + 绘图序列;不落库 */
+export async function statsResearchTable(
+  tableId: string,
+  payload: TablePayload,
+): Promise<TableStatsResult> {
+  return post<TableStatsResult>(
+    `/api/research/tables/${encodeURIComponent(tableId)}/stats`, payload, authHeaders())
 }
 
 /** 保存草稿并让本机 WPS/Excel 打开,打印选项沿用该程序 */

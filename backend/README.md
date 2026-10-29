@@ -196,6 +196,8 @@ MG_ROLE_LONG=aliyun:qwen-long       # 长文:教材 / 长文档(3 万字级)
 或 HttpOnly 会话 Cookie `mg_session`(双域部署下由父域共享,登录一次两区通用)。
 Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.*` 子域由服务端按 Host 固定工作区。
 
+正式论文和临时浏览历史分别计量容量，每类上限均由 `MG_RESEARCH_MAX_TOTAL_MB` 指定（默认 500 MB）；回收站文件保留至到期清理，不计入活动容量。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/health` | 健康检查 `{ok, service}`(公开) |
@@ -208,7 +210,7 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/chat/stream` | 聊天流式回复(SSE) |
 | POST | `/api/research/docs?name=文件名&projectId=` | 上传论文(PDF/文本原始字节),按内容哈希去重、按用户隔离 → `{docId, duplicate, pages, chunks}` |
 | GET | `/api/research/docs` | 当前用户的论文列表(元数据,含 `projectId`) |
-| DELETE | `/api/research/docs` | 清空我的论文库(论文、切片、章节树、原文件) |
+| DELETE | `/api/research/docs` | 清空正式论文库及其批注、切片、章节树和原文件；保留临时浏览历史 |
 | DELETE | `/api/research/docs/{doc_id}` | 删除论文、切片、章节树与原文件 |
 | POST | `/api/research/search` | 全文检索 `{query, topK?, docId?, projectId?, tree?}` → `{hits, mode, elapsed}`;BM25 + embedding 混合,未配置向量时纯 BM25 |
 | GET | `/api/research/tree?docId=` | 论文章节树(节点扁平列表,`parentId` 组树) |
@@ -218,12 +220,18 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | DELETE | `/api/research/projects/{project_id}` | 删除项目(论文只解除归属,不删除) |
 | POST | `/api/research/tables/import?name=&projectId=` | 导入 XLSX/DOCX/CSV 模板 → 结构化列与行 |
 | GET | `/api/research/tables` | 数据表列表(可按 `projectId` 过滤) |
-| POST | `/api/research/tables` | 新建空表 `{title, columns, rows, formulas, rowLabels, merges, colWidths, rowHeights}` |
+| POST | `/api/research/tables` | 新建空表 `{title, columns, rows, formulas, rowLabels, merges, colWidths, rowHeights, source?}`;`source` 记录论文来源 `{docId, docName, page, quote}` |
 | GET | `/api/research/tables/{id}` | 读取完整数据表 |
-| POST | `/api/research/tables/{id}` | 保存草稿 |
+| POST | `/api/research/tables/{id}` | 保存草稿(不带 `source` 时保留原来源) |
 | POST | `/api/research/tables/{id}/compute` | 「完成」:保存并计算,返回逐格结果与错误 |
+| POST | `/api/research/tables/{id}/stats` | 统计与绘图数据:描述性统计、Pearson 相关、序列(不落库) |
 | GET | `/api/research/tables/{id}/export?format=csv\|xlsx` | 导出 |
 | DELETE | `/api/research/tables/{id}` | 删除数据表 |
+| POST | `/api/research/papers/{doc_id}/extract-table` | 论文表格截图转录 `{image:{mime,data}, page}` → `{table, docId, docName, page}`;只返回预览,不自动入库 |
+| POST | `/api/research/papers/{doc_id}/locate` | 论文内定位与问题相关的段落(供阅读器高亮) |
+| POST | `/api/research/papers/{doc_id}/explain-region` | 截图解释图表/公式区域(只依据图片) |
+| POST | `/api/research/literature/compare` | 多文献对比 `{docIds:[2~6]}` → 研究问题/方法/数据/结果/局限,每行带 `rowSources` 来源 |
+| POST | `/api/research/report` | 项目研究报告 DOCX `{projectId, tableIds?}`:项目档案 + 数据表 + 统计 + 来源(不调用 LLM) |
 | POST | `/api/research/formulas/extract` | 图片公式识别 `{images:[{mime,data(base64)}], columns}` → `{formulas, groups, master, warnings}`;图片不落盘 |
 | POST | `/api/diagnosis` | 掌握度诊断:`{pointId, answer}` 走模型评分,或 `{pointId, selfRating}` 自评 |
 | GET | `/api/diagnosis/report` | 薄弱点报告(低于 3 分,按分数升序/核心度降序) |

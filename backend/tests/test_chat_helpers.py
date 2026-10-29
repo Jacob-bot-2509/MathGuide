@@ -236,6 +236,14 @@ def test_formula_followup_detection():
     assert chat._is_formula_followup([{"role": "assistant", "content": "x"}]) is False
 
 
+def test_research_prompt_includes_table_context():
+    from rag.research.synthesize import _user_prompt
+
+    prompt = _user_prompt("趋势如何?", [], "【研究数据表】长表\n| A |\n| 1 |")
+    assert "【研究数据表" in prompt
+    assert "趋势如何?" in prompt
+
+
 def test_gen_continue_uses_original_question_and_partial(monkeypatch):
     captured: dict = {}
 

@@ -4,29 +4,50 @@
  * 检索在服务端完成:BM25 + embedding 混合排序,章节树先筛节点;
  * 命中带论文名、章节与页码,可直接作为提问依据。
  */
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import {
-  openLiteraturePdf,
+  createTempPaper,
+  deletePaperHistory,
+  importTempPaper,
+  listPaperHistory,
+  listPaperTrash,
   relatedLiterature,
+  restorePaperHistory,
   searchLiterature,
+  type HistoryItem,
   type LiteratureItem,
 } from '@/services/literatureService'
+import { listAnnotations } from '@/services/researchAnnotationService'
+import DocumentViewer from '@/components/research/DocumentViewer.vue'
 import {
   clearResearchDocs,
+  compareResearchDocs,
   deleteResearchDoc,
   listResearchDocs,
   listResearchProjects,
+  locatePaperPassages,
   searchResearch,
   uploadResearchDoc,
   type ResearchDoc,
   type ResearchHit,
   type ResearchProject,
 } from '@/services/researchService'
+import { createResearchTable } from '@/services/researchTableService'
+
+const props = defineProps<{ embedded?: boolean }>()
+const emit = defineEmits<{
+  ask: [prompt: string]
+  'paper-change': [paper: { docId: string; title: string } | null]
+}>()
+
+type SearchMode = 'local' | 'web'
+const SEARCH_MODE_KEY = 'mg-search-mode'
 
 const router = useRouter()
+const route = useRoute()
 const docs = ref<ResearchDoc[]>([])
 const projects = ref<ResearchProject[]>([])
 const query = ref('')
@@ -35,66 +56,352 @@ const searched = ref(false)
 const loading = ref(false)
 const uploading = ref(false)
 const uploadEl = ref<HTMLInputElement | null>(null)
-const activeDoc = ref('')
+const selectedDocIds = ref<string[]>([])
+const comparing = ref(false)
+const knownDocIds = new Set<string>()
 const activeProject = ref('')
 const useTree = ref(false)
 const mode = ref('')
 const elapsed = ref(0)
+const searchMode = ref<SearchMode>(loadSearchMode())
+const authorFilter = ref('')
+const yearFrom = ref('')
+const yearTo = ref('')
+const advancedOpen = ref(false)
 const litItems = ref<LiteratureItem[]>([])
 const litLoading = ref(false)
 const litSearched = ref(false)
 const litWarnings = ref<string[]>([])
+const litIdentifier = ref<{ type: string; value: string } | null>(null)
 const openingPdf = ref('')
+const importingDoc = ref('')
+const historyOpen = ref(false)
+const historyTab = ref<'active' | 'trash'>('active')
+const historyItems = ref<HistoryItem[]>([])
+const trashItems = ref<HistoryItem[]>([])
+const historyLoading = ref(false)
+let litSeq = 0
 
 const hasDocs = computed(() => docs.value.length > 0)
+const busy = computed(() =>
+  searchMode.value === 'local' ? loading.value : litLoading.value)
 
-/** 外部文献发现:只取元数据/摘要,不下载全文 */
-async function searchExternal(): Promise<void> {
-  const q = query.value.trim()
-  if (q.length < 2 || litLoading.value) return
+/** 输入框里出现 DOI / arXiv / PMCID / PMID 时提示将按编号精确检索 */
+const identifierHint = computed(() => {
+  const text = query.value
+  const doi = text.match(/\b10\.\d{4,9}\/[^\s"'<>]+/i)
+  if (doi) return { type: 'DOI', value: doi[0].replace(/[.,;)\]}]+$/, '') }
+  const arxiv = text.match(/(?:arxiv:\s*)?(\d{4}\.\d{4,5})(?:v\d+)?\b/i)
+  if (arxiv) return { type: 'arXiv', value: arxiv[1] }
+  const pmcid = text.match(/\b(PMC\d{6,})\b/i)
+  if (pmcid) return { type: 'PMCID', value: pmcid[1].toUpperCase() }
+  const pmid = text.match(/\bPMID[:\s]*(\d{6,9})\b/i)
+  if (pmid) return { type: 'PMID', value: pmid[1] }
+  return null
+})
+
+function loadSearchMode(): SearchMode {
+  try {
+    return localStorage.getItem(SEARCH_MODE_KEY) === 'web' ? 'web' : 'local'
+  } catch {
+    return 'local'
+  }
+}
+
+function setSearchMode(value: SearchMode): void {
+  searchMode.value = value
+  if (value === 'local') historyOpen.value = false
+  try {
+    localStorage.setItem(SEARCH_MODE_KEY, value)
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 新导入的论文默认勾选;用户取消后不会被后续刷新重新选上 */
+function syncSelection(): void {
+  const ids = docs.value.map((d) => d.id)
+  const selected = new Set(selectedDocIds.value.filter((id) => ids.includes(id)))
+  for (const id of ids) {
+    if (!knownDocIds.has(id)) selected.add(id)
+  }
+  knownDocIds.clear()
+  ids.forEach((id) => knownDocIds.add(id))
+  selectedDocIds.value = ids.filter((id) => selected.has(id))
+}
+
+function toggleDoc(id: string): void {
+  const set = new Set(selectedDocIds.value)
+  if (set.has(id)) set.delete(id)
+  else set.add(id)
+  selectedDocIds.value = docs.value.map((d) => d.id).filter((x) => set.has(x))
+}
+
+function selectAllDocs(): void {
+  selectedDocIds.value = docs.value.map((d) => d.id)
+}
+
+function clearSelectedDocs(): void {
+  selectedDocIds.value = []
+}
+
+/** 勾选 2~6 篇 → 模型逐篇抽取 → 建对比表并打开 */
+async function compareSelected(): Promise<void> {
+  if (comparing.value || selectedDocIds.value.length < 2) return
+  comparing.value = true
+  try {
+    const data = await compareResearchDocs(selectedDocIds.value)
+    const selectedProjects = new Set(
+      docs.value
+        .filter((d) => selectedDocIds.value.includes(d.id) && d.projectId)
+        .map((d) => d.projectId as string),
+    )
+    const projectId = activeProject.value
+      || (selectedProjects.size === 1 ? [...selectedProjects][0] : null)
+    const created = await createResearchTable({
+      title: data.title,
+      columns: data.columns,
+      rows: data.rows,
+      formulas: {},
+      rowLabels: data.rowLabels,
+      merges: [],
+      colWidths: data.columns.map(() => 160),
+      rowHeights: data.rows.map(() => 30),
+      projectId,
+      rowSources: data.rowSources,
+    })
+    if (data.warnings.length) showToast(data.warnings[0])
+    const query: Record<string, string> = { tableId: created.id }
+    if (projectId) query.projectId = projectId
+    await router.push({ path: '/research/tables', query })
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('search.compareFail'))
+  } finally {
+    comparing.value = false
+  }
+}
+
+/** 外部文献发现:只取元数据/摘要,不下载全文;seq 保证只认最后一次查询 */
+async function searchExternal(qArg?: string): Promise<void> {
+  const q = (qArg ?? query.value).trim()
+  if (q.length < 2) return
+  historyOpen.value = false
+  const seq = ++litSeq
   litLoading.value = true
   try {
-    const res = await searchLiterature(q, 20)
+    const res = await searchLiterature(q, {
+      limit: 20,
+      author: authorFilter.value.trim() || undefined,
+      yearFrom: Number(yearFrom.value) || null,
+      yearTo: Number(yearTo.value) || null,
+    })
+    if (seq !== litSeq) return
     litItems.value = res.results
     litWarnings.value = res.warnings
+    litIdentifier.value = res.identifier ?? null
     litSearched.value = true
   } catch (err) {
+    if (seq !== litSeq) return
     showToast(err instanceof Error && err.message ? err.message : t('search.litFail'))
   } finally {
-    litLoading.value = false
+    if (seq === litSeq) litLoading.value = false
   }
 }
 
 /** 以库内论文为种子找相关论文 */
 async function findRelated(doc: ResearchDoc): Promise<void> {
-  if (litLoading.value) return
+  const seq = ++litSeq
   litLoading.value = true
   try {
     const res = await relatedLiterature({ doi: doc.doi, title: doc.title || doc.name })
+    if (seq !== litSeq) return
     litItems.value = res.results
     litWarnings.value = res.warnings
     litSearched.value = true
     document.querySelector('.lit')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   } catch (err) {
+    if (seq !== litSeq) return
     showToast(err instanceof Error && err.message ? err.message : t('search.litFail'))
   } finally {
-    litLoading.value = false
+    if (seq === litSeq) litLoading.value = false
   }
 }
 
-/** 下载开放获取 PDF 并用本机 WPS/阅读器打开 */
-async function openPdf(item: LiteratureItem): Promise<void> {
+interface ViewerState {
+  docId: string
+  title: string
+  kind: 'pdf' | 'text'
+  page?: number
+  projectId?: string | null
+}
+
+const viewer = ref<ViewerState | null>(null)
+const viewerRef = ref<{ showPassages: (items: { page: number; quote: string }[]) => Promise<void> } | null>(null)
+
+/** 对话提问时定位当前论文的命中段落,交给阅读器高亮 */
+async function locateForQuestion(question: string): Promise<void> {
+  if (!viewer.value) return
+  try {
+    const res = await locatePaperPassages(viewer.value.docId, question)
+    await viewerRef.value?.showPassages(res.passages)
+  } catch {
+    /* 定位失败不影响回答 */
+  }
+}
+
+watch(viewer, (value) => {
+  emit('paper-change', value ? { docId: value.docId, title: value.title } : null)
+})
+
+defineExpose({ locateForQuestion })
+
+/** 外部论文:先临时入库,再在覆盖层阅读;已入库直接读本地文件 */
+async function openExternalPaper(item: LiteratureItem): Promise<void> {
   if (!item.pdfUrl || openingPdf.value) return
+  if (item.imported && item.docId) {
+    viewer.value = {
+      docId: item.docId, title: item.title, kind: 'pdf',
+      projectId: activeProject.value || null,
+    }
+    return
+  }
+  if (item.tempDocId) {
+    viewer.value = {
+      docId: item.tempDocId, title: item.title, kind: 'pdf',
+      projectId: activeProject.value || null,
+    }
+    return
+  }
   openingPdf.value = item.pdfUrl
   try {
-    const res = await openLiteraturePdf(item.pdfUrl)
-    if (res.opened) showToast(t('search.pdfOpened'))
-    else window.open(item.pdfUrl, '_blank', 'noopener')
+    const res = await createTempPaper(item.pdfUrl)
+    item.tempDocId = res.docId
+    viewer.value = {
+      docId: res.docId,
+      title: item.title || res.title || 'PDF',
+      kind: 'pdf',
+      projectId: activeProject.value || null,
+    }
   } catch (err) {
     showToast(err instanceof Error && err.message ? err.message : t('search.pdfFail'))
   } finally {
     openingPdf.value = ''
   }
+}
+
+/** 导入外部论文:有批注时先问是否保留 */
+async function importPaper(item: LiteratureItem): Promise<void> {
+  if (!item.pdfUrl || importingDoc.value) return
+  if (item.imported && item.docId) {
+    showToast(t('search.alreadyImported'))
+    return
+  }
+  importingDoc.value = item.pdfUrl
+  try {
+    let docId = item.tempDocId || ''
+    if (!docId) {
+      const temp = await createTempPaper(item.pdfUrl)
+      docId = temp.docId
+      item.tempDocId = docId
+    }
+    let keep = true
+    try {
+      const notes = await listAnnotations(docId)
+      if (notes.length) {
+        keep = window.confirm(t('search.keepAnnotations', { n: notes.length }))
+      }
+    } catch {
+      /* 读取批注失败时按保留处理 */
+    }
+    const res = await importTempPaper(docId, activeProject.value || undefined, keep)
+    item.imported = true
+    item.docId = docId
+    item.tempDocId = ''
+    await loadDocs()
+    showToast(res.duplicate ? t('search.alreadyImported') : t('search.imported'))
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('search.importFail'))
+  } finally {
+    importingDoc.value = ''
+  }
+}
+
+/** 我的论文:按原文件类型选 PDF 或文本阅读器 */
+function openLocalPaper(doc: ResearchDoc, startPage = 0): void {
+  viewer.value = {
+    docId: doc.id,
+    title: doc.title || doc.name,
+    kind: /\.pdf$/i.test(doc.name) ? 'pdf' : 'text',
+    page: startPage || undefined,
+    projectId: doc.projectId ?? null,
+  }
+}
+
+/** 从数据表来源跳转:?docId=...&page=... 打开对应论文页 */
+function openDocFromQuery(): void {
+  const docId = typeof route.query.docId === 'string' ? route.query.docId : ''
+  if (!docId) return
+  const rawPage = typeof route.query.page === 'string' ? Number(route.query.page) : 0
+  const startPage = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 0
+  const doc = docs.value.find((d) => d.id === docId)
+  if (doc) {
+    openLocalPaper(doc, startPage)
+    return
+  }
+  // 表格来源可能来自尚未导入的临时论文:不在「我的论文」列表里,但仍可按 docId 打开
+  const title = typeof route.query.title === 'string' ? route.query.title : 'PDF'
+  viewer.value = { docId, title, kind: 'pdf', page: startPage || undefined }
+}
+
+function closeViewer(): void {
+  viewer.value = null
+}
+
+async function loadHistory(): Promise<void> {
+  historyLoading.value = true
+  try {
+    const [active, trash] = await Promise.all([listPaperHistory(), listPaperTrash()])
+    historyItems.value = active
+    trashItems.value = trash
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('history.fail'))
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+async function toggleHistory(): Promise<void> {
+  if (searchMode.value !== 'web') return
+  historyOpen.value = !historyOpen.value
+  if (historyOpen.value) await loadHistory()
+}
+
+function openHistoryItem(item: HistoryItem): void {
+  viewer.value = { docId: item.id, title: item.title, kind: 'pdf' }
+}
+
+async function removeHistory(item: HistoryItem): Promise<void> {
+  if (!window.confirm(t('history.deleteConfirm'))) return
+  try {
+    await deletePaperHistory(item.id)
+    await loadHistory()
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('history.fail'))
+  }
+}
+
+async function restoreHistory(item: HistoryItem): Promise<void> {
+  try {
+    await restorePaperHistory(item.id)
+    await loadHistory()
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('history.fail'))
+  }
+}
+
+function fmtHistoryDate(ts: number): string {
+  if (!ts) return ''
+  return new Date(ts * 1000).toLocaleDateString()
 }
 
 /** 命中片段高亮:先转义再包 <mark>,查询按空格拆词(至少 2 字符) */
@@ -131,6 +438,7 @@ async function loadDocs(): Promise<void> {
     const [ds, ps] = await Promise.all([listResearchDocs(), listResearchProjects()])
     docs.value = ds
     projects.value = ps
+    syncSelection()
   } catch {
     /* 未登录/后端不可达时不打断页面,检索时会再报 */
   }
@@ -164,12 +472,22 @@ async function onFile(e: Event): Promise<void> {
 
 async function doSearch(): Promise<void> {
   const q = query.value.trim()
-  if (!q || loading.value) return
+  if (!q) return
+  if (searchMode.value === 'web') {
+    if (litLoading.value) return
+    await searchExternal(q)
+    return
+  }
+  if (loading.value) return
+  if (!selectedDocIds.value.length) {
+    showToast(t('search.selectDocs'))
+    return
+  }
   loading.value = true
   searched.value = true
   try {
     const res = await searchResearch(q, {
-      docId: activeDoc.value || undefined,
+      docIds: selectedDocIds.value,
       projectId: activeProject.value || undefined,
       tree: useTree.value,
     })
@@ -188,7 +506,7 @@ async function removeDoc(doc: ResearchDoc): Promise<void> {
   if (!window.confirm(t('search.deleteConfirm'))) return
   try {
     await deleteResearchDoc(doc.id)
-    if (activeDoc.value === doc.id) activeDoc.value = ''
+    selectedDocIds.value = selectedDocIds.value.filter((id) => id !== doc.id)
     await loadDocs()
   } catch {
     showToast(t('search.deleteFail'))
@@ -199,7 +517,7 @@ async function clearAll(): Promise<void> {
   if (!window.confirm(t('search.clearConfirm'))) return
   try {
     const removed = await clearResearchDocs()
-    activeDoc.value = ''
+    selectedDocIds.value = []
     hits.value = []
     searched.value = false
     await loadDocs()
@@ -217,19 +535,24 @@ function askFromResults(): void {
     .map((h) => `[${h.docName} · ${h.section} · 第 ${h.pageStart}-${h.pageEnd} 页]\n${h.snippet}`)
     .join('\n\n')
     .slice(0, 6000)
-  sessionStorage.setItem(
-    'mg-research-seed',
-    `请只依据以下检索资料回答问题;资料不足时明确说明,不要补充资料以外的内容。\n\n问题:${query.value.trim()}\n\n${evidence}`,
-  )
+  const prompt = `请只依据以下检索资料回答问题;资料不足时明确说明,不要补充资料以外的内容。\n\n问题:${query.value.trim()}\n\n${evidence}`
+  if (props.embedded) {
+    emit('ask', prompt)
+    return
+  }
+  sessionStorage.setItem('mg-research-seed', prompt)
   router.push('/research')
 }
 
-onMounted(loadDocs)
+onMounted(async () => {
+  await loadDocs()
+  openDocFromQuery()
+})
 </script>
 
 <template>
-  <div class="rs">
-    <header class="rs-head">
+  <div class="rs" :class="{ embedded }">
+    <header v-if="!embedded" class="rs-head">
       <button class="back" @click="router.push('/research')">{{ t('search.back') }}</button>
       <div class="title-box">
         <span class="title">{{ t('search.title') }}</span>
@@ -240,32 +563,59 @@ onMounted(loadDocs)
           {{ uploading ? t('search.uploading') : t('search.upload') }}
         </button>
         <button class="act ghost" @click="router.push('/research')">{{ t('search.toChat') }}</button>
-        <input
-          ref="uploadEl"
-          type="file"
-          hidden
-          accept=".pdf,.docx,.epub,.html,.htm,.xml,.rtf,.txt,.md,.markdown,.tex,.csv,.json,text/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/epub+zip,application/rtf"
-          @change="onFile"
-        />
       </div>
     </header>
 
-    <main class="rs-main">
-      <!-- 论文库 -->
-      <section class="panel">
+    <input
+      ref="uploadEl"
+      type="file"
+      hidden
+      accept=".pdf,.docx,.epub,.html,.htm,.xml,.rtf,.txt,.md,.markdown,.tex,.csv,.json,text/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/epub+zip,application/rtf"
+      @change="onFile"
+    />
+
+    <div v-if="embedded" class="rs-embed-bar">
+      <span class="tech-label">{{ t('search.title') }}</span>
+      <span class="embed-spacer"></span>
+      <button class="act" :disabled="uploading" @click="pickFile">
+        {{ uploading ? t('search.uploading') : t('search.upload') }}
+      </button>
+      <button class="act ghost" @click="router.push('/research/search')">
+        {{ t('search.openPage') }}
+      </button>
+    </div>
+
+    <main class="rs-main" :class="{ embedded }">
+      <!-- 论文库:勾选参与文内检索的论文 -->
+      <section v-if="searchMode === 'local'" class="panel">
         <div class="panel-head">
           <span class="tech-label">{{ t('search.docs') }}</span>
           <span class="count">{{ docs.length }}</span>
+          <span class="doc-selected">{{ t('search.selectedDocs', { n: selectedDocIds.length, total: docs.length }) }}</span>
+          <button v-if="hasDocs" class="pick-all" @click="selectAllDocs">{{ t('search.selectAll') }}</button>
+          <button v-if="hasDocs" class="pick-all" @click="clearSelectedDocs">{{ t('search.selectNone') }}</button>
+          <button
+            v-if="hasDocs"
+            class="compare-btn"
+            :disabled="selectedDocIds.length < 2 || comparing"
+            :title="t('search.compareHint')"
+            @click="compareSelected"
+          >{{ comparing ? t('search.comparing') : t('search.compare') }}</button>
           <button v-if="hasDocs" class="clear-all" @click="clearAll">{{ t('search.clearDocs') }}</button>
-          <select v-model="activeDoc" class="doc-filter">
-            <option value="">{{ t('search.allDocs') }}</option>
-            <option v-for="d in docs" :key="d.id" :value="d.id">{{ d.name }}</option>
-          </select>
         </div>
         <p v-if="!hasDocs" class="empty">{{ t('search.noDocs') }}</p>
         <ul v-else class="doc-list">
           <li v-for="d in docs" :key="d.id" class="doc-item">
-            <span class="doc-name" :title="d.title || d.name">{{ d.title || d.name }}</span>
+            <label class="doc-check">
+              <input
+                type="checkbox"
+                :checked="selectedDocIds.includes(d.id)"
+                @change="toggleDoc(d.id)"
+              />
+            </label>
+            <button class="doc-name" :title="t('viewer.open')" @click="openLocalPaper(d)">
+              {{ d.title || d.name }}
+            </button>
             <span class="doc-meta">
               {{ fmtSize(d.size) }} · {{ d.pages }} 页<span v-if="d.year"> · {{ d.year }}</span><span v-if="d.doi"> · {{ d.doi }}</span>
             </span>
@@ -278,20 +628,51 @@ onMounted(loadDocs)
         <p class="hint">{{ t('search.uploadHint') }}</p>
       </section>
 
-      <!-- 检索区 -->
+      <!-- 检索区:文内 / 文外两种方向互不干扰 -->
       <section class="search-box">
+        <div class="mode-row">
+          <button
+            class="mode-btn"
+            :class="{ on: searchMode === 'local' }"
+            @click="setSearchMode('local')"
+          >{{ t('search.modeLocal') }}</button>
+          <button
+            class="mode-btn"
+            :class="{ on: searchMode === 'web' }"
+            @click="setSearchMode('web')"
+          >{{ t('search.modeWeb') }}</button>
+          <span class="mode-hint">
+            {{ searchMode === 'local' ? t('search.modeLocalHint') : t('search.modeWebHint') }}
+          </span>
+        </div>
         <div class="search-row">
           <input
             v-model="query"
             class="search-input"
-            :placeholder="t('search.placeholder')"
+            :placeholder="searchMode === 'local' ? t('search.placeholderLocal') : t('search.placeholderWeb')"
             @keydown.enter="doSearch"
           />
-          <button class="search-btn" :disabled="loading || !query.trim()" @click="doSearch">
-            {{ loading ? t('search.loading') : t('search.button') }}
+          <button class="search-btn" :disabled="busy || !query.trim()" @click="doSearch">
+            {{ busy
+              ? t('search.loading')
+              : searchMode === 'local' ? t('search.searchLocal') : t('search.searchWeb') }}
           </button>
         </div>
-        <div class="opts">
+        <p v-if="identifierHint && searchMode === 'web'" class="id-hint">
+          {{ t('search.identifierHint', { type: identifierHint.type, value: identifierHint.value }) }}
+        </p>
+        <div v-if="searchMode === 'web'" class="adv">
+          <button class="adv-toggle" @click="advancedOpen = !advancedOpen">
+            {{ advancedOpen ? '− ' : '+ ' }}{{ t('search.advanced') }}
+          </button>
+          <div v-if="advancedOpen" class="adv-fields">
+            <input v-model="authorFilter" class="adv-input" :placeholder="t('search.author')" />
+            <input v-model="yearFrom" class="adv-input year" inputmode="numeric" :placeholder="t('search.yearFrom')" />
+            <span class="adv-dash">–</span>
+            <input v-model="yearTo" class="adv-input year" inputmode="numeric" :placeholder="t('search.yearTo')" />
+          </div>
+        </div>
+        <div v-if="searchMode === 'local'" class="opts">
           <select v-model="activeProject" class="project-filter">
             <option value="">{{ t('search.allProjects') }}</option>
             <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.title }}</option>
@@ -306,8 +687,8 @@ onMounted(loadDocs)
         </div>
       </section>
 
-      <!-- 结果 -->
-      <section class="results">
+      <!-- 文内结果 -->
+      <section v-if="searchMode === 'local'" class="results">
         <p v-if="searched && !loading && !hits.length" class="empty">{{ t('search.empty') }}</p>
         <article v-for="(h, i) in hits" :key="h.docId + h.nodeId + i" class="hit">
           <div class="hit-head">
@@ -325,18 +706,75 @@ onMounted(loadDocs)
       </section>
 
       <!-- 外部文献发现 -->
-      <section class="lit">
+      <section v-if="searchMode === 'web'" class="lit">
         <div class="lit-head">
-          <span class="tech-label">{{ t('search.litTitle') }}</span>
+          <span class="tech-label">
+            {{ t('search.litTitle') }}<template v-if="litItems.length"> · {{ litItems.length }}</template>
+          </span>
           <button
             class="lit-btn"
             :disabled="litLoading || query.trim().length < 2"
-            @click="searchExternal"
+            @click="searchExternal()"
           >
             {{ litLoading ? t('search.litLoading') : t('search.litSearch') }}
           </button>
+          <button
+            class="lit-btn"
+            :class="{ on: historyOpen }"
+            @click="toggleHistory"
+          >
+            {{ historyOpen ? t('history.backResults') : t('history.title') }}
+            <template v-if="!historyOpen && historyItems.length"> · {{ historyItems.length }}</template>
+          </button>
         </div>
         <p class="hint">{{ t('search.litHint') }}</p>
+
+        <section v-if="historyOpen" class="history">
+          <div class="hist-head">
+            <button
+              class="hist-tab"
+              :class="{ on: historyTab === 'active' }"
+              @click="historyTab = 'active'"
+            >{{ t('history.active') }} · {{ historyItems.length }}</button>
+            <button
+              class="hist-tab"
+              :class="{ on: historyTab === 'trash' }"
+              @click="historyTab = 'trash'"
+            >{{ t('history.trash') }} · {{ trashItems.length }}</button>
+            <span class="hist-loading" v-if="historyLoading">{{ t('viewer.loading') }}</span>
+          </div>
+          <template v-if="historyTab === 'active'">
+            <p v-if="!historyItems.length" class="empty">{{ t('history.empty') }}</p>
+            <div v-for="item in historyItems" :key="item.id" class="hist-item">
+              <button class="hist-title" @click="openHistoryItem(item)">
+                {{ item.title }}
+              </button>
+              <span class="hist-meta">
+                {{ t('history.pages', { n: item.pages }) }} ·
+                {{ t('history.notes', { n: item.annotations }) }}
+                <template v-if="item.lastViewedAt"> · {{ fmtHistoryDate(item.lastViewedAt) }}</template>
+              </span>
+              <button class="hist-action" @click="removeHistory(item)">{{ t('history.delete') }}</button>
+            </div>
+          </template>
+          <template v-else>
+            <p v-if="!trashItems.length" class="empty">{{ t('history.trashEmpty') }}</p>
+            <div v-for="item in trashItems" :key="item.id" class="hist-item">
+              <span class="hist-title static">{{ item.title }}</span>
+              <span class="hist-meta">{{ t('history.daysLeft', { n: item.daysLeft ?? 0 }) }}</span>
+              <button class="hist-action" @click="restoreHistory(item)">{{ t('history.restore') }}</button>
+            </div>
+          </template>
+        </section>
+
+        <template v-if="!historyOpen">
+        <p v-if="litIdentifier" class="id-hint">
+          {{ t('search.identified', {
+            type: litIdentifier.type.toUpperCase(),
+            value: litIdentifier.value,
+            n: litItems.length,
+          }) }}
+        </p>
         <p v-if="litSearched && !litLoading && !litItems.length" class="empty">
           {{ t('search.litEmpty') }}
         </p>
@@ -369,14 +807,37 @@ onMounted(loadDocs)
               v-if="item.pdfUrl"
               class="lit-pdf"
               :disabled="openingPdf === item.pdfUrl"
-              @click="openPdf(item)"
+              @click="openExternalPaper(item)"
             >
               {{ openingPdf === item.pdfUrl ? t('search.openingPdf') : t('search.viewPdf') }}
             </button>
+            <button
+              v-if="item.pdfUrl && !item.imported"
+              class="lit-import"
+              :disabled="importingDoc === item.pdfUrl"
+              @click="importPaper(item)"
+            >
+              {{ importingDoc === item.pdfUrl ? t('search.importing') : t('search.importPaper') }}
+            </button>
+            <button v-else-if="item.imported" class="lit-import done" disabled>
+              {{ t('search.imported') }}
+            </button>
           </p>
         </article>
+        </template>
       </section>
     </main>
+
+    <DocumentViewer
+      v-if="viewer"
+      ref="viewerRef"
+      :doc-id="viewer.docId"
+      :title="viewer.title"
+      :kind="viewer.kind"
+      :start-page="viewer.page"
+      :project-id="viewer.projectId ?? (activeProject || null)"
+      @close="closeViewer"
+    />
   </div>
 </template>
 
@@ -385,6 +846,47 @@ onMounted(loadDocs)
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+.rs.embedded {
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  border-left: 1px solid var(--line);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.rs-embed-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+  flex: none;
+}
+
+.embed-spacer {
+  flex: 1;
+}
+
+.rs-main.embedded {
+  width: 100%;
+  margin: 0;
+  padding: 14px 16px 28px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.rs.embedded .panel {
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.rs-main.embedded .search-box {
+  order: -1;
 }
 
 .rs-head {
@@ -547,6 +1049,15 @@ onMounted(loadDocs)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.doc-name:hover {
+  color: var(--cyan);
 }
 
 .doc-meta {
@@ -776,6 +1287,12 @@ onMounted(loadDocs)
   cursor: default;
 }
 
+.lit-btn.on {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+}
+
 .lit-item {
   display: flex;
   flex-direction: column;
@@ -854,8 +1371,248 @@ onMounted(loadDocs)
   cursor: default;
 }
 
+.lit-import {
+  background: transparent;
+  border: 1px solid var(--line-bright);
+  color: var(--cyan);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.lit-import:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.lit-import.done {
+  border-color: var(--line);
+  color: var(--text-dim);
+}
+
 .lit-warn {
   color: #ffd166;
   font-size: 11px;
+}
+
+.mode-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.mode-btn {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.mode-btn.on {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+}
+
+.mode-hint {
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.id-hint {
+  margin-top: 8px;
+  color: var(--cyan);
+  font-size: 11px;
+}
+
+.adv {
+  margin-top: 10px;
+}
+
+.adv-toggle {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.adv-toggle:hover {
+  color: var(--cyan);
+}
+
+.adv-fields {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.adv-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 11.5px;
+}
+
+.adv-input.year {
+  flex: none;
+  width: 76px;
+}
+
+.adv-dash {
+  color: var(--text-dim);
+}
+
+.doc-check {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.doc-check input {
+  accent-color: var(--cyan);
+  cursor: pointer;
+}
+
+.doc-selected {
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.pick-all {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.pick-all:hover {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+}
+
+.compare-btn {
+  background: color-mix(in srgb, var(--cyan) 9%, transparent);
+  border: 1px solid var(--line-bright);
+  color: var(--cyan);
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.compare-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.compare-btn:not(:disabled):hover {
+  box-shadow: var(--glow-cyan);
+}
+
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.hist-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 6px;
+}
+
+.hist-tab {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.hist-tab.on {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+}
+
+.hist-loading {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.hist-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 4px;
+  border-top: 1px solid var(--line);
+}
+
+.hist-title {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-hi);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+}
+
+.hist-title:hover {
+  color: var(--cyan);
+}
+
+.hist-title.static {
+  cursor: default;
+}
+
+.hist-meta {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.hist-action {
+  flex: none;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.hist-action:hover {
+  color: #ff8a8a;
+  border-color: #ff8a8a66;
 }
 </style>

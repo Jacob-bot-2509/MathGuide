@@ -10,6 +10,7 @@ export interface AppSettings {
   albumAccess: boolean
   voiceAccess: boolean
   personalized: boolean
+  researchSearchMode: 'split' | 'page'
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -19,6 +20,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   albumAccess: false,
   voiceAccess: true,
   personalized: true,
+  researchSearchMode: 'split',
 }
 
 const SETTINGS_KEY = 'mg-settings'

@@ -386,6 +386,208 @@ def compute(columns: list[dict], rows: list[list[str]], formulas: dict[str, str]
     }
 
 
+# ---------- 统计与图表数据 ----------
+
+def _stat_text(value: Decimal | None) -> str:
+    if value is None:
+        return ""
+    try:
+        return _fmt4(value)
+    except FormulaError:
+        return format(value, "f")[:40]
+
+
+def _percentile(sorted_values: list[Decimal], p: Decimal) -> Decimal | None:
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    rank = Decimal(len(sorted_values) - 1) * p
+    lower = int(rank)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    weight = rank - Decimal(lower)
+    return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * weight
+
+
+def _numeric_columns(
+    columns: list[dict], rows: list[list[str]], formulas: dict[str, str],
+    computed: dict[str, list[str]],
+) -> list[dict]:
+    """挑出可统计的数值列;文本列只有整列都能解析为数字才算。"""
+    out: list[dict] = []
+    for i, col in enumerate(columns):
+        key = str(col.get("key") or _index_to_col(i)).upper()
+        ctype = str(col.get("type") or "text")
+        if key in formulas:
+            raw = list(computed.get(key) or [])
+        else:
+            raw = [row[i] if i < len(row) else "" for row in rows]
+        values: list[Decimal | None] = []
+        parse_failed = False
+        for cell in raw:
+            text = str(cell).strip()
+            if not text:
+                values.append(None)
+                continue
+            try:
+                values.append(Decimal(text))
+            except (InvalidOperation, ValueError):
+                values.append(None)
+                parse_failed = True
+        has_value = any(v is not None for v in values)
+        numeric = has_value and (
+            ctype in ("number", "computed") or not parse_failed)
+        if not numeric:
+            continue
+        if len(values) < len(rows):
+            values.extend([None] * (len(rows) - len(values)))
+        out.append({
+            "key": key,
+            "label": str(col.get("label") or key)[:60],
+            "values": values,
+        })
+    return out
+
+
+def _pearson(xs: list[Decimal | None], ys: list[Decimal | None]) -> Decimal | None:
+    pairs = [(x, y) for x, y in zip(xs, ys) if x is not None and y is not None]
+    if len(pairs) < 2:
+        return None
+    mean_x = sum(x for x, _ in pairs) / Decimal(len(pairs))
+    mean_y = sum(y for _, y in pairs) / Decimal(len(pairs))
+    dx = [x - mean_x for x, _ in pairs]
+    dy = [y - mean_y for _, y in pairs]
+    num = sum(a * b for a, b in zip(dx, dy))
+    den_x = sum(a * a for a in dx)
+    den_y = sum(b * b for b in dy)
+    if den_x == 0 or den_y == 0:
+        return None
+    try:
+        return num / (den_x * den_y).sqrt()
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def analyze(columns: list[dict], rows: list[list[str]],
+            formulas: dict[str, str], row_labels: list[str] | None = None) -> dict:
+    """描述性统计 + Pearson 相关 + 绘图序列;全部 Decimal,输出 4 位小数。"""
+    result = compute(columns, rows, formulas)
+    computed = result["computed"]
+    numeric = _numeric_columns(columns, rows, formulas, computed)
+    stats: list[dict] = []
+    series: list[dict] = []
+    for col in numeric:
+        values = [v for v in col["values"] if v is not None]
+        ordered = sorted(values)
+        n = len(values)
+        mean = sum(values) / Decimal(n) if n else None
+        stdev = None
+        if n >= 2:
+            variance = sum((v - mean) ** 2 for v in values) / Decimal(n - 1)
+            stdev = variance.sqrt()
+        stats.append({
+            "key": col["key"], "label": col["label"], "n": n,
+            "missing": len(col["values"]) - n,
+            "mean": _stat_text(mean),
+            "median": _stat_text(_percentile(ordered, Decimal("0.5"))),
+            "stdev": _stat_text(stdev),
+            "min": _stat_text(ordered[0] if ordered else None),
+            "max": _stat_text(ordered[-1] if ordered else None),
+            "q1": _stat_text(_percentile(ordered, Decimal("0.25"))),
+            "q3": _stat_text(_percentile(ordered, Decimal("0.75"))),
+        })
+        series.append({
+            "key": col["key"], "label": col["label"],
+            "values": [None if v is None else float(v) for v in col["values"]],
+        })
+    correlations: list[dict] = []
+    for i in range(len(numeric)):
+        for j in range(i + 1, len(numeric)):
+            r = _pearson(numeric[i]["values"], numeric[j]["values"])
+            if r is None:
+                continue
+            correlations.append({
+                "x": numeric[i]["key"], "y": numeric[j]["key"],
+                "r": _stat_text(r),
+            })
+    labels_in = row_labels if isinstance(row_labels, list) else []
+    row_labels_out = [
+        str(labels_in[i])[:60] if i < len(labels_in) and labels_in[i] else str(i + 1)
+        for i in range(len(rows))
+    ]
+    return {
+        "stats": stats,
+        "correlations": correlations,
+        "series": series,
+        "labels": [str(i + 1) for i in range(len(rows))],
+        "rowLabels": row_labels_out,
+        "computed": computed,
+        "errors": result["errors"],
+        "columns": result["columns"],
+    }
+
+
+def context_text(table: dict, max_rows: int = 40) -> str:
+    """把数据表压缩成对话上下文:结构、公式、前若干行与计算结果。"""
+    columns = table.get("columns") if isinstance(table.get("columns"), list) else []
+    rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+    formulas = table.get("formulas") if isinstance(table.get("formulas"), dict) else {}
+    result = compute(columns, rows, formulas)
+    computed = result["computed"]
+    labels = table.get("rowLabels") if isinstance(table.get("rowLabels"), list) else []
+
+    def cell(row: list[str], row_i: int, i: int) -> str:
+        key = str(columns[i].get("key") or "").upper()
+        if key in formulas:
+            values = computed.get(key) or []
+            text = values[row_i] if row_i < len(values) else ""
+        else:
+            text = row[i] if i < len(row) else ""
+        return str(text)[:40]
+
+    header = ["行"] + [f"{c.get('key')} {str(c.get('label') or '')[:30]}"
+                       for c in columns[:12]]
+    lines = [
+        f"【研究数据表】{str(table.get('title') or '')[:120]}",
+        f"规模:{len(rows)} 行 × {len(columns)} 列",
+    ]
+    source = table.get("source") if isinstance(table.get("source"), dict) else {}
+    if source.get("docName"):
+        lines.append(f"来源:{str(source.get('docName'))[:120]}"
+                     f"{' · 第 ' + str(source.get('page')) + ' 页' if source.get('page') else ''}")
+    if formulas:
+        lines.append("公式:" + "；".join(
+            f"{k}={str(v)[:120]}" for k, v in list(formulas.items())[:12]))
+    lines.append("| " + " | ".join(header) + " |")
+    lines.append("|" + "---|" * len(header))
+    for row_i, row in enumerate(rows[:max_rows]):
+        row_label = str(labels[row_i])[:30] if row_i < len(labels) and labels[row_i] else str(row_i + 1)
+        lines.append("| " + " | ".join(
+            [row_label] + [cell(row, row_i, i) for i in range(min(len(columns), 12))]) + " |")
+    if len(rows) > max_rows:
+        lines.append(f"（仅列出前 {max_rows} 行,共 {len(rows)} 行）")
+    if len(columns) > 12:
+        lines.append(f"（表格另有 {len(columns) - 12} 列未列出）")
+    stats = analyze(columns, rows, formulas, labels)["stats"]
+    if stats:
+        lines.append("描述性统计(服务端计算,直接引用,不要自行重算):" + "；".join(
+            f"{s['key']} {s['label']} n={s['n']} 均值={s['mean'] or '—'} "
+            f"中位数={s['median'] or '—'} 标准差={s['stdev'] or '—'} "
+            f"最小={s['min'] or '—'} 最大={s['max'] or '—'}"
+            for s in stats[:8]))
+    errors = result.get("errors") or []
+    if errors:
+        lines.append(f"计算错误:{len(errors)} 个单元格,数值结果以能算出的单元格为准。")
+    lines.append("以上数据来自用户本项目的数据表,引用数值时必须与表内一致,"
+                 "不得改写、编造或用外部资料替代。")
+    return "\n".join(lines)[:12000]
+
+
+def table_context(uid: str, table_id: str) -> str | None:
+    table = _get_table(uid, table_id)
+    return context_text(table) if table else None
+
+
 # ---------- 导入 / 存储 ----------
 
 def _clean_cell(value: object) -> str:
@@ -482,7 +684,9 @@ def _connect(uid: str):
         "row_labels_json TEXT NOT NULL DEFAULT '[]',"
         "merges_json TEXT NOT NULL DEFAULT '[]',"
         "col_widths_json TEXT NOT NULL DEFAULT '[]',"
-        "row_heights_json TEXT NOT NULL DEFAULT '[]')"
+        "row_heights_json TEXT NOT NULL DEFAULT '[]',"
+        "source_json TEXT NOT NULL DEFAULT '{}',"
+        "row_sources_json TEXT NOT NULL DEFAULT '[]')"
     )
     columns = {row[1] for row in conn.execute("PRAGMA table_info(tables)")}
     for column, decl in (
@@ -490,6 +694,8 @@ def _connect(uid: str):
         ("merges_json", "TEXT NOT NULL DEFAULT '[]'"),
         ("col_widths_json", "TEXT NOT NULL DEFAULT '[]'"),
         ("row_heights_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("source_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("row_sources_json", "TEXT NOT NULL DEFAULT '[]'"),
     ):
         if column not in columns:
             conn.execute(f"ALTER TABLE tables ADD COLUMN {column} {decl}")
@@ -504,6 +710,45 @@ def _json_list(raw: object) -> list:
         return []
 
 
+def _json_dict(raw: object) -> dict:
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+        return value if isinstance(value, dict) else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _clean_source(raw: object) -> dict:
+    """数据表来源:只保留可追溯字段,不接受任意对象膨胀存储。"""
+    if not isinstance(raw, dict):
+        return {}
+    doc_id = str(raw.get("docId") or "").strip()[:64]
+    if not doc_id:
+        return {}
+    try:
+        page = int(raw.get("page") or 0)
+    except (TypeError, ValueError):
+        page = 0
+    source = {
+        "docId": doc_id,
+        "docName": str(raw.get("docName") or "").strip()[:200],
+        "page": max(0, min(page, 100000)),
+        "quote": str(raw.get("quote") or "").strip()[:300],
+        "kind": "paper",
+    }
+    return source
+
+
+def _clean_row_sources(raw: object, n_rows: int) -> list[dict]:
+    """每行一个来源(多文献对比表用);空行保留 {} 以维持行对齐。"""
+    sources: list[dict] = [{} for _ in range(n_rows)]
+    if not isinstance(raw, list):
+        return sources
+    for i, item in enumerate(raw[:n_rows]):
+        sources[i] = _clean_source(item)
+    return sources
+
+
 def _row_to_table(row: tuple) -> dict:
     return {
         "id": row[0], "projectId": row[1], "title": row[2],
@@ -513,13 +758,15 @@ def _row_to_table(row: tuple) -> dict:
         "merges": _json_list(row[9] if len(row) > 9 else []),
         "colWidths": _json_list(row[10] if len(row) > 10 else []),
         "rowHeights": _json_list(row[11] if len(row) > 11 else []),
+        "source": _json_dict(row[12] if len(row) > 12 else None),
+        "rowSources": _json_list(row[13] if len(row) > 13 else []),
     }
 
 
 _TABLE_SELECT = (
     "SELECT id, project_id, title, columns_json, rows_json, formulas_json,"
     " created_at, updated_at, row_labels_json, merges_json, col_widths_json,"
-    " row_heights_json FROM tables"
+    " row_heights_json, source_json, row_sources_json FROM tables"
 )
 
 
@@ -598,7 +845,7 @@ def _clean_sizes(raw: object, n: int, default: int, low: int, high: int) -> list
 def _validate_table_payload(
     body: dict,
 ) -> tuple[list[dict], list[list[str]], dict[str, str],
-           list[str], list[dict], list[int], list[int]]:
+           list[str], list[dict], list[int], list[int], list[dict]]:
     columns = body.get("columns")
     rows = body.get("rows")
     formulas = body.get("formulas", {})
@@ -645,27 +892,41 @@ def _validate_table_payload(
     merges = _clean_merges(body.get("merges"), len(clean_rows), len(clean_cols))
     col_widths = _clean_sizes(body.get("colWidths"), len(clean_cols), 120, 40, 600)
     row_heights = _clean_sizes(body.get("rowHeights"), len(clean_rows), 30, 24, 300)
+    row_sources = _clean_row_sources(body.get("rowSources"), len(clean_rows))
     return (clean_cols, clean_rows, clean_formulas,
-            row_labels, merges, col_widths, row_heights)
+            row_labels, merges, col_widths, row_heights, row_sources)
 
 
 def _save_table(uid: str, table_id: str, body: dict) -> dict:
     (columns, rows, formulas, row_labels, merges,
-     col_widths, row_heights) = _validate_table_payload(body)
+     col_widths, row_heights, row_sources) = _validate_table_payload(body)
     title = str(body.get("title") or "实验数据表")[:120]
     now = time.time()
     conn = _connect(uid)
     try:
+        existing = conn.execute(
+            "SELECT source_json, row_sources_json FROM tables WHERE id = ?",
+            (table_id,)).fetchone()
+        if existing is None:
+            raise KeyError(table_id)
+        # 旧客户端不带来源字段时保留原值,避免自动保存把溯源信息抹掉
+        source = (_clean_source(body.get("source"))
+                  if "source" in body else _json_dict(existing[0]))
+        if "rowSources" not in body:
+            row_sources = _clean_row_sources(
+                _json_list(existing[1]), len(rows))
         cur = conn.execute(
             "UPDATE tables SET title=?, columns_json=?, rows_json=?, formulas_json=?,"
             " row_labels_json=?, merges_json=?, col_widths_json=?, row_heights_json=?,"
-            " updated_at=? WHERE id=?",
+            " source_json=?, row_sources_json=?, updated_at=? WHERE id=?",
             (title, json.dumps(columns, ensure_ascii=False),
              json.dumps(rows, ensure_ascii=False),
              json.dumps(formulas, ensure_ascii=False),
              json.dumps(row_labels, ensure_ascii=False),
              json.dumps(merges, ensure_ascii=False),
-             json.dumps(col_widths), json.dumps(row_heights), now, table_id))
+             json.dumps(col_widths), json.dumps(row_heights),
+             json.dumps(source, ensure_ascii=False),
+             json.dumps(row_sources, ensure_ascii=False), now, table_id))
         if cur.rowcount == 0:
             raise KeyError(table_id)
         conn.commit()
@@ -673,13 +934,15 @@ def _save_table(uid: str, table_id: str, body: dict) -> dict:
         conn.close()
     return {"id": table_id, "title": title, "columns": columns, "rows": rows,
             "formulas": formulas, "rowLabels": row_labels, "merges": merges,
-            "colWidths": col_widths, "rowHeights": row_heights, "updatedAt": now}
+            "colWidths": col_widths, "rowHeights": row_heights,
+            "source": source, "rowSources": row_sources, "updatedAt": now}
 
 
 def _create_table(uid: str, body: dict, project_id: str | None) -> dict:
     (columns, rows, formulas, row_labels, merges,
-     col_widths, row_heights) = _validate_table_payload(body)
+     col_widths, row_heights, row_sources) = _validate_table_payload(body)
     title = str(body.get("title") or "实验数据表")[:120]
+    source = _clean_source(body.get("source"))
     table_id = f"t-{secrets.token_hex(8)}"
     now = time.time()
     conn = _connect(uid)
@@ -694,14 +957,16 @@ def _create_table(uid: str, body: dict, project_id: str | None) -> dict:
         conn.execute(
             "INSERT INTO tables(id, project_id, title, columns_json, rows_json,"
             " formulas_json, created_at, updated_at, row_labels_json, merges_json,"
-            " col_widths_json, row_heights_json)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " col_widths_json, row_heights_json, source_json, row_sources_json)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (table_id, project_id, title, json.dumps(columns, ensure_ascii=False),
              json.dumps(rows, ensure_ascii=False),
              json.dumps(formulas, ensure_ascii=False), now, now,
              json.dumps(row_labels, ensure_ascii=False),
              json.dumps(merges, ensure_ascii=False),
-             json.dumps(col_widths), json.dumps(row_heights)))
+             json.dumps(col_widths), json.dumps(row_heights),
+             json.dumps(source, ensure_ascii=False),
+             json.dumps(row_sources, ensure_ascii=False)))
         conn.commit()
     finally:
         conn.close()
@@ -709,6 +974,7 @@ def _create_table(uid: str, body: dict, project_id: str | None) -> dict:
             "columns": columns, "rows": rows, "formulas": formulas,
             "rowLabels": row_labels, "merges": merges,
             "colWidths": col_widths, "rowHeights": row_heights,
+            "source": source, "rowSources": row_sources,
             "createdAt": now, "updatedAt": now}
 
 
@@ -989,6 +1255,27 @@ async def compute_table(request: Request) -> JSONResponse:
     result = await asyncio.to_thread(
         compute, saved["columns"], saved["rows"], saved["formulas"])
     return JSONResponse({"table": saved, **result})
+
+
+async def stats_table(request: Request) -> JSONResponse:
+    """统计面板:不落库,直接分析当前草稿(含未保存修改)。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    table_id = str(request.path_params.get("table_id") or "")
+    if await asyncio.to_thread(_get_table, uid, table_id) is None:
+        raise HTTPException(404, "not found")
+    body = await read_json_object(request)
+    try:
+        (columns, rows, formulas, _row_labels, _merges,
+         _col_widths, _row_heights, _row_sources) = _validate_table_payload(body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    raw_labels = body.get("rowLabels")
+    row_labels = ([str(v)[:60] for v in raw_labels[:len(rows)]]
+                  if isinstance(raw_labels, list) else [])
+    result = await asyncio.to_thread(
+        analyze, columns, rows, formulas, row_labels)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 async def export_table(request: Request) -> Response:

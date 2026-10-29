@@ -29,6 +29,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 import asyncio
+from contextlib import asynccontextmanager, suppress
 
 import store
 from starlette.applications import Starlette
@@ -48,8 +49,11 @@ import profile
 import rag
 import recommendation
 import research_corpus
+import research_compare
 import research_tables
 import research_lit
+import research_papers
+import research_report
 import research_vision
 import research_legacy
 import retention
@@ -100,10 +104,25 @@ routes = [
     Route("/api/research/docs", research_corpus.list_docs),
     Route("/api/research/docs", research_corpus.clear_docs, methods=["DELETE"]),
     Route("/api/research/docs/{doc_id}", research_corpus.delete_doc, methods=["DELETE"]),
+    Route("/api/research/docs/{doc_id}/file", research_corpus.doc_file),
+    Route("/api/research/docs/{doc_id}/text", research_corpus.doc_text),
+    Route("/api/research/docs/{doc_id}/annotations", research_corpus.list_annotations),
+    Route("/api/research/docs/{doc_id}/annotations", research_corpus.save_annotation, methods=["POST"]),
+    Route("/api/research/docs/{doc_id}/annotations/{annotation_id}", research_corpus.delete_annotation, methods=["DELETE"]),
+    Route("/api/research/papers/temp", research_papers.create_temp, methods=["POST"]),
+    Route("/api/research/papers/import", research_papers.import_paper, methods=["POST"]),
+    Route("/api/research/papers/{doc_id}/locate", research_papers.locate, methods=["POST"]),
+    Route("/api/research/papers/{doc_id}/explain-region", research_papers.explain_region, methods=["POST"]),
+    Route("/api/research/papers/{doc_id}/extract-table", research_papers.extract_table, methods=["POST"]),
+    Route("/api/research/history", research_papers.history_list),
+    Route("/api/research/history/trash", research_papers.history_trash),
+    Route("/api/research/history/{doc_id}", research_papers.history_delete, methods=["DELETE"]),
+    Route("/api/research/history/{doc_id}/restore", research_papers.history_restore, methods=["POST"]),
     Route("/api/research/search", research_corpus.search_docs, methods=["POST"]),
     Route("/api/research/tree", research_corpus.tree),
     Route("/api/research/literature", research_lit.search),
     Route("/api/research/literature/related", research_lit.related),
+    Route("/api/research/literature/compare", research_compare.compare, methods=["POST"]),
     Route("/api/research/literature/open-pdf", research_lit.open_pdf, methods=["POST"]),
     Route("/api/research/legacy-import", research_legacy.import_archive, methods=["POST"]),
     Route("/api/research/projects", research_corpus.list_projects),
@@ -117,7 +136,9 @@ routes = [
     Route("/api/research/tables/{table_id}", research_tables.save_table, methods=["POST"]),
     Route("/api/research/tables/{table_id}", research_tables.delete_table, methods=["DELETE"]),
     Route("/api/research/tables/{table_id}/compute", research_tables.compute_table, methods=["POST"]),
+    Route("/api/research/tables/{table_id}/stats", research_tables.stats_table, methods=["POST"]),
     Route("/api/research/tables/{table_id}/export", research_tables.export_table),
+    Route("/api/research/report", research_report.export_report, methods=["POST"]),
     Route("/api/research/tables/{table_id}/print", research_tables.print_table, methods=["POST"]),
     Route("/api/research/formulas/extract", research_vision.extract_formulas, methods=["POST"]),
     Route("/api/diagnosis", diagnosis.diagnose, methods=["POST"]),
@@ -135,7 +156,19 @@ routes = [
     Route("/api/stats", stats),
 ]
 
+@asynccontextmanager
+async def _lifespan(app):
+    task = asyncio.create_task(research_papers.history_retention_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
 app = Starlette(
+    lifespan=_lifespan,
     routes=routes,
     middleware=[
         Middleware(
@@ -163,4 +196,10 @@ try:
         print(f"[retention] 已清理账号 {pruned['accounts']} 个、用量 {pruned['usage']} 条")
 except OSError as exc:
     print(f"[retention] 留存清理失败(不影响启动): {exc}")
+try:
+    purged = research_corpus.purge_expired_history_all()
+    if purged:
+        print(f"[retention] 已清理过期浏览历史 {purged} 条")
+except OSError as exc:
+    print(f"[retention] 浏览历史清理失败(不影响启动): {exc}")
 rag.init()

@@ -31,15 +31,15 @@ def test_search_endpoint_merges_providers(monkeypatch):
     from starlette.routing import Route
     from starlette.testclient import TestClient
 
-    async def fake_crossref(client, query, limit):
+    async def fake_crossref(client, query, limit, filters=None):
         return [rl._result(title="Stable signal recovery", doi="10.1/a",
                            citations=5, sources=["crossref"], year=2020)]
 
-    async def fake_arxiv(client, query, limit):
+    async def fake_arxiv(client, query, limit, filters=None):
         return [rl._result(title="Stable signal recovery preprint", doi="10.1/a",
                            citations=1, sources=["arxiv"], year=2020)]
 
-    async def empty(client, query, limit):
+    async def empty(client, query, limit, filters=None):
         return []
 
     monkeypatch.setattr(rl, "require_auth", lambda request: {"uid": "u-lit"})
@@ -109,3 +109,63 @@ def test_open_pdf_endpoint(monkeypatch, tmp_path):
     body = res.json()
     assert body["opened"] is True and body["file"].endswith(".pdf")
     assert opened and opened[0].exists()
+
+
+def test_detect_identifier():
+    assert rl._detect_identifier("10.1234/abcd.5678") == ("doi", "10.1234/abcd.5678")
+    assert rl._detect_identifier("https://doi.org/10.1234/ABCD.5678.") == (
+        "doi", "10.1234/abcd.5678")
+    assert rl._detect_identifier("arXiv:2401.12345v2") == ("arxiv", "2401.12345")
+    assert rl._detect_identifier("2401.12345") == ("arxiv", "2401.12345")
+    assert rl._detect_identifier("PMC1234567") == ("pmcid", "PMC1234567")
+    assert rl._detect_identifier("PMID: 12345678") == ("pmid", "12345678")
+    assert rl._detect_identifier("sparse attention") is None
+
+
+def test_search_identifier_bypasses_keyword_providers(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    async def fake_doi(client, doi):
+        return [rl._result(title="Exact paper", doi=doi, sources=["crossref"])]
+
+    async def should_not_run(client, query, limit, filters=None):
+        raise AssertionError("keyword provider must not run")
+
+    monkeypatch.setattr(rl, "require_auth", lambda request: {"uid": "u-id"})
+    monkeypatch.setattr(rl, "_crossref_doi", fake_doi)
+    for name in ("_crossref", "_arxiv", "_europe_pmc", "_openalex", "_semantic_scholar"):
+        monkeypatch.setattr(rl, name, should_not_run)
+    app = Starlette(routes=[Route("/api/research/literature", rl.search)])
+    client = TestClient(app)
+    res = client.get("/api/research/literature?q=10.1234/abcd.5678")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["identifier"] == {"type": "doi", "value": "10.1234/abcd.5678"}
+    assert body["results"][0]["title"] == "Exact paper"
+
+
+def test_search_passes_author_and_year_filters(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    seen: list[dict | None] = []
+
+    async def fake(client, query, limit, filters=None):
+        seen.append(filters)
+        return []
+
+    monkeypatch.setattr(rl, "require_auth", lambda request: {"uid": "u-filter"})
+    for name in ("_crossref", "_arxiv", "_europe_pmc", "_openalex", "_semantic_scholar"):
+        monkeypatch.setattr(rl, name, fake)
+    app = Starlette(routes=[Route("/api/research/literature", rl.search)])
+    client = TestClient(app)
+    res = client.get(
+        "/api/research/literature?q=attention&author=Zhang&yearFrom=2020&yearTo=2024")
+    assert res.status_code == 200
+    assert seen and seen[0] == {"author": "Zhang", "yearFrom": 2020, "yearTo": 2024}
+
+    bad = client.get("/api/research/literature?q=attention&yearFrom=2024&yearTo=2020")
+    assert bad.status_code == 400

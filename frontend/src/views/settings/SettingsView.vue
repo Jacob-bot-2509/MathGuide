@@ -24,6 +24,10 @@ function onLanguageChange() {
   updateSettings({ language: settingsState.language })
 }
 
+function pickSearchMode(mode: 'split' | 'page') {
+  updateSettings({ researchSearchMode: mode })
+}
+
 function doLogout() {
   if (window.confirm(t('settings.logoutConfirm'))) {
     logout()
@@ -79,6 +83,21 @@ function doLogout() {
       <span class="seg">
         <button class="seg-btn" :class="{ on: settingsState.theme === 'dark' }" @click="pickTheme('dark')">{{ t('settings.dark') }}</button>
         <button class="seg-btn" :class="{ on: settingsState.theme === 'light' }" @click="pickTheme('light')">{{ t('settings.light') }}</button>
+      </span>
+    </div>
+    <div class="row">
+      <span class="row-label">{{ t('settings.researchSearchMode') }}</span>
+      <span class="seg">
+        <button
+          class="seg-btn"
+          :class="{ on: settingsState.researchSearchMode === 'split' }"
+          @click="pickSearchMode('split')"
+        >{{ t('settings.searchSplit') }}</button>
+        <button
+          class="seg-btn"
+          :class="{ on: settingsState.researchSearchMode === 'page' }"
+          @click="pickSearchMode('page')"
+        >{{ t('settings.searchPage') }}</button>
       </span>
     </div>
 

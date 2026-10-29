@@ -5,10 +5,11 @@
  * 公式计算全部在服务端(Decimal + 白名单 AST),前端只展示结果。
  */
 import { computed as vueComputed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import FormulaImportDialog from '@/components/chat/FormulaImportDialog.vue'
+import TableChart from '@/components/research/TableChart.vue'
 import {
   createResearchTable,
   computeResearchTable,
@@ -19,15 +20,18 @@ import {
   listResearchTables,
   printResearchTable,
   saveResearchTable,
+  statsResearchTable,
   type ResearchTable,
   type TableColumn,
   type TableError,
   type TableMerge,
+  type TableStatsResult,
   type TableSummary,
 } from '@/services/researchTableService'
-import { listResearchProjects, type ResearchProject } from '@/services/researchService'
+import { listResearchProjects, downloadResearchReport, type ResearchProject } from '@/services/researchService'
 
 const router = useRouter()
+const route = useRoute()
 const tables = ref<TableSummary[]>([])
 const projects = ref<ResearchProject[]>([])
 const table = ref<ResearchTable | null>(null)
@@ -35,6 +39,7 @@ const computed = ref<Record<string, string[]>>({})
 const errors = ref<TableError[]>([])
 const activeProject = ref('')
 const importing = ref(false)
+const exportingReport = ref(false)
 const saving = ref(false)
 const computing = ref(false)
 const printing = ref(false)
@@ -43,6 +48,92 @@ const fileEl = ref<HTMLInputElement | null>(null)
 const gridEl = ref<HTMLTableElement | null>(null)
 const formulaDialogOpen = ref(false)
 const dirty = ref(false)
+
+/* ---------- 左侧列表重命名 ---------- */
+const renamingId = ref('')
+const renameValue = ref('')
+const renameSaving = ref(false)
+
+function startRename(item: TableSummary, event: Event): void {
+  event.stopPropagation()
+  renamingId.value = item.id
+  renameValue.value = item.title
+  nextTick(() => {
+    const el = document.querySelector<HTMLInputElement>('.table-item .ti-rename')
+    el?.focus()
+    el?.select()
+  })
+}
+
+function cancelRename(): void {
+  renamingId.value = ''
+  renameValue.value = ''
+}
+
+async function commitRename(item: TableSummary): Promise<void> {
+  if (renamingId.value !== item.id || renameSaving.value) return
+  const title = renameValue.value.trim().slice(0, 120)
+  if (!title || title === item.title) {
+    cancelRename()
+    return
+  }
+  // 正在编辑同一张表:先把草稿落库,避免重命名用旧数据覆盖未保存内容
+  if (table.value?.id === item.id && dirty.value && !(await saveNow(true))) return
+  renameSaving.value = true
+  try {
+    const full = await getResearchTable(item.id)
+    const saved = await saveResearchTable(item.id, {
+      title,
+      columns: full.columns,
+      rows: full.rows,
+      formulas: full.formulas,
+      rowLabels: full.rowLabels,
+      merges: full.merges,
+      colWidths: full.colWidths,
+      rowHeights: full.rowHeights,
+      projectId: full.projectId ?? null,
+      source: full.source ?? null,
+    })
+    item.title = saved.title
+    if (table.value?.id === item.id) {
+      suppressWatch = true
+      table.value.title = saved.title
+      await nextTick()
+      suppressWatch = false
+      dirty.value = false
+    }
+    cancelRename()
+  } catch {
+    showToast(t('tables.renameFail'))
+  } finally {
+    renameSaving.value = false
+  }
+}
+
+/* ---------- 统计与图表 ---------- */
+const analysisOpen = ref(false)
+const analysisTab = ref<'stats' | 'chart'>('stats')
+const analysisLoading = ref(false)
+const analysis = ref<TableStatsResult | null>(null)
+const analysisKey = ref('')
+const chartType = ref<'line' | 'scatter' | 'bar'>('line')
+const chartX = ref('row')
+const chartY = ref<string[]>([])
+const chartRef = ref<{
+  downloadSvg: (name?: string) => void
+  downloadPng: (name?: string) => Promise<void>
+} | null>(null)
+
+const numericSeries = vueComputed(() => analysis.value?.series ?? [])
+const chartSeries = vueComputed(() => {
+  const chosen = numericSeries.value.filter((s) => chartY.value.includes(s.key))
+  return chosen.length ? chosen : numericSeries.value.slice(0, 2)
+})
+const chartXValues = vueComputed<number[] | null>(() => {
+  if (chartX.value === 'row') return null
+  const series = numericSeries.value.find((s) => s.key === chartX.value)
+  return series ? series.values.map((v) => (typeof v === 'number' ? v : Number.NaN)) : null
+})
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let suppressWatch = false
@@ -282,7 +373,11 @@ function normalize(tableValue: ResearchTable): ResearchTable {
     const value = Number(tableValue.rowHeights?.[i])
     return Number.isFinite(value) ? Math.min(300, Math.max(24, value)) : 30
   })
-  return { ...tableValue, rows, rowLabels, merges, colWidths, rowHeights }
+  const rowSources = Array.from({ length: rows.length }, (_, i) => {
+    const source = tableValue.rowSources?.[i]
+    return source?.docId ? source : null
+  })
+  return { ...tableValue, rows, rowLabels, merges, colWidths, rowHeights, rowSources }
 }
 
 function payload() {
@@ -297,6 +392,8 @@ function payload() {
     colWidths: value?.colWidths ?? [],
     rowHeights: value?.rowHeights ?? [],
     projectId: value ? value.projectId : (activeProject.value || null),
+    source: value?.source ?? null,
+    rowSources: value?.rowSources ?? [],
   }
 }
 
@@ -505,6 +602,19 @@ async function onExport(format: 'csv' | 'xlsx'): Promise<void> {
   }
 }
 
+async function onExportReport(): Promise<void> {
+  if (!activeProject.value || exportingReport.value) return
+  if (dirty.value && !(await saveNow(true))) return
+  exportingReport.value = true
+  try {
+    await downloadResearchReport(activeProject.value)
+  } catch {
+    showToast(t('archive.exportFail'))
+  } finally {
+    exportingReport.value = false
+  }
+}
+
 /** 保存草稿并交给本机 WPS/Excel,由用户调整后打印 */
 async function onPrint(): Promise<void> {
   if (!table.value || printing.value || saving.value || computing.value || switching.value) return
@@ -526,6 +636,74 @@ async function onPrint(): Promise<void> {
     if (dirty.value) scheduleSave()
   } finally {
     printing.value = false
+  }
+}
+
+async function onChat(): Promise<void> {
+  if (!table.value) return
+  if (dirty.value && !(await saveNow(true))) return
+  await router.push({ path: '/research', query: { tableId: table.value.id } })
+}
+
+function openSource(): void {
+  const source = table.value?.source
+  if (source?.docId) openSourceLink(source)
+}
+
+function openRowSource(rowIndex: number): void {
+  const source = table.value?.rowSources?.[rowIndex]
+  if (source?.docId) openSourceLink(source)
+}
+
+function openSourceLink(source: { docId: string; docName?: string; page?: number }): void {
+  const query: Record<string, string> = { docId: source.docId }
+  if (source.page) query.page = String(source.page)
+  if (source.docName) query.title = source.docName
+  void router.push({ path: '/research/search', query })
+}
+
+async function refreshAnalysis(): Promise<void> {
+  if (!table.value || analysisLoading.value) return
+  const id = table.value.id
+  const snapshot = JSON.stringify(payload())
+  analysisLoading.value = true
+  try {
+    const res = await statsResearchTable(id, payload())
+    if (!table.value || table.value.id !== id) return
+    analysis.value = res
+    analysisKey.value = snapshot
+    computed.value = res.computed
+    errors.value = res.errors
+    if (!chartY.value.length) {
+      chartY.value = res.series.slice(0, 2).map((s) => s.key)
+    }
+    if (chartX.value !== 'row' && !res.series.some((s) => s.key === chartX.value)) {
+      chartX.value = 'row'
+    }
+  } catch {
+    showToast(t('tables.statsFail'))
+  } finally {
+    analysisLoading.value = false
+  }
+}
+
+async function openAnalysis(tab: 'stats' | 'chart'): Promise<void> {
+  analysisTab.value = tab
+  analysisOpen.value = true
+  if (!analysis.value || analysisKey.value !== JSON.stringify(payload())) {
+    await refreshAnalysis()
+  }
+}
+
+function toggleChartY(key: string): void {
+  chartY.value = chartY.value.includes(key)
+    ? chartY.value.filter((k) => k !== key)
+    : [...chartY.value, key]
+}
+
+function onChartXChange(): void {
+  if (chartX.value !== 'row') {
+    chartY.value = chartY.value.filter((k) => k !== chartX.value)
   }
 }
 
@@ -857,6 +1035,14 @@ watch(table, () => {
   scheduleSave()
 }, { deep: true })
 
+watch(() => table.value?.id, () => {
+  analysisOpen.value = false
+  analysis.value = null
+  analysisKey.value = ''
+  chartY.value = []
+  chartX.value = 'row'
+})
+
 function closeMenuOnClick(): void {
   closeMenu()
 }
@@ -870,8 +1056,14 @@ function warnBeforeUnload(event: BeforeUnloadEvent): void {
 onMounted(async () => {
   window.addEventListener('beforeunload', warnBeforeUnload)
   window.addEventListener('click', closeMenuOnClick)
+  if (typeof route.query.projectId === 'string') activeProject.value = route.query.projectId
   await loadLists()
-  if (tables.value.length) await openTable(tables.value[0].id)
+  const wanted = typeof route.query.tableId === 'string' ? route.query.tableId : ''
+  if (wanted && tables.value.some((item) => item.id === wanted)) {
+    await openTable(wanted)
+  } else if (tables.value.length) {
+    await openTable(tables.value[0].id)
+  }
 })
 
 onBeforeRouteLeave(async () => {
@@ -903,7 +1095,13 @@ onBeforeUnmount(() => {
         <button class="act" :disabled="importing" @click="fileEl?.click()">
           {{ importing ? t('tables.importing') : t('tables.import') }}
         </button>
-        <button class="act ghost" @click="onCreate">{{ t('tables.newTable') }}</button>
+        <button class="act" @click="onCreate">{{ t('tables.newTable') }}</button>
+        <button
+          v-if="activeProject"
+          class="act"
+          :disabled="exportingReport"
+          @click="onExportReport"
+        >{{ exportingReport ? t('archive.exportingReport') : t('archive.exportReport') }}</button>
         <input
           ref="fileEl"
           type="file"
@@ -928,8 +1126,27 @@ onBeforeUnmount(() => {
           @keydown.enter.prevent="openTable(item.id)"
           @keydown.space.prevent="openTable(item.id)"
         >
-          <span class="ti-title">{{ item.title }}</span>
+          <input
+            v-if="renamingId === item.id"
+            v-model="renameValue"
+            class="ti-rename"
+            maxlength="120"
+            @click.stop
+            @dblclick.stop
+            @keydown.enter.prevent="commitRename(item)"
+            @keydown.esc.prevent="cancelRename"
+            @blur="commitRename(item)"
+          />
+          <span v-else class="ti-title" :title="item.title" @dblclick.stop="startRename(item, $event)">
+            {{ item.title }}
+          </span>
           <span class="ti-meta">{{ item.rows }} × {{ item.columns }}</span>
+          <button
+            v-if="renamingId !== item.id"
+            class="ti-edit"
+            :title="t('tables.rename')"
+            @click.stop="startRename(item, $event)"
+          >✎</button>
           <button
             class="ti-del"
             :title="t('tables.delete')"
@@ -947,12 +1164,23 @@ onBeforeUnmount(() => {
           <button class="mini primary" :disabled="computing" @click="onCompute()">
             {{ computing ? t('tables.computing') : t('tables.complete') }}
           </button>
+          <button class="mini" @click="openAnalysis('stats')">{{ t('tables.stats') }}</button>
+          <button class="mini" @click="openAnalysis('chart')">{{ t('tables.chart') }}</button>
+          <button class="mini" @click="onChat">{{ t('tables.chat') }}</button>
           <button class="mini" @click="onExport('csv')">CSV</button>
           <button class="mini" @click="onExport('xlsx')">XLSX</button>
           <button class="mini" :disabled="printing" @click="onPrint">
             {{ printing ? t('tables.printing') : t('tables.print') }}
           </button>
           <button class="mini danger" @click="onDelete">{{ t('tables.delete') }}</button>
+        </div>
+
+        <div v-if="table.source?.docId" class="source-bar">
+          <span class="source-label">{{ t('tables.source') }}</span>
+          <button class="source-chip" :title="t('tables.openSource')" @click="openSource">
+            {{ table.source.docName || table.source.docId }}
+            <template v-if="table.source.page"> · {{ t('viewer.pageNo', { n: table.source.page }) }}</template>
+          </button>
         </div>
 
         <div class="grid-wrap">
@@ -1001,6 +1229,12 @@ onBeforeUnmount(() => {
                     class="row-label-input"
                     :placeholder="String(ri + 1)"
                   />
+                  <button
+                    v-if="table.rowSources?.[ri]?.docId"
+                    class="row-src"
+                    :title="t('tables.openSource')"
+                    @click.stop="openRowSource(ri)"
+                  >↗</button>
                   <button class="row-del" :title="t('tables.deleteRow')" @click="deleteRow(ri)">✕</button>
                   <span
                     class="row-resize"
@@ -1046,6 +1280,120 @@ onBeforeUnmount(() => {
             </tbody>
           </table>
         </div>
+
+        <section v-if="analysisOpen" class="analysis">
+          <header class="analysis-head">
+            <button
+              class="analysis-tab"
+              :class="{ on: analysisTab === 'stats' }"
+              @click="openAnalysis('stats')"
+            >{{ t('tables.stats') }}</button>
+            <button
+              class="analysis-tab"
+              :class="{ on: analysisTab === 'chart' }"
+              @click="openAnalysis('chart')"
+            >{{ t('tables.chart') }}</button>
+            <span class="analysis-spacer"></span>
+            <button class="mini" :disabled="analysisLoading" @click="refreshAnalysis">
+              {{ analysisLoading ? t('tables.computing') : t('tables.refresh') }}
+            </button>
+            <button class="mini" @click="analysisOpen = false">{{ t('common.close') }}</button>
+          </header>
+
+          <div v-if="analysisLoading" class="analysis-empty">{{ t('tables.computing') }}</div>
+
+          <template v-else-if="analysisTab === 'stats'">
+            <div v-if="!analysis?.stats.length" class="analysis-empty">
+              {{ t('tables.noNumeric') }}
+            </div>
+            <div v-else class="stats-wrap">
+              <table class="stats-table">
+                <thead>
+                  <tr>
+                    <th>{{ t('tables.column') }}</th>
+                    <th>n</th>
+                    <th>{{ t('tables.missing') }}</th>
+                    <th>{{ t('tables.mean') }}</th>
+                    <th>{{ t('tables.median') }}</th>
+                    <th>{{ t('tables.stdev') }}</th>
+                    <th>{{ t('tables.min') }}</th>
+                    <th>{{ t('tables.max') }}</th>
+                    <th>Q1</th>
+                    <th>Q3</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="s in analysis.stats" :key="s.key">
+                    <td class="stat-label">{{ s.key }} · {{ s.label }}</td>
+                    <td>{{ s.n }}</td>
+                    <td>{{ s.missing }}</td>
+                    <td>{{ s.mean }}</td>
+                    <td>{{ s.median }}</td>
+                    <td>{{ s.stdev || '—' }}</td>
+                    <td>{{ s.min }}</td>
+                    <td>{{ s.max }}</td>
+                    <td>{{ s.q1 }}</td>
+                    <td>{{ s.q3 }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-if="analysis.correlations.length" class="correlations">
+                <span class="corr-title">{{ t('tables.correlations') }}</span>
+                <span v-for="c in analysis.correlations" :key="`${c.x}-${c.y}`" class="corr">
+                  r({{ c.x }}, {{ c.y }}) = {{ c.r }}
+                </span>
+              </div>
+            </div>
+          </template>
+
+          <template v-else>
+            <div v-if="!numericSeries.length" class="analysis-empty">
+              {{ t('tables.noNumeric') }}
+            </div>
+            <template v-else>
+              <div class="chart-controls">
+                <label class="ctl">
+                  <span>{{ t('tables.chartType') }}</span>
+                  <select v-model="chartType">
+                    <option value="line">{{ t('tables.chartLine') }}</option>
+                    <option value="scatter">{{ t('tables.chartScatter') }}</option>
+                    <option value="bar">{{ t('tables.chartBar') }}</option>
+                  </select>
+                </label>
+                <label class="ctl">
+                  <span>{{ t('tables.chartX') }}</span>
+                  <select v-model="chartX" @change="onChartXChange">
+                    <option value="row">{{ t('tables.chartRow') }}</option>
+                    <option v-for="s in numericSeries" :key="s.key" :value="s.key">
+                      {{ s.key }} · {{ s.label }}
+                    </option>
+                  </select>
+                </label>
+                <div class="y-picks">
+                  <span>{{ t('tables.chartY') }}</span>
+                  <button
+                    v-for="s in numericSeries"
+                    :key="s.key"
+                    class="y-pick"
+                    :class="{ on: chartY.includes(s.key) }"
+                    @click="toggleChartY(s.key)"
+                  >{{ s.key }} · {{ s.label }}</button>
+                </div>
+                <div class="chart-actions">
+                  <button class="mini" @click="chartRef?.downloadSvg(`${table.title || 'chart'}.svg`)">SVG</button>
+                  <button class="mini" @click="chartRef?.downloadPng(`${table.title || 'chart'}.png`)">PNG</button>
+                </div>
+              </div>
+              <TableChart
+                ref="chartRef"
+                :labels="analysis?.rowLabels ?? []"
+                :series="chartSeries"
+                :chart-type="chartType"
+                :x-values="chartXValues"
+              />
+            </template>
+          </template>
+        </section>
 
         <div
           v-if="menu"
@@ -1231,15 +1579,15 @@ onBeforeUnmount(() => {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 7px;
-  padding: 7px 24px 7px 9px;
+  padding: 7px 42px 7px 9px;
   cursor: pointer;
   margin-bottom: 4px;
 }
 
+.ti-edit,
 .ti-del {
   position: absolute;
   top: 5px;
-  right: 5px;
   background: transparent;
   border: none;
   color: var(--text-dim);
@@ -1250,13 +1598,39 @@ onBeforeUnmount(() => {
   transition: opacity var(--dur-fast), color var(--dur-fast);
 }
 
+.ti-edit {
+  right: 21px;
+}
+
+.ti-del {
+  right: 5px;
+}
+
+.table-item:hover .ti-edit,
 .table-item:hover .ti-del,
+.table-item:focus-within .ti-edit,
 .table-item:focus-within .ti-del {
   opacity: 1;
 }
 
+.ti-edit:hover {
+  color: var(--cyan);
+}
+
 .ti-del:hover {
   color: #ff8a8a;
+}
+
+.ti-rename {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-card);
+  border: 1px solid var(--line-bright);
+  border-radius: 4px;
+  color: var(--text-hi);
+  font-size: 12.5px;
+  padding: 3px 5px;
+  outline: none;
 }
 
 .table-item.on {
@@ -1342,6 +1716,198 @@ onBeforeUnmount(() => {
   border-color: rgba(255, 138, 138, 0.4);
 }
 
+.source-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.source-label {
+  color: var(--text-dim);
+  font-family: var(--font-tech);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+
+.source-chip {
+  max-width: min(520px, 70vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--cyan) 7%, transparent);
+  border: 1px solid var(--line-bright);
+  border-radius: 999px;
+  color: var(--cyan);
+  padding: 4px 12px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.source-chip:hover {
+  box-shadow: var(--glow-cyan);
+}
+
+.analysis {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.analysis-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.analysis-tab {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-dim);
+  padding: 4px 14px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.analysis-tab.on {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+}
+
+.analysis-spacer {
+  flex: 1;
+}
+
+.analysis-empty {
+  padding: 28px 12px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.stats-wrap {
+  padding: 10px 12px 12px;
+  overflow-x: auto;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.stats-table th,
+.stats-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.stats-table th {
+  color: var(--text-dim);
+  font-weight: 500;
+  font-family: var(--font-tech);
+  font-size: 10px;
+}
+
+.stats-table th:first-child,
+.stats-table td:first-child {
+  text-align: left;
+}
+
+.stat-label {
+  color: var(--text-hi);
+}
+
+.correlations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.corr-title {
+  color: var(--cyan);
+  font-family: var(--font-tech);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+}
+
+.corr {
+  font-family: var(--font-tech);
+}
+
+.chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 12px 4px;
+}
+
+.ctl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.ctl select {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 11.5px;
+}
+
+.y-picks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.y-pick {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-dim);
+  padding: 3px 10px;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.y-pick.on {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+  background: color-mix(in srgb, var(--cyan) 9%, transparent);
+}
+
+.chart-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.analysis :deep(.chart-box) {
+  padding: 4px 12px 12px;
+}
+
 .grid-wrap {
   margin-top: 12px;
   overflow: auto;
@@ -1415,7 +1981,7 @@ onBeforeUnmount(() => {
 }
 
 .row-label-input {
-  width: calc(100% - 22px);
+  width: calc(100% - 38px);
   background: transparent;
   border: none;
   color: var(--text);
@@ -1509,6 +2075,29 @@ onBeforeUnmount(() => {
   padding: 0 2px;
   opacity: 0;
   transition: opacity var(--dur-fast), color var(--dur-fast);
+}
+
+.row-src {
+  position: absolute;
+  top: 3px;
+  right: 20px;
+  z-index: 4;
+  background: transparent;
+  border: none;
+  color: var(--cyan);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity var(--dur-fast);
+}
+
+.row-no:hover .row-src {
+  opacity: 1;
+}
+
+.row-src:hover {
+  text-shadow: var(--glow-cyan);
 }
 
 .row-no:hover .row-del,

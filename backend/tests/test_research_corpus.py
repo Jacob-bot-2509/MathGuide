@@ -242,3 +242,18 @@ def test_api_upload_search_tree_delete(api):
 
     assert api.delete(f"/api/research/docs/{doc_id}").status_code == 200
     assert api.get("/api/research/docs").json()["docs"] == []
+
+
+def test_search_scoped_to_selected_documents(corpus):
+    first = rc._ingest("u-1", "attention.txt", SAMPLE.encode("utf-8"), "text/plain")
+    other_text = SAMPLE.replace("attention", "spectral\ngap estimation")
+    second = rc._ingest("u-1", "spectral.txt", other_text.encode("utf-8"), "text/plain")
+    index = rc._get_index("u-1")
+
+    only_first = index.search("attention spectral", top_k=8, doc_ids={first["docId"]})
+    assert only_first["hits"]
+    assert {h["docId"] for h in only_first["hits"]} == {first["docId"]}
+
+    both = index.search("attention spectral", top_k=8,
+                        doc_ids={first["docId"], second["docId"]})
+    assert {h["docId"] for h in both["hits"]} == {first["docId"], second["docId"]}
