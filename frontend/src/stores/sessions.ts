@@ -96,7 +96,7 @@ export interface SessionStore {
   readonly workspace: Workspace
   readonly state: SessionsState
   persistSessions(): boolean
-  flushSessions(): boolean
+  flushSessions(force?: boolean): boolean
   nextMsgId(): number
   nextSessionId(): number
   restorePair(item: RestoreItem): void
@@ -181,12 +181,12 @@ function createSessionStore(workspace: Workspace): SessionStore {
   }
 
   /** 立即写盘并取消待执行的 debounce;关键路径/卸载前调用 */
-  function flushSessions(): boolean {
+  function flushSessions(force = false): boolean {
     if (persistTimer !== null) {
       clearTimeout(persistTimer)
       persistTimer = null
     }
-    if (!pendingPersist) return lastPersistOk
+    if (!pendingPersist && !force) return lastPersistOk
     pendingPersist = false
     return writeSessionsNow()
   }

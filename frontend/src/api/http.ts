@@ -42,6 +42,22 @@ export async function post<T>(path: string, body: unknown, headers?: Record<stri
   return (await res.json()) as T
 }
 
+/** 上传类错误:后端把失败原因放在 detail 里,直接透传给用户 */
+async function uploadError(res: Response): Promise<HttpError> {
+  let message = `HTTP ${res.status}`
+  try {
+    const data = (await res.clone().json()) as { detail?: unknown; error?: unknown }
+    const detail = typeof data?.detail === 'string' ? data.detail
+      : typeof data?.error === 'string' ? data.error : ''
+    if (detail) message = detail
+  } catch {
+    /* 非 JSON 响应保持状态码提示 */
+  }
+  const e = new Error(message) as HttpError
+  e.status = res.status
+  return e
+}
+
 /** 原始文件上传:body 直接是文件字节,类型与文件名由调用方给(不走 multipart) */
 export async function upload<T>(
   path: string,
@@ -55,7 +71,7 @@ export async function upload<T>(
     body: file,
     credentials: 'include',
   })
-  if (!res.ok) throw httpError(res)
+  if (!res.ok) throw await uploadError(res)
   return (await res.json()) as T
 }
 

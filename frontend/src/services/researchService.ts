@@ -11,6 +11,25 @@ export interface ResearchDoc {
   size: number
   pages: number
   createdAt: number
+  projectId: string | null
+  doi?: string
+  title?: string
+  authors?: string
+  year?: number
+  venue?: string
+}
+
+export type ResearchStatus = 'exploring' | 'active' | 'paused' | 'done'
+
+export interface ResearchProject {
+  id: string
+  title: string
+  goal: string
+  approach: string
+  notes: string
+  status: ResearchStatus
+  createdAt: number
+  updatedAt: number
 }
 
 export interface ResearchHit {
@@ -52,7 +71,10 @@ export async function listResearchDocs(): Promise<ResearchDoc[]> {
   return res.docs
 }
 
-export async function uploadResearchDoc(file: File): Promise<{
+export async function uploadResearchDoc(
+  file: File,
+  projectId?: string,
+): Promise<{
   docId: string
   duplicate: boolean
   pages?: number
@@ -62,8 +84,9 @@ export async function uploadResearchDoc(file: File): Promise<{
   const type = file.type || (file.name.toLowerCase().endsWith('.pdf')
     ? 'application/pdf'
     : 'text/plain')
+  const pid = projectId ? `&projectId=${encodeURIComponent(projectId)}` : ''
   return upload(
-    `/api/research/docs?name=${encodeURIComponent(file.name)}`,
+    `/api/research/docs?name=${encodeURIComponent(file.name)}${pid}`,
     file,
     type,
     authHeaders(),
@@ -74,16 +97,53 @@ export async function deleteResearchDoc(docId: string): Promise<void> {
   await del(`/api/research/docs/${encodeURIComponent(docId)}`, authHeaders())
 }
 
+/** 清空我的论文库(服务端语料与索引) */
+export async function clearResearchDocs(): Promise<number> {
+  const res = await del<{ ok: boolean; removed: number }>('/api/research/docs', authHeaders())
+  return res.removed
+}
+
 export async function searchResearch(
   query: string,
-  options: { topK?: number; docId?: string; tree?: boolean } = {},
+  options: { topK?: number; docId?: string; projectId?: string; tree?: boolean } = {},
 ): Promise<ResearchSearchResult> {
   return post<ResearchSearchResult>('/api/research/search', {
     query,
     topK: options.topK ?? 8,
     docId: options.docId,
+    projectId: options.projectId,
     tree: options.tree ?? true,
   }, authHeaders())
+}
+
+export async function listResearchProjects(): Promise<ResearchProject[]> {
+  const res = await get<{ projects: ResearchProject[] }>(
+    '/api/research/projects', authHeaders())
+  return res.projects
+}
+
+/** 仅在用户确认后导入旧版浏览器档案;原始记录留在本机。 */
+export async function importLegacyResearchArchive(archive: unknown): Promise<{ duplicate: boolean; projects: number; files: number }> {
+  return post('/api/research/legacy-import', archive, authHeaders())
+}
+
+export async function createResearchProject(title = ''): Promise<ResearchProject> {
+  const res = await post<{ project: ResearchProject }>(
+    '/api/research/projects', { title }, authHeaders())
+  return res.project
+}
+
+export async function updateResearchProject(
+  projectId: string,
+  patch: Partial<Pick<ResearchProject, 'title' | 'goal' | 'approach' | 'notes' | 'status'>>,
+): Promise<ResearchProject> {
+  const res = await post<{ project: ResearchProject }>(
+    `/api/research/projects/${encodeURIComponent(projectId)}`, patch, authHeaders())
+  return res.project
+}
+
+export async function deleteResearchProject(projectId: string): Promise<void> {
+  await del(`/api/research/projects/${encodeURIComponent(projectId)}`, authHeaders())
 }
 
 export async function getResearchTree(docId: string): Promise<ResearchNode[]> {

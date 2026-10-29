@@ -9,16 +9,26 @@ import { useRouter } from 'vue-router'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import {
+  openLiteraturePdf,
+  relatedLiterature,
+  searchLiterature,
+  type LiteratureItem,
+} from '@/services/literatureService'
+import {
+  clearResearchDocs,
   deleteResearchDoc,
   listResearchDocs,
+  listResearchProjects,
   searchResearch,
   uploadResearchDoc,
   type ResearchDoc,
   type ResearchHit,
+  type ResearchProject,
 } from '@/services/researchService'
 
 const router = useRouter()
 const docs = ref<ResearchDoc[]>([])
+const projects = ref<ResearchProject[]>([])
 const query = ref('')
 const hits = ref<ResearchHit[]>([])
 const searched = ref(false)
@@ -26,11 +36,89 @@ const loading = ref(false)
 const uploading = ref(false)
 const uploadEl = ref<HTMLInputElement | null>(null)
 const activeDoc = ref('')
-const useTree = ref(true)
+const activeProject = ref('')
+const useTree = ref(false)
 const mode = ref('')
 const elapsed = ref(0)
+const litItems = ref<LiteratureItem[]>([])
+const litLoading = ref(false)
+const litSearched = ref(false)
+const litWarnings = ref<string[]>([])
+const openingPdf = ref('')
 
 const hasDocs = computed(() => docs.value.length > 0)
+
+/** 外部文献发现:只取元数据/摘要,不下载全文 */
+async function searchExternal(): Promise<void> {
+  const q = query.value.trim()
+  if (q.length < 2 || litLoading.value) return
+  litLoading.value = true
+  try {
+    const res = await searchLiterature(q, 20)
+    litItems.value = res.results
+    litWarnings.value = res.warnings
+    litSearched.value = true
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('search.litFail'))
+  } finally {
+    litLoading.value = false
+  }
+}
+
+/** 以库内论文为种子找相关论文 */
+async function findRelated(doc: ResearchDoc): Promise<void> {
+  if (litLoading.value) return
+  litLoading.value = true
+  try {
+    const res = await relatedLiterature({ doi: doc.doi, title: doc.title || doc.name })
+    litItems.value = res.results
+    litWarnings.value = res.warnings
+    litSearched.value = true
+    document.querySelector('.lit')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('search.litFail'))
+  } finally {
+    litLoading.value = false
+  }
+}
+
+/** 下载开放获取 PDF 并用本机 WPS/阅读器打开 */
+async function openPdf(item: LiteratureItem): Promise<void> {
+  if (!item.pdfUrl || openingPdf.value) return
+  openingPdf.value = item.pdfUrl
+  try {
+    const res = await openLiteraturePdf(item.pdfUrl)
+    if (res.opened) showToast(t('search.pdfOpened'))
+    else window.open(item.pdfUrl, '_blank', 'noopener')
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('search.pdfFail'))
+  } finally {
+    openingPdf.value = ''
+  }
+}
+
+/** 命中片段高亮:先转义再包 <mark>,查询按空格拆词(至少 2 字符) */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function highlight(text: string, q: string): string {
+  const escaped = escapeHtml(text)
+  const terms = q.trim().split(/\s+/).filter((x) => x.length >= 2)
+  if (!terms.length) return escaped
+  const pattern = terms
+    .map((x) => escapeHtml(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|')
+  try {
+    return escaped.replace(new RegExp(`(${pattern})`, 'gi'), '<mark>$1</mark>')
+  } catch {
+    return escaped
+  }
+}
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -40,7 +128,9 @@ function fmtSize(bytes: number): string {
 
 async function loadDocs(): Promise<void> {
   try {
-    docs.value = await listResearchDocs()
+    const [ds, ps] = await Promise.all([listResearchDocs(), listResearchProjects()])
+    docs.value = ds
+    projects.value = ps
   } catch {
     /* 未登录/后端不可达时不打断页面,检索时会再报 */
   }
@@ -65,8 +155,8 @@ async function onFile(e: Event): Promise<void> {
       showToast(t('search.uploaded', { n: res.pages ?? 0, c: res.chunks ?? 0 }))
     }
     await loadDocs()
-  } catch {
-    showToast(t('search.uploadFail'))
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('search.uploadFail'))
   } finally {
     uploading.value = false
   }
@@ -80,6 +170,7 @@ async function doSearch(): Promise<void> {
   try {
     const res = await searchResearch(q, {
       docId: activeDoc.value || undefined,
+      projectId: activeProject.value || undefined,
       tree: useTree.value,
     })
     hits.value = res.hits
@@ -101,6 +192,20 @@ async function removeDoc(doc: ResearchDoc): Promise<void> {
     await loadDocs()
   } catch {
     showToast(t('search.deleteFail'))
+  }
+}
+
+async function clearAll(): Promise<void> {
+  if (!window.confirm(t('search.clearConfirm'))) return
+  try {
+    const removed = await clearResearchDocs()
+    activeDoc.value = ''
+    hits.value = []
+    searched.value = false
+    await loadDocs()
+    showToast(t('search.cleared', { n: removed }))
+  } catch {
+    showToast(t('search.clearFail'))
   }
 }
 
@@ -139,7 +244,7 @@ onMounted(loadDocs)
           ref="uploadEl"
           type="file"
           hidden
-          accept=".pdf,.txt,.md,.markdown,.tex,.csv,.json,text/*,application/pdf"
+          accept=".pdf,.docx,.epub,.html,.htm,.xml,.rtf,.txt,.md,.markdown,.tex,.csv,.json,text/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/epub+zip,application/rtf"
           @change="onFile"
         />
       </div>
@@ -151,6 +256,7 @@ onMounted(loadDocs)
         <div class="panel-head">
           <span class="tech-label">{{ t('search.docs') }}</span>
           <span class="count">{{ docs.length }}</span>
+          <button v-if="hasDocs" class="clear-all" @click="clearAll">{{ t('search.clearDocs') }}</button>
           <select v-model="activeDoc" class="doc-filter">
             <option value="">{{ t('search.allDocs') }}</option>
             <option v-for="d in docs" :key="d.id" :value="d.id">{{ d.name }}</option>
@@ -159,8 +265,13 @@ onMounted(loadDocs)
         <p v-if="!hasDocs" class="empty">{{ t('search.noDocs') }}</p>
         <ul v-else class="doc-list">
           <li v-for="d in docs" :key="d.id" class="doc-item">
-            <span class="doc-name">{{ d.name }}</span>
-            <span class="doc-meta">{{ fmtSize(d.size) }} · {{ d.pages }} 页</span>
+            <span class="doc-name" :title="d.title || d.name">{{ d.title || d.name }}</span>
+            <span class="doc-meta">
+              {{ fmtSize(d.size) }} · {{ d.pages }} 页<span v-if="d.year"> · {{ d.year }}</span><span v-if="d.doi"> · {{ d.doi }}</span>
+            </span>
+            <button class="rel" :title="t('search.related')" @click="findRelated(d)">
+              {{ t('search.relatedShort') }}
+            </button>
             <button class="del" :title="t('search.delete')" @click="removeDoc(d)">✕</button>
           </li>
         </ul>
@@ -181,6 +292,10 @@ onMounted(loadDocs)
           </button>
         </div>
         <div class="opts">
+          <select v-model="activeProject" class="project-filter">
+            <option value="">{{ t('search.allProjects') }}</option>
+            <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.title }}</option>
+          </select>
           <label class="opt">
             <input v-model="useTree" type="checkbox" />
             {{ t('search.tree') }}
@@ -202,11 +317,64 @@ onMounted(loadDocs)
             <span class="hit-score tech-label">{{ h.score.toFixed(4) }}</span>
           </div>
           <div class="hit-section">{{ h.section }}</div>
-          <p class="hit-text">{{ h.snippet }}</p>
+          <p class="hit-text" v-html="highlight(h.snippet, query)"></p>
         </article>
         <button v-if="hits.length" class="ask-btn" @click="askFromResults">
           {{ t('search.askResults') }}
         </button>
+      </section>
+
+      <!-- 外部文献发现 -->
+      <section class="lit">
+        <div class="lit-head">
+          <span class="tech-label">{{ t('search.litTitle') }}</span>
+          <button
+            class="lit-btn"
+            :disabled="litLoading || query.trim().length < 2"
+            @click="searchExternal"
+          >
+            {{ litLoading ? t('search.litLoading') : t('search.litSearch') }}
+          </button>
+        </div>
+        <p class="hint">{{ t('search.litHint') }}</p>
+        <p v-if="litSearched && !litLoading && !litItems.length" class="empty">
+          {{ t('search.litEmpty') }}
+        </p>
+        <p v-if="litWarnings.length" class="lit-warn">
+          {{ t('search.litPartial', { s: litWarnings.join(' / ') }) }}
+        </p>
+        <article v-for="(item, i) in litItems" :key="(item.doi || item.title) + i" class="lit-item">
+          <div class="lit-top">
+            <a
+              v-if="item.url"
+              class="lit-title"
+              :href="item.url"
+              target="_blank"
+              rel="noopener noreferrer"
+            >{{ item.title }}</a>
+            <span v-else class="lit-title">{{ item.title }}</span>
+            <span v-if="item.year" class="lit-year">{{ item.year }}</span>
+          </div>
+          <p v-if="item.authors || item.venue" class="lit-meta">
+            {{ item.authors }}<span v-if="item.venue"> · {{ item.venue }}</span>
+          </p>
+          <p v-if="item.abstract" class="lit-abstract">{{ item.abstract }}</p>
+          <p class="lit-foot">
+            <span v-if="item.doi" class="lit-doi">{{ item.doi }}</span>
+            <span v-if="item.citations" class="lit-cite">
+              {{ t('search.litCited', { n: item.citations }) }}
+            </span>
+            <span class="lit-src">{{ item.sources.join(' · ') }}</span>
+            <button
+              v-if="item.pdfUrl"
+              class="lit-pdf"
+              :disabled="openingPdf === item.pdfUrl"
+              @click="openPdf(item)"
+            >
+              {{ openingPdf === item.pdfUrl ? t('search.openingPdf') : t('search.viewPdf') }}
+            </button>
+          </p>
+        </article>
       </section>
     </main>
   </div>
@@ -323,6 +491,20 @@ onMounted(loadDocs)
   color: var(--text-dim);
 }
 
+.clear-all {
+  background: transparent;
+  border: 1px solid rgba(255, 138, 138, 0.35);
+  color: #ff8a8a;
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.clear-all:hover {
+  background: rgba(255, 138, 138, 0.08);
+}
+
 .doc-filter {
   margin-left: auto;
   max-width: 45%;
@@ -378,6 +560,22 @@ onMounted(loadDocs)
   color: var(--text-dim);
   cursor: pointer;
   font-size: 12px;
+}
+
+.rel {
+  flex: none;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.rel:hover {
+  color: var(--cyan);
+  border-color: var(--line-bright);
 }
 
 .del:hover {
@@ -445,6 +643,16 @@ onMounted(loadDocs)
   font-size: 11.5px;
 }
 
+.project-filter {
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  max-width: 220px;
+}
+
 .stat {
   margin-left: auto;
   color: var(--text-dim);
@@ -507,6 +715,13 @@ onMounted(loadDocs)
   word-break: break-word;
 }
 
+.hit-text :deep(mark) {
+  background: color-mix(in srgb, var(--cyan) 28%, transparent);
+  color: var(--text-hi);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 .empty {
   color: var(--text-dim);
   font-size: 12.5px;
@@ -529,5 +744,118 @@ onMounted(loadDocs)
 
 .ask-btn:hover {
   box-shadow: var(--glow-cyan);
+}
+
+.lit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 22px 30px;
+  border-top: 1px solid var(--line);
+}
+
+.lit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lit-btn {
+  background: transparent;
+  border: 1px solid var(--line-bright);
+  color: var(--cyan);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.lit-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.lit-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--bg-panel) 85%, transparent);
+}
+
+.lit-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lit-title {
+  color: var(--text-hi);
+  font-size: 13.5px;
+  line-height: 1.45;
+  text-decoration: none;
+}
+
+.lit-title:hover {
+  color: var(--cyan);
+}
+
+.lit-year {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.lit-meta {
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.lit-abstract {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lit-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.lit-doi {
+  color: var(--cyan);
+  word-break: break-all;
+}
+
+.lit-pdf {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--line-bright);
+  color: var(--cyan);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.lit-pdf:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.lit-warn {
+  color: #ffd166;
+  font-size: 11px;
 }
 </style>

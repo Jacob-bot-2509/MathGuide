@@ -39,6 +39,7 @@ backend/
   chat.py      # POST /api/chat/stream:SSE 流式下发 + RAG 编排
                # (安全外壳:输入上限/限流/用量记账 → 路由 → LLM/直答)
   usage.py     # 用量统计(电表):按 uid 记账、旧记录 PII 迁移、按账号导出/删除
+  docgen.py    # 文档生成:问答导出/大纲/分节生成/PDF-Markdown-Word
   knowledge_graph/  # 知识点知识图谱:data/knowledge_points.csv(80 点,难度/前置)
                     # 加载时校验重复/缺失/自依赖/难度/无环,并计算核心度
   diagnosis.py      # 掌握度诊断:LLM 评分或自评 → data/diagnoses.jsonl(按 uid)
@@ -117,6 +118,30 @@ set MG_EMBED_API_KEY=sk-xxx
 set MG_EMBED_MODEL=text-embedding-v3
 ```
 
+科研语料库(可选):
+
+```bash
+set MG_TREE_WALK=1   # 开启 LLM 走树检索:每次查询多 1~2 次模型调用,
+                     # 章节定位更准;默认关闭,先用评测集确认收益再开
+set MG_RESEARCH_MAX_UPLOAD_MB=100  # 单篇论文大小上限(默认 100MB)
+set MG_RESEARCH_MAX_DOCS=200       # 每用户论文数上限(默认 200)
+# 图片公式识别:不配则复用 MG_ALIYUN_*;默认模型 qwen3.8-omni-flash
+# MG_VISION_MODEL=qwen3.8-omni-flash
+# MG_VISION_BASE_URL=...           # 可选,默认 MG_ALIYUN_BASE_URL
+# MG_VISION_API_KEY=...            # 可选,默认 MG_ALIYUN_API_KEY
+# 文献发现:Crossref/arXiv/Europe PMC 免 key;OpenAlex 与 S2 可选
+# MG_OPENALEX_API_KEY=...          # OpenAlex 免费 key,启用后相关论文带引用数据
+# MG_LITERATURE_MAILTO=you@example.com  # Crossref 礼貌池标识
+```
+
+- 入库支持 PDF、DOCX、EPUB、HTML/JATS、RTF 与纯文本;按文件头识别,
+  扩展名只兜底,网页另存的 HTML 改成 .pdf 也能正确解析;
+- PDF 先走 pypdf,抽不到文字自动换 PDFium;两者都空才判定为扫描件并提示 OCR;
+
+- 上传论文时,若 LLM 已配置,会一次性为章节生成摘要(失败自动退回首段);
+- 未配置 embedding 时检索退化为纯 BM25,行为不变;
+- 章节树筛选默认关闭:样本集 27 条数字版实测,树筛会把 BM25 的 Hit@8 从 96.3% 降到 85.2%、PageHit 从 88.9% 降到 63.0%;需要 PageIndex 式走树时显式打开 `tree=true` 并配 `MG_TREE_WALK=1`。
+
 深度搜索可选环境变量(不设也可用,设了更稳):
 
 ```bash
@@ -181,11 +206,25 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/account/export` | 导出账号、用量元数据与诊断记录 → `200 {exportedAt, account, usage, diagnoses}` |
 | POST | `/api/account/delete` | 注销账号(密码或 `confirm` 二次确认),级联删 token/用量/诊断 → `200 {ok:true}` |
 | POST | `/api/chat/stream` | 聊天流式回复(SSE) |
-| POST | `/api/research/docs?name=文件名` | 上传论文(PDF/文本原始字节),按内容哈希去重、按用户隔离 → `{docId, duplicate, pages, chunks}` |
-| GET | `/api/research/docs` | 当前用户的论文列表(元数据) |
+| POST | `/api/research/docs?name=文件名&projectId=` | 上传论文(PDF/文本原始字节),按内容哈希去重、按用户隔离 → `{docId, duplicate, pages, chunks}` |
+| GET | `/api/research/docs` | 当前用户的论文列表(元数据,含 `projectId`) |
+| DELETE | `/api/research/docs` | 清空我的论文库(论文、切片、章节树、原文件) |
 | DELETE | `/api/research/docs/{doc_id}` | 删除论文、切片、章节树与原文件 |
-| POST | `/api/research/search` | 全文检索 `{query, topK?, docId?, tree?}` → `{hits, mode, elapsed}`;BM25 + embedding 混合,未配置向量时纯 BM25 |
+| POST | `/api/research/search` | 全文检索 `{query, topK?, docId?, projectId?, tree?}` → `{hits, mode, elapsed}`;BM25 + embedding 混合,未配置向量时纯 BM25 |
 | GET | `/api/research/tree?docId=` | 论文章节树(节点扁平列表,`parentId` 组树) |
+| GET | `/api/research/projects` | 研究项目列表(目标/思路/状态) |
+| POST | `/api/research/projects` | 新建项目 `{title}` |
+| POST | `/api/research/projects/{project_id}` | 更新项目 `{title?, goal?, approach?, notes?, status?}` |
+| DELETE | `/api/research/projects/{project_id}` | 删除项目(论文只解除归属,不删除) |
+| POST | `/api/research/tables/import?name=&projectId=` | 导入 XLSX/DOCX/CSV 模板 → 结构化列与行 |
+| GET | `/api/research/tables` | 数据表列表(可按 `projectId` 过滤) |
+| POST | `/api/research/tables` | 新建空表 `{title, columns, rows, formulas, rowLabels, merges, colWidths, rowHeights}` |
+| GET | `/api/research/tables/{id}` | 读取完整数据表 |
+| POST | `/api/research/tables/{id}` | 保存草稿 |
+| POST | `/api/research/tables/{id}/compute` | 「完成」:保存并计算,返回逐格结果与错误 |
+| GET | `/api/research/tables/{id}/export?format=csv\|xlsx` | 导出 |
+| DELETE | `/api/research/tables/{id}` | 删除数据表 |
+| POST | `/api/research/formulas/extract` | 图片公式识别 `{images:[{mime,data(base64)}], columns}` → `{formulas, groups, master, warnings}`;图片不落盘 |
 | POST | `/api/diagnosis` | 掌握度诊断:`{pointId, answer}` 走模型评分,或 `{pointId, selfRating}` 自评 |
 | GET | `/api/diagnosis/report` | 薄弱点报告(低于 3 分,按分数升序/核心度降序) |
 | GET | `/api/recommendation` | 学习路径推荐:`?strategy=difficulty|coreness&limit=5` |
@@ -193,6 +232,11 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | GET | `/api/profile` | 学习画像:诊断次数、掌握/薄弱、章节分布与最近 10 条 |
 | POST | `/api/speech/math` | 语音识别文本 → 数学符号转写(SSE) |
 | POST | `/api/doc/export` | 研究综述 → 结构化 → PDF 下载 |
+| POST | `/api/doc/questions` | 从当前会话提取问答对 → `{items}` |
+| POST | `/api/doc/qa` | 选定问答 → 原答案排版 → PDF/Markdown/Word |
+| POST | `/api/doc/outline` | 独立要求 → 知识库证据 → 可编辑大纲 |
+| POST | `/api/doc/generate` | 大纲 → 逐节生成(无依据跳过) → `{document,gaps}` |
+| POST | `/api/doc/render` | 结构化文档 → PDF/Markdown/Word |
 | GET | `/api/stats` | 用量统计(**仅管理员**):总调用数 / 回复字数 / 按 uid / 按模型角色 |
 
 登录请求体:
@@ -257,7 +301,7 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
   "history": [{"role": "user", "content": "…"}] }
 ```
 
-- `cmd` 与前端指令栏对应(概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围);
+- `cmd` 与前端指令栏对应(概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围 / 待办清单);
   `history` 为最近几轮对话(≤16 条 × 400 字,后端校验),多轮上下文由后端组装;
 - `categoryKey` 为前端板块预判,**后端不消费**:四路裁决(研究/知识/框架/会话)由
   `rag/route.py` 依问句判定,板块只用于前端会话归并与归纳面板,字段作契约预留;
@@ -312,6 +356,13 @@ data: [DONE]
 ../.venv/Scripts/python.exe tools/eval_qa.py --data evaluation/data/course-50.jsonl --stage all
 ```
 
+- **50 题抗幻觉集** `evaluation/data/hallucination-50.jsonl`:不存在反例、条件矛盾与超范围问题,
+  全部 `answerable:false`;单独统计编造率,不混进 course-50 的正确率分母:
+
+```bash
+../.venv/Scripts/python.exe tools/eval_qa.py --data evaluation/data/hallucination-50.jsonl --stage all
+```
+
 ## 用量统计(测试期成本可见)
 
 每次聊天流结束后自动记账到 `data/usage.jsonl`(**只记 uid**,不记手机号/昵称;
@@ -356,6 +407,9 @@ python tools/sync_knowledge.py  # 知识库每日同步一条龙:增量拉取(�
 python tools/eval_recall.py    # 知识库召回率评测:55 道多语问法批量测,报告落盘 eval_report.txt
 python tools/eval_route.py     # 路由分流评测:50 用例四路(研究/知识/框架/会话)
 python tools/eval_search.py    # 深度搜索评测:10 道研究型问题(网络依赖,单源失败不影响整体)
+python tools/eval_research.py --uid u-xxx --questions eval.jsonl   # 用户论文库检索评测(Hit@k/PageHit/MRR)
+python tools/eval_research.py --samples D:\Works\research-samples # 样本目录一键评测(临时库,数字版)
+python tools/research_backup.py --uid u-xxx --out backup.tar.gz    # 科研语料备份;--restore 恢复
 python tools/preflight.py      # 演示前自检:前后端健康 + 登录 + 抽查题端到端,全绿才可演示
 python tools/fetch_knowledge.py --source arxiv --limit 20   # 从 arXiv 拉论文摘要入库
 python tools/usage.py          # 用量报表:总调用 / 回复字数 / 按用户 / 按模型角色

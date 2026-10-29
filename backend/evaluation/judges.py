@@ -28,7 +28,9 @@ JUDGE_SYSTEM = (
     "3. claims 取最多 8 条关键断言;supported 仅当该断言能被标准答案或检索资料直接支持,"
     "或属于题目给出的条件。无依据、与资料矛盾、把猜测说成事实,都记 false。"
     "不得以「数学常识」「众所周知」为由判 supported:标准答案和检索资料都没写的,一律 false。\n"
-    "4. 标准答案为空(不可答题)时,correct 表示是否恰当拒答;不要因为答案看起来合理就判正确。\n"
+    "4. 标准答案为空(不可答题)时,correct 表示是否恰当处理:明确拒答、声明资料不足,"
+    "或正确指出所请求的对象不存在、条件矛盾、题目超出可答范围,均判 true;"
+    "编造一个不存在的对象、给出具体数值或构造,判 false。\n"
     "5. 计算错误但没编造事实:correct=false,但对应断言的 supported 仍可为 true。\n"
 )
 
@@ -74,8 +76,8 @@ def _normalize(data: dict, item: EvalItem) -> dict:
     correct = data.get("correct")
     if not isinstance(correct, bool):
         correct = None
-    if not item.answerable and isinstance(data.get("refused"), bool):
-        # 不可答题:正确 = 明确拒答
+    if not item.answerable and correct is None and isinstance(data.get("refused"), bool):
+        # 兼容旧评审输出:只给了 refused 没给 correct 时,拒答视为恰当处理
         correct = bool(data["refused"])
     return {
         "correct": correct,
@@ -97,16 +99,22 @@ async def judge_answer(item: EvalItem, answer: str, chunks: list[ChunkTrace],
         f"检索资料:\n{_context(chunks)}\n\n"
         f"待评答案:\n{answer[:3000]}"
     )
-    parts: list[str] = []
-    try:
-        async for delta in llm.stream_chat(JUDGE_SYSTEM, prompt, role=role,
-                                           fallback=False, thinking=False,
-                                           max_tokens=1200):
-            parts.append(delta)
-    except Exception as exc:  # noqa: BLE001 评审失败不伪造结果
-        return {"error": f"{type(exc).__name__}: {exc}"}
-    try:
-        return _normalize(_parse_json("".join(parts)), item)
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"评审输出解析失败: {type(exc).__name__}: {exc}",
-                "raw": "".join(parts)[:500]}
+    last_error = "评审失败"
+    last_raw = ""
+    # 评审模型偶发超时或被 max_tokens 截断;重试一次,仍失败才计入 judge_errors
+    for _ in range(2):
+        parts: list[str] = []
+        try:
+            async for delta in llm.stream_chat(JUDGE_SYSTEM, prompt, role=role,
+                                               fallback=False, thinking=False,
+                                               max_tokens=2000):
+                parts.append(delta)
+        except Exception as exc:  # noqa: BLE001 评审失败不伪造结果
+            last_error = f"{type(exc).__name__}: {exc}"
+            continue
+        try:
+            return _normalize(_parse_json("".join(parts)), item)
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"评审输出解析失败: {type(exc).__name__}: {exc}"
+            last_raw = "".join(parts)[:500]
+    return {"error": last_error, "raw": last_raw}

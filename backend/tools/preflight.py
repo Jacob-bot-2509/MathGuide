@@ -66,8 +66,11 @@ def fail(msg: str, hint: str = "") -> None:
     failures.append(msg)
 
 
-def get(url: str, timeout: int = 8):
-    req = urllib.request.Request(url, headers={"User-Agent": "mg-preflight"})
+def get(url: str, timeout: int = 8, token: str = ""):
+    headers = {"User-Agent": "mg-preflight"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
     return urllib.request.urlopen(req, timeout=timeout)
 
 
@@ -198,6 +201,33 @@ def main() -> int:
             fail(f"研究型冒烟「{question}」未返回来源/引用", "检查深度搜索各源与综合链路日志")
     except Exception as e:
         fail(f"研究型冒烟「{question}」请求失败:{e}", "查看后端控制台报错")
+
+    # 5c. 科研语料库(只读检查,不写入用户数据)
+    try:
+        docs_body = json.loads(get(f"{BASE}/api/research/docs", token=token).read())
+        docs_list = docs_body.get("docs", [])
+        ok(f"科研语料库接口可用(当前 {len(docs_list)} 篇论文)")
+        if docs_list:
+            result = json.loads(post(
+                f"{BASE}/api/research/search",
+                {"query": "研究方法", "topK": 3}, token=token).read())
+            ok(f"科研检索冒烟 {len(result.get('hits', []))} 条命中 · "
+               f"mode {result.get('mode', '?')}")
+        else:
+            print(f"{YELLOW}[i ]{RESET} 论文库为空,跳过科研检索冒烟")
+    except urllib.error.HTTPError as e:
+        fail(f"科研语料库接口异常(HTTP {e.code})", "确认 main.py 已注册 /api/research/* 路由")
+    except Exception as e:
+        fail(f"科研语料库检查失败:{e}", "查看后端控制台")
+
+    # 5d. 实验数据表接口(只读列表)
+    try:
+        tables_body = json.loads(get(f"{BASE}/api/research/tables", token=token).read())
+        ok(f"实验数据表接口可用(当前 {len(tables_body.get('tables', []))} 张)")
+    except urllib.error.HTTPError as e:
+        fail(f"实验数据表接口异常(HTTP {e.code})", "确认 main.py 已注册 /api/research/tables")
+    except Exception as e:
+        fail(f"实验数据表检查失败:{e}", "查看后端控制台")
 
     # 6. LLM / embedding 配置状态(信息项)
     from rag import embed, llm

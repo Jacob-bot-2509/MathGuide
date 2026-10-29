@@ -1,34 +1,54 @@
 <script setup lang="ts">
 /**
- * 研究档案面板:科研区的目标、思路与资料库(替代学习区的问题归纳)。
- * - 项目:标题、目标、思路、过程笔记、状态,失焦即存;
- * - 资料:PDF/TXT/Markdown/TeX/CSV/JSON 提取正文后登记,原文件不上传;
- * - 科研区聊天里的附件会自动登记到当前项目。
- * 面板对齐「研究档案」按钮,在按钮上方展开。
+ * 研究档案面板:科研区的项目目标、思路与论文库(替代学习区的问题归纳)。
+ * 数据在服务端按用户保存,与文献检索共用同一套项目与论文;
+ * 换设备登录仍可见。
  */
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
-import { extractPdfText, readTextFile, TEXT_FILE_EXT } from '@/utils/fileText'
+import { userState } from '@/stores/user'
 import {
-  FILE_TEXT_MAX,
-  activeProject,
-  addResearchFile,
-  archiveState,
-  createProject,
-  removeProject,
-  removeResearchFile,
-  setActiveProject,
-  updateProject,
+  createResearchProject,
+  importLegacyResearchArchive,
+  deleteResearchDoc,
+  deleteResearchProject,
+  listResearchDocs,
+  listResearchProjects,
+  updateResearchProject,
+  uploadResearchDoc,
+  type ResearchDoc,
+  type ResearchProject,
   type ResearchStatus,
-} from '@/stores/researchArchive'
+} from '@/services/researchService'
 
 const props = defineProps<{ left?: number; width?: number }>()
 const emit = defineEmits<{ close: [] }>()
 
 const tab = ref<'goal' | 'files'>('goal')
 const fileEl = ref<HTMLInputElement | null>(null)
-const project = computed(() => activeProject())
+const projects = ref<ResearchProject[]>([])
+const docs = ref<ResearchDoc[]>([])
+const activeId = ref<string | null>(null)
+const loading = ref(false)
+const uploading = ref(false)
+type ProjectPatch = Parameters<typeof updateResearchProject>[1]
+const pendingPatches = reactive<Record<string, ProjectPatch>>({})
+const savingProjects = reactive<Record<string, boolean>>({})
+const failedProjects = reactive<Record<string, boolean>>({})
+const deletingProjects = reactive<Record<string, boolean>>({})
+const legacyAvailable = ref(false)
+const legacyImporting = ref(false)
+try {
+  const owner = localStorage.getItem('mg-research-archive-owner')
+  legacyAvailable.value = !!localStorage.getItem('mg-research-archive') && (!owner || owner === userState.info?.accountKey)
+} catch { /* storage unavailable */ }
+
+const project = computed(() => projects.value.find((p) => p.id === activeId.value) ?? null)
+const files = computed(() =>
+  docs.value.filter((d) => !project.value || d.projectId === null || d.projectId === project.value.id),
+)
 
 const statuses: { key: ResearchStatus; label: string }[] = [
   { key: 'exploring', label: 'archive.statusExploring' },
@@ -37,15 +57,8 @@ const statuses: { key: ResearchStatus; label: string }[] = [
   { key: 'done', label: 'archive.statusDone' },
 ]
 
-/** 当前项目的资料 + 尚未归属项目的资料(科研聊天未建项目时上传的) */
-const files = computed(() =>
-  archiveState.files.filter(
-    (f) => f.projectId === null || f.projectId === project.value?.id,
-  ),
-)
-
 function fmtDate(ts: number): string {
-  const d = new Date(ts)
+  const d = new Date(ts * 1000)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
@@ -56,24 +69,102 @@ function fmtSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-function save(patch: Parameters<typeof updateProject>[1]): void {
-  if (project.value) updateProject(project.value.id, patch)
+async function load(): Promise<void> {
+  loading.value = true
+  try {
+    const [ps, ds] = await Promise.all([listResearchProjects(), listResearchDocs()])
+    projects.value = ps.map((serverProject) => {
+      const local = projects.value.find((p) => p.id === serverProject.id)
+      return local && (savingProjects[serverProject.id] || pendingPatches[serverProject.id])
+        ? { ...serverProject, title: local.title, goal: local.goal, approach: local.approach,
+            notes: local.notes, status: local.status }
+        : serverProject
+    })
+    docs.value = ds
+    if (!activeId.value && ps.length) activeId.value = ps[0].id
+  } catch {
+    /* 未登录/网络失败时保持空白,操作时会再提示 */
+  } finally {
+    loading.value = false
+  }
 }
 
-function onCreate(): void {
-  createProject()
-  tab.value = 'goal'
+async function onCreate(): Promise<void> {
+  try {
+    const p = await createResearchProject()
+    projects.value.unshift(p)
+    activeId.value = p.id
+    tab.value = 'goal'
+  } catch {
+    showToast(t('archive.saveFail'))
+  }
 }
 
-function onDelete(): void {
+async function onDelete(): Promise<void> {
   if (!project.value) return
+  const id = project.value.id
+  if (savingProjects[id] || deletingProjects[id]) return
   if (!window.confirm(t('archive.deleteConfirm'))) return
-  removeProject(project.value.id)
+  deletingProjects[id] = true
+  try {
+    await deleteResearchProject(id)
+    projects.value = projects.value.filter((p) => p.id !== id)
+    docs.value = docs.value.map((d) => (d.projectId === id ? { ...d, projectId: null } : d))
+    delete pendingPatches[id]
+    delete failedProjects[id]
+    if (activeId.value === id) activeId.value = projects.value[0]?.id ?? null
+  } catch {
+    showToast(t('archive.saveFail'))
+  } finally {
+    delete deletingProjects[id]
+  }
 }
 
 function onPickProject(e: Event): void {
   const value = (e.target as HTMLSelectElement).value
-  setActiveProject(value ? Number(value) : null)
+  activeId.value = value || null
+}
+
+/** 失焦即存:先本地生效,服务端失败再回滚并提示 */
+/** 同一项目串行写入,响应只更新本次提交且未被新编辑覆盖的字段。 */
+async function savePending(id: string): Promise<void> {
+  if (savingProjects[id]) return
+  savingProjects[id] = true
+  failedProjects[id] = false
+  try {
+    while (pendingPatches[id]) {
+      const patch = pendingPatches[id]
+      delete pendingPatches[id]
+      try {
+        const updated = await updateResearchProject(id, patch)
+        const current = projects.value.find((p) => p.id === id)
+        if (current) {
+          for (const key of Object.keys(patch) as Array<keyof ProjectPatch>) {
+            if (!(key in (pendingPatches[id] ?? {}))) {
+              Object.assign(current, { [key]: updated[key] })
+            }
+          }
+          current.updatedAt = updated.updatedAt
+        }
+      } catch {
+        pendingPatches[id] = { ...patch, ...pendingPatches[id] }
+        failedProjects[id] = true
+        showToast(t('archive.saveFail'))
+        break
+      }
+    }
+  } finally {
+    savingProjects[id] = false
+  }
+}
+
+function save(patch: ProjectPatch): void {
+  if (!project.value) return
+  const id = project.value.id
+  if (deletingProjects[id]) return
+  Object.assign(project.value, patch)
+  pendingPatches[id] = { ...pendingPatches[id], ...patch }
+  void savePending(id)
 }
 
 function onImport(): void {
@@ -84,26 +175,69 @@ async function onFile(e: Event): Promise<void> {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (!file) return
-  let text = ''
+  if (!file || uploading.value) return
+  uploading.value = true
   try {
-    if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
-      text = await extractPdfText(file, FILE_TEXT_MAX)
-    } else if (TEXT_FILE_EXT.test(file.name) || file.type.startsWith('text/')) {
-      text = await readTextFile(file, FILE_TEXT_MAX)
-    }
-  } catch {
-    showToast(t('archive.importFail'))
-    return
+    const res = await uploadResearchDoc(file, project.value?.id)
+    showToast(res.duplicate ? t('search.duplicate')
+      : t('search.uploaded', { n: res.pages ?? 0, c: res.chunks ?? 0 }))
+    docs.value = await listResearchDocs()
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('search.uploadFail'))
+  } finally {
+    uploading.value = false
   }
-  addResearchFile({
-    projectId: project.value?.id ?? null,
-    name: file.name,
-    size: file.size,
-    kind: 'file',
-    text: text || undefined,
-  })
 }
+
+async function removeFile(file: ResearchDoc): Promise<void> {
+  try {
+    await deleteResearchDoc(file.id)
+    docs.value = docs.value.filter((d) => d.id !== file.id)
+  } catch {
+    showToast(t('search.deleteFail'))
+  }
+}
+
+async function importLegacy(): Promise<void> {
+  if (legacyImporting.value || !userState.info?.accountKey) return
+  const name = userState.info.nickname || userState.info.accountKey
+  if (!window.confirm(t('archive.legacyConfirm', { name }))) return
+  legacyImporting.value = true
+  try {
+    const raw = localStorage.getItem('mg-research-archive')
+    if (!raw) throw new Error('Missing archive')
+    const result = await importLegacyResearchArchive(JSON.parse(raw))
+    showToast(t(result.duplicate ? 'archive.legacyDuplicate' : 'archive.legacySuccess'))
+    await load()
+  } catch {
+    showToast(t('archive.legacyFail'))
+  } finally {
+    legacyImporting.value = false
+  }
+}
+
+function hasUnsavedChanges(): boolean {
+  return Object.values(savingProjects).some(Boolean) || Object.keys(pendingPatches).length > 0
+}
+
+function confirmClose(): boolean {
+  return !hasUnsavedChanges() || window.confirm(t('archive.discardUnsaved'))
+}
+
+defineExpose({ confirmClose })
+
+function warnBeforeUnload(event: BeforeUnloadEvent): void {
+  if (!hasUnsavedChanges()) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onMounted(() => {
+  window.addEventListener('beforeunload', warnBeforeUnload)
+  void load()
+})
+onBeforeUnmount(() => window.removeEventListener('beforeunload', warnBeforeUnload))
+onBeforeRouteLeave(() => confirmClose())
 </script>
 
 <template>
@@ -127,14 +261,25 @@ async function onFile(e: Event): Promise<void> {
       <div class="project-bar">
         <select class="project-select" :value="project?.id ?? ''" @change="onPickProject">
           <option value="">—</option>
-          <option v-for="p in archiveState.projects" :key="p.id" :value="p.id">{{ p.title }}</option>
+          <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.title }}</option>
         </select>
         <button class="mini" @click="onCreate">{{ t('archive.newProject') }}</button>
-        <button v-if="project" class="mini danger" @click="onDelete">{{ t('archive.deleteProject') }}</button>
+        <button v-if="project" class="mini danger" :disabled="savingProjects[project.id] || deletingProjects[project.id]" @click="onDelete">{{ t('archive.deleteProject') }}</button>
+      </div>
+
+      <div v-if="legacyAvailable" class="body">
+        <p class="hint">{{ t('archive.legacyHint') }}</p>
+        <button class="mini" :disabled="legacyImporting || !userState.info?.accountKey" @click="importLegacy">
+          {{ t('archive.legacyImport') }}
+        </button>
       </div>
 
       <!-- 目标与思路 -->
-      <div v-if="tab === 'goal'" class="body">
+      <div v-if="tab === 'goal'" class="body" :inert="!!project && !!deletingProjects[project.id]">
+        <p v-if="project && failedProjects[project.id]" class="hint">
+          {{ t('archive.pendingSave') }}
+          <button class="mini" @click="savePending(project.id)">{{ t('archive.retrySave') }}</button>
+        </p>
         <template v-if="project">
           <input
             class="field title-field"
@@ -143,44 +288,69 @@ async function onFile(e: Event): Promise<void> {
             @change="save({ title: ($event.target as HTMLInputElement).value })"
           />
           <div class="row">
-            <select class="field status" :value="project.status" @change="save({ status: ($event.target as HTMLSelectElement).value as ResearchStatus })">
+            <select
+              class="field status"
+              :value="project.status"
+              @change="save({ status: ($event.target as HTMLSelectElement).value as ResearchStatus })"
+            >
               <option v-for="s in statuses" :key="s.key" :value="s.key">{{ t(s.label) }}</option>
             </select>
             <span class="updated">{{ t('archive.updated', { d: fmtDate(project.updatedAt) }) }}</span>
           </div>
           <label class="lbl">{{ t('archive.goal') }}</label>
-          <textarea class="field area" :value="project.goal" :placeholder="t('archive.goalPh')" @change="save({ goal: ($event.target as HTMLTextAreaElement).value })"></textarea>
+          <textarea
+            class="field area"
+            :value="project.goal"
+            :placeholder="t('archive.goalPh')"
+            @change="save({ goal: ($event.target as HTMLTextAreaElement).value })"
+          ></textarea>
           <label class="lbl">{{ t('archive.approach') }}</label>
-          <textarea class="field area" :value="project.approach" :placeholder="t('archive.approachPh')" @change="save({ approach: ($event.target as HTMLTextAreaElement).value })"></textarea>
+          <textarea
+            class="field area"
+            :value="project.approach"
+            :placeholder="t('archive.approachPh')"
+            @change="save({ approach: ($event.target as HTMLTextAreaElement).value })"
+          ></textarea>
           <label class="lbl">{{ t('archive.notes') }}</label>
-          <textarea class="field area" :value="project.notes" :placeholder="t('archive.notesPh')" @change="save({ notes: ($event.target as HTMLTextAreaElement).value })"></textarea>
+          <textarea
+            class="field area"
+            :value="project.notes"
+            :placeholder="t('archive.notesPh')"
+            @change="save({ notes: ($event.target as HTMLTextAreaElement).value })"
+          ></textarea>
         </template>
-        <p v-else class="empty">{{ t('archive.emptyProjects') }}</p>
+        <p v-else class="empty">{{ loading ? '…' : t('archive.emptyProjects') }}</p>
       </div>
 
-      <!-- 资料库 -->
+      <!-- 资料库:与服务端论文库同一份数据 -->
       <div v-else class="body">
         <div class="files-head">
           <span class="lbl">{{ t('archive.files') }}</span>
-          <button class="mini" @click="onImport">{{ t('archive.addFile') }}</button>
-          <input ref="fileEl" type="file" hidden accept=".pdf,.txt,.md,.markdown,.tex,.csv,.json,text/*,application/pdf" @change="onFile" />
+          <button class="mini" :disabled="uploading" @click="onImport">
+            {{ uploading ? t('search.uploading') : t('archive.addFile') }}
+          </button>
+          <input
+            ref="fileEl"
+            type="file"
+            hidden
+            accept=".pdf,.docx,.epub,.html,.htm,.xml,.rtf,.txt,.md,.markdown,.tex,.csv,.json,text/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/epub+zip,application/rtf"
+            @change="onFile"
+          />
         </div>
         <p class="hint">{{ t('archive.fileHint') }}</p>
         <p v-if="!files.length" class="empty">{{ t('archive.emptyFiles') }}</p>
         <ul v-else class="file-list">
           <li v-for="f in files" :key="f.id" class="file-item">
             <div class="file-main">
-              <span class="file-name">{{ f.name }}</span>
+              <span class="file-name">{{ f.title || f.name }}</span>
               <span class="file-meta">
-                <span v-if="f.projectId === null" class="tag">{{ t('archive.fromChat') }}</span>
-                {{ fmtSize(f.size) }} · {{ fmtDate(f.addedAt) }}
+                <span v-if="f.projectId === null" class="tag">{{ t('archive.unassigned') }}</span>
+                {{ fmtSize(f.size) }} · {{ f.pages }} {{ t('search.pagesUnit') }} · {{ fmtDate(f.createdAt) }}
+                <span v-if="f.year"> · {{ f.year }}</span>
+                <span v-if="f.doi" class="doi"> · {{ f.doi }}</span>
               </span>
-              <details v-if="f.text" class="preview">
-                <summary>{{ f.text.slice(0, 80) }}{{ f.text.length > 80 ? '…' : '' }}</summary>
-                <p>{{ f.text.slice(0, 800) }}{{ f.text.length > 800 ? '…' : '' }}</p>
-              </details>
             </div>
-            <button class="mini danger" @click="removeResearchFile(f.id)">{{ t('archive.removeFile') }}</button>
+            <button class="mini danger" @click="removeFile(f)">{{ t('archive.removeFile') }}</button>
           </li>
         </ul>
       </div>
@@ -291,6 +461,11 @@ async function onFile(e: Event): Promise<void> {
 
 .mini:hover {
   box-shadow: var(--glow-cyan);
+}
+
+.mini:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .mini.danger {
@@ -435,24 +610,8 @@ async function onFile(e: Event): Promise<void> {
   font-size: 9.5px;
 }
 
-.preview {
-  margin-top: 6px;
-  color: var(--text-dim);
-  font-size: 11px;
-  line-height: 1.55;
-}
-
-.preview summary {
-  cursor: pointer;
+.doi {
   color: var(--text-dim);
   word-break: break-all;
-}
-
-.preview p {
-  margin: 6px 0 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text);
-  opacity: 0.8;
 }
 </style>

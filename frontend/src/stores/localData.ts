@@ -7,18 +7,27 @@
  */
 import { clearConvertCache } from '@/utils/speechMath'
 import { clearNotebook } from './notebook'
-import { clearResearchArchive } from './researchArchive'
 import { clearAllSessions } from './sessions'
 import { clearTrash } from './trash'
 
 /** 本机数据当前归属的 accountKey;只存 16 位 uid 哈希,不含账号原文 */
 const OWNER_KEY = 'mg-data-owner'
 
+/** 保留旧研究档案的已知归属,避免换账号后误导入。 */
+function rememberLegacyArchiveOwner(): void {
+  try {
+    const owner = localStorage.getItem(OWNER_KEY)
+    if (owner && localStorage.getItem('mg-research-archive') && !localStorage.getItem('mg-research-archive-owner')) {
+      localStorage.setItem('mg-research-archive-owner', owner)
+    }
+  } catch { /* 不影响其他本机数据清理 */ }
+}
+
 export function clearLearningData(): void {
+  rememberLegacyArchiveOwner()
   clearAllSessions()
   clearTrash()
   clearNotebook()
-  clearResearchArchive()
   clearConvertCache()
   try {
     localStorage.removeItem(OWNER_KEY)
@@ -38,6 +47,7 @@ export function clearLearningData(): void {
  */
 export function claimLocalData(accountKey?: string): void {
   if (!accountKey) return
+  rememberLegacyArchiveOwner()
   let owner: string | null = null
   try {
     owner = localStorage.getItem(OWNER_KEY)

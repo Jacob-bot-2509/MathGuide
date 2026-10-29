@@ -22,6 +22,7 @@ dev.bat
 ## 演示
 
 - [DEMO.md](DEMO.md) — 大创展示脚本:环境准备、演示动线、翻车预案、答辩备答
+- [docs/EVAL_REPORT.md](docs/EVAL_REPORT.md) — 50 题问答评测与 50 题抗幻觉评测报告
 
 ## 测试
 

@@ -196,6 +196,37 @@ def test_session_cache_isolates_workspaces():
     assert session_cache.valid_workspace(None) == "learn"
 
 
+def test_chat_stream_workspace_from_host(monkeypatch):
+    """双域部署:Host 命中 learn./research. 时,服务端以 Host 为准,
+    请求体里的 workspace 不能跨区。"""
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    captured: dict[str, str] = {}
+
+    async def fake_route(prompt, cmd, body, rec, meta, workspace="learn"):
+        captured["workspace"] = workspace
+        return chat._stream_text("ok")
+
+    monkeypatch.setattr(chat, "require_auth", lambda request: {"uid": "u"})
+    monkeypatch.setattr(chat, "_rate_check", lambda uid: None)
+    monkeypatch.setattr(chat, "_route_chat", fake_route)
+    monkeypatch.setattr(
+        chat, "_meter",
+        lambda resp, rec, prompt_len, cmd, meta: resp)
+    app = Starlette(routes=[Route("/api/chat/stream", chat.chat_stream, methods=["POST"])])
+    client = TestClient(app)
+
+    res = client.post("/api/chat/stream", json={"prompt": "q", "workspace": "learn"},
+                      headers={"host": "research.example.com"})
+    assert res.status_code == 200
+    assert captured["workspace"] == "research"
+
+    client.post("/api/chat/stream", json={"prompt": "q", "workspace": "learn"})
+    assert captured["workspace"] == "learn"
+
+
 def test_formula_followup_detection():
     history = [
         {"role": "user", "content": "请先询问我想查哪个具体知识点"},

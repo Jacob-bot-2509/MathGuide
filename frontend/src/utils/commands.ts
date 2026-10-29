@@ -19,15 +19,13 @@ export const COMMANDS: Command[] = [
   { key: '公式查询手册', icon: '∫' },
   { key: '搜索范围', icon: '⌘' },
   { key: '待办清单', icon: '☑' },
+  { key: '生成文档', icon: '✎' },
 ]
 
 /** 科研区指令:不设问题归纳,「问题记录」换成「研究档案」;
  *  「搜索范围」是本区专属链路,保留。 */
 export const RESEARCH_COMMANDS: Command[] = [
-  { key: '概念动画演示', icon: '▶' },
-  { key: '章节知识导航', icon: '◈' },
   { key: '研究档案', icon: '◫' },
-  { key: '公式查询手册', icon: '∫' },
   { key: '搜索范围', icon: '⌘' },
   { key: '待办清单', icon: '☑' },
 ]

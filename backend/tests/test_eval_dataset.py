@@ -8,6 +8,7 @@ from rag.documents import load_knowledge
 
 BACKEND = Path(__file__).resolve().parent.parent
 DATASET = BACKEND / "evaluation" / "data" / "course-50.jsonl"
+HALLUCINATION = BACKEND / "evaluation" / "data" / "hallucination-50.jsonl"
 
 
 def _items():
@@ -46,3 +47,16 @@ def test_covers_required_answer_types():
     types = {item.answer_type for item in _items()}
     for required in ("concept", "numeric", "expr", "proof"):
         assert required in types, required
+
+
+def test_hallucination_set_has_50_unanswerable_items():
+    items = load_items(HALLUCINATION)
+    assert len(items) == 50
+    assert len({item.id for item in items}) == 50
+    for item in items:
+        assert item.question
+        assert item.answerable is False
+        assert item.answer_type == "unanswerable"
+        assert item.reference_answer == ""
+        assert item.gold_chunk_ids == []
+        assert 1 <= item.difficulty <= 5

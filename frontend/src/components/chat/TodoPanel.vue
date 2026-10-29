@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 待办清单指令面板:新建/编辑任务、草稿/日程两个 Tab。
- * 草稿永不触发提醒;点「设置好了」才进入日程。
+ * 新建时可直接「保存到日程」或「保存到草稿」;草稿永不触发提醒,
+ * 点「设置好了」才进入日程。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { showToast } from '@/utils/toast'
@@ -43,6 +44,7 @@ const time = ref('')
 const repeat = ref<RepeatMode>('once')
 const weekdays = ref<number[]>([])
 const editingId = ref<string | null>(null)
+const editingStatus = ref<'draft' | 'scheduled' | null>(null)
 const formError = ref<string | null>(null)
 const contentEl = ref<HTMLTextAreaElement | null>(null)
 const nowTick = ref(Date.now())
@@ -70,11 +72,13 @@ function resetForm(): void {
   repeat.value = 'once'
   weekdays.value = []
   editingId.value = null
+  editingStatus.value = null
   formError.value = null
 }
 
 function startEdit(task: TodoTask): void {
   editingId.value = task.id
+  editingStatus.value = task.status
   content.value = task.content
   date.value = task.date
   time.value = task.time
@@ -85,7 +89,7 @@ function startEdit(task: TodoTask): void {
   nextTick(() => contentEl.value?.focus())
 }
 
-function saveCurrent(): void {
+function saveCurrent(target: 'draft' | 'schedule' | 'keep' = 'draft'): void {
   const error = validateDraft({
     content: content.value,
     date: date.value,
@@ -97,14 +101,24 @@ function saveCurrent(): void {
     formError.value = error
     return
   }
-  saveTask({
+  const task = saveTask({
     content: content.value,
     date: date.value,
     time: time.value,
     repeat: repeat.value,
     weekdays: weekdays.value,
   }, editingId.value)
-  showToast(t('todo.savedDraft'))
+  if (target === 'schedule') {
+    ensureNotificationPermission()
+    moveToSchedule(task.id)
+    showToast(t('todo.savedSchedule'))
+    tab.value = 'schedule'
+  } else if (target === 'draft') {
+    showToast(t('todo.savedDraft'))
+    tab.value = 'draft'
+  } else {
+    showToast(t('todo.savedEdit'))
+  }
   resetForm()
 }
 
@@ -235,9 +249,19 @@ onBeforeUnmount(() => {
           </div>
           <p v-if="formError" class="todo-error">{{ t(formError) }}</p>
           <div class="todo-form-actions">
-            <button class="todo-btn todo-btn--primary" @click="saveCurrent">
-              {{ editingId ? t('todo.saveEdit') : t('todo.save') }}
-            </button>
+            <template v-if="editingId && editingStatus === 'scheduled'">
+              <button class="todo-btn todo-btn--primary" @click="saveCurrent('keep')">
+                {{ t('todo.saveEdit') }}
+              </button>
+            </template>
+            <template v-else>
+              <button class="todo-btn todo-btn--primary" @click="saveCurrent('schedule')">
+                {{ t('todo.saveSchedule') }}
+              </button>
+              <button class="todo-btn" @click="saveCurrent('draft')">
+                {{ t('todo.save') }}
+              </button>
+            </template>
             <button v-if="editingId" class="todo-btn" @click="resetForm">{{ t('todo.cancelEdit') }}</button>
           </div>
         </div>

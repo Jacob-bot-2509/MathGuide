@@ -91,3 +91,9 @@ def test_export_pdf_rejects_empty_or_malformed_body(monkeypatch):
 
     res = client.post("/api/doc/export", json={"content": "  ", "lang": "zh"})
     assert res.status_code == 400
+
+
+def test_render_math_supports_inline_starting_with_digit():
+    html = doc._render_math(html_mod.escape(r"$0 < |x - x_0| < \delta$"))
+    assert 'class="mg-math"' in html
+    assert r"0 &lt; |x - x_0| &lt; \delta" in html

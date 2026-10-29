@@ -39,6 +39,13 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      // 科研实验数据表:导入模板、录入、公式计算、导出
+      path: '/research/tables',
+      name: 'research-tables',
+      component: () => import('@/views/ResearchTablesView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/graph',
       name: 'graph',
       component: () => import('@/views/GraphView.vue'),

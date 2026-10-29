@@ -38,6 +38,15 @@ def test_objective_numeric_and_choice():
     assert objective_check(item, "答案：A")[0] is False
 
 
+def test_objective_numeric_accepts_approximate_reference():
+    item = EvalItem(id="a", question="q", reference_answer="约 0.6827",
+                    answer_type="numeric")
+    assert objective_check(item, "P(-1<X<1) ≈ 0.6826")[0] is True
+    # 精确答案不放宽容差
+    item = EvalItem(id="e", question="q", reference_answer="9", answer_type="numeric")
+    assert objective_check(item, "结果是 9.05")[0] is False
+
+
 def test_objective_expr_uses_sympy():
     item = EvalItem(id="e", question="q", reference_answer="\\boxed{x^2}",
                     answer_type="expr")

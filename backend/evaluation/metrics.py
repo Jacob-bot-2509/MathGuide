@@ -84,6 +84,12 @@ def compute_metrics(records: list[dict]) -> dict:
     fabricated = []
     for r in judged_unanswerable:
         judge = r.get("judge") or {}
+        judge_correct = judge.get("correct")
+        if isinstance(judge_correct, bool):
+            # 不可答题的 correct 表示「是否恰当处理」(拒答/声明不存在/指出矛盾)
+            if not judge_correct:
+                fabricated.append(r)
+            continue
         refused = judge.get("refused")
         if isinstance(refused, bool):
             if not refused:

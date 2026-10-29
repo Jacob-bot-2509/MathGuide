@@ -102,11 +102,66 @@ def test_delete_removes_doc_and_chunks(corpus):
     assert rc._delete("u-1", info["docId"]) is False
 
 
+def test_doi_is_extracted_and_deduplicates(corpus):
+    text_a = SAMPLE + "\nDOI: 10.1234/example.2026.001\n"
+    first = rc._ingest("u-1", "a.txt", text_a.encode("utf-8"), "text/plain")
+    docs, _, _ = rc._load_rows("u-1")
+    assert docs[0]["doi"] == "10.1234/example.2026.001"
+    assert docs[0]["title"]
+    assert docs[0]["year"] == 2026
+
+    # 不同正文、同一 DOI:按 DOI 去重,返回同一篇
+    text_b = text_a.replace("We study attention", "A revised version studies attention")
+    second = rc._ingest("u-1", "a-v2.txt", text_b.encode("utf-8"), "text/plain")
+    assert second["duplicate"] is True
+    assert second["docId"] == first["docId"]
+
+
+def test_chunk_pages_follow_actual_lines():
+    pages = [(1, "1 Introduction\n" + "A" * 600), (2, "B" * 600)]
+    sections = rc._sections(pages)
+    chunks = rc._chunk_section(sections[0])
+    assert chunks[0][1] == 1
+    assert any(end == 2 for _, _, end in chunks)
+
+
+def test_clear_all_docs(corpus):
+    rc._ingest("u-1", "a.txt", SAMPLE.encode("utf-8"), "text/plain")
+    assert rc._clear_all("u-1") == 1
+    docs, nodes, chunks = rc._load_rows("u-1")
+    assert docs == [] and nodes == [] and chunks == []
+
+
 def test_delete_user_removes_entire_corpus(corpus):
     rc._ingest("u-1", "a.txt", SAMPLE.encode("utf-8"), "text/plain")
     assert rc._get_index("u-1").chunks
     rc.delete_user("u-1")
     assert rc.chat_hits("u-1", "attention") == []
+
+
+def test_llm_tree_walk_selects_and_expands_nodes(corpus, monkeypatch):
+    rc._ingest("u-1", "a.txt", SAMPLE.encode("utf-8"), "text/plain")
+    index = rc._get_index("u-1")
+
+    monkeypatch.setenv("MG_TREE_WALK", "1")
+    monkeypatch.setattr(rc.llm_mod, "is_configured", lambda: True)
+
+    def fake_llm(system, user, **kwargs):
+        first = user.split("候选章节:\n", 1)[1].splitlines()[0]
+        return '["%s"]' % first.split(" | ")[0]
+
+    monkeypatch.setattr(rc, "_llm_sync", fake_llm)
+    node_ids = index._tree_walk("attention", list(range(len(index.nodes))))
+    assert node_ids
+    assert index.nodes[0].id in node_ids
+
+
+def test_tree_walk_off_by_default(corpus, monkeypatch):
+    rc._ingest("u-1", "a.txt", SAMPLE.encode("utf-8"), "text/plain")
+    index = rc._get_index("u-1")
+    monkeypatch.delenv("MG_TREE_WALK", raising=False)
+    monkeypatch.setattr(rc.llm_mod, "is_configured", lambda: True)
+    assert index._tree_walk("attention", list(range(len(index.nodes)))) is None
 
 
 def test_rejects_empty_text(corpus):
@@ -127,8 +182,40 @@ def api(corpus, monkeypatch):
         Route("/api/research/docs/{doc_id}", rc.delete_doc, methods=["DELETE"]),
         Route("/api/research/search", rc.search_docs, methods=["POST"]),
         Route("/api/research/tree", rc.tree),
+        Route("/api/research/projects", rc.list_projects),
+        Route("/api/research/projects", rc.create_project, methods=["POST"]),
+        Route("/api/research/projects/{project_id}", rc.update_project, methods=["POST"]),
+        Route("/api/research/projects/{project_id}", rc.delete_project, methods=["DELETE"]),
     ])
     return TestClient(app)
+
+
+def test_api_projects_and_project_scoped_search(api):
+    project = api.post("/api/research/projects", json={"title": "Attention"}).json()["project"]
+    pid = project["id"]
+
+    updated = api.post(f"/api/research/projects/{pid}",
+                       json={"goal": "了解复杂度瓶颈", "status": "active"}).json()["project"]
+    assert updated["goal"] == "了解复杂度瓶颈"
+    assert updated["status"] == "active"
+
+    res = api.post(
+        "/api/research/docs?name=attention.txt&projectId=" + pid,
+        content=SAMPLE.encode("utf-8"),
+        headers={"content-type": "text/plain"},
+    )
+    assert res.status_code == 200
+
+    docs = api.get("/api/research/docs").json()["docs"]
+    assert docs[0]["projectId"] == pid
+
+    scoped = api.post("/api/research/search",
+                      json={"query": "attention", "projectId": pid}).json()
+    assert scoped["hits"]
+
+    assert api.delete(f"/api/research/projects/{pid}").status_code == 200
+    docs = api.get("/api/research/docs").json()["docs"]
+    assert len(docs) == 1 and docs[0]["projectId"] is None
 
 
 def test_api_upload_search_tree_delete(api):

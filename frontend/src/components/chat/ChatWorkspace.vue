@@ -25,6 +25,7 @@ import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
 import ResearchArchivePanel from '@/components/chat/ResearchArchivePanel.vue'
 import TodoPanel from '@/components/chat/TodoPanel.vue'
+import DocModal from '@/components/chat/DocModal.vue'
 import TodoReminder from '@/components/chat/TodoReminder.vue'
 import NotebookPanel from '@/components/chat/NotebookPanel.vue'
 import FormulaPanel from '@/components/chat/FormulaPanel.vue'
@@ -47,9 +48,9 @@ import {
 } from '@/stores/sessions'
 import { addToTrash } from '@/stores/trash'
 import { notebookStore } from '@/stores/notebook'
+import { setTodoWorkspace } from '@/stores/todo'
 import { compressImage } from '@/utils/avatar'
 import { extractPdfText } from '@/utils/fileText'
-import { addResearchFile, activeProject, archiveState } from '@/stores/researchArchive'
 import { beautifyMath, cachedConvert, normalizeSpeechCase, saveConvert, speechMathConvert } from '@/utils/speechMath'
 import { showToast } from '@/utils/toast'
 import { chapterNameFromCmd } from '@/utils/cmdLink'
@@ -83,6 +84,9 @@ const { persistSessions, flushSessions, nextMsgId, nextSessionId } = store
 /* 归纳本同样按工作区隔离:科研区收的题不会出现在学习区 */
 const notebooks = notebookStore(props.workspace)
 
+/* 待办也按工作区隔离:学习区的任务不会出现在科研区 */
+setTodoWorkspace(props.workspace)
+
 /* 指令栏:学习区不显示搜索范围;科研区不设问题记录,改为研究档案 */
 const commands = computed(() =>
   isResearch.value
@@ -94,9 +98,16 @@ const input = ref('')
     关闭后其余按钮才可点(全屏遮罩拦截) */
 type PanelKind = 'summary' | 'scope' | 'notebook' | 'formula' | 'todo' | 'archive'
 const activePanel = ref<PanelKind | null>(null)
+const archivePanelRef = ref<InstanceType<typeof ResearchArchivePanel> | null>(null)
+const docOpen = ref(false)
+
+function closePanel(): void {
+  if (activePanel.value === 'archive' && archivePanelRef.value && !archivePanelRef.value.confirmClose()) return
+  activePanel.value = null
+}
 
 function togglePanel(kind: PanelKind) {
-  // 仅支持单个面板展开:开新面板时收起念法贴士(贴士打开时也会收起面板,见下)
+  if (activePanel.value === 'archive' && archivePanelRef.value && !archivePanelRef.value.confirmClose()) return
   tipsOpen.value = false
   activePanel.value = activePanel.value === kind ? null : kind
 }
@@ -489,6 +500,13 @@ function send(text?: string, cmd?: string) {
 
 /** 点击指令:直接执行对应功能 */
 function runCommand(cmd: string) {
+  // 生成文档 = 本地弹窗:按当前对话/问题归纳/独立要求生成,不走聊天流
+  if (cmd === '生成文档') {
+    docOpen.value = true
+    activePanel.value = null
+    tipsOpen.value = false
+    return
+  }
   // 问题记录 = 本地归纳本:直接展示,不走后端
   if (cmd === '问题记录') {
     showNotebook()
@@ -919,23 +937,11 @@ function attachMessage(attachment: ChatAttachment, content: string) {
 
   const userMsg: ChatMsg = { id: nextMsgId(), role: 'user', content, attachment }
   session.messages.push(userMsg)
-  // 科研区的附件同时登记进研究档案资料库,聊天与档案不再各存一份
-  if (isResearch.value) {
-    addResearchFile({
-      projectId: activeProject()?.id ?? null,
-      name: attachment.name,
-      size: attachment.size ?? 0,
-      kind: attachment.kind,
-      text: attachment.text,
-      sessionId: session.id,
-      msgId: userMsg.id,
-    })
-  }
   pinnedToBottom = true
   scrollBottom()
   // 图片以 dataURL 随会话持久化:存储超限时明确提示,避免静默丢失记录。
   // 附件可能很大,必须立即写并拿到真实配额结果,不能等 debounce。
-  if (!flushSessions()) showToast(t('learn.toastStorage'))
+  if (!flushSessions(true)) showToast(t('learn.toastStorage'))
 
   const reply: ChatMsg = { id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true }
   session.messages.push(reply)
@@ -1204,6 +1210,9 @@ onBeforeUnmount(() => {
         <button v-if="isResearch" class="new-btn" @click="router.push('/research/search')">
           {{ t('search.button') }}
         </button>
+        <button v-if="isResearch" class="new-btn" @click="router.push('/research/tables')">
+          {{ t('tables.entry') }}
+        </button>
         <button class="new-btn" @click="newConversation">{{ t('learn.newChat') }}</button>
         <!-- 板块上下文徽章(未归类会话不显示标题) -->
         <span v-if="activeSession?.cat && activeSession.cat.key !== 'other'" class="session-chip">
@@ -1212,7 +1221,7 @@ onBeforeUnmount(() => {
         </span>
         <span v-else-if="!activeSession?.cat" class="session-chip session-chip--dim">{{ t('learn.newSession') }}</span>
         <button v-if="isResearch" class="sum-btn" @click="toggleArchivePanel()">
-          {{ t('archive.title') }}<span v-if="archiveState.files.length" class="sum-badge">{{ archiveState.files.length }}</span>
+          {{ t('archive.title') }}
         </button>
         <button v-else class="sum-btn" @click="toggleSummaryPanel()">
           {{ t('learn.archive') }}<span v-if="questionCount" class="sum-badge">{{ questionCount }}</span>
@@ -1410,10 +1419,11 @@ onBeforeUnmount(() => {
       </Transition>
       <Transition name="nb-rise">
         <ResearchArchivePanel
+          ref="archivePanelRef"
           v-if="isResearch && activePanel === 'archive'"
           :left="panelAnchor?.left"
           :width="panelAnchor?.width"
-          @close="activePanel = null"
+          @close="closePanel"
         />
       </Transition>
       <Transition name="nb-rise">
@@ -1455,8 +1465,16 @@ onBeforeUnmount(() => {
 
     <!-- 浮层面板统一遮罩:压暗全屏,点任意暗处收起当前面板(收起后按钮才可点) -->
     <Transition name="mask-fade">
-      <div v-if="activePanel" class="panel-overlay" @click="activePanel = null"></div>
+      <div v-if="activePanel" class="panel-overlay" @click="closePanel"></div>
     </Transition>
+
+    <!-- 生成文档:当前会话问答 / 问题归纳 / 独立要求 -->
+    <DocModal
+      v-if="docOpen"
+      :messages="activeSession?.messages ?? []"
+      :entries="notebooks.state.entries"
+      @close="docOpen = false"
+    />
 
     <!-- 待办提醒:仅在学习辅助页挂载,满足“开场+登录+进入本页”后才提醒 -->
     <TodoReminder />

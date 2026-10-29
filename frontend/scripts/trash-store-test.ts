@@ -8,9 +8,11 @@
 declare const process: { exit(code: number): void }
 
 const memory = new Map<string, string>()
+let failStorageWrites = false
 const localStorageMock = {
   getItem: (key: string) => memory.get(key) ?? null,
   setItem: (key: string, value: string) => {
+    if (failStorageWrites) throw new Error('quota exceeded')
     memory.set(key, String(value))
   },
   removeItem: (key: string) => {
@@ -78,6 +80,15 @@ async function main() {
   claimLocalData('acct-C')
   check('无标记旧数据不被误删', memory.has('mg-learn-sessions'))
 
+  // 旧档案保留独立归属,换账号不重新认领
+  memory.set('mg-research-archive', '{\"projects\":[],\"files\":[]}')
+  memory.set('mg-data-owner', 'acct-A')
+  claimLocalData('acct-B')
+  check('旧档案保留原账号归属', memory.get('mg-research-archive-owner') === 'acct-A')
+  check('换账号保留旧档案备份', memory.has('mg-research-archive'))
+  memory.delete('mg-research-archive')
+  memory.delete('mg-research-archive-owner')
+
   // 会话持久化 debounce:默认合并写,flush 立即写,清空时取消待写
   const {
     clearAllSessions, flushSessions, nextSessionId, persistSessions, sessionsState,
@@ -95,12 +106,24 @@ async function main() {
   flushSessions()
   check('flush:立即写盘', memory.has('mg-learn-sessions'))
 
+  // 已有会话没有待写任务时,附件也必须立即保存并报告真实配额结果
+  sessionsState.sessions[0].messages.push({
+    id: 1, role: 'user', content: '附件', attachment: { kind: 'file', name: 'test.txt' },
+  })
+  const forcedOk = flushSessions(true)
+  const forced = JSON.parse(memory.get('mg-learn-sessions') ?? '{}')
+  check('附件:无待写任务也立即保存', forcedOk && forced.sessions[0].messages[0].attachment.name === 'test.txt')
+  failStorageWrites = true
+  check('附件:写入失败返回 false', flushSessions(true) === false)
+  failStorageWrites = false
+  check('附件:存储恢复后可重试', flushSessions(true) === true)
+
   persistSessions()
   clearAllSessions()
   await new Promise((resolve) => setTimeout(resolve, 180))
   check('清空后不会被 debounce 写回', !memory.has('mg-learn-sessions'))
 
-  console.log('回收站过期清理 / 本地数据隔离 / 会话持久化自测:15/15 通过')
+  console.log('回收站过期清理 / 本地数据隔离 / 会话持久化自测:20/20 通过')
 }
 
 main().catch((err) => {

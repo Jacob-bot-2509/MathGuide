@@ -392,6 +392,7 @@ async def export_account(request: Request) -> JSONResponse:
     # 诊断记录与用量同口径:随账号导出,注销时级联删除(局部导入避免循环依赖)
     import diagnosis
     import research_corpus
+    import research_tables
 
     return JSONResponse({
         "exportedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -399,6 +400,8 @@ async def export_account(request: Request) -> JSONResponse:
         "usage": usage.for_user(uid, phone),
         "diagnoses": diagnosis.for_user(uid),
         "researchDocs": research_corpus.docs_for_export(uid),
+        "researchProjects": research_corpus.projects_for_export(uid),
+        "researchTables": research_tables.tables_for_export(uid),
         "note": "学习会话、归纳本与待办保存在浏览器本地,导出文件会由前端一并合并。",
     }, headers={"Cache-Control": "no-store"})
 

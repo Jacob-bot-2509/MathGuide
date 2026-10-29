@@ -59,3 +59,26 @@ def test_metrics_accuracy_hallucination_retrieval():
     assert s["retrieval"]["recall"] == 0.5
     assert round(s["retrieval"]["mrr"], 4) == 0.5
     assert s["by_domain"]["导数"]["n"] == 2
+
+
+def test_unanswerable_correct_nonexistence_is_not_fabrication():
+    """模型正确指出「不存在」但没用拒答措辞,不能算编造。"""
+    records = [{
+        "id": "u", "domain": "反例辨析", "difficulty": 3,
+        "answer_type": "unanswerable", "answerable": False,
+        "gold_chunk_ids": [], "retrieval": {"chunks": []},
+        "judge": {"correct": True, "refused": False, "claims": []},
+    }]
+    s = compute_metrics(records)
+    assert s["unanswerable"]["fabrication"]["rate"] == 0.0
+
+
+def test_unanswerable_wrong_handling_is_fabrication():
+    records = [{
+        "id": "u", "domain": "反例辨析", "difficulty": 3,
+        "answer_type": "unanswerable", "answerable": False,
+        "gold_chunk_ids": [], "retrieval": {"chunks": []},
+        "judge": {"correct": False, "refused": False, "claims": []},
+    }]
+    s = compute_metrics(records)
+    assert s["unanswerable"]["fabrication"]["rate"] == 1.0

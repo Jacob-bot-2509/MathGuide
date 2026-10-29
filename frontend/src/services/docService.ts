@@ -15,6 +15,30 @@ export interface ExportResult {
   filename: string
 }
 
+/** POST 结构化 JSON,接收二进制文件(PDF/Markdown/Word)。 */
+export async function postBinary(path: string, body: unknown): Promise<ExportResult> {
+  const token = getToken()
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  })
+  if (res.status === 401) {
+    clearUser()
+    router.push('/login')
+    showToast(t('login.toastExpired'))
+    throw httpError(res)
+  }
+  if (!res.ok) throw httpError(res)
+  const blob = await res.blob()
+  const cd = res.headers.get('Content-Disposition') ?? ''
+  const match = /filename="([^"]+)"/.exec(cd)
+  return { blob, filename: match?.[1] ?? 'mg-document' }
+}
+
 /**
  * 导出研究综述为 PDF。
  * lang: 'zh' | 'en'(语言由调用方弹菜单选择后传入);

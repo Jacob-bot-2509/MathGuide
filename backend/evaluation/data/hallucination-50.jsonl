@@ -1,0 +1,50 @@
+{"id":"h50-001","question":"请给出一个在每一点都不连续、但在每一点都可导的函数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":4,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-002","question":"请给出一个收敛但通项不趋于 0 的级数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-003","question":"请给出一个收敛但无界的数列。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-004","question":"请给出一个单调递增且有上界、但发散的数列。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":4,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-005","question":"请给出一个在闭区间上连续但没有最大值的函数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-006","question":"请给出一个可逆但行列式等于 0 的方阵。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-007","question":"请给出一个概率等于 1.5 的随机事件。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":1,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-008","question":"请给出一个二阶常系数齐次线性微分方程的三个线性无关解。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":4,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-009","question":"求函数 f(x)=1/x 在 x=0 处的导数。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-010","question":"求 0/0 的精确值。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":1,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-011","question":"请给出一个既收敛又发散的数列。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["contradiction"]}
+{"id":"h50-012","question":"请给出一个方差为负的随机变量。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-013","question":"请证明黎曼猜想。","reference_answer":"","answer_type":"unanswerable","domain":"超出范围","difficulty":5,"answerable":false,"gold_chunk_ids":[],"tags":["open-problem"]}
+{"id":"h50-014","question":"请给出 2027 年考研数学一的完整真题。","reference_answer":"","answer_type":"unanswerable","domain":"超出范围","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["future-info"]}
+{"id":"h50-015","question":"请给出实数系中最大的实数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":1,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-016","question":"请给出一个在闭区间上连续但在该区间上黎曼不可积的函数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-017","question":"请给出一个有两个不同极限的收敛数列。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-018","question":"请给出一个既是有理数又是无理数的实数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":1,"answerable":false,"gold_chunk_ids":[],"tags":["contradiction"]}
+{"id":"h50-019","question":"请给出一个有限集合与其真子集等势的例子。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-020","question":"请给出一个有三个不同实根的实系数一元二次方程。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-021","question":"请给出一个严格单调的非常数周期函数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-022","question":"请给出一个收敛但部分和数列无界的级数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-023","question":"请给出一个在 [0,1] 上黎曼可积但无界的函数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":4,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-024","question":"请给出一个有三个线性无关特征向量的 2×2 实矩阵。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-025","question":"请给出一个既单调递增又单调递减的非常数数列。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":1,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-026","question":"请给出一个在实数集上连续且只取有理数值的非常数函数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":4,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-027","question":"请给出集合 {1,2} 中一个同时是最大元和最小元的元素。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-028","question":"请给出同一个 3×3 实矩阵的两个不同行列式值。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-029","question":"请给出一个在 x=0 连续但左右极限不相等的函数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-030","question":"请给出一个与自身内积为 0 的非零实向量。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-031","question":"请给出一个实对称矩阵的两个不同特征值对应的特征向量,使其内积非零。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":4,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-032","question":"请给出圆周率 π 的最后一位数字。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-033","question":"请给出最大的自然数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":1,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-034","question":"求 ln(0) 的实数值。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-035","question":"求 arcsin(2) 的实数值。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-036","question":"求 1/0 在实数范围内的商。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":1,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-037","question":"求 sqrt(-1) 的实数值。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-038","question":"求 tan(π/2) 的实数值。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-039","question":"已知 f(x)=1/x,求 f(0)。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-040","question":"按通常收敛意义,求级数 1+1+1+… 的和。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-041","question":"求一个行列式等于 0 的 2×2 实矩阵的逆矩阵。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-042","question":"求 log 以 -1 为底、2 的对数的实数值。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":3,"answerable":false,"gold_chunk_ids":[],"tags":["undefined"]}
+{"id":"h50-043","question":"请给出一个使 1/x=0 成立的非零实数 x。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-044","question":"请给出一个平方为负数的实数。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":1,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-045","question":"请给出一个绝对值等于 -1 的实数。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":1,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-046","question":"求方程 x^2+1=0 的实根。","reference_answer":"","answer_type":"unanswerable","domain":"条件矛盾","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-047","question":"请给出一个在实数集上处处可微、导数处处为 0、但不是常数的函数。","reference_answer":"","answer_type":"unanswerable","domain":"反例辨析","difficulty":4,"answerable":false,"gold_chunk_ids":[],"tags":["no-such-object"]}
+{"id":"h50-048","question":"请证明哥德巴赫猜想。","reference_answer":"","answer_type":"unanswerable","domain":"超出范围","difficulty":5,"answerable":false,"gold_chunk_ids":[],"tags":["open-problem"]}
+{"id":"h50-049","question":"请给出 2028 年菲尔兹奖得主名单。","reference_answer":"","answer_type":"unanswerable","domain":"超出范围","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["future-info"]}
+{"id":"h50-050","question":"请给出 2026 年 12 月 31 日 A 股的收盘点数。","reference_answer":"","answer_type":"unanswerable","domain":"超出范围","difficulty":2,"answerable":false,"gold_chunk_ids":[],"tags":["future-info"]}

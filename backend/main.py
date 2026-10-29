@@ -42,11 +42,16 @@ import chat
 import config
 import diagnosis
 import doc
+import docgen
 import graph_api
 import profile
 import rag
 import recommendation
 import research_corpus
+import research_tables
+import research_lit
+import research_vision
+import research_legacy
 import retention
 import usage
 from security_headers import SecurityHeadersMiddleware
@@ -93,9 +98,28 @@ routes = [
     Route("/api/chat/stream", chat.chat_stream, methods=["POST"]),
     Route("/api/research/docs", research_corpus.upload_doc, methods=["POST"]),
     Route("/api/research/docs", research_corpus.list_docs),
+    Route("/api/research/docs", research_corpus.clear_docs, methods=["DELETE"]),
     Route("/api/research/docs/{doc_id}", research_corpus.delete_doc, methods=["DELETE"]),
     Route("/api/research/search", research_corpus.search_docs, methods=["POST"]),
     Route("/api/research/tree", research_corpus.tree),
+    Route("/api/research/literature", research_lit.search),
+    Route("/api/research/literature/related", research_lit.related),
+    Route("/api/research/literature/open-pdf", research_lit.open_pdf, methods=["POST"]),
+    Route("/api/research/legacy-import", research_legacy.import_archive, methods=["POST"]),
+    Route("/api/research/projects", research_corpus.list_projects),
+    Route("/api/research/projects", research_corpus.create_project, methods=["POST"]),
+    Route("/api/research/projects/{project_id}", research_corpus.update_project, methods=["POST"]),
+    Route("/api/research/projects/{project_id}", research_corpus.delete_project, methods=["DELETE"]),
+    Route("/api/research/tables/import", research_tables.import_table, methods=["POST"]),
+    Route("/api/research/tables", research_tables.list_tables),
+    Route("/api/research/tables", research_tables.create_table, methods=["POST"]),
+    Route("/api/research/tables/{table_id}", research_tables.get_table),
+    Route("/api/research/tables/{table_id}", research_tables.save_table, methods=["POST"]),
+    Route("/api/research/tables/{table_id}", research_tables.delete_table, methods=["DELETE"]),
+    Route("/api/research/tables/{table_id}/compute", research_tables.compute_table, methods=["POST"]),
+    Route("/api/research/tables/{table_id}/export", research_tables.export_table),
+    Route("/api/research/tables/{table_id}/print", research_tables.print_table, methods=["POST"]),
+    Route("/api/research/formulas/extract", research_vision.extract_formulas, methods=["POST"]),
     Route("/api/diagnosis", diagnosis.diagnose, methods=["POST"]),
     Route("/api/diagnosis/report", diagnosis.weak_points),
     Route("/api/recommendation", recommendation.recommend_points),
@@ -103,6 +127,11 @@ routes = [
     Route("/api/profile", profile.learning_profile),
     Route("/api/speech/math", chat.speech_to_math, methods=["POST"]),
     Route("/api/doc/export", doc.export_pdf, methods=["POST"]),
+    Route("/api/doc/questions", docgen.questions, methods=["POST"]),
+    Route("/api/doc/qa", docgen.qa_export, methods=["POST"]),
+    Route("/api/doc/outline", docgen.outline, methods=["POST"]),
+    Route("/api/doc/generate", docgen.generate, methods=["POST"]),
+    Route("/api/doc/render", docgen.render, methods=["POST"]),
     Route("/api/stats", stats),
 ]
 

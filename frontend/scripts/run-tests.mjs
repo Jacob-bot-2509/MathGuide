@@ -41,6 +41,18 @@ const CASES = [
     artifact: '.trash-store-test.cjs',
   },
   {
+    name: '研究档案异步保存',
+    bundle: 'node --check scripts/research-archive-test.mjs',
+    run: 'node scripts/research-archive-test.mjs',
+    artifact: '.research-archive-test.cjs',
+  },
+  {
+    name: '研究表格保存竞态',
+    bundle: 'node --check scripts/research-tables-test.mjs',
+    run: 'node scripts/research-tables-test.mjs',
+    artifact: '.research-tables-test.cjs',
+  },
+  {
     name: '待办清单时间/状态',
     bundle: 'npx esbuild scripts/todo-test.ts --bundle --format=cjs --platform=node --outfile=.todo-test.cjs',
     run: 'node .todo-test.cjs',

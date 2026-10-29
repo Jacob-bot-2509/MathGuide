@@ -59,7 +59,7 @@ _DONE = "data: [DONE]\n\n"  # SSE 收尾标记(由 _sse 统一补,生成器不�
 WELCOME_ZH = (
     "**欢迎回到 MATHGUIDE · 学习辅助**\n\n"
     "我是 MG,你的高等数学学习与研究助手。直接提问即可,或用下方指令:"
-    "概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围 / 待办清单。\n\n"
+    "概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 待办清单。\n\n"
     "问题的**板块我会自动识别**,先给严谨的专业表述,再给形象化理解,并带上公式推演;"
     "中文、英文提问都可以。\n\n"
     "(Welcome to MATHGUIDE · Learn. You can also ask in English, e.g. \"explain limits with intuition\".)"
@@ -68,7 +68,7 @@ WELCOME_ZH = (
 WELCOME_RESEARCH_ZH = (
     "**欢迎回到 MATHGUIDE · 科学研究**\n\n"
     "我是 MG,你的科研工作区助手。本区会话、归纳本与检索范围与学习辅助完全独立,"
-    "可直接提问,或用下方指令:概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围 / 待办清单。\n\n"
+    "可直接提问,或用下方指令:章节知识导航 / 研究档案 / 公式查询手册 / 搜索范围 / 待办清单。\n\n"
     "提出研究型问题时,我会按选定的**搜索范围**跨文献库检索,并给出带编号引用的综合解答;"
     "中文、英文提问都可以。\n\n"
     "(Welcome to MATHGUIDE · Research. This workspace is isolated from Learn; ask in English if you prefer.)"
@@ -590,6 +590,20 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
     answer: list[str] = []
     try:
         system = rag.build_system(chunks, cmd, zh=zh)
+        if workspace == "research":
+            # 科研区收紧为纯 RAG:只依据【资料】作答,不用模型自身知识补充;
+            # 资料不足必须明说,避免把通识猜测包装成文献结论
+            system += (
+                "\n\n【科研模式】只依据上方【资料】回答;"
+                "每条关键结论注明资料编号,如【资料1】;"
+                "资料不足以回答时,直接说明「现有资料不足以回答」,"
+                "不得用模型自身知识补充,不得编造引用。"
+                if zh else
+                "\n\n[Research mode] Answer ONLY from the sources above. "
+                "Cite source numbers such as [Source 1] for every key claim. "
+                "If the sources are insufficient, say so directly; do not use "
+                "outside knowledge and do not fabricate citations."
+            )
         if summary:
             system += f"\n\n【更早对话摘要】\n{summary}"
         async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
@@ -993,7 +1007,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             local = []
         if local:
             outcome.hits = [
-                SearchHit("我的论文", f'{h["docName"]} · {h["section"]}',
+                SearchHit("我的论文",
+                          f'{h["docName"]} · {h["section"]} · 第 {h["pageStart"]}-{h["pageEnd"]} 页',
                           h["snippet"], "", 0, "", 0)
                 for h in local
             ] + outcome.hits
@@ -1019,7 +1034,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             local = []
         if local:
             chunks = [
-                (rag.Chunk(h["nodeId"], h["docName"], "", h["section"],
+                (rag.Chunk(h["nodeId"], h["docName"], "",
+                           f'{h["section"]} · 第 {h["pageStart"]}-{h["pageEnd"]} 页',
                            h.get("text") or h["snippet"]), 6.0)
                 for h in local
             ] + chunks

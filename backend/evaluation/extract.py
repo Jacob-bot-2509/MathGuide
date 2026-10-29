@@ -103,7 +103,11 @@ def objective_check(item: EvalItem, answer: str) -> tuple[bool | None, str]:
         if want is None or not nums:
             return None, "数值无法解析"
         scale = max(1.0, abs(want))
-        matched = [n for n in nums if abs(n - want) <= 1e-6 * scale]
+        # 参考答案或回答明确写「约/≈」时按近似值处理(1%),否则只认精确值
+        approximate = any(marker in ref or marker in answer
+                          for marker in ("约", "大约", "≈", "~"))
+        tolerance = (0.01 if approximate else 1e-6) * scale
+        matched = [n for n in nums if abs(n - want) <= tolerance]
         return bool(matched), f"numeric: ref={want}, got={matched or nums[-1]}"
 
     if item.answer_type == "expr":

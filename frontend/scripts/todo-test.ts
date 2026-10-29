@@ -99,6 +99,21 @@ async function main() {
   await Promise.resolve()
   check('同账号重登恢复任务', todo.todoState.data.tasks.length > 0)
 
+  // ---- 工作区分桶 ----
+  todo.setTodoWorkspace('learn')
+  todo.saveTask({ content: 'learn-only', date: day, time: '11:00', repeat: 'once', weekdays: [] }, null, now)
+  todo.setTodoWorkspace('research')
+  check('科研区看不到学习区任务', !todo.todoState.data.tasks.some((x) => x.content === 'learn-only'))
+  todo.saveTask({ content: 'research-only', date: day, time: '12:00', repeat: 'once', weekdays: [] }, null, now)
+  todo.setTodoWorkspace('learn')
+  check('学习区恢复后仍只有自己的任务',
+    todo.todoState.data.tasks.some((x) => x.content === 'learn-only') &&
+    !todo.todoState.data.tasks.some((x) => x.content === 'research-only'))
+  todo.setTodoWorkspace('research')
+  check('科研区任务独立保留',
+    todo.todoState.data.tasks.some((x) => x.content === 'research-only') &&
+    !todo.todoState.data.tasks.some((x) => x.content === 'learn-only'))
+
   // ---- 清空 ----
   todo.clearAllTodoData()
   check('清空后内存为空', todo.todoState.data.tasks.length === 0)

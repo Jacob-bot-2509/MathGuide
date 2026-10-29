@@ -33,6 +33,22 @@ const NOTIFIED_PREFIX = 'mg-todo-notified:'
 const MAX_EXPIRED_DAYS = 31
 const EXPIRE_RETENTION_DAYS = 60
 
+/** 当前待办所属工作区:学习区沿用旧键,科研区加后缀,两区互不可见 */
+let activeWorkspace: 'learn' | 'research' = 'learn'
+
+function scopedStorageKey(owner: string): string {
+  const base = storageKey(owner)
+  return activeWorkspace === 'learn' ? base : `${base}:${activeWorkspace}`
+}
+
+/** 切换工作区:先落盘当前区,再装载目标区 */
+export function setTodoWorkspace(workspace: 'learn' | 'research'): void {
+  if (workspace === activeWorkspace) return
+  persist()
+  activeWorkspace = workspace
+  load()
+}
+
 interface TodoData {
   tasks: TodoTask[]
   /** key = taskId|YYYY-MM-DD */
@@ -129,7 +145,7 @@ function load(): void {
     return
   }
   try {
-    const raw = localStorage.getItem(storageKey(owner))
+    const raw = localStorage.getItem(scopedStorageKey(owner))
     todoState.data = raw ? validData(JSON.parse(raw) as unknown) : emptyData()
   } catch {
     todoState.data = emptyData()
@@ -139,7 +155,7 @@ function load(): void {
 function persist(): void {
   if (!todoState.owner) return
   try {
-    localStorage.setItem(storageKey(todoState.owner), JSON.stringify(todoState.data))
+    localStorage.setItem(scopedStorageKey(todoState.owner), JSON.stringify(todoState.data))
   } catch {
     /* 配额/隐私模式:本次内存状态仍可用 */
   }
@@ -150,7 +166,7 @@ watch(() => userState.info?.accountKey ?? '', () => load(), { flush: 'sync' })
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
-    if (event.key === storageKey(currentOwner())) load()
+    if (event.key === scopedStorageKey(currentOwner())) load()
   })
 }
 
@@ -367,7 +383,9 @@ export function clearAllTodoData(): void {
 
 /** 供提醒组件做跨标签页去重(只压系统通知,不压页面内面板)。 */
 export function notificationKey(now: Date = new Date()): string {
-  return `${NOTIFIED_PREFIX}${todoState.owner || 'anon'}:${todayKey(now)}`
+  // 学习区沿用旧键格式,升级后当天已提醒的任务不会重复弹
+  const scope = activeWorkspace === 'learn' ? '' : `:${activeWorkspace}`
+  return `${NOTIFIED_PREFIX}${todoState.owner || 'anon'}${scope}:${todayKey(now)}`
 }
 
 export function repeatLabel(task: TodoTask, en: boolean): string {

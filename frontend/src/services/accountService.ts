@@ -55,7 +55,6 @@ export function collectLocalData(): Record<string, unknown> {
     'mg-research-sessions',
     'mg-notebook',
     'mg-research-notebook',
-    'mg-research-archive',
     'mg-settings',
     'mg-trash',
     'mg-research-scope',

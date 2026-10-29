@@ -27,7 +27,7 @@ src/
   │ types.ts    #   前后端接口契约:消息/流式回调/认证结构
   │ http.ts     #   fetch 封装 + OpenAI 兼容 SSE 流解析
   services/     # 业务服务:页面唯一依赖(全部走真实后端)
-  │ chatService.ts / authService.ts / accountService.ts
+  │ chatService.ts / authService.ts / accountService.ts / docgenService.ts
   │ graphService.ts #  知识图谱数据(GET /api/graph)
   stores/       # 全局状态:user / settings / sessions(会话栈)
   │ notebook.ts #   问题记录(归纳本)
@@ -38,7 +38,7 @@ src/
   │ graphLayout.ts # 知识图谱最长路径分层布局(纯函数)
   components/
   ├─ common/    # Starfield、UserAvatar、ModulePlaceholder
-  └─ chat/      # MathText、MathFormula、CategoryPanel、SpeechTips、TodoPanel、TodoReminder
+  └─ chat/      # MathText、MathFormula、CategoryPanel、SpeechTips、TodoPanel、TodoReminder、DocModal
   views/        # 页面;settings/ 下为设置中心与子页
   │ GraphView.vue # 知识图谱:缩放/拖拽、章节聚焦、搜索与点选详情
   router/       # 路由(含登录守卫)
@@ -95,8 +95,12 @@ npm run build   # vue-tsc 类型检查 + 生产构建
   (指令栏位于输入框下方)。
 - **停止后续写**:点「停止生成」截断回答后,气泡右下角出现「回复」按钮;
   点击后把原问题 + 已生成正文交给后端续写,增量追加到同一条消息,不重复已写内容。
+- **生成文档**:指令「生成文档」打开三选一弹窗(当前对话问答 / 问题归纳 / 独立要求);
+  前两条直接按原问答排版 PDF/Markdown/Word,独立要求先生成可编辑大纲再逐节生成;
+  无知识库依据的章节跳过并在 gaps 中列出。
 - **待办清单**:指令「待办清单」打开面板,支持一次性 / 每天 / 周期性(周一至周日多选),
-  日期精确到年月日、时间到时分;保存先入草稿,点「设置好了」转日程。
+  日期精确到年月日、时间到时分;新建时可直接「保存到日程」或「保存到草稿」,
+  草稿点「设置好了」转日程。
   当天最早任务到点弹一次高亮提醒面板(无关闭按钮,只能点「好的,我开始做」),
   页面隐藏时发浏览器系统通知;未到点任务显示「在表」,到点显示「进行中」,
   点击「进行中」变「已完成」;跨天未完成变「已过期」并弹「我已知晓」面板。
