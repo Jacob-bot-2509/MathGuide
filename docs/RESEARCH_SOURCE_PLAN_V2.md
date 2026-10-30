@@ -31,7 +31,7 @@
 | OpenAlex | 单条 200；搜索 429 | 免费；keyless 共享每日额度 | 已启用 keyless，建议配免费 key |
 | Semantic Scholar | 单条 200；搜索 429 | 需要 key | P2 配 key 后启用 |
 | Unpaywall | 422（缺 email） | 需要 email | P1 配 `MG_UNPAYWALL_EMAIL` 后启用 |
-| NASA ADS | 未测 | 需要 token | P3 有 token 再接 |
+| NASA ADS | 已接入，200 | 需要 token | 物理/天体物理默认源 |
 | ChinaXiv OAI | 权限拒绝 | 否 | 暂缓，国内网络复测 |
 | CAS IR 单所 OAI | 200 | 否 | P3 按院所列表接入 |
 | CAS IR Grid 聚合站 | 连接失败 | 否 | 暂缓 |
@@ -417,7 +417,7 @@ MG_CORE_API_KEY
 
 ### P3：可选与暂缓（条件触发）
 
-- ADS（有 token）。
+- 已接入 ADS（token 已配置）。
 - ChinaXiv/CAS IR（国内网络复测通过）。
 - CORE（有 key）。
 - 授权索引适配位（WoS/Scopus/MathSciNet/SciFinder/Reaxys）只留接口，不实现抓取。
@@ -546,7 +546,7 @@ frontend/src/utils/i18n.ts
 - 前端默认仅同行评审、预印本默认关闭。
 - bioRxiv/medRxiv 按 DOI 补充预印本元数据（关键词搜索仍走 Europe PMC）。
 - `tools/lit_smoke.py`：分学科冒烟与金标准指标。
-- 后端 384 条测试、前端自测、`vue-tsc`、`npm run build` 通过。
+- 后端 385 条测试、前端自测、`vue-tsc`、`npm run build` 通过。
 
 冒烟基线（2026-10-30，每学科 3 查询 × Top-10）：
 
@@ -562,7 +562,7 @@ frontend/src/utils/i18n.ts
 
 - Semantic Scholar 免费 key 的生产配置（当前无 key 走公共池）。
 - ChinaXiv、CAS IR Grid、ChemRxiv API 的网络验证。
-- ADS、CORE。
+- CORE。
 - 授权索引（WoS/Scopus/MathSciNet/SciFinder/Reaxys）。
 - 校园图书馆与 CARSI。
 - authority_precision 在 general/math/physics 偏低，排序权重仍需用更大样本调参。

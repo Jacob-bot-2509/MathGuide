@@ -83,6 +83,7 @@ PROVIDERS = {
     "europepmc": rl._europe_pmc,
     "pubmed": rl._pubmed,
     "inspire": rl._inspire,
+    "ads": rl._ads,
     "zbmath": rl._zbmath,
     "openalex": rl._openalex,
     "semanticscholar": rl._semantic_scholar,
@@ -166,7 +167,7 @@ async def main_async(args: argparse.Namespace) -> int:
                 lines.append(f"== {field}: FAIL")
     elapsed = time.monotonic() - started
     lines.append(f"elapsed={elapsed:.1f}s fields={len(fields)} failures={failures}")
-    report = "\n".join(lines)
+    report = "\n".join(line.rstrip() for line in lines)
     print(report)
     Path(__file__).with_name("lit_smoke_report.txt").write_text(
         report + "\n", encoding="utf-8")

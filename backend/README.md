@@ -130,6 +130,7 @@ set MG_RESEARCH_MAX_DOCS=200       # 每用户论文数上限(默认 200)
 # MG_VISION_BASE_URL=...           # 可选,默认 MG_ALIYUN_BASE_URL
 # MG_VISION_API_KEY=...            # 可选,默认 MG_ALIYUN_API_KEY
 # 文献发现:Crossref/arXiv/Europe PMC/zbMATH/PubMed/DOAJ/OpenAlex/S2 免 key;
+# 物理另加 INSPIRE 与 NASA ADS(ADS 需免费 token)
 # OpenAlex 免费 key 可把每日额度从 $0.10 提到 $1;
 # Semantic Scholar 无 key 走公共池(易 429),免费 key 走独立额度;Unpaywall 需要 email
 # MG_OPENALEX_API_KEY=...          # OpenAlex 免费 key(可选,强烈建议)
@@ -137,7 +138,7 @@ set MG_RESEARCH_MAX_DOCS=200       # 每用户论文数上限(默认 200)
 # MG_S2_API_KEY=...                # Semantic Scholar key(可选,公共池也可用)
 # MG_UNPAYWALL_EMAIL=you@example.com  # Unpaywall 合法 OA 解析(必需)
 # MG_LITERATURE_MAILTO=you@example.com  # Crossref 礼貌池标识
-# MG_ADS_API_KEY=...               # NASA ADS(暂未启用)
+# MG_ADS_API_KEY=...               # NASA ADS 免费 API token(天体物理/物理)
 ```
 
 - 入库支持 PDF、DOCX、EPUB、HTML/JATS、RTF 与纯文本;按文件头识别,
@@ -228,7 +229,7 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/research/projects` | 新建项目 `{title}` |
 | POST | `/api/research/projects/{project_id}` | 更新项目 `{title?, goal?, approach?, notes?, status?}` |
 | DELETE | `/api/research/projects/{project_id}` | 删除项目(论文只解除归属,不删除) |
-| GET | `/api/research/literature?q=&field=&peerReviewed=&includePreprints=&oaOnly=` | 跨库检索:Crossref/arXiv/Europe PMC/DOAJ/OpenAlex/S2,物理加 INSPIRE,生物加 PubMed,数学加 zbMATH;DOI 为 bioRxiv/medRxiv 时补预印本元数据;返回 venueTier/oaStatus/landingUrl 等字段 |
+| GET | `/api/research/literature?q=&field=&peerReviewed=&includePreprints=&oaOnly=` | 跨库检索:Crossref/arXiv/Europe PMC/DOAJ/OpenAlex/S2,物理加 INSPIRE/NASA ADS,生物加 PubMed,数学加 zbMATH;DOI 为 bioRxiv/medRxiv 时补预印本元数据;返回 venueTier/oaStatus/landingUrl 等字段 |
 | GET | `/api/research/literature/related?doi=\|title=` | 相关论文:Crossref 参考文献 + arXiv/Europe PMC/OpenAlex |
 | GET | `/api/research/literature/oa?doi=` | 合法开放获取解析(Unpaywall 优先,OpenAlex 兜底) |
 | GET | `/api/research/venues?issn=\|name=&field=` | 场所权威查询:返回学科层级 T0–T3、出版社与 registry 版本 |

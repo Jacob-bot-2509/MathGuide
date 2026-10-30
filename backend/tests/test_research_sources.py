@@ -466,6 +466,64 @@ def test_oa_endpoint_requires_doi(monkeypatch):
     assert client.get("/api/research/literature/oa").status_code == 400
 
 
+def test_ads_maps_oa_and_preprint(monkeypatch):
+    class Response:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"response": {"docs": [{
+                "bibcode": "2024ApJ...1..1A",
+                "title": ["A dark matter survey"],
+                "author": ["A. Author", "B. Author"],
+                "year": 2024,
+                "pub": "The Astrophysical Journal",
+                "doi": ["10.3847/0004-637X/1/1"],
+                "abstract": "Abstract text",
+                "citation_count": 7,
+                "doctype": "article",
+                "property": ["REFEREED", "EPRINT", "EPRINT_OPENACCESS"],
+                "issn": ["0004-637X"],
+                "publisher": "American Astronomical Society",
+                "esources": ["EPRINT_PDF", "PUB_PDF"],
+            }, {
+                "bibcode": "2024arXiv2401.00001A",
+                "title": ["A preprint"],
+                "author": ["A. Author"],
+                "year": 2024,
+                "pub": "arXiv",
+                "doi": [],
+                "doctype": "article",
+                "property": ["EPRINT"],
+            }]}}
+
+    class Client:
+        headers = None
+        params = None
+
+        async def get(self, url, params=None, headers=None):
+            self.headers = headers
+            self.params = params
+            return Response()
+
+    monkeypatch.setenv("MG_ADS_API_KEY", "test-ads")
+    client = Client()
+    items = asyncio.run(rl._ads(client, "dark matter", 5))
+    assert client.headers["Authorization"] == "Bearer test-ads"
+    assert 'abs:"dark matter"' in client.params["q"]
+    assert items[0]["doi"] == "10.3847/0004-637x/1/1"
+    assert items[0]["peerReviewed"] is True
+    assert items[0]["articleType"] == "research"
+    assert items[0]["oaUrl"].endswith("EPRINT_PDF")
+    assert items[0]["venue"] == "The Astrophysical Journal"
+    assert items[1]["articleType"] == "preprint"
+    assert items[1]["peerReviewed"] is False
+    monkeypatch.delenv("MG_ADS_API_KEY", raising=False)
+    assert asyncio.run(rl._ads(client, "dark matter", 5)) == []
+
+
 def test_semantic_scholar_attempts_keyless(monkeypatch):
     class Response:
         @staticmethod
@@ -531,6 +589,8 @@ def test_sources_endpoint(monkeypatch):
     assert by_id["semanticscholar"]["keyRequired"] is False
     assert by_id["openalex"]["keyEnv"] == "MG_OPENALEX_API_KEY"
     assert by_id["openalex"]["keyRequired"] is True
+    assert by_id["ads"]["keyEnv"] == "MG_ADS_API_KEY"
+    assert by_id["ads"]["keyRequired"] is True
     assert by_id["pubmed"]["keyEnv"] == "MG_NCBI_API_KEY"
     assert by_id["pubmed"]["keyRequired"] is False
     assert body["registryVersion"]

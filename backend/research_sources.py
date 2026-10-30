@@ -41,6 +41,11 @@ SPECS: dict[str, SourceSpec] = {
         "inspire", "INSPIRE-HEP",
         ("physics",),
         "authority", True, fulltext="oa"),
+    "ads": SourceSpec(
+        "ads", "NASA ADS",
+        ("physics",),
+        "authority", True, requires_key="MG_ADS_API_KEY",
+        key_required=True, fulltext="oa"),
     "zbmath": SourceSpec(
         "zbmath", "zbMATH Open",
         ("math",),
@@ -93,7 +98,7 @@ def source_tier(name: str) -> str:
 
 
 SOURCE_PRIORITY = {
-    "zbmath": 3, "inspire": 3, "pubmed": 3,
+    "zbmath": 3, "inspire": 3, "pubmed": 3, "ads": 2,
     "europepmc": 2, "crossref": 2,
     "arxiv": 1, "biorxiv": 1, "chemrxiv": 1,
     "openalex": 0, "semanticscholar": 0, "doaj": 0,

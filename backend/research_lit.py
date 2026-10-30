@@ -586,6 +586,88 @@ def _zbmath_title(item: dict) -> str:
     return _clean(title, 300)
 
 
+async def _ads(client: httpx.AsyncClient, query: str, limit: int,
+               filters: dict | None = None) -> list[dict]:
+    """NASA ADS:天体物理/物理权威索引;需要免费 API token。"""
+    key = os.getenv("MG_ADS_API_KEY", "").strip()
+    if not key:
+        return []
+    filters = filters or {}
+    safe = re.sub(r'["\\]', " ", query).strip()[:200]
+    parts = [f'abs:"{safe}"']
+    author = re.sub(r'["\\]', " ", str(filters.get("author") or "")).strip()[:100]
+    if author:
+        parts.append(f'author:"{author}"')
+    year_from = filters.get("yearFrom")
+    year_to = filters.get("yearTo")
+    if year_from or year_to:
+        parts.append(
+            f"year:[{year_from or 1900} TO {year_to or time.localtime().tm_year}]")
+    params = {
+        "q": " AND ".join(parts),
+        "fl": "bibcode,title,author,year,pub,doi,abstract,citation_count,"
+              "doctype,property,issn,publisher,esources",
+        "rows": max(1, min(limit, 20)),
+        "start": 0,
+    }
+    res = await client.get(
+        "https://api.adsabs.harvard.edu/v1/search/query",
+        params=params, headers={"Authorization": f"Bearer {key}"})
+    res.raise_for_status()
+    out: list[dict] = []
+    for item in res.json().get("response", {}).get("docs", []):
+        if not isinstance(item, dict):
+            continue
+        raw_title = item.get("title")
+        title = _clean(raw_title[0] if isinstance(raw_title, list) and raw_title
+                       else raw_title, 300)
+        if not title:
+            continue
+        raw_doi = item.get("doi")
+        doi = _doi(raw_doi[0] if isinstance(raw_doi, list) and raw_doi else raw_doi)
+        bibcode = str(item.get("bibcode") or "")
+        props = {str(x).upper() for x in item.get("property") or []}
+        pub = _clean(item.get("pub"), 160)
+        doctype = str(item.get("doctype") or "").lower()
+        is_preprint = doctype in {"eprint", "preprint"} or pub.lower().startswith("arxiv")
+        is_review = "review" in doctype or "REVIEW" in props
+        refereed = "REFEREED" in props
+        esources = {str(x).upper() for x in item.get("esources") or []}
+        is_oa = any(
+            value == "OPENACCESS" or value.endswith("_OPENACCESS")
+            for value in props
+        )
+        gateway = ""
+        if is_oa and bibcode:
+            for name in ("EPRINT_PDF", "PUB_PDF", "ADS_PDF"):
+                if name in esources:
+                    gateway = name
+                    break
+        oa_url = (f"https://ui.adsabs.harvard.edu/link_gateway/"
+                  f"{quote(bibcode)}/{gateway}") if gateway else ""
+        authors = ", ".join(str(x) for x in item.get("author") or [])[:300]
+        issns = item.get("issn") or []
+        out.append(_result(
+            title=title, authors=authors,
+            year=int(item.get("year") or 0), venue=pub,
+            doi=doi,
+            url=f"https://ui.adsabs.harvard.edu/abs/{quote(bibcode)}/abstract"
+            if bibcode else "",
+            abstract=_clean(item.get("abstract")),
+            citations=int(item.get("citation_count") or 0),
+            sources=["ads"], peerReviewed=refereed and not is_preprint,
+            articleType="preprint" if is_preprint else (
+                "review" if is_review else "research"),
+            sourceTier="preprint" if is_preprint else "authority",
+            oaStatus="green" if oa_url else "unknown", oaUrl=oa_url,
+            issn=",".join(str(x) for x in issns[:3]),
+            publisher=_clean(item.get("publisher"), 160),
+            retractionStatus="retracted" if "RETRACTED" in props else "none",
+            fields=["physics"],
+        ))
+    return out
+
+
 async def _zbmath(client: httpx.AsyncClient, query: str, limit: int,
                   filters: dict | None = None) -> list[dict]:
     params = {"search_string": query, "results_per_page": max(1, min(limit, 50))}
@@ -1188,6 +1270,7 @@ async def search(request: Request) -> JSONResponse:
         "europepmc": _europe_pmc,
         "pubmed": _pubmed,
         "inspire": _inspire,
+        "ads": _ads,
         "zbmath": _zbmath,
         "openalex": _openalex,
         "semanticscholar": _semantic_scholar,
