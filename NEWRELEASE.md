@@ -1,182 +1,150 @@
-# MathGuide v1.12.0 — 科研阅读、外部文献、智能数据表与项目报告
+# MathGuide v1.13.0 — 文献来源权威分级、免费全文与来源溯源
 
 发布日期：2026-10-30
-发布类型：功能版本（科研阅读闭环 + 外部文献 + 数据表智能联动）
-代码快照：`3456b4d`（标签 `v1.12.0` 指向该提交）
-基线版本：`v1.11.0`（`0257ff85165be8d46b48ac1a5feab08cf69f5fa0`）
+发布类型：功能版本（免费学术源接入 + 学科权威分级 + 开放获取解析）
+代码快照：`56572b6`（标签 `v1.13.0` 指向该提交）
+基线版本：`v1.12.0`（`3456b4d`）
 
-本版本把科研区从「检索结果列表」推进到可闭环的研究工作台：
-检索到的外部论文可以在当前窗口阅读、批注、由模型定位与解释；
-论文表格可以框选转录成数据表并保留来源页码；
-数据表可以归属项目、做统计与绘图、带进对话分析、跨论文生成对比表，
-最后按项目导出 DOCX 研究报告。设置页回收站同时改为「学习问题 / 科研历史」双窗口。
+本版本把「全网文献」从单一检索入口升级为按学科组织、可核验来源的文献发现层：
 
-## 一、科研阅读器与批注
+- 按学科路由到 Crossref、arXiv、Europe PMC、PubMed、INSPIRE-HEP、zbMATH Open、DOAJ、OpenAlex、Semantic Scholar；
+- 每条结果带 ISSN、出版社、文章类型、同行评审、撤稿状态与开放获取状态；
+- 用人工维护的场所注册表给综合顶刊与领域顶刊标注 T0–T3，预印本单独标 P；
+- 通过 Unpaywall 与 OpenAlex 解析合法 OA 地址，只有 HTTPS 且确有全文时才提供免费入口；
+- 阅读器顶部显示论文来源、许可与撤稿提示，导入后仍可追溯。
 
-- 点击论文在当前窗口弹出覆盖式阅读器，不再跳转第三方站点；`×` 或 `Esc` 关闭。
-- PDF 使用 PDF.js 画布 + 文本层渲染，支持缩放、翻页、页码跳转、全屏展开；
-  非 PDF 文档走文本分页阅读器；按面板宽度自动适配，长文与宽页面不裁切。
-- 选中文本可建批注：黄/青/绿/红四色、支持编辑与删除；
-  批注按 `docId` 存储，临时论文导入正式库后不丢。
-- 关闭阅读器时三态处理：有未保存批注 → 保存 / 不保存 / 取消；
-  无修改 → 直接关闭。
-- 区域解释：在 PDF 上框选图表或公式，截图交给视觉模型解释；
-  只依据截图回答，数值以原文为准，不猜测。
-- 对话联动：阅读器打开时提问，后端先在该论文内定位命中段落，
-  阅读器自动跳页并高亮；模型回答与原文位置对应。
-- 「我的论文」与外部论文共用同一套阅读器；
-  外部论文先进入隐藏的临时语料（`status=temp`），导入后转为正式论文。
-- 导入外部论文时若已有批注，先询问「是否保留批注」；
-  保留则批注随论文入库，不保留则写入干净文档。
-- 实现：`frontend/src/components/research/DocumentViewer.vue`、
-  `frontend/src/services/researchAnnotationService.ts`、
-  `backend/research_papers.py`、`backend/research_vision.py`。
+全部来源均为免费或开放接口；本版本不包含校园图书馆、CARSI、订阅 PDF 或任何付费墙绕过。
 
-## 二、外部文献检索与浏览历史
+## 一、学科来源与权威分级
 
-- 科研检索拆为「我的论文 / 全网文献」两种互不干扰的模式：
-  - 文内检索：勾选参与检索的本地论文，支持全选、清空与项目过滤。
-  - 文外检索：关键词、作者、年份区间；自动识别 DOI / arXiv / PMCID / PMID
-    并做精确条目查询，不额外询问用户。
-- 检索结果可查看相关论文、查看开放获取 PDF、导入论文库；
-  相关论文按 DOI 参考文献与标题相似度合并。
-- 数据源：Crossref、arXiv、Europe PMC；可选 OpenAlex / Semantic Scholar。
-  多源并行、DOI 去重、8 秒死线，慢源自动取消；单源失败不拖垮整体。
-- 外部 PDF 只允许 HTTPS 与 arXiv / Europe PMC / PMC 白名单主机；
-  校验重定向与 `%PDF-` 文件头，限制大小，防止 SSRF 与任意下载。
-- 浏览历史只记录「全网文献」中尚未入库的临时论文：
-  历史项保留当前批注状态，可继续阅读；入库后自动从历史消失。
-- 删除历史记录进入回收站，保留 30 天，可恢复；
-  删除确认文案为「确定删除？删除文件 30 天内可在回收站中找回」。
-  到期由启动清理与每日后台任务彻底删除。
-- 临时论文超过 200 篇或总体积超限时，自动淘汰最旧且无批注的临时论文；
-  有批注的临时论文不自动删除，避免误伤。
-- 入口位置：「浏览历史」在「全网文献」内，与「重新检索全网」并列；
-  「我的论文」不产生浏览历史。
-- 实现：`backend/research_lit.py`、`backend/research_corpus.py`、
-  `backend/research_papers.py`、`frontend/src/views/ResearchSearchView.vue`。
+- 新增 `backend/research_sources.py`：来源注册表声明适用学科、权威层级、是否同行评审、
+  key 环境变量与全文策略。未登记来源不会进入检索结果。
+- 新增 `backend/research_venues.py` 与 `backend/registry/venues.json`：
+  109 条人工维护的场所记录，覆盖综合、数学、物理、化学、生物五个方向。
+- 场所分级规则：
+  - `T0` 综合顶刊：Nature、Science、PNAS 等跨学科高先验；
+  - `T1` 领域顶刊：PRL、JACS、Angewandte、Annals of Mathematics 等；
+  - `T2` 领域强刊；`T3` 同行评审/索引期刊；`P` 预印本；`U` 用户上传。
+- ISSN 归一化（去连字符、X 大写）优先匹配；无 ISSN 时用规范化名称与别名。
+- Nature 子刊单独定级，不自动继承 Nature。
+- 学科路由：
+  - 物理加入 INSPIRE-HEP；
+  - 生物医学加入 PubMed E-utilities；
+  - 数学加入 zbMATH Open；
+  - 综合检索只使用声明了 `general` 的跨学科来源。
+- 排序按「场所层级 → 来源优先级 → 被引数 → 年份」，预印本不冒充满同行评审。
 
-## 三、数据表与科研联动
+## 二、免费全文与开放获取解析
 
-### 1. 数据表归属与项目联动
+- 新增 `backend/research_oa.py`：Unpaywall 优先，OpenAlex 兜底。
+- 只接受 HTTPS 地址；带用户名/密码、空白字符或控制字符的 URL 一律拒绝。
+- 未配置 `MG_UNPAYWALL_EMAIL` 时跳过 Unpaywall，不伪造 OA 状态。
+- OA 结果缓存 24 小时；检索结果缓存 5 分钟，减少 429 与重复请求。
+- 没有合法免费全文时只显示「查看原文」跳转出版社页面，不显示「免费 PDF」。
+- 前端新增「查找免费全文」按钮；已知 DOI 可单独解析。
+- 不下载许可不明 PDF，不代理全文，不转存公共库。
 
-- 新建、导入、论文转录的数据表自动继承当前研究项目；可按项目过滤。
-- 研究档案新增「数据表」标签：按项目列出数据表，点击直接打开对应表。
-- 数据表页新增「在对话中分析」：跳回科研对话并携带 `tableId`；
-  输入框上方显示数据表上下文标签，可手动移除。
-- 后端把表结构、公式、前 40 行、计算列结果与服务端统计摘要送入对话上下文；
-  模型引用数值时不得改写或编造，统计值直接采用服务端结果。
-- 数据表左侧列表支持双击标题或点 ✎ 重命名，Enter 保存、Esc 取消，刷新后保留。
-- 「＋新建表」按钮高光与「＋导入模板」一致。
+## 三、检索界面与阅读器
 
-### 2. 统计与绘图
+- 检索筛选新增：学科、仅同行评审、含预印本、仅免费全文。
+- 结果徽标新增：`T0–T3` / `P` 场所层级、同行评审、预印本、已撤稿、免费全文。
+- 标签区分「查看原文」（出版社页面）与「免费全文」（合法 OA）。
+- 阅读器顶部新增来源条：
+  - 场所名称、同行评审、预印本、开放获取状态、许可、撤稿警告；
+  - 「出版社页面」外链使用 `rel="noopener noreferrer"`。
+- 切换阅读的论文时重新加载来源元数据，避免残留上一篇的信息。
+- 临时论文与正式论文都保留来源元数据；导入正式库时不覆盖已有字段。
 
-- 统计面板：样本量、缺失值、均值、中位数、标准差、最小值、最大值、Q1、Q3，
-  全部服务端 `Decimal` 计算，保留 4 位小数；同时给出 Pearson 相关系数。
-- 图表面板：折线、散点、柱状；X 轴可选行号或数值列，Y 列可多选；
-  不引入图表库，按服务端序列绘制 SVG，支持导出 SVG 与 PNG。
-- 统计与绘图直接分析当前草稿，不要求先保存；切换数据表自动重置分析状态。
+## 四、接口与配置
 
-### 3. 论文表格转录
+新增接口：
 
-- 阅读器框选论文表格 → 「转为数据表」→ 视觉模型逐格转录。
-- 转录结果先进入预览窗口：表名与每个单元格都可修改；
-  空单元格、合并单元格与识别警告明确提示。
-- 用户确认后写入数据表，并记录来源：`docId`、论文名、页码、表注；
-  数据表顶部显示来源标签，点击回到原文对应页。
-- 临时论文未入库时，来源链接仍可按 `docId` 直接打开。
-- 预览与入库分离：识别失败或不准时不会污染数据表。
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/research/venues?issn=\|name=&field=` | 场所权威查询；ISSN 支持逗号分隔多值 |
+| GET | `/api/research/sources` | 来源、学科、层级、全文策略与 key 配置状态，不探测外网 |
+| GET | `/api/research/docs/{doc_id}` | 单篇论文来源元数据，供阅读器顶部显示 |
 
-### 4. 多文献对比表
+扩展接口：
 
-- 「我的论文」勾选 2~6 篇 → 「生成对比表」：
-  逐篇抽取研究问题、方法、数据与样本、主要结果、局限。
-- 每行带回来源 `rowSources`，行号旁出现 ↗，点击回到对应论文页。
-- 新增「核对」列：结果或数据中的数字若在原文找不到，明确标注，不静默放过。
-- 单篇抽取失败只影响该行，不拖垮整张表；全部失败时返回错误。
-- 选中的论文同属一个项目时，对比表自动归入该项目。
+- `GET /api/research/literature` 新增 `field`、`peerReviewed`、`includePreprints`、`oaOnly`；
+- 结果新增 `issn`、`publisher`、`peerReviewed`、`articleType`、`oaStatus`、`oaUrl`、
+  `license`、`retractionStatus`、`versionOf`、`fields`、`sourceTier`、`venueTier`、`landingUrl`；
+- DOI 为 bioRxiv/medRxiv 时补充预印本元数据；关键词搜索仍走 Europe PMC。
 
-### 5. 项目报告导出
+配置（只放 `backend/.env.local`）：
 
-- 研究档案项目栏与数据表页均提供「导出报告」。
-- 服务端生成 DOCX，**不调用 LLM**，避免二次生成引入幻觉：
-  研究目标、研究思路、过程笔记、项目内数据表（含计算列）、
-  描述性统计与 Pearson 相关、项目文献、表级与行级数据来源。
-- 报告只包含归属于当前项目的数据表；未归属项目的表不会混入。
+```bash
+MG_OPENALEX_API_KEY=...      # 免费 key，提高每日额度
+MG_NCBI_API_KEY=...          # 可选，提高 PubMed 限额
+MG_S2_API_KEY=...            # 可选；无 key 走公共池
+MG_UNPAYWALL_EMAIL=...       # Unpaywall 要求联系邮箱
+MG_LITERATURE_MAILTO=...     # 可选，Crossref 礼貌池
+```
 
-## 四、设置与界面
-
-- 设置 → 回收站改为「学习问题 / 科研历史」两个按钮切换的独立窗口，
-  不再上下并列；科研历史首次切换时才请求服务端数据。
-- 科研浏览历史回收站支持恢复，显示批注数量与剩余天数。
-- 数据表页顶部新增「统计 / 图表 / 在对话中分析 / 导出报告」。
+无 key 时 OpenAlex 搜索受共享每日额度限制，Semantic Scholar 走公共池，均可能 429；
+配置免费 key 后额度独立。
 
 ## 五、修复与安全
 
-- 修复 PDF 画布宽于面板时被裁切：改为按面板宽度自适应缩放。
-- 修复阅读器关闭时 PDF 销毁异常阻塞关闭流程。
-- 修复框选区域时原生文本选择吞掉鼠标移动：区域选择改用窗口级事件。
-- 修复 arXiv 带引号检索返回零结果：改为 `all:{query}` 并保留 AND 过滤。
-- 修复外部文献 URL 未净化可能携带 `javascript:` 等危险协议。
-- 修复研究档案异步保存竞态与数据表保存竞态。
-- 修复临时论文与正式论文检索范围混淆：默认检索排除 `temp`，
-  显式传入 `docIds` 时才允许临时论文。
-- 设置页回收站与科研历史分源：学习问题仍在本机，科研历史在服务端。
+- 修复 OpenAlex 搜索 `select` 含无效字段 `oa_status` 导致 400。
+- 修复 OpenAlex OA 状态读取位置错误：应读 `open_access.oa_status`，此前恒为 unknown。
+- 修复 Semantic Scholar 无 key 直接返回空：改为无 key 也请求公共池。
+- 修复 INSPIRE `publication_info` 为列表时解析崩溃。
+- 修复 zbMATH 许可占位记录进入结果。
+- 修复 Crossref 返回 book chapter / front matter 等噪声条目。
+- 修复 PubMed 仅按年份上限时 `mindate` 缺失。
+- 修复 URL 净化遗漏：OA 地址与 landing URL 均只允许 HTTPS 且无凭据。
+- 前端默认改为「仅同行评审、预印本关闭」；需要 arXiv 时手动勾选。
+- 测试缓存隔离：来源与检索缓存不再跨测试泄漏。
 
-## 六、行为变更与配置
-
-| 项目 | 变更 | 默认/迁移 |
-| --- | --- | --- |
-| 版本号 | `1.11.0` → `1.12.0` | `package.json`、`package-lock.json`、关于页 |
-| 数据表来源 | 新增表级 `source` 与行级 `rowSources` | 旧表自动补空字段，自动保存不覆盖原来源 |
-| 数据表统计 | 新增 `/api/research/tables/{id}/stats` | 不落库，分析当前草稿 |
-| 论文表格转录 | 新增 `/api/research/papers/{id}/extract-table` | 复用视觉模型配置 `MG_VISION_*` / `MG_ALIYUN_*` |
-| 多文献对比 | 新增 `/api/research/literature/compare` | 仅本地论文正文，2~6 篇，每 5 分钟 6 次 |
-| 项目报告 | 新增 `/api/research/report` | 仅 DOCX，不调用 LLM |
-| 浏览历史 | 仅记录未入库的外部论文 | 入库后自动移出历史 |
-| 临时论文上限 | 新增自动淘汰 | 200 篇或总体积上限；有批注的不自动删除 |
-
-## 七、验证
+## 六、验证
 
 ```text
-backend pytest                     350 passed
+backend pytest                     378 passed
 frontend npm test                  全部自测通过
 npm run build                      通过（仅 tex2svg 分块 >1800kB 的既有告警）
 vue-tsc --noEmit                   通过
 ```
 
-浏览器实测：
+分学科冒烟（2026-10-30，每学科 3 查询 × Top-10，`tools/lit_smoke.py`）：
 
-- 真实 PDF（含表格）上传 → 阅读器框选表格 → 视觉模型转录 5 行 × 4 列全部正确
-  → 存入数据表 → 来源标签回跳原文第 1 页。
-- 两篇本地论文生成对比表：研究问题/方法/数据/结果分列，
-  结果字段保留原文数值，行来源回跳正常。
-- 数据表统计：均值、标准差、四分位与 Pearson 相关与服务端一致；
-  折线/散点/柱状图渲染与 SVG/PNG 导出正常。
-- 对话带表提问：模型直接引用表内 B 列最大值 7.9、均值 4.9833。
-- 项目报告下载 DOCX，包含数据表、计算列与统计结果。
+| 学科 | 结果 | authority_precision | peer | oa | source_errors |
+| --- | --- | --- | --- | --- | --- |
+| general | 30 | 10% | 100% | 43% | 3 |
+| math | 30 | 10% | 100% | 10% | 3 |
+| physics | 30 | 30% | 100% | 27% | 3 |
+| chemistry | 30 | 57% | 100% | 27% | 3 |
+| biology | 30 | 80% | 100% | 57% | 3 |
 
-## 八、完整代码与溯源附件
+实时探测：
 
-本版本把**完整源码快照**与**完整变更补丁**一并入库，位于 `releases/v1.12.0/`，
+- Unpaywall 配置邮箱后，Nature Communications 样本解析为 `gold`，返回 `www.nature.com` 的 HTTPS PDF；
+- OpenAlex 配置免费 key 后搜索不再 429，OA 状态正确读取；
+- Semantic Scholar 无 key 可返回结果，公共池仍可能限流；
+- ChemRxiv API 仍被 Cloudflare 403，ChinaXiv 404，CAS IR 连接失败，均未进入默认检索。
+
+## 七、完整代码与溯源附件
+
+本版本把**完整源码快照**与**完整变更补丁**一并入库，位于 `releases/v1.13.0/`，
 也会作为 GitHub Release 资产上传：
 
 | 附件 | 内容 | SHA-256 |
 | --- | --- | --- |
-| `MathGuide-v1.12.0-source.tar.gz` | **完整源码快照**（308 个文件，1,474,217 字节），由 `git archive` 从代码提交 `3456b4d` 生成 | `a56d3e15ec4d1522920527c540d0d4d9988b81eddb12bbf2d1fd0c3ea64249cf` |
-| `v1.12.0.patch` | 相对 `v1.11.0` 的完整二进制补丁（392,907 字节，排除 `releases/` 附件） | `bc09ab1919b24ac9c4516cffef5d9767f87250db70dfb958dd767a03d434a417` |
-| `MANIFEST.sha256` | 源码快照 308 个文件的逐文件 SHA-256（按归档内真实字节生成） | `a09a8cc32eb4528cd3df593a8d3c22d524d39f1605eb455b940260f23f910f05` |
+| `MathGuide-v1.13.0-source.tar.gz` | **完整源码快照**（317 个文件，1,518,902 字节），由 `git archive` 从代码提交 `56572b6` 生成 | `2f3e3403b81095fc3ab8dd49dc4a0bf4be9b262a9a4214f27983a17de54e3333` |
+| `v1.13.0.patch` | 相对 `v1.12.0` 的完整二进制补丁（248,646 字节，排除 `releases/` 附件） | `fd8f763de7e6508efa865d9d2fdbc4692ac8a425687ac02e9cba9b8e2d804878` |
+| `MANIFEST.sha256` | 源码快照 317 个文件的逐文件 SHA-256（按归档内真实字节生成） | `f534ddfde159c07036aa20528f52297dfcb1ebc2de5541591ee8402baa24f47f` |
 | `SHA256SUMS` | 上述附件 + 校验脚本 + 本目录 README 的 SHA-256 | 见文件本身 |
 | `verify_manifest.py` | 跨平台逐文件校验脚本 | `0d304ea57b0a76938d55f539f02a0f189b77d1a1496b26e7b84b358ba6fbf01a` |
-| `README.md` | 附件说明与复核步骤 | `6d9218ba88df5f820127f1350961715c14939bc763adf33a1e8389b546f86721` |
+| `README.md` | 附件说明与复核步骤 | `dc427f87f6992a2fd3db0466cf0c5da5537c1b4a90663a163142d1a4f5b51196` |
 
 复核步骤：
 
 ```bash
-cd releases/v1.12.0
+cd releases/v1.13.0
 sha256sum -c SHA256SUMS
-tar -xzf MathGuide-v1.12.0-source.tar.gz
-python verify_manifest.py MathGuide-v1.12.0   # checked=308 failures=0
+tar -xzf MathGuide-v1.13.0-source.tar.gz
+python verify_manifest.py MathGuide-v1.13.0   # checked=317 failures=0
 ```
 
 源码包不包含 `.git`、`backend/.env.local`、`backend/data/`、`.venv/`、`node_modules/`
@@ -184,29 +152,25 @@ python verify_manifest.py MathGuide-v1.12.0   # checked=308 failures=0
 `export-ignore`。`MANIFEST.sha256` 按源码包内真实字节生成，Windows 工作树的
 CRLF 转换不影响归档校验，请以解压后的源码目录为准。
 
-## 九、已知限制
+## 八、已知限制
 
-- 扫描件/纯图片 PDF 仍需先 OCR；当前不会自动识别图片文字。
-- 论文表格转录依赖视觉模型：模糊、跨页、超宽表格可能缺格或截断；
-  已提供逐格校对与「核对」提示，但不保证一次识别完全正确。
-- 多文献对比只读取「我的论文」正文；仅元数据的外部文献不参与，
-  避免用摘要硬凑对比表。单篇长文只取前 7,000 字符。
-- 对比抽取由模型归纳，「核对」列只能发现原文中不存在的数字，
-  无法自动发现张冠李戴；入库前仍需人工过一遍。
-- 项目报告只包含归属于当前项目的数据表；未归属的数据表不会自动纳入。
-- 图表目前为行序/单数值 X 轴，暂不支持误差棒、拟合线与多子图。
-- 外部文献 PDF：Europe PMC 与 PMC 仍有反爬（403），实际覆盖以 arXiv 为主。
-- 数据库仍是按用户 SQLite + 单进程缓存，多 worker 部署前需要重新评估锁与缓存一致性。
+- `authority_precision` 在综合、数学、物理仍偏低（10%–30%）；场所权重需用更大样本调参。
+- Semantic Scholar 无 key 走共享池，可能 429；配置免费 key 后改善。
+- OpenAlex 无 key 每日额度按网络共享；正式使用建议配置免费 key。
+- Unpaywall 只按 DOI 解析；无 DOI 的结果无法解析 OA。
+- 仅接受 HTTPS；出版社只提供 HTTP 链接时不会显示免费全文。
+- ChemRxiv API、ChinaXiv、CAS IR、ADS、CORE 尚未接入或网络不可达。
+- 不包含校园图书馆、CARSI、订阅 PDF、Sci-Hub 或任何付费墙绕过。
+- 场所分级为人工维护的种子表，不是 JCR/中科院分区，也不替代授权索引。
 
-## 十、升级步骤
+## 九、升级步骤
 
-1. 拉取 `v1.12.0`，安装依赖：
+1. 拉取 `v1.13.0`，安装依赖：
    `pip install -r backend/requirements.txt` 与 `cd frontend && npm ci`。
-2. 在 `backend/.env.local` 按需配置视觉模型：
-   `MG_VISION_BASE_URL` / `MG_VISION_API_KEY` / `MG_VISION_MODEL`
-   （缺省复用 `MG_ALIYUN_*`，模型默认 `qwen3.8-omni-flash`）。
-3. 重启后端；数据表会自动补充 `source_json` / `row_sources_json` 列，
-   旧表来源为空但不会影响读写。
+2. 在 `backend/.env.local` 配置：
+   `MG_UNPAYWALL_EMAIL`（必需）、`MG_OPENALEX_API_KEY`（建议）、
+   `MG_NCBI_API_KEY` / `MG_S2_API_KEY`（可选）。
+3. 重启后端；`docs` 表会自动补充来源元数据列，旧文档字段为空但读写不受影响。
 4. 前端 `npm run build`；按 `deploy/README.md` 配置 HTTPS/CSP 与双域 Cookie。
 5. 运行 `python -m pytest` 与 `npm test` 确认环境。
-6. 需要核对发布包时，按第八节命令执行 SHA-256 与逐文件校验。
+6. 需要核对发布包时，按第七节命令执行 SHA-256 与逐文件校验。
