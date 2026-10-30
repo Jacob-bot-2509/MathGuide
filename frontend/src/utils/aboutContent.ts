@@ -6,8 +6,8 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.12.0'
-export const APP_STABLE_VERSION = 'v1.12.0'
+export const APP_VERSION = 'v1.13.0'
+export const APP_STABLE_VERSION = 'v1.13.0'
 export const APP_STABLE_DATE = '2026-10-30'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
@@ -51,6 +51,33 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '文献来源分级:接入 Crossref、arXiv、Europe PMC、PubMed、INSPIRE、zbMATH、DOAJ、OpenAlex、Semantic Scholar,按学科标注 T0–T3 场所层级与预印本 P。',
+        en: 'Source authority: Crossref, arXiv, Europe PMC, PubMed, INSPIRE, zbMATH, DOAJ, OpenAlex and Semantic Scholar, with per-discipline T0–T3 venue tiers and a preprint P tier.',
+      },
+      {
+        zh: '合法免费全文:Unpaywall 优先、OpenAlex 兜底,只接受 HTTPS 开放获取地址;没有免费版本时只跳出版社页面,不绕过付费墙。',
+        en: 'Lawful open access: Unpaywall first and OpenAlex as fallback, HTTPS-only OA links; when no free copy exists the app only links to the publisher, never bypassing a paywall.',
+      },
+      {
+        zh: '检索筛选与徽标:学科、仅同行评审、含预印本、仅免费全文;结果显示场所层级、同行评审、预印本、撤稿与开放获取状态。',
+        en: 'Search filters and badges: discipline, peer-reviewed only, include preprints and free full text only, with venue tier, peer review, preprint, retraction and OA badges.',
+      },
+      {
+        zh: '阅读器来源信息:顶部显示场所、同行评审、开放获取、许可、撤稿提示与出版社页面;新接口提供场所查询与来源配置状态。',
+        en: 'Reader provenance: the viewer shows venue, peer review, open access, license, retraction warnings and the publisher page; new endpoints expose venue lookup and source status.',
+      },
+      {
+        zh: '默认仅同行评审、预印本关闭;bioRxiv/medRxiv 按 DOI 补充元数据;新增分学科冒烟评测与 378 条后端测试。',
+        en: 'Peer-reviewed results are the default with preprints off; bioRxiv/medRxiv metadata is resolved by DOI; adds a per-discipline smoke evaluation and 378 backend tests.',
+      },
+    ],
+  },
+  {
+    version: 'v1.12.0',
+    date: '2026-10-30',
+    status: 'released',
     items: [
       {
         zh: '科研阅读器:PDF 画布/文本层、批注、区域解释与论文内定位高亮;关闭前统一保存或丢弃批注。',

@@ -121,7 +121,7 @@ async def main_async(args: argparse.Namespace) -> int:
     started = time.monotonic()
     async with httpx.AsyncClient(
             timeout=rl.TIMEOUT, follow_redirects=True,
-            headers={"User-Agent": "MathGuide/1.12 (literature smoke)"}) as client:
+            headers={"User-Agent": "MathGuide/1.13 (literature smoke)"}) as client:
         for field in fields:
             queries = CASES[field]
             if not args.full:

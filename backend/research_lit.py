@@ -1024,7 +1024,7 @@ async def oa_lookup(request: Request) -> JSONResponse:
         raise HTTPException(429, "检索过于频繁,请稍后再试")
     async with httpx.AsyncClient(
             timeout=TIMEOUT, follow_redirects=True,
-            headers={"User-Agent": "MathGuide/1.12 (research oa resolver)"}) as client:
+            headers={"User-Agent": "MathGuide/1.13 (research oa resolver)"}) as client:
         result = await oa_resolver.resolve_doi(client, doi)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
@@ -1032,7 +1032,12 @@ async def oa_lookup(request: Request) -> JSONResponse:
 async def venues_lookup(request: Request) -> JSONResponse:
     """按 ISSN 或名称查场所权威;返回学科层级,不做模糊猜测。"""
     require_auth(request)
-    issns = [raw for raw in request.query_params.getlist("issn") if raw.strip()]
+    issns = [
+        part.strip()
+        for raw in request.query_params.getlist("issn")
+        for part in raw.split(",")
+        if part.strip()
+    ]
     name = (request.query_params.get("name") or "").strip()
     field = (request.query_params.get("field") or "").strip().lower()
     if not issns and not name:
@@ -1076,6 +1081,7 @@ async def sources_info(request: Request) -> JSONResponse:
             "fulltext": spec.fulltext,
             "keyEnv": key_env,
             "keyConfigured": bool(os.getenv(key_env, "").strip()) if key_env else True,
+            "keyRequired": spec.key_required,
         })
     return JSONResponse({
         "sources": sources,
@@ -1153,7 +1159,7 @@ async def search(request: Request) -> JSONResponse:
         kind, value = identifier
         async with httpx.AsyncClient(
             timeout=TIMEOUT, follow_redirects=True,
-            headers={"User-Agent": "MathGuide/1.12 (research literature identifier)"},
+            headers={"User-Agent": "MathGuide/1.13 (research literature identifier)"},
         ) as client:
             try:
                 if kind == "doi":
@@ -1206,7 +1212,7 @@ async def search(request: Request) -> JSONResponse:
     warnings: list[str] = []
     gathered: list[dict] = []
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True,
-                                 headers={"User-Agent": "MathGuide/1.12 "
+                                 headers={"User-Agent": "MathGuide/1.13 "
                                           "(research literature search)"}) as client:
         outcomes = await _run_providers(
             client, providers, query, limit, filters if has_filters else None,
@@ -1221,7 +1227,7 @@ async def search(request: Request) -> JSONResponse:
     if oa_only:
         async with httpx.AsyncClient(
                 timeout=TIMEOUT, follow_redirects=True,
-                headers={"User-Agent": "MathGuide/1.12 (research oa fill)"}) as oa_client:
+                headers={"User-Agent": "MathGuide/1.13 (research oa fill)"}) as oa_client:
             await _fill_oa(oa_client, results)
     results = _filter_results(
         results, peer_reviewed=peer_reviewed_only,

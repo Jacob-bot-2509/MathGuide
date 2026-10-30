@@ -36,18 +36,25 @@ const hasMeta = computed(() => {
   const meta = docMeta.value
   if (!meta) return false
   return Boolean(
-    meta.venue || meta.peerReviewed || meta.license
+    meta.venue || meta.peerReviewed || meta.articleType === 'preprint'
+    || meta.license
     || meta.retractionStatus === 'retracted' || meta.landingUrl
     || (meta.oaStatus && meta.oaStatus !== 'unknown' && meta.oaStatus !== 'closed'),
   )
 })
-onMounted(async () => {
+
+async function loadDocMeta(): Promise<void> {
+  const docId = props.docId
+  docMeta.value = null
   try {
-    docMeta.value = await getResearchDocMeta(props.docId)
+    const meta = await getResearchDocMeta(docId)
+    if (docId === props.docId) docMeta.value = meta
   } catch {
-    docMeta.value = null
+    if (docId === props.docId) docMeta.value = null
   }
-})
+}
+
+onMounted(loadDocMeta)
 
 const fileUrl = computed(() =>
   `/api/research/docs/${encodeURIComponent(props.docId)}/file`)
@@ -753,6 +760,8 @@ watch(() => [props.docId, props.kind], () => {
   clearSelection()
   void load()
 })
+
+watch(() => props.docId, () => void loadDocMeta())
 
 void load()
 

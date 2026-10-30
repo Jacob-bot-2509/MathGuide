@@ -15,7 +15,8 @@ class SourceSpec:
     domains: tuple[str, ...]
     tier: str                 # authority | discovery | preprint | repository
     peer_reviewed: bool
-    requires_key: str = ""    # 环境变量名;空 = 不需要
+    requires_key: str = ""    # 可选/必需 key 的环境变量名
+    key_required: bool = False
     fulltext: str = "landing"  # pdf | oa | landing | metadata
 
 
@@ -47,11 +48,12 @@ SPECS: dict[str, SourceSpec] = {
     "openalex": SourceSpec(
         "openalex", "OpenAlex",
         ("general", "math", "physics", "chemistry", "biology"),
-        "discovery", False, fulltext="oa"),
+        "discovery", False, requires_key="MG_OPENALEX_API_KEY",
+        key_required=True, fulltext="oa"),
     "semanticscholar": SourceSpec(
         "semanticscholar", "Semantic Scholar",
         ("general", "math", "physics", "chemistry", "biology"),
-        "discovery", False, fulltext="oa"),
+        "discovery", False, requires_key="MG_S2_API_KEY", fulltext="oa"),
     "biorxiv": SourceSpec(
         "biorxiv", "bioRxiv / medRxiv",
         ("biology",),

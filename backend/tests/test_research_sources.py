@@ -511,6 +511,9 @@ def test_venues_endpoint(monkeypatch):
     assert body["found"] is True
     assert body["tier"] == "T0"
     assert body["venue"]["name"] == "Nature"
+    res = client.get("/api/research/venues?issn=bad,0028-0836&field=physics")
+    assert res.status_code == 200
+    assert res.json()["tier"] == "T0"
     assert client.get("/api/research/venues").status_code == 400
     assert client.get("/api/research/venues?name=NoSuchVenue").json()["found"] is False
 
@@ -524,9 +527,12 @@ def test_sources_endpoint(monkeypatch):
     app = Starlette(routes=[Route("/api/research/sources", rl.sources_info)])
     body = TestClient(app).get("/api/research/sources").json()
     by_id = {item["id"]: item for item in body["sources"]}
-    assert by_id["semanticscholar"]["keyEnv"] == ""
-    assert by_id["openalex"]["keyEnv"] == ""
+    assert by_id["semanticscholar"]["keyEnv"] == "MG_S2_API_KEY"
+    assert by_id["semanticscholar"]["keyRequired"] is False
+    assert by_id["openalex"]["keyEnv"] == "MG_OPENALEX_API_KEY"
+    assert by_id["openalex"]["keyRequired"] is True
     assert by_id["pubmed"]["keyEnv"] == "MG_NCBI_API_KEY"
+    assert by_id["pubmed"]["keyRequired"] is False
     assert body["registryVersion"]
 
 

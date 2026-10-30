@@ -353,7 +353,7 @@ tier=T0,T1,T2,T3
 
 - `GET /api/research/literature/oa?doi=`：OA 解析。
 - `GET /api/research/venues?issn=|name=`：venue 查询。
-- `GET /api/research/sources`：来源状态与 warnings（可选，调试用）。
+- `GET /api/research/sources`：来源、学科、层级与 key 配置状态（不探测外网）。
 
 ### 8.3 配置
 
