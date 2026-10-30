@@ -214,11 +214,14 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/account/export` | 导出账号、用量元数据与诊断记录 → `200 {exportedAt, account, usage, diagnoses}` |
 | POST | `/api/account/delete` | 注销账号(密码或 `confirm` 二次确认),级联删 token/用量/诊断 → `200 {ok:true}` |
 | POST | `/api/chat/stream` | 聊天流式回复(SSE) |
-| POST | `/api/research/docs?name=文件名&projectId=` | 上传论文(PDF/文本原始字节),按内容哈希去重、按用户隔离 → `{docId, duplicate, pages, chunks}` |
+| POST | `/api/research/docs?name=文件名&projectId=&temp=1` | 上传论文(PDF/文本原始字节),按内容哈希去重、按用户隔离 → `{docId, duplicate, pages, chunks}`;`temp=1` 进临时语料,供拖入后确认是否入库 |
 | GET | `/api/research/docs` | 当前用户的论文列表(元数据,含 `projectId`) |
 | GET | `/api/research/docs/{doc_id}` | 单篇论文来源元数据(场所、ISSN、许可、OA、撤稿),供阅读器顶部显示 |
-| DELETE | `/api/research/docs` | 清空正式论文库及其批注、切片、章节树和原文件；保留临时浏览历史 |
-| DELETE | `/api/research/docs/{doc_id}` | 删除论文、切片、章节树与原文件 |
+| GET | `/api/research/docs/{doc_id}/insights` | 论文结构缓存(研究问题/方法/结论/局限/章节);无缓存返回 `cached=false` |
+| POST | `/api/research/docs/{doc_id}/insights` | 生成或刷新论文结构 `{refresh?}`;按 docId + 内容哈希缓存 |
+| POST | `/api/research/docs/{doc_id}/progress` | 保存阅读页码 `{page}`;聊天记录不落库 |
+| DELETE | `/api/research/docs` | 清空正式论文库及其批注、切片、章节树、结构缓存和原文件；保留临时浏览历史 |
+| DELETE | `/api/research/docs/{doc_id}` | 删除论文、批注、切片、章节树、结构缓存与原文件 |
 | POST | `/api/research/search` | 全文检索 `{query, topK?, docId?, projectId?, tree?}` → `{hits, mode, elapsed}`;BM25 + embedding 混合,未配置向量时纯 BM25 |
 | GET | `/api/research/tree?docId=` | 论文章节树(节点扁平列表,`parentId` 组树) |
 | GET | `/api/research/projects` | 研究项目列表(目标/思路/状态) |

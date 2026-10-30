@@ -1024,7 +1024,7 @@ async def oa_lookup(request: Request) -> JSONResponse:
         raise HTTPException(429, "检索过于频繁,请稍后再试")
     async with httpx.AsyncClient(
             timeout=TIMEOUT, follow_redirects=True,
-            headers={"User-Agent": "MathGuide/1.13 (research oa resolver)"}) as client:
+            headers={"User-Agent": "MathGuide/1.14 (research oa resolver)"}) as client:
         result = await oa_resolver.resolve_doi(client, doi)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
@@ -1159,7 +1159,7 @@ async def search(request: Request) -> JSONResponse:
         kind, value = identifier
         async with httpx.AsyncClient(
             timeout=TIMEOUT, follow_redirects=True,
-            headers={"User-Agent": "MathGuide/1.13 (research literature identifier)"},
+            headers={"User-Agent": "MathGuide/1.14 (research literature identifier)"},
         ) as client:
             try:
                 if kind == "doi":
@@ -1212,7 +1212,7 @@ async def search(request: Request) -> JSONResponse:
     warnings: list[str] = []
     gathered: list[dict] = []
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True,
-                                 headers={"User-Agent": "MathGuide/1.13 "
+                                 headers={"User-Agent": "MathGuide/1.14 "
                                           "(research literature search)"}) as client:
         outcomes = await _run_providers(
             client, providers, query, limit, filters if has_filters else None,
@@ -1227,7 +1227,7 @@ async def search(request: Request) -> JSONResponse:
     if oa_only:
         async with httpx.AsyncClient(
                 timeout=TIMEOUT, follow_redirects=True,
-                headers={"User-Agent": "MathGuide/1.13 (research oa fill)"}) as oa_client:
+                headers={"User-Agent": "MathGuide/1.14 (research oa fill)"}) as oa_client:
             await _fill_oa(oa_client, results)
     results = _filter_results(
         results, peer_reviewed=peer_reviewed_only,

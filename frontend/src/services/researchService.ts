@@ -29,6 +29,8 @@ export interface ResearchDoc {
   versionOf?: string
   status?: string
   originUrl?: string
+  lastPage?: number
+  lastReadAt?: number
 }
 
 export type ResearchStatus = 'exploring' | 'active' | 'paused' | 'done'
@@ -89,6 +91,45 @@ export async function getResearchDocMeta(docId: string): Promise<ResearchDoc> {
   return res.doc
 }
 
+export interface OutlineNode {
+  title: string
+  children: OutlineNode[]
+}
+
+export interface PaperStructure {
+  question: string
+  methods: string[]
+  conclusions: string[]
+  limitations: string[]
+  outline: OutlineNode[]
+}
+
+export interface DocInsights {
+  docId: string
+  cached: boolean
+  structure: PaperStructure | null
+}
+
+export async function getResearchDocInsights(docId: string): Promise<DocInsights> {
+  return get<DocInsights>(
+    `/api/research/docs/${encodeURIComponent(docId)}/insights`, authHeaders())
+}
+
+export async function generateResearchDocInsights(
+  docId: string,
+  refresh = false,
+): Promise<DocInsights> {
+  return post<DocInsights>(
+    `/api/research/docs/${encodeURIComponent(docId)}/insights`,
+    { refresh }, authHeaders())
+}
+
+export async function saveReadingProgress(docId: string, page: number): Promise<void> {
+  await post(
+    `/api/research/docs/${encodeURIComponent(docId)}/progress`,
+    { page }, authHeaders())
+}
+
 export async function uploadResearchDoc(
   file: File,
   projectId?: string,
@@ -105,6 +146,27 @@ export async function uploadResearchDoc(
   const pid = projectId ? `&projectId=${encodeURIComponent(projectId)}` : ''
   return upload(
     `/api/research/docs?name=${encodeURIComponent(file.name)}${pid}`,
+    file,
+    type,
+    authHeaders(),
+  )
+}
+
+/** 拖入的论文先进临时语料:解析成功后才询问是否入库。 */
+export async function uploadTempPaper(
+  file: File,
+): Promise<{
+  docId: string
+  duplicate: boolean
+  status?: string
+  pages?: number
+  doi?: string
+}> {
+  const type = file.type || (file.name.toLowerCase().endsWith('.pdf')
+    ? 'application/pdf'
+    : 'text/plain')
+  return upload(
+    `/api/research/docs?name=${encodeURIComponent(file.name)}&temp=1`,
     file,
     type,
     authHeaders(),

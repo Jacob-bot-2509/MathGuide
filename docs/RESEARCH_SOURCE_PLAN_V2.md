@@ -546,7 +546,7 @@ frontend/src/utils/i18n.ts
 - 前端默认仅同行评审、预印本默认关闭。
 - bioRxiv/medRxiv 按 DOI 补充预印本元数据（关键词搜索仍走 Europe PMC）。
 - `tools/lit_smoke.py`：分学科冒烟与金标准指标。
-- 后端 378 条测试、前端自测、`vue-tsc`、`npm run build` 通过。
+- 后端 384 条测试、前端自测、`vue-tsc`、`npm run build` 通过。
 
 冒烟基线（2026-10-30，每学科 3 查询 × Top-10）：
 

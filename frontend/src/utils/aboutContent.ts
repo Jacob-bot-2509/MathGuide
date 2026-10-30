@@ -6,8 +6,8 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.13.0'
-export const APP_STABLE_VERSION = 'v1.13.0'
+export const APP_VERSION = 'v1.14.0'
+export const APP_STABLE_VERSION = 'v1.14.0'
 export const APP_STABLE_DATE = '2026-10-30'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
@@ -51,6 +51,33 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '论文工作台:研究档案每篇论文可点「继续」,左侧对话、右侧阅读器,第三栏展开论文结构与思维导图;页码与批注保存,聊天记录关闭即清空。',
+        en: 'Paper workspace: continue any archived paper into a left-chat, right-reader layout with an optional structure and mind-map pane; page and annotations are saved while chat is cleared on close.',
+      },
+      {
+        zh: '论文结构:模型提炼研究问题、方法、结论、局限与章节,按 docId + 内容哈希缓存,切换论文只读缓存,可手动重新生成。',
+        en: 'Paper structure: the model extracts the research question, methods, conclusions, limitations and outline, cached by docId plus content hash and reused across switches.',
+      },
+      {
+        zh: '阅读联动:提问后自动定位相关段落并跳页高亮;批注照常新增、修改、删除。',
+        en: 'Reading integration: questions locate and highlight the relevant passage and page; annotations can still be added, edited and deleted.',
+      },
+      {
+        zh: '拖拽论文入对话:科研区拖入 PDF/DOCX/EPUB 等文档即临时解析并直接提问,不必先入库;新建对话或离开页面时再逐篇选择导入研究档案、仅保留浏览历史或忽略。',
+        en: 'Drag papers into chat: in the research workspace a PDF/DOCX/EPUB is parsed as a temporary paper and can be queried immediately; on a new conversation or leaving the page, choose to import it, keep it in history or ignore it.',
+      },
+      {
+        zh: '导入联动:临时论文入库后与手动上传论文一致,出现在研究档案并可全文检索、阅读、批注与生成结构;刷新后未处理论文仍会恢复。',
+        en: 'Import integration: imported papers behave like manual uploads across search, reading, annotations and structure; unresolved papers are restored after a refresh.',
+      },
+    ],
+  },
+  {
+    version: 'v1.13.0',
+    date: '2026-10-30',
+    status: 'released',
     items: [
       {
         zh: '文献来源分级:接入 Crossref、arXiv、Europe PMC、PubMed、INSPIRE、zbMATH、DOAJ、OpenAlex、Semantic Scholar,按学科标注 T0–T3 场所层级与预印本 P。',

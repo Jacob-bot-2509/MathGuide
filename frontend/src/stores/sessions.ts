@@ -46,6 +46,13 @@ export interface ChatMsg {
   stopped?: boolean
   /** 研究型回答(后端 meta 帧标记,非前端猜测):导出 PDF 入口只对它显示 */
   research?: boolean
+  /** 拖入论文后的导入询问:用户选择后更新状态,随会话保存 */
+  paperImport?: {
+    docId: string
+    title: string
+    pages: number
+    status: 'pending' | 'imported' | 'temp'
+  }
 }
 
 export interface ChatSession {
@@ -76,6 +83,7 @@ interface PersistedMsg {
   interrupted?: boolean
   research?: boolean
   stopped?: boolean
+  paperImport?: ChatMsg['paperImport']
 }
 
 interface Persisted {
@@ -145,7 +153,7 @@ function createSessionStore(workspace: Workspace): SessionStore {
               attachment: m.attachment, chitchat: m.chitchat,
               nav: m.nav, navGuideFor: m.navGuideFor,
               interrupted: m.interrupted, research: m.research,
-              stopped: m.stopped,
+              stopped: m.stopped, paperImport: m.paperImport,
             }))
             .slice(-120),
         })),

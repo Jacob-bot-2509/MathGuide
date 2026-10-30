@@ -55,6 +55,7 @@ SNIPPET_CHARS = 320
 # 上传与检索都触发磁盘/embedding 开销,按用户限流(聊天另有自己的限流器)
 _upload_limiter = SlidingWindowLimiter(4, 300)    # 5 分钟最多 4 篇
 _search_limiter = SlidingWindowLimiter(30, 60)    # 1 分钟最多 30 次检索
+_insights_limiter = SlidingWindowLimiter(6, 3600)  # 结构生成每小时最多 6 次
 
 # BM25 参数(业界默认值)
 K1 = 1.2
@@ -177,9 +178,16 @@ def _connect(uid: str) -> sqlite3.Connection:
         ("landing_url", "TEXT"),
         ("retraction_status", "TEXT"),
         ("version_of", "TEXT"),
+        ("last_page", "INTEGER NOT NULL DEFAULT 1"),
+        ("last_read_at", "REAL"),
     ):
         if column not in columns:
             conn.execute(f"ALTER TABLE docs ADD COLUMN {column} {decl}")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS doc_insights("
+        "doc_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL,"
+        " structure_json TEXT NOT NULL, created_at REAL NOT NULL)"
+    )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS annotations("
         "id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, page INTEGER NOT NULL,"
@@ -1074,19 +1082,21 @@ def _load_rows(uid: str) -> tuple[list[dict], list[NodeRec], list[ChunkRec]]:
              "createdAt": r[5], "projectId": r[6], "doi": r[7] or "",
              "title": r[8] or r[1], "authors": r[9] or "",
              "year": r[10] or 0, "venue": r[11] or "",
+             "sha": r[3] or "",
              "status": r[12] or "uploaded", "originUrl": r[13] or "",
              "lastViewedAt": r[14] or 0, "deletedAt": r[15] or 0,
              "issn": r[16] or "", "publisher": r[17] or "",
              "articleType": r[18] or "", "peerReviewed": bool(r[19]),
              "oaStatus": r[20] or "unknown", "license": r[21] or "",
              "accessSource": r[22] or "user_upload", "landingUrl": r[23] or "",
-             "retractionStatus": r[24] or "none", "versionOf": r[25] or ""}
+             "retractionStatus": r[24] or "none", "versionOf": r[25] or "",
+             "lastPage": r[26] or 1, "lastReadAt": r[27] or 0}
             for r in conn.execute(
                 "SELECT id, name, size, sha, pages, created_at, project_id, doi,"
                 " title, authors, year, venue, status, origin_url, last_viewed_at,"
                 " deleted_at, issn, publisher, article_type, peer_reviewed,"
                 " oa_status, license, access_source, landing_url, retraction_status,"
-                " version_of FROM docs ORDER BY created_at DESC")
+                " version_of, last_page, last_read_at FROM docs ORDER BY created_at DESC")
         ]
         nodes = [NodeRec(*r) for r in conn.execute(
             "SELECT id, doc_id, parent_id, title, summary, page_start, page_end, text FROM nodes")]
@@ -1316,6 +1326,7 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
                             "且没有可自动清理的无批注记录")
                     if evicted:
                         marks = ",".join("?" for _ in evicted)
+                        conn.execute(f"DELETE FROM doc_insights WHERE doc_id IN ({marks})", evicted)
                         conn.execute(f"DELETE FROM chunks WHERE doc_id IN ({marks})", evicted)
                         conn.execute(f"DELETE FROM nodes WHERE doc_id IN ({marks})", evicted)
                         conn.execute(f"DELETE FROM docs WHERE id IN ({marks})", evicted)
@@ -1403,6 +1414,7 @@ def _delete(uid: str, doc_id: str, *, expired_before: float | None = None) -> bo
                     (doc_id, expired_before)).fetchone()
             if not found:
                 return False
+            conn.execute("DELETE FROM doc_insights WHERE doc_id = ?", (doc_id,))
             conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
             conn.execute("DELETE FROM nodes WHERE doc_id = ?", (doc_id,))
             conn.execute("DELETE FROM annotations WHERE doc_id = ?", (doc_id,))
@@ -1438,7 +1450,7 @@ def _doc_row(uid: str, doc_id: str) -> dict | None:
             "SELECT id, name, pages, mime, status, deleted_at, issn, publisher,"
             " article_type, peer_reviewed, oa_status, license, access_source,"
             " landing_url, retraction_status, version_of, doi, title, authors,"
-            " year, venue, origin_url FROM docs WHERE id = ?",
+            " year, venue, origin_url, last_page, last_read_at FROM docs WHERE id = ?",
             (doc_id,)).fetchone()
         if not row:
             return None
@@ -1451,7 +1463,161 @@ def _doc_row(uid: str, doc_id: str) -> dict | None:
                 "retractionStatus": row[14] or "none", "versionOf": row[15] or "",
                 "doi": row[16] or "", "title": row[17] or row[1],
                 "authors": row[18] or "", "year": row[19] or 0,
-                "venue": row[20] or "", "originUrl": row[21] or ""}
+                "venue": row[20] or "", "originUrl": row[21] or "",
+                "lastPage": row[22] or 1, "lastReadAt": row[23] or 0}
+    finally:
+        conn.close()
+
+
+def _cached_structure(uid: str, doc_id: str) -> dict | None:
+    """缓存键带内容哈希:重新上传/替换同一篇论文后自动失效。"""
+    conn = _connect(uid)
+    try:
+        doc = conn.execute(
+            "SELECT sha FROM docs WHERE id = ? AND deleted_at IS NULL",
+            (doc_id,)).fetchone()
+        if not doc:
+            return None
+        row = conn.execute(
+            "SELECT content_hash, structure_json FROM doc_insights WHERE doc_id = ?",
+            (doc_id,)).fetchone()
+        if not row or str(row[0]) != str(doc[0] or ""):
+            return None
+        value = json.loads(row[1])
+        return value if isinstance(value, dict) else None
+    except (TypeError, ValueError, sqlite3.Error):
+        return None
+    finally:
+        conn.close()
+
+
+def _store_structure(uid: str, doc_id: str, content_hash: str, structure: dict) -> None:
+    conn = _connect(uid)
+    try:
+        conn.execute(
+            "INSERT INTO doc_insights(doc_id, content_hash, structure_json, created_at)"
+            " VALUES(?,?,?,?) ON CONFLICT(doc_id) DO UPDATE SET"
+            " content_hash=excluded.content_hash,"
+            " structure_json=excluded.structure_json, created_at=excluded.created_at",
+            (doc_id, content_hash, json.dumps(structure, ensure_ascii=False),
+             time.time()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _structure_source(uid: str, doc_id: str) -> tuple[dict, str]:
+    """取论文元数据与章节摘要,拼成一次性结构分析输入。"""
+    docs, nodes, chunks = _load_rows(uid)
+    doc = next((d for d in docs if d["id"] == doc_id and not d.get("deletedAt")), None)
+    if doc is None:
+        raise ValueError("not found")
+    parts = [
+        f"标题: {doc.get('title') or doc.get('name') or ''}",
+        f"作者: {doc.get('authors') or ''}",
+        f"年份: {doc.get('year') or ''}  场所: {doc.get('venue') or ''}",
+        "", "章节与摘要:",
+    ]
+    selected = [n for n in nodes if n.doc_id == doc_id]
+    for node in selected[:80]:
+        summary = re.sub(r"\s+", " ", node.summary or "")[:260]
+        parts.append(
+            f"- {node.title} (第 {node.page_start}-{node.page_end} 页): {summary}")
+    if not selected:
+        for chunk in [c for c in chunks if c.doc_id == doc_id][:12]:
+            summary = re.sub(r"\s+", " ", chunk.text)[:500]
+            parts.append(
+                f"- 第 {chunk.page_start}-{chunk.page_end} 页: {summary}")
+    return doc, "\n".join(parts)[:14000]
+
+
+def _normalize_outline(value: object, depth: int = 0) -> list[dict]:
+    if not isinstance(value, list) or depth > 3:
+        return []
+    out = []
+    for item in value[:40]:
+        if isinstance(item, str):
+            title = item.strip()[:120]
+            if title:
+                out.append({"title": title, "children": []})
+        elif isinstance(item, dict):
+            title = str(item.get("title") or "").strip()[:120]
+            if not title:
+                continue
+            out.append({
+                "title": title,
+                "children": _normalize_outline(item.get("children"), depth + 1),
+            })
+    return out
+
+
+def _parse_structure(text: str) -> dict:
+    raw = text.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("模型未返回 JSON")
+    data = json.loads(raw[start:end + 1])
+    if not isinstance(data, dict):
+        raise ValueError("模型返回格式错误")
+
+    def strings(key: str, limit: int) -> list[str]:
+        value = data.get(key)
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+        return [str(x).strip()[:300] for x in value if str(x).strip()][:limit]
+
+    structure = {
+        "question": str(data.get("question") or "").strip()[:600],
+        "methods": strings("methods", 8),
+        "conclusions": strings("conclusions", 8),
+        "limitations": strings("limitations", 8),
+        "outline": _normalize_outline(data.get("outline")),
+    }
+    if not any((structure["question"], structure["methods"],
+                structure["conclusions"], structure["limitations"],
+                structure["outline"])):
+        raise ValueError("模型返回内容为空")
+    return structure
+
+
+async def _build_structure(uid: str, doc_id: str) -> dict:
+    doc, context = await asyncio.to_thread(_structure_source, uid, doc_id)
+    system = (
+        "你是论文结构分析器。只根据给出的标题、章节与摘要提炼论文框架。"
+        "不要编造摘要中不存在的实验、数值或结论。"
+        "只输出一个 JSON 对象,不要解释、不要 Markdown 代码块。格式:\n"
+        '{"question":"核心研究问题",'
+        '"methods":["方法1","方法2"],'
+        '"conclusions":["结论1"],'
+        '"limitations":["局限1"],'
+        '"outline":[{"title":"章节","children":[{"title":"小节","children":[]}]}]}\n'
+        "methods/conclusions/limitations 各 1-6 条;outline 保留论文的主要章节层级,"
+        "最多三层、合计不超过 30 项。"
+    )
+    parts: list[str] = []
+    async for delta in llm_mod.stream_chat(
+            system, context, role="main", fallback=True, max_tokens=1800):
+        parts.append(delta)
+    structure = _parse_structure("".join(parts))
+    await asyncio.to_thread(
+        _store_structure, uid, doc_id, str(doc.get("sha") or ""), structure)
+    return structure
+
+
+def _set_progress(uid: str, doc_id: str, page: int) -> bool:
+    conn = _connect(uid)
+    try:
+        cursor = conn.execute(
+            "UPDATE docs SET last_page = ?, last_read_at = ?"
+            " WHERE id = ? AND deleted_at IS NULL",
+            (page, time.time(), doc_id))
+        conn.commit()
+        return cursor.rowcount > 0
     finally:
         conn.close()
 
@@ -1873,6 +2039,7 @@ def _clear_all(uid: str) -> int:
                 "SELECT id FROM docs WHERE status != 'temp'")]
             if ids:
                 marks = ",".join("?" for _ in ids)
+                conn.execute(f"DELETE FROM doc_insights WHERE doc_id IN ({marks})", ids)
                 conn.execute(f"DELETE FROM chunks WHERE doc_id IN ({marks})", ids)
                 conn.execute(f"DELETE FROM nodes WHERE doc_id IN ({marks})", ids)
                 conn.execute(f"DELETE FROM annotations WHERE doc_id IN ({marks})", ids)
@@ -1958,15 +2125,18 @@ async def upload_doc(request: Request) -> JSONResponse:
     _rate(_upload_limiter, uid)
     name = request.query_params.get("name", "").strip()
     project_id = request.query_params.get("projectId", "").strip() or None
+    temp = request.query_params.get("temp", "").lower() in {"1", "true", "yes"}
     data = await _read_limited(request)
     if not data:
         raise HTTPException(400, "empty file")
     try:
         result = await asyncio.to_thread(
-            _ingest, uid, name, data, request.headers.get("content-type", ""), project_id)
+            _ingest, uid, name, data, request.headers.get("content-type", ""),
+            project_id, status="temp" if temp else "uploaded",
+            analyze=not temp)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return JSONResponse({"ok": True, **result})
+    return JSONResponse({"ok": True, "temp": temp, **result})
 
 
 async def list_docs(request: Request) -> JSONResponse:
@@ -1989,6 +2159,73 @@ async def get_doc(request: Request) -> JSONResponse:
     if doc is None or doc["deletedAt"]:
         raise HTTPException(404, "not found")
     return JSONResponse({"doc": doc}, headers={"Cache-Control": "no-store"})
+
+
+async def get_insights(request: Request) -> JSONResponse:
+    """读取论文结构缓存;没有缓存时返回 cached=false,由前端决定是否生成。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    doc_id = str(request.path_params.get("doc_id") or "")
+    doc = await asyncio.to_thread(_doc_row, uid, doc_id)
+    if doc is None or doc["deletedAt"]:
+        raise HTTPException(404, "not found")
+    structure = await asyncio.to_thread(_cached_structure, uid, doc_id)
+    return JSONResponse({
+        "docId": doc_id,
+        "cached": structure is not None,
+        "structure": structure,
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def generate_insights(request: Request) -> JSONResponse:
+    """首次生成或手动刷新论文结构;结果按 docId + 内容哈希缓存。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    doc_id = str(request.path_params.get("doc_id") or "")
+    doc = await asyncio.to_thread(_doc_row, uid, doc_id)
+    if doc is None or doc["deletedAt"]:
+        raise HTTPException(404, "not found")
+    body = await read_json_object(request)
+    refresh = bool(body.get("refresh"))
+    if not refresh:
+        cached = await asyncio.to_thread(_cached_structure, uid, doc_id)
+        if cached is not None:
+            return JSONResponse({
+                "docId": doc_id, "cached": True, "structure": cached,
+            }, headers={"Cache-Control": "no-store"})
+    if not llm_mod.is_configured():
+        raise HTTPException(503, "论文结构生成需要配置模型")
+    if not _insights_limiter.allow(uid):
+        raise HTTPException(429, "生成过于频繁,请稍后再试")
+    try:
+        structure = await _build_structure(uid, doc_id)
+    except ValueError as exc:
+        raise HTTPException(502, f"论文结构生成失败: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 模型/网络错误统一降级
+        raise HTTPException(502, f"论文结构生成失败: {type(exc).__name__}") from exc
+    return JSONResponse({
+        "docId": doc_id, "cached": False, "structure": structure,
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def save_progress(request: Request) -> JSONResponse:
+    """保存阅读页码;聊天记录不落库,下次打开只恢复页码与批注。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    doc_id = str(request.path_params.get("doc_id") or "")
+    body = await read_json_object(request)
+    raw = body.get("page")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise HTTPException(400, "page 必须是整数")
+    doc = await asyncio.to_thread(_doc_row, uid, doc_id)
+    if doc is None or doc["deletedAt"]:
+        raise HTTPException(404, "not found")
+    pages = int(doc.get("pages") or 0)
+    page = max(1, min(MAX_PAGES, pages or MAX_PAGES, raw))
+    ok = await asyncio.to_thread(_set_progress, uid, doc_id, page)
+    if not ok:
+        raise HTTPException(404, "not found")
+    return JSONResponse({"ok": True, "page": page})
 
 
 async def delete_doc(request: Request) -> JSONResponse:

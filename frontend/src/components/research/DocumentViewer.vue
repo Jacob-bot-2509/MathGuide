@@ -28,7 +28,7 @@ const props = defineProps<{
   startPage?: number
   projectId?: string | null
 }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; pageChange: [page: number] }>()
 
 /* 来源元数据:失败不阻塞阅读,只少一行徽标。 */
 const docMeta = ref<ResearchDoc | null>(null)
@@ -70,6 +70,7 @@ const canvasEl = ref<HTMLCanvasElement | null>(null)
 const textLayerEl = ref<HTMLDivElement | null>(null)
 const bodyEl = ref<HTMLElement | null>(null)
 const page = ref(props.startPage && props.startPage > 0 ? props.startPage : 1)
+watch(page, (value) => emit('pageChange', value))
 const total = ref(0)
 const scale = ref(1.2)
 const expanded = ref(false)
@@ -353,7 +354,16 @@ async function showPassages(items: { page: number; quote: string }[]): Promise<v
   }
 }
 
-defineExpose({ showPassages })
+async function flushPending(): Promise<boolean> {
+  if (!dirty.value) return true
+  return flush()
+}
+
+function hasPending(): boolean {
+  return dirty.value
+}
+
+defineExpose({ showPassages, requestClose, flushPending, hasPending })
 
 function escapeHtml(text: string): string {
   return text

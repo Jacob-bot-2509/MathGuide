@@ -19,11 +19,13 @@
  * 问题分类由前端关键词预判,后端路由做最终裁决。
  */
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
 import ResearchArchivePanel from '@/components/chat/ResearchArchivePanel.vue'
+import PaperWorkspace from '@/components/research/PaperWorkspace.vue'
+import PaperImportPrompt from '@/components/research/PaperImportPrompt.vue'
 import TodoPanel from '@/components/chat/TodoPanel.vue'
 import DocModal from '@/components/chat/DocModal.vue'
 import TodoReminder from '@/components/chat/TodoReminder.vue'
@@ -35,6 +37,8 @@ import { COMMANDS, RESEARCH_COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
 import { speechToMath, streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
 import { getResearchTable } from '@/services/researchTableService'
+import { getResearchDocMeta, uploadTempPaper, type ResearchDoc } from '@/services/researchService'
+import { deletePaperHistory, importTempPaper } from '@/services/literatureService'
 import { downloadBlob, exportSurveyPdf } from '@/services/docService'
 import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyQuestion, isChitchat } from '@/utils/classifier'
 import { settingsState, updateSettings } from '@/stores/settings'
@@ -79,11 +83,23 @@ const workspaceBodyRef = ref<HTMLElement | null>(null)
 const splitRatio = ref(loadSplitRatio())
 const searchPaneRef = ref<{ locateForQuestion: (q: string) => Promise<void> } | null>(null)
 const currentPaper = ref<{ docId: string; title: string } | null>(null)
+/** 拖入本次对话的论文:直接作为对话上下文,结束时再询问是否入库。 */
+const stagedPaper = ref<{ docId: string; title: string } | null>(null)
+const stagedPapers = ref<Array<{
+  docId: string
+  title: string
+  pages: number
+  msgId: number
+}>>([])
+const importPromptOpen = ref(false)
+const importPromptBusy = ref(false)
+let importPromptResolve: ((proceed: boolean) => void) | null = null
 /** 从数据表页带过来的表:作为对话上下文,随消息发送 tableId */
 const tableContext = ref<{ id: string; title: string } | null>(null)
 
 function onPaperChange(paper: { docId: string; title: string } | null): void {
   currentPaper.value = paper
+  if (paper) stagedPaper.value = null
 }
 
 async function loadTableContext(): Promise<void> {
@@ -217,6 +233,12 @@ const input = ref('')
 type PanelKind = 'summary' | 'scope' | 'notebook' | 'formula' | 'todo' | 'archive'
 const activePanel = ref<PanelKind | null>(null)
 const archivePanelRef = ref<InstanceType<typeof ResearchArchivePanel> | null>(null)
+const paperDocId = ref<string | null>(null)
+
+function openPaperWorkspace(doc: ResearchDoc): void {
+  activePanel.value = null
+  paperDocId.value = doc.id
+}
 const docOpen = ref(false)
 
 function closePanel(): void {
@@ -617,7 +639,9 @@ function send(text?: string, cmd?: string) {
     history,
     // 搜索范围只属于科研链路:学习区不传,避免误触发跨区文献检索
     sources: isResearch.value ? scopeForRequest() : undefined,
-    paperId: isResearch.value ? currentPaper.value?.docId : undefined,
+    paperId: isResearch.value
+      ? (stagedPaper.value?.docId || currentPaper.value?.docId)
+      : undefined,
     tableId: isResearch.value ? tableContext.value?.id : undefined,
   })
 }
@@ -667,7 +691,8 @@ function runCommand(cmd: string) {
 }
 
 /** 新建对话:当前会话与其进行中的输出原样保留(后台继续生成),切换至新会话 */
-function newConversation() {
+async function newConversation() {
+  if (!(await askPendingPapers())) return
   createSession()
   greet()
 }
@@ -905,7 +930,9 @@ function onFile(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (file) attachFileItem(file)
+  if (!file) return
+  if (isResearch.value && isPaperFile(file)) void stagePaperFile(file)
+  else attachFileItem(file)
 }
 
 /** 文件入库:PDF(pdfjs 提取文本层)/ 文本类(.txt/.md)读取正文随附件保存,其余仅元信息 */
@@ -950,7 +977,142 @@ async function importImageFile(file: File) {
   }
 }
 
-/* ---------- 拖拽导入(电脑端:从桌面/资源管理器拖文件进对话框) ---------- */
+/** 拖入/选择的论文先进入临时语料,解析成功后再询问是否入库。 */
+const PAPER_EXT = /\.(pdf|docx|epub|html?|xml|rtf|tex)$/i
+
+function isPaperFile(file: File): boolean {
+  return file.type === 'application/pdf'
+    || file.type.includes('wordprocessingml')
+    || file.type === 'application/epub+zip'
+    || PAPER_EXT.test(file.name)
+}
+
+function findMessage(id: number): ChatMsg | null {
+  for (const session of sessions.value) {
+    const found = session.messages.find((m) => m.id === id)
+    if (found) return found
+  }
+  return null
+}
+
+function removeMessage(id: number): void {
+  for (const session of sessions.value) {
+    const index = session.messages.findIndex((m) => m.id === id)
+    if (index >= 0) {
+      session.messages.splice(index, 1)
+      return
+    }
+  }
+}
+
+/** 拖入即用:临时论文直接成为本次对话的上下文,不要求先入库。 */
+async function stagePaperFile(file: File): Promise<void> {
+  if (!activeSession.value) return
+  showToast(t('learn.paperParsing'))
+  try {
+    const res = await uploadTempPaper(file)
+    if (res.duplicate && res.status && res.status !== 'temp') {
+      showToast(t('learn.paperAlready'))
+      return
+    }
+    const meta = await getResearchDocMeta(res.docId).catch(() => null)
+    const title = meta?.title || file.name
+    const pages = res.pages || meta?.pages || 0
+    currentPaper.value = null
+    stagedPaper.value = { docId: res.docId, title }
+
+    const existing = stagedPapers.value.find((p) => p.docId === res.docId)
+    if (existing) {
+      persistSessions()
+      scrollBottom(false)
+      return
+    }
+    const session = activeSession.value
+    const message: ChatMsg = {
+      id: nextMsgId(),
+      role: 'assistant',
+      content: t('learn.paperReady'),
+      paperImport: { docId: res.docId, title, pages, status: 'pending' },
+    }
+    session.messages.push(message)
+    stagedPapers.value.push({
+      docId: res.docId, title, pages, msgId: message.id,
+    })
+    if (!flushSessions(true)) showToast(t('learn.toastStorage'))
+    scrollBottom(false)
+  } catch (err) {
+    const message = err instanceof Error && err.message ? err.message : 'unknown'
+    showToast(t('learn.paperParseFail', { msg: message }))
+  }
+}
+
+function askPendingPapers(): Promise<boolean> {
+  if (!stagedPapers.value.length) return Promise.resolve(true)
+  if (importPromptOpen.value) return Promise.resolve(false)
+  importPromptOpen.value = true
+  return new Promise((resolve) => {
+    importPromptResolve = resolve
+  })
+}
+
+async function confirmPaperChoices(
+  choices: Record<string, 'import' | 'temp' | 'ignore'>,
+): Promise<void> {
+  if (importPromptBusy.value) return
+  importPromptBusy.value = true
+  const selected = { ...choices }
+  const retry: typeof stagedPapers.value = []
+  let completed = false
+  let importedAny = false
+  try {
+    for (const paper of [...stagedPapers.value]) {
+      const choice = selected[paper.docId] || 'import'
+      const msg = findMessage(paper.msgId)
+      if (choice === 'import') {
+        try {
+          await importTempPaper(paper.docId, undefined, true)
+          if (msg?.paperImport) msg.paperImport.status = 'imported'
+          importedAny = true
+          showToast(t('learn.paperImported'))
+        } catch {
+          retry.push(paper)
+          showToast(t('learn.paperImportFail'))
+        }
+      } else if (choice === 'temp') {
+        if (msg?.paperImport) msg.paperImport.status = 'temp'
+        showToast(t('learn.paperKept'))
+      } else {
+        try {
+          await deletePaperHistory(paper.docId)
+        } catch {
+          /* 已入库或已删除:忽略删除失败 */
+        }
+        removeMessage(paper.msgId)
+        showToast(t('learn.paperIgnored'))
+      }
+    }
+    completed = retry.length === 0
+    if (importedAny) await archivePanelRef.value?.reload?.()
+  } finally {
+    const last = retry[retry.length - 1]
+    stagedPapers.value = retry
+    stagedPaper.value = last ? { docId: last.docId, title: last.title } : null
+    if (!flushSessions(true)) showToast(t('learn.toastStorage'))
+    importPromptBusy.value = false
+    importPromptOpen.value = false
+    importPromptResolve?.(completed)
+    importPromptResolve = null
+  }
+}
+
+function cancelPaperPrompt(): void {
+  if (importPromptBusy.value) return
+  importPromptOpen.value = false
+  importPromptResolve?.(false)
+  importPromptResolve = null
+}
+
+
 
 const dragging = ref(false)
 let dragHideTimer: ReturnType<typeof setTimeout> | null = null
@@ -984,6 +1146,7 @@ async function onDropFiles(e: DragEvent) {
   }
   for (const f of files) {
     if (f.type.startsWith('image/')) await importImageFile(f)
+    else if (isResearch.value && isPaperFile(f)) await stagePaperFile(f)
     else await attachFileItem(f)
   }
 }
@@ -1000,6 +1163,7 @@ function onPaste(e: ClipboardEvent) {
     if (!f) continue
     e.preventDefault()
     if (f.type.startsWith('image/')) importImageFile(f)
+    else if (isResearch.value && isPaperFile(f)) void stagePaperFile(f)
     else attachFileItem(f)
     return
   }
@@ -1291,10 +1455,30 @@ function greet() {
   scheduleStream(session, live, '', 0)
 }
 
+function restoreStagedPapers(): void {
+  const seen = new Set<string>()
+  for (const session of sessions.value) {
+    for (const msg of session.messages) {
+      const info = msg.paperImport
+      if (!info || info.status !== 'pending' || seen.has(info.docId)) continue
+      seen.add(info.docId)
+      stagedPapers.value.push({
+        docId: info.docId,
+        title: info.title,
+        pages: info.pages,
+        msgId: msg.id,
+      })
+      stagedPaper.value = { docId: info.docId, title: info.title }
+    }
+  }
+}
+
 onMounted(() => {
   // 每次进入页面都开启全新对话;旧会话自动归档到相应板块
   // (会话档案由 stores/sessions 在应用启动时恢复)
-  sessions.value = sessions.value.filter((s) => s.cat || s.messages.some((m) => m.role === 'user'))
+  sessions.value = sessions.value.filter((s) => s.cat
+    || s.messages.some((m) => m.role === 'user' || m.paperImport))
+  restoreStagedPapers()
   createSession()
   greet()
   // 文献检索页「基于这些结果提问」:证据已拼好,进对话后直接发送
@@ -1307,10 +1491,24 @@ onMounted(() => {
     void loadTableContext()
   }
   window.addEventListener('resize', onWorkspaceResize)
+  window.addEventListener('beforeunload', warnPendingPapers)
 })
+
+onBeforeRouteLeave(async () => {
+  if (!stagedPapers.value.length) return true
+  return askPendingPapers()
+})
+
+function warnPendingPapers(event: BeforeUnloadEvent): void {
+  if (!stagedPapers.value.length) return
+  flushSessions(true)
+  event.preventDefault()
+  event.returnValue = ''
+}
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onWorkspaceResize)
+  window.removeEventListener('beforeunload', warnPendingPapers)
   stopAllStreams()
   sr?.stop()
   cancelConvert()
@@ -1407,6 +1605,17 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </div>
+            <div v-if="m.paperImport" class="paper-imp">
+              <div class="paper-imp-head">
+                <span class="paper-imp-icon">📄</span>
+                <span class="paper-imp-name" :title="m.paperImport.title">{{ m.paperImport.title }}</span>
+                <span class="paper-imp-pages">{{ t('learn.paperPages', { n: m.paperImport.pages }) }}</span>
+              </div>
+              <p class="paper-imp-q">{{ m.content }}</p>
+              <p v-if="m.paperImport.status !== 'pending'" class="paper-imp-state">
+                {{ m.paperImport.status === 'imported' ? t('learn.paperImported') : t('learn.paperKept') }}
+              </p>
+            </div>
             <!-- 走 cmdName 而非裸键:契约键是中文,英文界面下会露出中文 -->
             <span v-if="m.role === 'user' && m.cmd" class="cmd-tag">{{ cmdName(m.cmd) }}</span>
             <span v-if="m.role === 'user' && activeSession.cat" class="cat-chip">
@@ -1414,7 +1623,7 @@ onBeforeUnmount(() => {
             </span>
             <template v-if="m.role === 'assistant'">
               <span v-if="m.thinking" class="thinking">{{ t('learn.thinking') }}<span class="dots">···</span></span>
-              <div v-if="m.content" class="mg-blocks">
+              <div v-if="m.content && !m.paperImport" class="mg-blocks">
                 <MathText v-for="(block, bi) in blocksOf(m.content)" :key="bi" :text="block" />
               </div>
               <span v-if="m.streaming && !m.thinking" class="cursor">▍</span>
@@ -1456,6 +1665,15 @@ onBeforeUnmount(() => {
 
     <!-- 输入区:输入行 + 指令栏 -->
     <footer class="input-bar">
+      <div v-if="isResearch && stagedPaper" class="context-chip">
+        <span class="context-label">{{ t('chat.paperContext') }}</span>
+        <span class="context-name" :title="stagedPaper.title">{{ stagedPaper.title }}</span>
+        <button
+          class="context-remove"
+          :title="t('chat.removePaper')"
+          @click="stagedPaper = null"
+        >✕</button>
+      </div>
       <div v-if="isResearch && tableContext" class="context-chip">
         <span class="context-label">{{ t('chat.tableContext') }}</span>
         <span class="context-name" :title="tableContext.title">{{ tableContext.title }}</span>
@@ -1558,6 +1776,7 @@ onBeforeUnmount(() => {
           :left="panelAnchor?.left"
           :width="panelAnchor?.width"
           @close="closePanel"
+          @open-doc="openPaperWorkspace"
         />
       </Transition>
       <Transition name="nb-rise">
@@ -1628,6 +1847,20 @@ onBeforeUnmount(() => {
     <Transition name="mask-fade">
       <div v-if="activePanel" class="panel-overlay" @click="closePanel"></div>
     </Transition>
+
+    <PaperImportPrompt
+      v-if="importPromptOpen"
+      :papers="stagedPapers"
+      @confirm="confirmPaperChoices"
+      @cancel="cancelPaperPrompt"
+    />
+
+    <!-- 论文工作台:研究档案「继续」进入,左对话右阅读器,第三栏结构/导图 -->
+    <PaperWorkspace
+      v-if="paperDocId"
+      :doc-id="paperDocId"
+      @close="paperDocId = null"
+    />
 
     <!-- 生成文档:当前会话问答 / 问题归纳 / 独立要求 -->
     <DocModal
@@ -2304,6 +2537,86 @@ onBeforeUnmount(() => {
 
 .attach {
   margin-bottom: 6px;
+}
+
+.paper-imp {
+  min-width: 240px;
+  margin-bottom: 6px;
+  padding: 10px;
+  border: 1px solid var(--line-bright);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+.paper-imp-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.paper-imp-icon {
+  flex: none;
+}
+
+.paper-imp-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-hi);
+  font-size: 12.5px;
+}
+
+.paper-imp-pages {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.paper-imp-q {
+  margin: 7px 0 8px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.paper-imp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.paper-imp-btn {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.paper-imp-btn.primary {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+}
+
+.paper-imp-btn:hover {
+  color: var(--text-hi);
+  border-color: var(--line-bright);
+}
+
+.paper-imp-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.paper-imp-state {
+  margin: 0;
+  color: var(--cyan);
+  font-size: 11px;
 }
 
 .attach-img {

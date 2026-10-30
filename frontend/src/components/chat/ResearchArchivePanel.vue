@@ -29,7 +29,7 @@ import {
 } from '@/services/researchTableService'
 
 const props = defineProps<{ left?: number; width?: number }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; openDoc: [doc: ResearchDoc] }>()
 const router = useRouter()
 
 const tab = ref<'goal' | 'files' | 'tables'>('goal')
@@ -277,7 +277,7 @@ function confirmClose(): boolean {
   return !hasUnsavedChanges() || window.confirm(t('archive.discardUnsaved'))
 }
 
-defineExpose({ confirmClose })
+defineExpose({ confirmClose, reload: load })
 
 function warnBeforeUnload(event: BeforeUnloadEvent): void {
   if (!hasUnsavedChanges()) return
@@ -409,6 +409,7 @@ onBeforeRouteLeave(() => confirmClose())
                 <span v-if="f.doi" class="doi"> · {{ f.doi }}</span>
               </span>
             </div>
+            <button class="mini primary" @click="emit('openDoc', f)">{{ t('workspace.continue') }}</button>
             <button class="mini danger" @click="removeFile(f)">{{ t('archive.removeFile') }}</button>
           </li>
         </ul>
@@ -539,6 +540,12 @@ onBeforeRouteLeave(() => confirmClose())
 
 .mini:hover {
   box-shadow: var(--glow-cyan);
+}
+
+.mini.primary {
+  color: var(--text-hi);
+  border-color: var(--line-bright);
+  background: color-mix(in srgb, var(--cyan) 12%, transparent);
 }
 
 .mini:disabled {
