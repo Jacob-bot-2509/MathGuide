@@ -31,6 +31,32 @@ def corpus(tmp_path, monkeypatch):
     rc._index_paths.clear()
 
 
+def test_ingest_persists_source_metadata(corpus):
+    result = rc._ingest(
+        "u-meta", "meta.txt", TEXT.encode(), "text/plain", None,
+        status="temp", analyze=False, metadata={
+            "issn": "0028-0836",
+            "publisher": "Springer Nature",
+            "articleType": "research",
+            "peerReviewed": True,
+            "oaStatus": "gold",
+            "license": "cc_by",
+            "landingUrl": "https://example.org/paper",
+            "retractionStatus": "none",
+            "accessSource": "oa",
+        })
+    row = rc._doc_row("u-meta", result["docId"])
+    assert row["issn"] == "0028-0836"
+    assert row["publisher"] == "Springer Nature"
+    assert row["peerReviewed"] is True
+    assert row["oaStatus"] == "gold"
+    assert row["accessSource"] == "oa"
+    assert row["landingUrl"] == "https://example.org/paper"
+    assert rc._clean_doc_meta(
+        {"landingUrl": "https://user:pass@example.org/paper"}
+    )["landing_url"] == ""
+
+
 def test_temp_doc_is_hidden_from_library_and_default_search(corpus):
     temp = rc._ingest("u-t", "temp.txt", TEXT.encode(), "text/plain",
                       status="temp", analyze=False)

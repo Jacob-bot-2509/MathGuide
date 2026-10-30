@@ -31,7 +31,7 @@ import zipfile
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
@@ -167,6 +167,16 @@ def _connect(uid: str) -> sqlite3.Connection:
         ("last_viewed_at", "REAL"),
         ("deleted_at", "REAL"),
         ("purge_after", "REAL"),
+        ("issn", "TEXT"),
+        ("publisher", "TEXT"),
+        ("article_type", "TEXT"),
+        ("peer_reviewed", "INTEGER"),
+        ("oa_status", "TEXT"),
+        ("license", "TEXT"),
+        ("access_source", "TEXT"),
+        ("landing_url", "TEXT"),
+        ("retraction_status", "TEXT"),
+        ("version_of", "TEXT"),
     ):
         if column not in columns:
             conn.execute(f"ALTER TABLE docs ADD COLUMN {column} {decl}")
@@ -1065,11 +1075,18 @@ def _load_rows(uid: str) -> tuple[list[dict], list[NodeRec], list[ChunkRec]]:
              "title": r[8] or r[1], "authors": r[9] or "",
              "year": r[10] or 0, "venue": r[11] or "",
              "status": r[12] or "uploaded", "originUrl": r[13] or "",
-             "lastViewedAt": r[14] or 0, "deletedAt": r[15] or 0}
+             "lastViewedAt": r[14] or 0, "deletedAt": r[15] or 0,
+             "issn": r[16] or "", "publisher": r[17] or "",
+             "articleType": r[18] or "", "peerReviewed": bool(r[19]),
+             "oaStatus": r[20] or "unknown", "license": r[21] or "",
+             "accessSource": r[22] or "user_upload", "landingUrl": r[23] or "",
+             "retractionStatus": r[24] or "none", "versionOf": r[25] or ""}
             for r in conn.execute(
                 "SELECT id, name, size, sha, pages, created_at, project_id, doi,"
                 " title, authors, year, venue, status, origin_url, last_viewed_at,"
-                " deleted_at FROM docs ORDER BY created_at DESC")
+                " deleted_at, issn, publisher, article_type, peer_reviewed,"
+                " oa_status, license, access_source, landing_url, retraction_status,"
+                " version_of FROM docs ORDER BY created_at DESC")
         ]
         nodes = [NodeRec(*r) for r in conn.execute(
             "SELECT id, doc_id, parent_id, title, summary, page_start, page_end, text FROM nodes")]
@@ -1131,11 +1148,43 @@ def _check_formal_capacity(conn: sqlite3.Connection, additional_size: int) -> No
         raise ValueError(f"论文库总容量达到上限 {_max_total_bytes() // (1024 * 1024)}MB")
 
 
+def _clean_doc_meta(raw: object) -> dict:
+    """外部检索结果带来的来源元数据;只保留固定字段,不信任任意键。"""
+    raw = raw if isinstance(raw, dict) else {}
+    out = {
+        "title": str(raw.get("title") or "").strip()[:300],
+        "issn": str(raw.get("issn") or "").strip()[:80],
+        "publisher": str(raw.get("publisher") or "").strip()[:160],
+        "article_type": str(raw.get("articleType") or "").strip()[:40],
+        "peer_reviewed": 1 if raw.get("peerReviewed") else 0,
+        "oa_status": str(raw.get("oaStatus") or "").strip()[:40],
+        "license": str(raw.get("license") or "").strip()[:120],
+        "access_source": str(raw.get("accessSource") or "").strip()[:40],
+        "landing_url": str(raw.get("landingUrl") or raw.get("url") or "").strip()[:1000],
+        "retraction_status": str(raw.get("retractionStatus") or "").strip()[:40],
+        "version_of": str(raw.get("versionOf") or "").strip()[:200],
+    }
+    for key in ("landing_url",):
+        value = out[key]
+        try:
+            parsed = urlparse(value) if value else None
+        except ValueError:
+            parsed = None
+        if value and (
+                not parsed or parsed.scheme != "https" or not parsed.hostname
+                or parsed.username or parsed.password
+                or any(c.isspace() or ord(c) < 32 for c in value)):
+            out[key] = ""
+    return out
+
+
 def _ingest(uid: str, name: str, data: bytes, mime: str,
             project_id: str | None = None, *, status: str = "uploaded",
-            origin_url: str = "", analyze: bool = True) -> dict:
+            origin_url: str = "", analyze: bool = True,
+            metadata: dict | None = None) -> dict:
     if status not in ("uploaded", "temp", "imported"):
         raise ValueError("未知的文档状态")
+    meta_extra = _clean_doc_meta(metadata)
     if not name or len(name) > 200:
         raise ValueError("文件名缺失或过长")
     limit = _max_upload_bytes()
@@ -1162,6 +1211,8 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
     else:
         summaries = [_clean_line(s.text)[:SUMMARY_CHARS] for s in sections]
         meta = _heuristic_meta(name, pages)
+    if meta_extra.get("title"):
+        meta["title"] = meta_extra["title"]
     with _mutation_lock(uid):
         purge_expired_history(uid)
         conn = _connect(uid)
@@ -1208,6 +1259,26 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
                     conn.execute(
                         "UPDATE docs SET last_viewed_at = ?, origin_url = COALESCE(?, origin_url)"
                         " WHERE id = ?", (now, origin_url or None, doc_id))
+                if meta_extra:
+                    conn.execute(
+                        "UPDATE docs SET title=COALESCE(NULLIF(?,''),title),"
+                        " issn=COALESCE(NULLIF(?,''),issn),"
+                        " publisher=COALESCE(NULLIF(?,''),publisher),"
+                        " article_type=COALESCE(NULLIF(?,''),article_type),"
+                        " peer_reviewed=COALESCE(?,peer_reviewed),"
+                        " oa_status=COALESCE(NULLIF(?,''),oa_status),"
+                        " license=COALESCE(NULLIF(?,''),license),"
+                        " access_source=COALESCE(NULLIF(?,''),access_source),"
+                        " landing_url=COALESCE(NULLIF(?,''),landing_url),"
+                        " retraction_status=COALESCE(NULLIF(?,''),retraction_status),"
+                        " version_of=COALESCE(NULLIF(?,''),version_of) WHERE id=?",
+                        (meta_extra["title"], meta_extra["issn"], meta_extra["publisher"],
+                         meta_extra["article_type"],
+                         meta_extra["peer_reviewed"] or None,
+                         meta_extra["oa_status"], meta_extra["license"],
+                         meta_extra["access_source"], meta_extra["landing_url"],
+                         meta_extra["retraction_status"], meta_extra["version_of"],
+                         doc_id))
                 conn.commit()
                 return {"docId": doc_id, "duplicate": True, "doi": doi,
                         "status": current, "pages": len(pages)}
@@ -1254,11 +1325,19 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
             now = time.time()
             conn.execute(
                 "INSERT INTO docs(id, name, size, sha, pages, created_at, mime, project_id,"
-                " doi, title, authors, year, venue, status, origin_url, last_viewed_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " doi, title, authors, year, venue, status, origin_url, last_viewed_at,"
+                " issn, publisher, article_type, peer_reviewed, oa_status, license,"
+                " access_source, landing_url, retraction_status, version_of)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (doc_id, name, len(data), sha, len(pages), now, mime, project_id,
                  doi, meta["title"], meta["authors"], meta["year"], meta["venue"],
-                 status, origin_url, now if status == "temp" else None))
+                 status, origin_url, now if status == "temp" else None,
+                 meta_extra["issn"], meta_extra["publisher"],
+                 meta_extra["article_type"], meta_extra["peer_reviewed"] or None,
+                 meta_extra["oa_status"], meta_extra["license"],
+                 meta_extra["access_source"] or ("user_upload" if status == "uploaded" else ""),
+                 meta_extra["landing_url"], meta_extra["retraction_status"],
+                 meta_extra["version_of"]))
             nodes: list[tuple] = []
             chunks: list[tuple] = []
             stack: list[tuple[int, str]] = []
@@ -1356,12 +1435,23 @@ def _doc_row(uid: str, doc_id: str) -> dict | None:
     conn = _connect(uid)
     try:
         row = conn.execute(
-            "SELECT id, name, pages, mime, status, deleted_at FROM docs WHERE id = ?",
+            "SELECT id, name, pages, mime, status, deleted_at, issn, publisher,"
+            " article_type, peer_reviewed, oa_status, license, access_source,"
+            " landing_url, retraction_status, version_of, doi, title, authors,"
+            " year, venue, origin_url FROM docs WHERE id = ?",
             (doc_id,)).fetchone()
         if not row:
             return None
         return {"id": row[0], "name": row[1], "pages": row[2], "mime": row[3] or "",
-                "status": row[4] or "uploaded", "deletedAt": row[5] or 0}
+                "status": row[4] or "uploaded", "deletedAt": row[5] or 0,
+                "issn": row[6] or "", "publisher": row[7] or "",
+                "articleType": row[8] or "", "peerReviewed": bool(row[9]),
+                "oaStatus": row[10] or "unknown", "license": row[11] or "",
+                "accessSource": row[12] or "user_upload", "landingUrl": row[13] or "",
+                "retractionStatus": row[14] or "none", "versionOf": row[15] or "",
+                "doi": row[16] or "", "title": row[17] or row[1],
+                "authors": row[18] or "", "year": row[19] or 0,
+                "venue": row[20] or "", "originUrl": row[21] or ""}
     finally:
         conn.close()
 
@@ -1888,6 +1978,17 @@ async def list_docs(request: Request) -> JSONResponse:
         if d.get("status") != "temp" and not d.get("deletedAt")
     ]
     return JSONResponse({"docs": docs}, headers={"Cache-Control": "no-store"})
+
+
+async def get_doc(request: Request) -> JSONResponse:
+    """返回单篇论文的来源元数据,供阅读器显示场所、许可与撤稿提示。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    doc_id = str(request.path_params.get("doc_id") or "")
+    doc = await asyncio.to_thread(_doc_row, uid, doc_id)
+    if doc is None or doc["deletedAt"]:
+        raise HTTPException(404, "not found")
+    return JSONResponse({"doc": doc}, headers={"Cache-Control": "no-store"})
 
 
 async def delete_doc(request: Request) -> JSONResponse:

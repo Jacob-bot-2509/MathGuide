@@ -17,6 +17,18 @@ export interface ResearchDoc {
   authors?: string
   year?: number
   venue?: string
+  issn?: string
+  publisher?: string
+  articleType?: string
+  peerReviewed?: boolean
+  oaStatus?: string
+  license?: string
+  accessSource?: string
+  landingUrl?: string
+  retractionStatus?: string
+  versionOf?: string
+  status?: string
+  originUrl?: string
 }
 
 export type ResearchStatus = 'exploring' | 'active' | 'paused' | 'done'
@@ -69,6 +81,12 @@ function authHeaders(): Record<string, string> {
 export async function listResearchDocs(): Promise<ResearchDoc[]> {
   const res = await get<{ docs: ResearchDoc[] }>('/api/research/docs', authHeaders())
   return res.docs
+}
+
+export async function getResearchDocMeta(docId: string): Promise<ResearchDoc> {
+  const res = await get<{ doc: ResearchDoc }>(
+    `/api/research/docs/${encodeURIComponent(docId)}`, authHeaders())
+  return res.doc
 }
 
 export async function uploadResearchDoc(

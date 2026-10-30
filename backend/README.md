@@ -129,9 +129,15 @@ set MG_RESEARCH_MAX_DOCS=200       # 每用户论文数上限(默认 200)
 # MG_VISION_MODEL=qwen3.8-omni-flash
 # MG_VISION_BASE_URL=...           # 可选,默认 MG_ALIYUN_BASE_URL
 # MG_VISION_API_KEY=...            # 可选,默认 MG_ALIYUN_API_KEY
-# 文献发现:Crossref/arXiv/Europe PMC 免 key;OpenAlex 与 S2 可选
-# MG_OPENALEX_API_KEY=...          # OpenAlex 免费 key,启用后相关论文带引用数据
+# 文献发现:Crossref/arXiv/Europe PMC/zbMATH/PubMed/DOAJ/OpenAlex/S2 免 key;
+# OpenAlex 免费 key 可把每日额度从 $0.10 提到 $1;
+# Semantic Scholar 无 key 走公共池(易 429),免费 key 走独立额度;Unpaywall 需要 email
+# MG_OPENALEX_API_KEY=...          # OpenAlex 免费 key(可选,强烈建议)
+# MG_NCBI_API_KEY=...              # PubMed E-utilities 提升限额(可选)
+# MG_S2_API_KEY=...                # Semantic Scholar key(可选,公共池也可用)
+# MG_UNPAYWALL_EMAIL=you@example.com  # Unpaywall 合法 OA 解析(必需)
 # MG_LITERATURE_MAILTO=you@example.com  # Crossref 礼貌池标识
+# MG_ADS_API_KEY=...               # NASA ADS(暂未启用)
 ```
 
 - 入库支持 PDF、DOCX、EPUB、HTML/JATS、RTF 与纯文本;按文件头识别,
@@ -210,6 +216,7 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/chat/stream` | 聊天流式回复(SSE) |
 | POST | `/api/research/docs?name=文件名&projectId=` | 上传论文(PDF/文本原始字节),按内容哈希去重、按用户隔离 → `{docId, duplicate, pages, chunks}` |
 | GET | `/api/research/docs` | 当前用户的论文列表(元数据,含 `projectId`) |
+| GET | `/api/research/docs/{doc_id}` | 单篇论文来源元数据(场所、ISSN、许可、OA、撤稿),供阅读器顶部显示 |
 | DELETE | `/api/research/docs` | 清空正式论文库及其批注、切片、章节树和原文件；保留临时浏览历史 |
 | DELETE | `/api/research/docs/{doc_id}` | 删除论文、切片、章节树与原文件 |
 | POST | `/api/research/search` | 全文检索 `{query, topK?, docId?, projectId?, tree?}` → `{hits, mode, elapsed}`;BM25 + embedding 混合,未配置向量时纯 BM25 |
@@ -218,6 +225,11 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/research/projects` | 新建项目 `{title}` |
 | POST | `/api/research/projects/{project_id}` | 更新项目 `{title?, goal?, approach?, notes?, status?}` |
 | DELETE | `/api/research/projects/{project_id}` | 删除项目(论文只解除归属,不删除) |
+| GET | `/api/research/literature?q=&field=&peerReviewed=&includePreprints=&oaOnly=` | 跨库检索:Crossref/arXiv/Europe PMC/DOAJ/OpenAlex/S2,物理加 INSPIRE,生物加 PubMed,数学加 zbMATH;DOI 为 bioRxiv/medRxiv 时补预印本元数据;返回 venueTier/oaStatus/landingUrl 等字段 |
+| GET | `/api/research/literature/related?doi=\|title=` | 相关论文:Crossref 参考文献 + arXiv/Europe PMC/OpenAlex |
+| GET | `/api/research/literature/oa?doi=` | 合法开放获取解析(Unpaywall 优先,OpenAlex 兜底) |
+| GET | `/api/research/venues?issn=\|name=&field=` | 场所权威查询:返回学科层级 T0–T3、出版社与 registry 版本 |
+| GET | `/api/research/sources` | 来源清单:学科范围、层级、全文策略与 key 配置状态(不探测外网) |
 | POST | `/api/research/tables/import?name=&projectId=` | 导入 XLSX/DOCX/CSV 模板 → 结构化列与行 |
 | GET | `/api/research/tables` | 数据表列表(可按 `projectId` 过滤) |
 | POST | `/api/research/tables` | 新建空表 `{title, columns, rows, formulas, rowLabels, merges, colWidths, rowHeights, source?}`;`source` 记录论文来源 `{docId, docName, page, quote}` |

@@ -32,12 +32,13 @@ async def create_temp(request: Request) -> JSONResponse:
     url = str(body.get("url") or "").strip()
     if not lit._pdf_url_allowed(url):
         raise HTTPException(400, "该论文没有可用的开放获取 PDF")
+    metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else None
     rc._rate(rc._upload_limiter, uid)
     try:
         data = await lit.download_allowed_pdf(url)
         result = await asyncio.to_thread(
             rc._ingest, uid, _pdf_name(url), data, "application/pdf",
-            None, status="temp", origin_url=url, analyze=False)
+            None, status="temp", origin_url=url, analyze=False, metadata=metadata)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except httpx.HTTPError as exc:

@@ -3,10 +3,14 @@
  * 论文阅读器覆盖层:PDF 用 PDF.js 渲染,非 PDF 用文本分页接口。
  * 支持选中文本建批注;批注先存本地草稿,关闭时统一决定是否保存。
  */
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import { getToken } from '@/stores/user'
+import {
+  getResearchDocMeta,
+  type ResearchDoc,
+} from '@/services/researchService'
 import {
   deleteAnnotation,
   listAnnotations,
@@ -25,6 +29,25 @@ const props = defineProps<{
   projectId?: string | null
 }>()
 const emit = defineEmits<{ close: [] }>()
+
+/* 来源元数据:失败不阻塞阅读,只少一行徽标。 */
+const docMeta = ref<ResearchDoc | null>(null)
+const hasMeta = computed(() => {
+  const meta = docMeta.value
+  if (!meta) return false
+  return Boolean(
+    meta.venue || meta.peerReviewed || meta.license
+    || meta.retractionStatus === 'retracted' || meta.landingUrl
+    || (meta.oaStatus && meta.oaStatus !== 'unknown' && meta.oaStatus !== 'closed'),
+  )
+})
+onMounted(async () => {
+  try {
+    docMeta.value = await getResearchDocMeta(props.docId)
+  } catch {
+    docMeta.value = null
+  }
+})
 
 const fileUrl = computed(() =>
   `/api/research/docs/${encodeURIComponent(props.docId)}/file`)
@@ -781,6 +804,37 @@ onBeforeUnmount(() => {
       <button class="v-close" :title="t('viewer.close')" @click="requestClose">✕</button>
     </header>
 
+    <div v-if="hasMeta && docMeta" class="v-meta">
+      <span v-if="docMeta.venue" class="v-meta-venue" :title="docMeta.venue">
+        {{ docMeta.venue }}
+      </span>
+      <span v-if="docMeta.peerReviewed" class="v-meta-chip ok">
+        {{ t('viewer.peerReviewed') }}
+      </span>
+      <span v-if="docMeta.articleType === 'preprint'" class="v-meta-chip">
+        {{ t('viewer.preprint') }}
+      </span>
+      <span
+        v-if="docMeta.oaStatus && docMeta.oaStatus !== 'unknown' && docMeta.oaStatus !== 'closed'"
+        class="v-meta-chip oa"
+      >
+        {{ t('viewer.freeFullText') }} · {{ docMeta.oaStatus }}
+      </span>
+      <span v-if="docMeta.license" class="v-meta-chip">
+        {{ t('viewer.licenseLabel') }}: {{ docMeta.license }}
+      </span>
+      <span v-if="docMeta.retractionStatus === 'retracted'" class="v-meta-chip warn">
+        {{ t('viewer.retracted') }}
+      </span>
+      <a
+        v-if="docMeta.landingUrl"
+        class="v-meta-link"
+        :href="docMeta.landingUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+      >{{ t('viewer.publisherPage') }}</a>
+    </div>
+
     <div ref="bodyEl" class="v-body">
       <p v-if="error" class="v-error">{{ error }}</p>
       <p v-else-if="loading && !textBody && kind === 'text'" class="v-loading">
@@ -968,6 +1022,60 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--line);
   background: var(--bg-panel);
   flex: none;
+}
+
+.v-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-card);
+  color: var(--text-dim);
+  font-size: 11px;
+  flex: none;
+}
+
+.v-meta-venue {
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-hi);
+}
+
+.v-meta-chip {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.v-meta-chip.ok {
+  color: var(--green, #3fb950);
+  border-color: color-mix(in srgb, var(--green, #3fb950) 45%, transparent);
+}
+
+.v-meta-chip.oa {
+  color: var(--cyan);
+  border-color: color-mix(in srgb, var(--cyan) 45%, transparent);
+}
+
+.v-meta-chip.warn {
+  color: var(--red, #f85149);
+  border-color: color-mix(in srgb, var(--red, #f85149) 55%, transparent);
+}
+
+.v-meta-link {
+  margin-left: auto;
+  color: var(--cyan);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.v-meta-link:hover {
+  text-decoration: underline;
 }
 
 .v-title {

@@ -1,0 +1,21 @@
+[general] climate change ocean circulation -> 10 results warnings=1 | top: T0 North Atlantic ocean circulation and abrupt climate change d
+[general] machine learning protein structure -> 10 results warnings=1 | top: T3 P2Rank: machine learning based tool for rapid and accurate p
+[general] quantum error correction -> 10 results warnings=1 | top: T3 Quantum error correction for quantum memories
+== general: queries=3 results=30 authority_precision=10% peer=100% oa=43% retracted=0% source_errors=3 empty_queries=0
+[math] Riemann hypothesis zeros -> 10 results warnings=1 | top: T2 The Riemann Hypothesis, simple zeros and the asymptotic conv
+[math] Navier-Stokes regularity -> 10 results warnings=1 | top: T3 Regularity for steady solutions of the Navier-Stokes equatio
+[math] algebraic geometry moduli space -> 10 results warnings=1 | top: T1 Intersection theory on algebraic stacks and on their moduli 
+== math: queries=3 results=30 authority_precision=10% peer=100% oa=10% retracted=0% source_errors=3 empty_queries=0
+[physics] Higgs boson coupling -> 10 results warnings=1 | top: T2 Role of supersymmetric heavy Higgs boson production in the s
+[physics] quantum entanglement decoherence -> 10 results warnings=1 | top: T1 Protecting entanglement from decoherence using weak measurem
+[physics] topological insulator -> 10 results warnings=1 | top: T0 The birth of topological insulators
+== physics: queries=3 results=30 authority_precision=30% peer=100% oa=27% retracted=0% source_errors=3 empty_queries=0
+[chemistry] photocatalytic water splitting -> 10 results warnings=1 | top: T0 Photocatalytic water splitting by 2D polymer with out-of-pla
+[chemistry] metal organic framework adsorption -> 10 results warnings=1 | top: T1 Bioinspired Adaptive Ångström-Channels in a Hydrogen-Bonded 
+[chemistry] asymmetric catalysis -> 10 results warnings=1 | top: T1 Asymmetric Catalysis: Recent Advances toward a More Sustaina
+== chemistry: queries=3 results=30 authority_precision=57% peer=100% oa=27% retracted=0% source_errors=3 empty_queries=0
+[biology] CRISPR off target effect -> 10 results warnings=1 | top: T0 High-fidelity CRISPR-Cas9 nucleases with no detectable genom
+[biology] Alzheimer amyloid tau -> 10 results warnings=1 | top: T0 CryoET of β-amyloid and tau within postmortem Alzheimer's di
+[biology] T cell exhaustion -> 10 results warnings=1 | top: T1 Osr2 functions as a biomechanical checkpoint to aggravate CD
+== biology: queries=3 results=30 authority_precision=80% peer=100% oa=57% retracted=0% source_errors=3 empty_queries=0
+elapsed=74.2s fields=5 failures=0

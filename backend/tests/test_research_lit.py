@@ -43,7 +43,7 @@ def test_search_endpoint_merges_providers(monkeypatch):
         return []
 
     monkeypatch.setattr(rl, "require_auth", lambda request: {"uid": "u-lit"})
-    for name in ("_crossref", "_arxiv", "_europe_pmc", "_openalex", "_semantic_scholar"):
+    for name in ("_crossref", "_arxiv", "_europe_pmc", "_openalex", "_semantic_scholar", "_doaj"):
         monkeypatch.setattr(rl, name, fake_crossref if name == "_crossref"
                             else fake_arxiv if name == "_arxiv" else empty)
     app = Starlette(routes=[
@@ -135,7 +135,7 @@ def test_search_identifier_bypasses_keyword_providers(monkeypatch):
 
     monkeypatch.setattr(rl, "require_auth", lambda request: {"uid": "u-id"})
     monkeypatch.setattr(rl, "_crossref_doi", fake_doi)
-    for name in ("_crossref", "_arxiv", "_europe_pmc", "_openalex", "_semantic_scholar"):
+    for name in ("_crossref", "_arxiv", "_europe_pmc", "_openalex", "_semantic_scholar", "_doaj"):
         monkeypatch.setattr(rl, name, should_not_run)
     app = Starlette(routes=[Route("/api/research/literature", rl.search)])
     client = TestClient(app)
@@ -158,7 +158,7 @@ def test_search_passes_author_and_year_filters(monkeypatch):
         return []
 
     monkeypatch.setattr(rl, "require_auth", lambda request: {"uid": "u-filter"})
-    for name in ("_crossref", "_arxiv", "_europe_pmc", "_openalex", "_semantic_scholar"):
+    for name in ("_crossref", "_arxiv", "_europe_pmc", "_openalex", "_semantic_scholar", "_doaj"):
         monkeypatch.setattr(rl, name, fake)
     app = Starlette(routes=[Route("/api/research/literature", rl.search)])
     client = TestClient(app)

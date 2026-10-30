@@ -15,6 +15,7 @@ import {
   listPaperHistory,
   listPaperTrash,
   relatedLiterature,
+  resolveLiteratureOa,
   restorePaperHistory,
   searchLiterature,
   type HistoryItem,
@@ -67,6 +68,11 @@ const searchMode = ref<SearchMode>(loadSearchMode())
 const authorFilter = ref('')
 const yearFrom = ref('')
 const yearTo = ref('')
+const litField = ref<'general' | 'math' | 'physics' | 'chemistry' | 'biology'>('general')
+const peerOnly = ref(true)
+const includePreprints = ref(false)
+const oaOnly = ref(false)
+const resolvingOa = ref('')
 const advancedOpen = ref(false)
 const litItems = ref<LiteratureItem[]>([])
 const litLoading = ref(false)
@@ -194,6 +200,10 @@ async function searchExternal(qArg?: string): Promise<void> {
       author: authorFilter.value.trim() || undefined,
       yearFrom: Number(yearFrom.value) || null,
       yearTo: Number(yearTo.value) || null,
+      field: litField.value,
+      peerReviewed: peerOnly.value,
+      includePreprints: includePreprints.value,
+      oaOnly: oaOnly.value,
     })
     if (seq !== litSeq) return
     litItems.value = res.results
@@ -255,9 +265,84 @@ watch(viewer, (value) => {
 
 defineExpose({ locateForQuestion })
 
+/** 打开出版社落地页;不经过服务端代理 */
+function openLanding(item: LiteratureItem): void {
+  const url = item.landingUrl || item.url
+  if (!url) return
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+function openFreeCopy(item: LiteratureItem): void {
+  if (item.oaUrl) {
+    window.open(item.oaUrl, '_blank', 'noopener,noreferrer')
+    return
+  }
+  if (item.pdfUrl) void openExternalPaper(item)
+}
+
+/** 按 DOI 查 Unpaywall/OpenAlex;找到合法 OA 地址后打开 */
+async function findFreeCopy(item: LiteratureItem): Promise<void> {
+  if (!item.doi || resolvingOa.value === item.doi) return
+  resolvingOa.value = item.doi
+  try {
+    const res = await resolveLiteratureOa(item.doi)
+    if (res.error) {
+      showToast(t('search.oaFail'))
+    } else if (res.isOa && res.oaUrl) {
+      item.oaUrl = res.oaUrl
+      item.oaStatus = res.oaStatus
+      if (res.license) item.license = res.license
+      window.open(res.oaUrl, '_blank', 'noopener,noreferrer')
+    } else {
+      showToast(t('search.noFree'))
+    }
+  } catch {
+    showToast(t('search.oaFail'))
+  } finally {
+    resolvingOa.value = ''
+  }
+}
+
+function pdfReaderAllowed(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.toLowerCase()
+    return parsed.protocol === 'https:' && (
+      host === 'arxiv.org' || host.endsWith('.arxiv.org') ||
+      host === 'europepmc.org' || host.endsWith('.europepmc.org') ||
+      host === 'ebi.ac.uk' || host.endsWith('.ebi.ac.uk') ||
+      host === 'ncbi.nlm.nih.gov' || host.endsWith('.ncbi.nlm.nih.gov')
+    )
+  } catch {
+    return false
+  }
+}
+
+function tempMeta(item: LiteratureItem) {
+  return {
+    title: item.title,
+    issn: item.issn,
+    publisher: item.publisher,
+    articleType: item.articleType,
+    peerReviewed: item.peerReviewed,
+    oaStatus: item.oaStatus,
+    license: item.license,
+    landingUrl: item.landingUrl || item.url,
+    retractionStatus: item.retractionStatus,
+    versionOf: item.versionOf,
+    accessSource: item.oaStatus && !['unknown', 'closed'].includes(item.oaStatus)
+      ? 'oa' : undefined,
+  }
+}
+
 /** 外部论文:先临时入库,再在覆盖层阅读;已入库直接读本地文件 */
 async function openExternalPaper(item: LiteratureItem): Promise<void> {
   if (!item.pdfUrl || openingPdf.value) return
+  // 非白名单 PDF(出版社 OA 等)只外跳,不经过服务端下载
+  if (!pdfReaderAllowed(item.pdfUrl)) {
+    window.open(item.pdfUrl, '_blank', 'noopener,noreferrer')
+    return
+  }
   if (item.imported && item.docId) {
     viewer.value = {
       docId: item.docId, title: item.title, kind: 'pdf',
@@ -274,7 +359,7 @@ async function openExternalPaper(item: LiteratureItem): Promise<void> {
   }
   openingPdf.value = item.pdfUrl
   try {
-    const res = await createTempPaper(item.pdfUrl)
+    const res = await createTempPaper(item.pdfUrl, tempMeta(item))
     item.tempDocId = res.docId
     viewer.value = {
       docId: res.docId,
@@ -300,7 +385,7 @@ async function importPaper(item: LiteratureItem): Promise<void> {
   try {
     let docId = item.tempDocId || ''
     if (!docId) {
-      const temp = await createTempPaper(item.pdfUrl)
+      const temp = await createTempPaper(item.pdfUrl, tempMeta(item))
       docId = temp.docId
       item.tempDocId = docId
     }
@@ -672,6 +757,27 @@ onMounted(async () => {
             <input v-model="yearTo" class="adv-input year" inputmode="numeric" :placeholder="t('search.yearTo')" />
           </div>
         </div>
+        <div v-if="searchMode === 'web'" class="lit-filters">
+          <select v-model="litField" class="adv-input field-select">
+            <option value="general">{{ t('search.fieldGeneral') }}</option>
+            <option value="math">{{ t('search.fieldMath') }}</option>
+            <option value="physics">{{ t('search.fieldPhysics') }}</option>
+            <option value="chemistry">{{ t('search.fieldChemistry') }}</option>
+            <option value="biology">{{ t('search.fieldBiology') }}</option>
+          </select>
+          <label class="opt">
+            <input v-model="peerOnly" type="checkbox" />
+            {{ t('search.peerOnly') }}
+          </label>
+          <label class="opt">
+            <input v-model="includePreprints" type="checkbox" />
+            {{ t('search.includePreprints') }}
+          </label>
+          <label class="opt">
+            <input v-model="oaOnly" type="checkbox" />
+            {{ t('search.oaOnly') }}
+          </label>
+        </div>
         <div v-if="searchMode === 'local'" class="opts">
           <select v-model="activeProject" class="project-filter">
             <option value="">{{ t('search.allProjects') }}</option>
@@ -796,6 +902,22 @@ onMounted(async () => {
           <p v-if="item.authors || item.venue" class="lit-meta">
             {{ item.authors }}<span v-if="item.venue"> · {{ item.venue }}</span>
           </p>
+          <p class="lit-badges">
+            <span v-if="item.venueTier" class="lit-badge tier" :class="`t-${item.venueTier}`">
+              {{ item.venueTier }} · {{ item.venueLabel || item.venue || item.sources.join(' · ') }}
+            </span>
+            <span v-if="item.peerReviewed" class="lit-badge peer">{{ t('search.peerReviewed') }}</span>
+            <span v-else-if="item.articleType === 'preprint'" class="lit-badge preprint">
+              {{ t('search.preprint') }}
+            </span>
+            <span v-if="item.retractionStatus === 'retracted'" class="lit-badge retracted">
+              {{ t('search.retracted') }}
+            </span>
+            <span
+              v-if="item.oaStatus && !['unknown', 'closed'].includes(item.oaStatus)"
+              class="lit-badge oa"
+            >{{ t('search.freeFullText') }}</span>
+          </p>
           <p v-if="item.abstract" class="lit-abstract">{{ item.abstract }}</p>
           <p class="lit-foot">
             <span v-if="item.doi" class="lit-doi">{{ item.doi }}</span>
@@ -803,6 +925,20 @@ onMounted(async () => {
               {{ t('search.litCited', { n: item.citations }) }}
             </span>
             <span class="lit-src">{{ item.sources.join(' · ') }}</span>
+            <button v-if="item.landingUrl || item.url" class="lit-pdf" @click="openLanding(item)">
+              {{ t('search.viewSource') }}
+            </button>
+            <button
+              v-if="item.oaUrl && !item.pdfUrl"
+              class="lit-pdf free"
+              @click="openFreeCopy(item)"
+            >{{ t('search.freeFullText') }}</button>
+            <button
+              v-else-if="item.doi && !item.pdfUrl"
+              class="lit-pdf"
+              :disabled="resolvingOa === item.doi"
+              @click="findFreeCopy(item)"
+            >{{ resolvingOa === item.doi ? t('search.oaSearching') : t('search.findFree') }}</button>
             <button
               v-if="item.pdfUrl"
               class="lit-pdf"
@@ -1146,6 +1282,18 @@ onMounted(async () => {
   margin-top: 10px;
 }
 
+.lit-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 8px;
+}
+
+.lit-filters .adv-input.field-select {
+  width: 130px;
+}
+
 .opt {
   display: inline-flex;
   align-items: center;
@@ -1332,6 +1480,57 @@ onMounted(async () => {
   font-size: 11.5px;
 }
 
+.lit-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.lit-badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 9.5px;
+  color: var(--text-dim);
+}
+
+.lit-badge.tier {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: min(520px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--cyan);
+  border-color: var(--line-bright);
+}
+
+.lit-badge.tier.t-T0,
+.lit-badge.tier.t-T1 {
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+}
+
+.lit-badge.peer {
+  color: #7ee787;
+  border-color: color-mix(in srgb, #7ee787 40%, transparent);
+}
+
+.lit-badge.preprint {
+  color: #f6c85f;
+  border-color: color-mix(in srgb, #f6c85f 40%, transparent);
+}
+
+.lit-badge.retracted {
+  color: #ff8a8a;
+  border-color: color-mix(in srgb, #ff8a8a 45%, transparent);
+}
+
+.lit-badge.oa {
+  color: #7ee787;
+  border-color: color-mix(in srgb, #7ee787 40%, transparent);
+}
+
 .lit-abstract {
   color: var(--text);
   font-size: 12px;
@@ -1350,13 +1549,17 @@ onMounted(async () => {
   font-size: 10.5px;
 }
 
+.lit-src {
+  margin-left: auto;
+}
+
 .lit-doi {
   color: var(--cyan);
   word-break: break-all;
 }
 
 .lit-pdf {
-  margin-left: auto;
+  margin-left: 0;
   background: transparent;
   border: 1px solid var(--line-bright);
   color: var(--cyan);
@@ -1364,6 +1567,12 @@ onMounted(async () => {
   padding: 2px 10px;
   font-size: 10.5px;
   cursor: pointer;
+}
+
+.lit-pdf.free {
+  background: color-mix(in srgb, #7ee787 10%, transparent);
+  border-color: color-mix(in srgb, #7ee787 45%, transparent);
+  color: #7ee787;
 }
 
 .lit-pdf:disabled {

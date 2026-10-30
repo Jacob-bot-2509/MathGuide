@@ -21,6 +21,20 @@ export interface LiteratureItem {
   docId?: string
   tempDocId?: string
   imported?: boolean
+  issn?: string
+  publisher?: string
+  peerReviewed?: boolean
+  articleType?: string
+  oaStatus?: string
+  oaUrl?: string
+  license?: string
+  retractionStatus?: string
+  versionOf?: string
+  fields?: string[]
+  sourceTier?: string
+  venueTier?: string
+  venueLabel?: string
+  landingUrl?: string
 }
 
 export interface OpenPdfResult {
@@ -38,10 +52,27 @@ export interface TempPaperResult {
   doi?: string
 }
 
+export interface TempPaperMeta {
+  title?: string
+  issn?: string
+  publisher?: string
+  articleType?: string
+  peerReviewed?: boolean
+  oaStatus?: string
+  license?: string
+  landingUrl?: string
+  retractionStatus?: string
+  versionOf?: string
+  accessSource?: string
+}
+
 /** 打开外部论文前先临时入库,阅读器用同源文件接口 */
-export async function createTempPaper(url: string): Promise<TempPaperResult> {
+export async function createTempPaper(
+  url: string,
+  metadata?: TempPaperMeta,
+): Promise<TempPaperResult> {
   return post<TempPaperResult>(
-    '/api/research/papers/temp', { url }, authHeaders())
+    '/api/research/papers/temp', { url, metadata }, authHeaders())
 }
 
 export interface ImportPaperResult {
@@ -82,6 +113,10 @@ export interface LiteratureQuery {
   author?: string
   yearFrom?: number | null
   yearTo?: number | null
+  field?: 'general' | 'math' | 'physics' | 'chemistry' | 'biology'
+  includePreprints?: boolean
+  peerReviewed?: boolean
+  oaOnly?: boolean
 }
 
 export async function searchLiterature(
@@ -94,8 +129,30 @@ export async function searchLiterature(
   if (opts.author) params.set('author', opts.author)
   if (opts.yearFrom) params.set('yearFrom', String(opts.yearFrom))
   if (opts.yearTo) params.set('yearTo', String(opts.yearTo))
+  if (opts.field) params.set('field', opts.field)
+  if (opts.includePreprints === false) params.set('includePreprints', 'false')
+  if (opts.peerReviewed) params.set('peerReviewed', 'true')
+  if (opts.oaOnly) params.set('oaOnly', 'true')
   return get<LiteratureSearchResult>(
     `/api/research/literature?${params.toString()}`,
+    authHeaders())
+}
+
+export interface LiteratureOaResult {
+  isOa: boolean
+  oaStatus: string
+  oaUrl: string
+  license: string
+  oaSource: string
+  version: string
+  resolver: string
+  error?: boolean
+}
+
+/** 按 DOI 解析合法 OA 地址;只返回链接,不下载 */
+export async function resolveLiteratureOa(doi: string): Promise<LiteratureOaResult> {
+  return get<LiteratureOaResult>(
+    `/api/research/literature/oa?doi=${encodeURIComponent(doi)}`,
     authHeaders())
 }
 

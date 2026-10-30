@@ -1,0 +1,1821 @@
+{
+  "version": "2026-10-30.2",
+  "note": "人工维护的场所权威种子表；ISSN 优先，名称仅作兜底。授权榜单数据不进入本文件。",
+  "venues": [
+    {
+      "issn": [
+        "0028-0836",
+        "1476-4687"
+      ],
+      "name": "Nature",
+      "publisher": "Springer Nature",
+      "scope": [
+        "general",
+        "physics",
+        "chemistry",
+        "biology",
+        "math"
+      ],
+      "tiers": {
+        "general": "T0",
+        "physics": "T0",
+        "chemistry": "T0",
+        "biology": "T0",
+        "math": "T0"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0036-8075",
+        "1095-9203"
+      ],
+      "name": "Science",
+      "publisher": "AAAS",
+      "scope": [
+        "general",
+        "physics",
+        "chemistry",
+        "biology",
+        "math"
+      ],
+      "tiers": {
+        "general": "T0",
+        "physics": "T0",
+        "chemistry": "T0",
+        "biology": "T0",
+        "math": "T0"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0027-8424",
+        "1091-6490"
+      ],
+      "name": "Proceedings of the National Academy of Sciences",
+      "aliases": [
+        "PNAS",
+        "Proc. Natl. Acad. Sci. U.S.A."
+      ],
+      "publisher": "National Academy of Sciences",
+      "scope": [
+        "general",
+        "physics",
+        "chemistry",
+        "biology",
+        "math"
+      ],
+      "tiers": {
+        "general": "T1",
+        "physics": "T1",
+        "chemistry": "T1",
+        "biology": "T1",
+        "math": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2041-1723"
+      ],
+      "name": "Nature Communications",
+      "publisher": "Springer Nature",
+      "scope": [
+        "general",
+        "physics",
+        "chemistry",
+        "biology"
+      ],
+      "tiers": {
+        "general": "T1",
+        "physics": "T1",
+        "chemistry": "T1",
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2375-2548"
+      ],
+      "name": "Science Advances",
+      "publisher": "AAAS",
+      "scope": [
+        "general",
+        "physics",
+        "chemistry",
+        "biology"
+      ],
+      "tiers": {
+        "general": "T1",
+        "physics": "T1",
+        "chemistry": "T1",
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0031-9007",
+        "1079-7114"
+      ],
+      "name": "Physical Review Letters",
+      "aliases": [
+        "PRL",
+        "Phys. Rev. Lett.",
+        "Phys Rev Lett"
+      ],
+      "publisher": "American Physical Society",
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0034-6861",
+        "1539-0756"
+      ],
+      "name": "Reviews of Modern Physics",
+      "aliases": [
+        "RMP",
+        "Rev. Mod. Phys."
+      ],
+      "publisher": "American Physical Society",
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2160-3308"
+      ],
+      "name": "Physical Review X",
+      "aliases": [
+        "PRX",
+        "Phys. Rev. X"
+      ],
+      "publisher": "American Physical Society",
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1745-2473",
+        "1745-2481"
+      ],
+      "name": "Nature Physics",
+      "publisher": "Springer Nature",
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2469-9950",
+        "2469-9969"
+      ],
+      "name": "Physical Review B",
+      "aliases": [
+        "PRB",
+        "Phys. Rev. B"
+      ],
+      "publisher": "American Physical Society",
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2470-0010",
+        "2470-0029"
+      ],
+      "name": "Physical Review D",
+      "aliases": [
+        "PRD",
+        "Phys. Rev. D"
+      ],
+      "publisher": "American Physical Society",
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1029-8479"
+      ],
+      "name": "Journal of High Energy Physics",
+      "aliases": [
+        "JHEP",
+        "J. High Energy Phys."
+      ],
+      "publisher": "Springer Nature",
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0004-637X",
+        "1538-4357"
+      ],
+      "name": "The Astrophysical Journal",
+      "aliases": [
+        "ApJ",
+        "Astrophys. J."
+      ],
+      "publisher": "American Astronomical Society",
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0035-8711",
+        "1365-2966"
+      ],
+      "name": "Monthly Notices of the Royal Astronomical Society",
+      "aliases": [
+        "MNRAS",
+        "Mon. Not. Roy. Astron. Soc."
+      ],
+      "publisher": "Oxford University Press",
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2397-3366"
+      ],
+      "name": "Nature Astronomy",
+      "publisher": "Springer Nature",
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0002-7863",
+        "1520-5126"
+      ],
+      "name": "Journal of the American Chemical Society",
+      "aliases": [
+        "JACS",
+        "J. Am. Chem. Soc."
+      ],
+      "publisher": "American Chemical Society",
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1433-7851",
+        "1521-3773"
+      ],
+      "name": "Angewandte Chemie International Edition",
+      "aliases": [
+        "Angewandte Chemie",
+        "Angew. Chem. Int. Ed."
+      ],
+      "publisher": "Wiley",
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1755-4330",
+        "1755-4349"
+      ],
+      "name": "Nature Chemistry",
+      "publisher": "Springer Nature",
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0009-2665",
+        "1520-6890"
+      ],
+      "name": "Chemical Reviews",
+      "publisher": "American Chemical Society",
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2041-6520",
+        "2041-6539"
+      ],
+      "name": "Chemical Science",
+      "publisher": "Royal Society of Chemistry",
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2155-5435"
+      ],
+      "name": "ACS Catalysis",
+      "publisher": "American Chemical Society",
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1523-7060",
+        "1523-7052"
+      ],
+      "name": "Organic Letters",
+      "publisher": "American Chemical Society",
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1549-9618",
+        "1549-9626"
+      ],
+      "name": "Journal of Chemical Theory and Computation",
+      "publisher": "American Chemical Society",
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2451-9294"
+      ],
+      "name": "Chem",
+      "publisher": "Cell Press",
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2520-1158"
+      ],
+      "name": "Nature Catalysis",
+      "publisher": "Springer Nature",
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0092-8674",
+        "1097-4172"
+      ],
+      "name": "Cell",
+      "publisher": "Cell Press",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1078-8956",
+        "1546-170X"
+      ],
+      "name": "Nature Medicine",
+      "publisher": "Springer Nature",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1074-7613",
+        "1097-4180"
+      ],
+      "name": "Immunity",
+      "publisher": "Cell Press",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0896-6273",
+        "1097-4199"
+      ],
+      "name": "Neuron",
+      "publisher": "Cell Press",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "2050-084X"
+      ],
+      "name": "eLife",
+      "publisher": "eLife Sciences Publications",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1545-7885",
+        "1544-9173"
+      ],
+      "name": "PLOS Biology",
+      "publisher": "Public Library of Science",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1001-0602",
+        "1748-7838"
+      ],
+      "name": "Cell Research",
+      "publisher": "Springer Nature",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1087-0156",
+        "1546-1696"
+      ],
+      "name": "Nature Biotechnology",
+      "publisher": "Springer Nature",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1548-7091",
+        "1548-7105"
+      ],
+      "name": "Nature Methods",
+      "publisher": "Springer Nature",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1535-6108",
+        "1878-3686"
+      ],
+      "name": "Cancer Cell",
+      "publisher": "Cell Press",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1061-4036",
+        "1546-1718"
+      ],
+      "name": "Nature Genetics",
+      "publisher": "Springer Nature",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1465-7392",
+        "1476-4679"
+      ],
+      "name": "Nature Cell Biology",
+      "publisher": "Springer Nature",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1097-2765",
+        "1097-4164"
+      ],
+      "name": "Molecular Cell",
+      "publisher": "Cell Press",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "1474-760X",
+        "1465-6906"
+      ],
+      "name": "Genome Biology",
+      "publisher": "BMC",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0028-4793",
+        "1533-4406"
+      ],
+      "name": "The New England Journal of Medicine",
+      "aliases": [
+        "NEJM",
+        "N. Engl. J. Med."
+      ],
+      "publisher": "Massachusetts Medical Society",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0140-6736",
+        "1474-547X"
+      ],
+      "name": "The Lancet",
+      "publisher": "Elsevier",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0959-8138",
+        "1756-1833"
+      ],
+      "name": "BMJ",
+      "publisher": "BMJ Publishing Group",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0098-7484",
+        "1538-3598"
+      ],
+      "name": "JAMA",
+      "publisher": "American Medical Association",
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0003-486X",
+        "1939-8980"
+      ],
+      "name": "Annals of Mathematics",
+      "publisher": "Princeton University",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0894-0347",
+        "1088-6834"
+      ],
+      "name": "Journal of the American Mathematical Society",
+      "aliases": [
+        "JAMS"
+      ],
+      "publisher": "American Mathematical Society",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0020-9910",
+        "1432-1297"
+      ],
+      "name": "Inventiones Mathematicae",
+      "publisher": "Springer Nature",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0001-5962",
+        "1871-2509"
+      ],
+      "name": "Acta Mathematica",
+      "publisher": "International Press",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0073-8301",
+        "1618-1913"
+      ],
+      "name": "Publications mathématiques de l'IHÉS",
+      "publisher": "Springer Nature",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0012-7094",
+        "1547-7398"
+      ],
+      "name": "Duke Mathematical Journal",
+      "publisher": "Duke University Press",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0022-040X",
+        "1945-743X"
+      ],
+      "name": "Journal of Differential Geometry",
+      "publisher": "International Press",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0091-1798",
+        "2168-894X"
+      ],
+      "name": "The Annals of Probability",
+      "publisher": "Institute of Mathematical Statistics",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0036-1445",
+        "1095-7200"
+      ],
+      "name": "SIAM Review",
+      "publisher": "SIAM",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0036-1429",
+        "1095-7170"
+      ],
+      "name": "SIAM Journal on Numerical Analysis",
+      "publisher": "SIAM",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0025-5718",
+        "1088-6842"
+      ],
+      "name": "Mathematics of Computation",
+      "publisher": "American Mathematical Society",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0010-3640",
+        "1097-0312"
+      ],
+      "name": "Communications on Pure and Applied Mathematics",
+      "publisher": "Wiley",
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true
+    },
+    {
+      "issn": [
+        "0306-0012",
+        "1460-4744"
+      ],
+      "name": "Chemical Society Reviews",
+      "aliases": [
+        "Chem. Soc. Rev."
+      ],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2397-3358"
+      ],
+      "name": "Nature Reviews Chemistry",
+      "aliases": [],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2374-7943",
+        "2374-7951"
+      ],
+      "name": "ACS Central Science",
+      "aliases": [],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0021-9517",
+        "1090-2694"
+      ],
+      "name": "Journal of Catalysis",
+      "aliases": [],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1463-9262",
+        "1463-9270"
+      ],
+      "name": "Green Chemistry",
+      "aliases": [],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1359-7345",
+        "1364-548X"
+      ],
+      "name": "Chemical Communications",
+      "aliases": [
+        "Chem. Commun."
+      ],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0003-2700",
+        "1520-6882"
+      ],
+      "name": "Analytical Chemistry",
+      "aliases": [
+        "Anal. Chem."
+      ],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0020-1669",
+        "1520-510X"
+      ],
+      "name": "Inorganic Chemistry",
+      "aliases": [
+        "Inorg. Chem."
+      ],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1463-9076",
+        "1463-9084"
+      ],
+      "name": "Physical Chemistry Chemical Physics",
+      "aliases": [
+        "Phys. Chem. Chem. Phys."
+      ],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2050-7488",
+        "2050-7496"
+      ],
+      "name": "Journal of Materials Chemistry A",
+      "aliases": [
+        "J. Mater. Chem. A"
+      ],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0935-9648",
+        "1521-4095"
+      ],
+      "name": "Advanced Materials",
+      "aliases": [
+        "Adv. Mater."
+      ],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1552-4450",
+        "1552-4469"
+      ],
+      "name": "Nature Chemical Biology",
+      "aliases": [],
+      "scope": [
+        "chemistry",
+        "biology"
+      ],
+      "tiers": {
+        "chemistry": "T1",
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1936-0851",
+        "1936-086X"
+      ],
+      "name": "ACS Nano",
+      "aliases": [],
+      "scope": [
+        "chemistry"
+      ],
+      "tiers": {
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0090-5364",
+        "2168-8966"
+      ],
+      "name": "Annals of Statistics",
+      "aliases": [
+        "Ann. Statist."
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0178-8051",
+        "1432-2064"
+      ],
+      "name": "Probability Theory and Related Fields",
+      "aliases": [
+        "Probab. Theory Related Fields"
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0022-1236",
+        "1096-0783"
+      ],
+      "name": "Journal of Functional Analysis",
+      "aliases": [
+        "J. Funct. Anal."
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0001-8708",
+        "1090-2082"
+      ],
+      "name": "Advances in Mathematics",
+      "aliases": [
+        "Adv. Math."
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0002-9947",
+        "1088-6850"
+      ],
+      "name": "Transactions of the American Mathematical Society",
+      "aliases": [
+        "Trans. Amer. Math. Soc."
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0002-9939",
+        "1088-6826"
+      ],
+      "name": "Proceedings of the American Mathematical Society",
+      "aliases": [
+        "Proc. Amer. Math. Soc."
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0021-8693",
+        "1090-266X"
+      ],
+      "name": "Journal of Algebra",
+      "aliases": [
+        "J. Algebra"
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0024-3795",
+        "1873-1856"
+      ],
+      "name": "Linear Algebra and its Applications",
+      "aliases": [
+        "Linear Algebra Appl."
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0097-3165",
+        "1096-0899"
+      ],
+      "name": "Journal of Combinatorial Theory, Series A",
+      "aliases": [],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0022-314X",
+        "1096-0805"
+      ],
+      "name": "Journal of Number Theory",
+      "aliases": [
+        "J. Number Theory"
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0010-3616",
+        "1432-0916"
+      ],
+      "name": "Communications in Mathematical Physics",
+      "aliases": [
+        "Comm. Math. Phys."
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1050-5164",
+        "2168-8737"
+      ],
+      "name": "The Annals of Applied Probability",
+      "aliases": [],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0036-1399",
+        "1095-712X"
+      ],
+      "name": "SIAM Journal on Applied Mathematics",
+      "aliases": [],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0885-7474",
+        "1573-7691"
+      ],
+      "name": "Journal of Scientific Computing",
+      "aliases": [
+        "J. Sci. Comput."
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0029-599X",
+        "0945-3245"
+      ],
+      "name": "Numerische Mathematik",
+      "aliases": [
+        "Numer. Math."
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0364-765X",
+        "1526-5471"
+      ],
+      "name": "Mathematics of Operations Research",
+      "aliases": [
+        "Math. Oper. Res."
+      ],
+      "scope": [
+        "math"
+      ],
+      "tiers": {
+        "math": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1476-1122",
+        "1476-4660"
+      ],
+      "name": "Nature Materials",
+      "aliases": [],
+      "scope": [
+        "physics",
+        "chemistry"
+      ],
+      "tiers": {
+        "physics": "T1",
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1748-3387",
+        "1748-3395"
+      ],
+      "name": "Nature Nanotechnology",
+      "aliases": [],
+      "scope": [
+        "physics",
+        "chemistry"
+      ],
+      "tiers": {
+        "physics": "T1",
+        "chemistry": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1749-4885",
+        "1749-4893"
+      ],
+      "name": "Nature Photonics",
+      "aliases": [],
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0370-1573",
+        "1873-6270"
+      ],
+      "name": "Physics Reports",
+      "aliases": [
+        "Phys. Rep."
+      ],
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0034-4885",
+        "1361-6633"
+      ],
+      "name": "Reports on Progress in Physics",
+      "aliases": [
+        "Rep. Prog. Phys."
+      ],
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "0264-9381",
+        "1361-6382"
+      ],
+      "name": "Classical and Quantum Gravity",
+      "aliases": [
+        "Class. Quantum Grav."
+      ],
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1475-7516"
+      ],
+      "name": "Journal of Cosmology and Astroparticle Physics",
+      "aliases": [
+        "JCAP"
+      ],
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1434-6044",
+        "1434-6052"
+      ],
+      "name": "The European Physical Journal C",
+      "aliases": [
+        "Eur. Phys. J. C"
+      ],
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2331-7019"
+      ],
+      "name": "Physical Review Applied",
+      "aliases": [
+        "Phys. Rev. Applied"
+      ],
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2334-2536"
+      ],
+      "name": "Optica",
+      "aliases": [],
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2047-7538"
+      ],
+      "name": "Light: Science & Applications",
+      "aliases": [],
+      "scope": [
+        "physics"
+      ],
+      "tiers": {
+        "physics": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1471-0072",
+        "1471-0080"
+      ],
+      "name": "Nature Reviews Molecular Cell Biology",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1471-0056",
+        "1471-0064"
+      ],
+      "name": "Nature Reviews Genetics",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1529-2908",
+        "1529-2916"
+      ],
+      "name": "Nature Immunology",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2522-5812"
+      ],
+      "name": "Nature Metabolism",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2470-9468"
+      ],
+      "name": "Science Immunology",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1946-6234",
+        "1946-6242"
+      ],
+      "name": "Science Translational Medicine",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1550-4131",
+        "1932-7420"
+      ],
+      "name": "Cell Metabolism",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1934-5909",
+        "1875-9777"
+      ],
+      "name": "Cell Stem Cell",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1534-5807",
+        "1878-1551"
+      ],
+      "name": "Developmental Cell",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1744-4292"
+      ],
+      "name": "Molecular Systems Biology",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T2"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2397-334X"
+      ],
+      "name": "Nature Ecology & Evolution",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2055-0278"
+      ],
+      "name": "Nature Plants",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "2058-5276"
+      ],
+      "name": "Nature Microbiology",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    },
+    {
+      "issn": [
+        "1097-6256",
+        "1546-1726"
+      ],
+      "name": "Nature Neuroscience",
+      "aliases": [],
+      "scope": [
+        "biology"
+      ],
+      "tiers": {
+        "biology": "T1"
+      },
+      "peer_reviewed": true,
+      "source": "curated"
+    }
+  ]
+}
