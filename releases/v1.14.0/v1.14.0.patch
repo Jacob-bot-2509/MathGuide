@@ -1,0 +1,3007 @@
+diff --git a/NEWRELEASE.md b/NEWRELEASE.md
+index b35deb1..74ce2a0 100644
+--- a/NEWRELEASE.md
++++ b/NEWRELEASE.md
+@@ -1,182 +1,150 @@
+-# MathGuide v1.12.0 — 科研阅读、外部文献、智能数据表与项目报告
++# MathGuide v1.13.0 — 文献来源权威分级、免费全文与来源溯源
+ 
+ 发布日期：2026-10-30
+-发布类型：功能版本（科研阅读闭环 + 外部文献 + 数据表智能联动）
+-代码快照：`3456b4d`（标签 `v1.12.0` 指向该提交）
+-基线版本：`v1.11.0`（`0257ff85165be8d46b48ac1a5feab08cf69f5fa0`）
+-
+-本版本把科研区从「检索结果列表」推进到可闭环的研究工作台：
+-检索到的外部论文可以在当前窗口阅读、批注、由模型定位与解释；
+-论文表格可以框选转录成数据表并保留来源页码；
+-数据表可以归属项目、做统计与绘图、带进对话分析、跨论文生成对比表，
+-最后按项目导出 DOCX 研究报告。设置页回收站同时改为「学习问题 / 科研历史」双窗口。
+-
+-## 一、科研阅读器与批注
+-
+-- 点击论文在当前窗口弹出覆盖式阅读器，不再跳转第三方站点；`×` 或 `Esc` 关闭。
+-- PDF 使用 PDF.js 画布 + 文本层渲染，支持缩放、翻页、页码跳转、全屏展开；
+-  非 PDF 文档走文本分页阅读器；按面板宽度自动适配，长文与宽页面不裁切。
+-- 选中文本可建批注：黄/青/绿/红四色、支持编辑与删除；
+-  批注按 `docId` 存储，临时论文导入正式库后不丢。
+-- 关闭阅读器时三态处理：有未保存批注 → 保存 / 不保存 / 取消；
+-  无修改 → 直接关闭。
+-- 区域解释：在 PDF 上框选图表或公式，截图交给视觉模型解释；
+-  只依据截图回答，数值以原文为准，不猜测。
+-- 对话联动：阅读器打开时提问，后端先在该论文内定位命中段落，
+-  阅读器自动跳页并高亮；模型回答与原文位置对应。
+-- 「我的论文」与外部论文共用同一套阅读器；
+-  外部论文先进入隐藏的临时语料（`status=temp`），导入后转为正式论文。
+-- 导入外部论文时若已有批注，先询问「是否保留批注」；
+-  保留则批注随论文入库，不保留则写入干净文档。
+-- 实现：`frontend/src/components/research/DocumentViewer.vue`、
+-  `frontend/src/services/researchAnnotationService.ts`、
+-  `backend/research_papers.py`、`backend/research_vision.py`。
+-
+-## 二、外部文献检索与浏览历史
+-
+-- 科研检索拆为「我的论文 / 全网文献」两种互不干扰的模式：
+-  - 文内检索：勾选参与检索的本地论文，支持全选、清空与项目过滤。
+-  - 文外检索：关键词、作者、年份区间；自动识别 DOI / arXiv / PMCID / PMID
+-    并做精确条目查询，不额外询问用户。
+-- 检索结果可查看相关论文、查看开放获取 PDF、导入论文库；
+-  相关论文按 DOI 参考文献与标题相似度合并。
+-- 数据源：Crossref、arXiv、Europe PMC；可选 OpenAlex / Semantic Scholar。
+-  多源并行、DOI 去重、8 秒死线，慢源自动取消；单源失败不拖垮整体。
+-- 外部 PDF 只允许 HTTPS 与 arXiv / Europe PMC / PMC 白名单主机；
+-  校验重定向与 `%PDF-` 文件头，限制大小，防止 SSRF 与任意下载。
+-- 浏览历史只记录「全网文献」中尚未入库的临时论文：
+-  历史项保留当前批注状态，可继续阅读；入库后自动从历史消失。
+-- 删除历史记录进入回收站，保留 30 天，可恢复；
+-  删除确认文案为「确定删除？删除文件 30 天内可在回收站中找回」。
+-  到期由启动清理与每日后台任务彻底删除。
+-- 临时论文超过 200 篇或总体积超限时，自动淘汰最旧且无批注的临时论文；
+-  有批注的临时论文不自动删除，避免误伤。
+-- 入口位置：「浏览历史」在「全网文献」内，与「重新检索全网」并列；
+-  「我的论文」不产生浏览历史。
+-- 实现：`backend/research_lit.py`、`backend/research_corpus.py`、
+-  `backend/research_papers.py`、`frontend/src/views/ResearchSearchView.vue`。
+-
+-## 三、数据表与科研联动
+-
+-### 1. 数据表归属与项目联动
+-
+-- 新建、导入、论文转录的数据表自动继承当前研究项目；可按项目过滤。
+-- 研究档案新增「数据表」标签：按项目列出数据表，点击直接打开对应表。
+-- 数据表页新增「在对话中分析」：跳回科研对话并携带 `tableId`；
+-  输入框上方显示数据表上下文标签，可手动移除。
+-- 后端把表结构、公式、前 40 行、计算列结果与服务端统计摘要送入对话上下文；
+-  模型引用数值时不得改写或编造，统计值直接采用服务端结果。
+-- 数据表左侧列表支持双击标题或点 ✎ 重命名，Enter 保存、Esc 取消，刷新后保留。
+-- 「＋新建表」按钮高光与「＋导入模板」一致。
+-
+-### 2. 统计与绘图
+-
+-- 统计面板：样本量、缺失值、均值、中位数、标准差、最小值、最大值、Q1、Q3，
+-  全部服务端 `Decimal` 计算，保留 4 位小数；同时给出 Pearson 相关系数。
+-- 图表面板：折线、散点、柱状；X 轴可选行号或数值列，Y 列可多选；
+-  不引入图表库，按服务端序列绘制 SVG，支持导出 SVG 与 PNG。
+-- 统计与绘图直接分析当前草稿，不要求先保存；切换数据表自动重置分析状态。
+-
+-### 3. 论文表格转录
+-
+-- 阅读器框选论文表格 → 「转为数据表」→ 视觉模型逐格转录。
+-- 转录结果先进入预览窗口：表名与每个单元格都可修改；
+-  空单元格、合并单元格与识别警告明确提示。
+-- 用户确认后写入数据表，并记录来源：`docId`、论文名、页码、表注；
+-  数据表顶部显示来源标签，点击回到原文对应页。
+-- 临时论文未入库时，来源链接仍可按 `docId` 直接打开。
+-- 预览与入库分离：识别失败或不准时不会污染数据表。
+-
+-### 4. 多文献对比表
+-
+-- 「我的论文」勾选 2~6 篇 → 「生成对比表」：
+-  逐篇抽取研究问题、方法、数据与样本、主要结果、局限。
+-- 每行带回来源 `rowSources`，行号旁出现 ↗，点击回到对应论文页。
+-- 新增「核对」列：结果或数据中的数字若在原文找不到，明确标注，不静默放过。
+-- 单篇抽取失败只影响该行，不拖垮整张表；全部失败时返回错误。
+-- 选中的论文同属一个项目时，对比表自动归入该项目。
+-
+-### 5. 项目报告导出
+-
+-- 研究档案项目栏与数据表页均提供「导出报告」。
+-- 服务端生成 DOCX，**不调用 LLM**，避免二次生成引入幻觉：
+-  研究目标、研究思路、过程笔记、项目内数据表（含计算列）、
+-  描述性统计与 Pearson 相关、项目文献、表级与行级数据来源。
+-- 报告只包含归属于当前项目的数据表；未归属项目的表不会混入。
+-
+-## 四、设置与界面
+-
+-- 设置 → 回收站改为「学习问题 / 科研历史」两个按钮切换的独立窗口，
+-  不再上下并列；科研历史首次切换时才请求服务端数据。
+-- 科研浏览历史回收站支持恢复，显示批注数量与剩余天数。
+-- 数据表页顶部新增「统计 / 图表 / 在对话中分析 / 导出报告」。
++发布类型：功能版本（免费学术源接入 + 学科权威分级 + 开放获取解析）
++代码快照：`56572b6`（标签 `v1.13.0` 指向该提交）
++基线版本：`v1.12.0`（`3456b4d`）
++
++本版本把「全网文献」从单一检索入口升级为按学科组织、可核验来源的文献发现层：
++
++- 按学科路由到 Crossref、arXiv、Europe PMC、PubMed、INSPIRE-HEP、zbMATH Open、DOAJ、OpenAlex、Semantic Scholar；
++- 每条结果带 ISSN、出版社、文章类型、同行评审、撤稿状态与开放获取状态；
++- 用人工维护的场所注册表给综合顶刊与领域顶刊标注 T0–T3，预印本单独标 P；
++- 通过 Unpaywall 与 OpenAlex 解析合法 OA 地址，只有 HTTPS 且确有全文时才提供免费入口；
++- 阅读器顶部显示论文来源、许可与撤稿提示，导入后仍可追溯。
++
++全部来源均为免费或开放接口；本版本不包含校园图书馆、CARSI、订阅 PDF 或任何付费墙绕过。
++
++## 一、学科来源与权威分级
++
++- 新增 `backend/research_sources.py`：来源注册表声明适用学科、权威层级、是否同行评审、
++  key 环境变量与全文策略。未登记来源不会进入检索结果。
++- 新增 `backend/research_venues.py` 与 `backend/registry/venues.json`：
++  109 条人工维护的场所记录，覆盖综合、数学、物理、化学、生物五个方向。
++- 场所分级规则：
++  - `T0` 综合顶刊：Nature、Science、PNAS 等跨学科高先验；
++  - `T1` 领域顶刊：PRL、JACS、Angewandte、Annals of Mathematics 等；
++  - `T2` 领域强刊；`T3` 同行评审/索引期刊；`P` 预印本；`U` 用户上传。
++- ISSN 归一化（去连字符、X 大写）优先匹配；无 ISSN 时用规范化名称与别名。
++- Nature 子刊单独定级，不自动继承 Nature。
++- 学科路由：
++  - 物理加入 INSPIRE-HEP；
++  - 生物医学加入 PubMed E-utilities；
++  - 数学加入 zbMATH Open；
++  - 综合检索只使用声明了 `general` 的跨学科来源。
++- 排序按「场所层级 → 来源优先级 → 被引数 → 年份」，预印本不冒充满同行评审。
++
++## 二、免费全文与开放获取解析
++
++- 新增 `backend/research_oa.py`：Unpaywall 优先，OpenAlex 兜底。
++- 只接受 HTTPS 地址；带用户名/密码、空白字符或控制字符的 URL 一律拒绝。
++- 未配置 `MG_UNPAYWALL_EMAIL` 时跳过 Unpaywall，不伪造 OA 状态。
++- OA 结果缓存 24 小时；检索结果缓存 5 分钟，减少 429 与重复请求。
++- 没有合法免费全文时只显示「查看原文」跳转出版社页面，不显示「免费 PDF」。
++- 前端新增「查找免费全文」按钮；已知 DOI 可单独解析。
++- 不下载许可不明 PDF，不代理全文，不转存公共库。
++
++## 三、检索界面与阅读器
++
++- 检索筛选新增：学科、仅同行评审、含预印本、仅免费全文。
++- 结果徽标新增：`T0–T3` / `P` 场所层级、同行评审、预印本、已撤稿、免费全文。
++- 标签区分「查看原文」（出版社页面）与「免费全文」（合法 OA）。
++- 阅读器顶部新增来源条：
++  - 场所名称、同行评审、预印本、开放获取状态、许可、撤稿警告；
++  - 「出版社页面」外链使用 `rel="noopener noreferrer"`。
++- 切换阅读的论文时重新加载来源元数据，避免残留上一篇的信息。
++- 临时论文与正式论文都保留来源元数据；导入正式库时不覆盖已有字段。
++
++## 四、接口与配置
++
++新增接口：
++
++| 方法 | 路径 | 说明 |
++| --- | --- | --- |
++| GET | `/api/research/venues?issn=\|name=&field=` | 场所权威查询；ISSN 支持逗号分隔多值 |
++| GET | `/api/research/sources` | 来源、学科、层级、全文策略与 key 配置状态，不探测外网 |
++| GET | `/api/research/docs/{doc_id}` | 单篇论文来源元数据，供阅读器顶部显示 |
+ 
+-## 五、修复与安全
++扩展接口：
+ 
+-- 修复 PDF 画布宽于面板时被裁切：改为按面板宽度自适应缩放。
+-- 修复阅读器关闭时 PDF 销毁异常阻塞关闭流程。
+-- 修复框选区域时原生文本选择吞掉鼠标移动：区域选择改用窗口级事件。
+-- 修复 arXiv 带引号检索返回零结果：改为 `all:{query}` 并保留 AND 过滤。
+-- 修复外部文献 URL 未净化可能携带 `javascript:` 等危险协议。
+-- 修复研究档案异步保存竞态与数据表保存竞态。
+-- 修复临时论文与正式论文检索范围混淆：默认检索排除 `temp`，
+-  显式传入 `docIds` 时才允许临时论文。
+-- 设置页回收站与科研历史分源：学习问题仍在本机，科研历史在服务端。
++- `GET /api/research/literature` 新增 `field`、`peerReviewed`、`includePreprints`、`oaOnly`；
++- 结果新增 `issn`、`publisher`、`peerReviewed`、`articleType`、`oaStatus`、`oaUrl`、
++  `license`、`retractionStatus`、`versionOf`、`fields`、`sourceTier`、`venueTier`、`landingUrl`；
++- DOI 为 bioRxiv/medRxiv 时补充预印本元数据；关键词搜索仍走 Europe PMC。
+ 
+-## 六、行为变更与配置
++配置（只放 `backend/.env.local`）：
+ 
+-| 项目 | 变更 | 默认/迁移 |
+-| --- | --- | --- |
+-| 版本号 | `1.11.0` → `1.12.0` | `package.json`、`package-lock.json`、关于页 |
+-| 数据表来源 | 新增表级 `source` 与行级 `rowSources` | 旧表自动补空字段，自动保存不覆盖原来源 |
+-| 数据表统计 | 新增 `/api/research/tables/{id}/stats` | 不落库，分析当前草稿 |
+-| 论文表格转录 | 新增 `/api/research/papers/{id}/extract-table` | 复用视觉模型配置 `MG_VISION_*` / `MG_ALIYUN_*` |
+-| 多文献对比 | 新增 `/api/research/literature/compare` | 仅本地论文正文，2~6 篇，每 5 分钟 6 次 |
+-| 项目报告 | 新增 `/api/research/report` | 仅 DOCX，不调用 LLM |
+-| 浏览历史 | 仅记录未入库的外部论文 | 入库后自动移出历史 |
+-| 临时论文上限 | 新增自动淘汰 | 200 篇或总体积上限；有批注的不自动删除 |
++```bash
++MG_OPENALEX_API_KEY=...      # 免费 key，提高每日额度
++MG_NCBI_API_KEY=...          # 可选，提高 PubMed 限额
++MG_S2_API_KEY=...            # 可选；无 key 走公共池
++MG_UNPAYWALL_EMAIL=...       # Unpaywall 要求联系邮箱
++MG_LITERATURE_MAILTO=...     # 可选，Crossref 礼貌池
++```
+ 
+-## 七、验证
++无 key 时 OpenAlex 搜索受共享每日额度限制，Semantic Scholar 走公共池，均可能 429；
++配置免费 key 后额度独立。
++
++## 五、修复与安全
++
++- 修复 OpenAlex 搜索 `select` 含无效字段 `oa_status` 导致 400。
++- 修复 OpenAlex OA 状态读取位置错误：应读 `open_access.oa_status`，此前恒为 unknown。
++- 修复 Semantic Scholar 无 key 直接返回空：改为无 key 也请求公共池。
++- 修复 INSPIRE `publication_info` 为列表时解析崩溃。
++- 修复 zbMATH 许可占位记录进入结果。
++- 修复 Crossref 返回 book chapter / front matter 等噪声条目。
++- 修复 PubMed 仅按年份上限时 `mindate` 缺失。
++- 修复 URL 净化遗漏：OA 地址与 landing URL 均只允许 HTTPS 且无凭据。
++- 前端默认改为「仅同行评审、预印本关闭」；需要 arXiv 时手动勾选。
++- 测试缓存隔离：来源与检索缓存不再跨测试泄漏。
++
++## 六、验证
+ 
+ ```text
+-backend pytest                     350 passed
++backend pytest                     378 passed
+ frontend npm test                  全部自测通过
+ npm run build                      通过（仅 tex2svg 分块 >1800kB 的既有告警）
+ vue-tsc --noEmit                   通过
+ ```
+ 
+-浏览器实测：
++分学科冒烟（2026-10-30，每学科 3 查询 × Top-10，`tools/lit_smoke.py`）：
++
++| 学科 | 结果 | authority_precision | peer | oa | source_errors |
++| --- | --- | --- | --- | --- | --- |
++| general | 30 | 10% | 100% | 43% | 3 |
++| math | 30 | 10% | 100% | 10% | 3 |
++| physics | 30 | 30% | 100% | 27% | 3 |
++| chemistry | 30 | 57% | 100% | 27% | 3 |
++| biology | 30 | 80% | 100% | 57% | 3 |
++
++实时探测：
+ 
+-- 真实 PDF（含表格）上传 → 阅读器框选表格 → 视觉模型转录 5 行 × 4 列全部正确
+-  → 存入数据表 → 来源标签回跳原文第 1 页。
+-- 两篇本地论文生成对比表：研究问题/方法/数据/结果分列，
+-  结果字段保留原文数值，行来源回跳正常。
+-- 数据表统计：均值、标准差、四分位与 Pearson 相关与服务端一致；
+-  折线/散点/柱状图渲染与 SVG/PNG 导出正常。
+-- 对话带表提问：模型直接引用表内 B 列最大值 7.9、均值 4.9833。
+-- 项目报告下载 DOCX，包含数据表、计算列与统计结果。
++- Unpaywall 配置邮箱后，Nature Communications 样本解析为 `gold`，返回 `www.nature.com` 的 HTTPS PDF；
++- OpenAlex 配置免费 key 后搜索不再 429，OA 状态正确读取；
++- Semantic Scholar 无 key 可返回结果，公共池仍可能限流；
++- ChemRxiv API 仍被 Cloudflare 403，ChinaXiv 404，CAS IR 连接失败，均未进入默认检索。
+ 
+-## 八、完整代码与溯源附件
++## 七、完整代码与溯源附件
+ 
+-本版本把**完整源码快照**与**完整变更补丁**一并入库，位于 `releases/v1.12.0/`，
++本版本把**完整源码快照**与**完整变更补丁**一并入库，位于 `releases/v1.13.0/`，
+ 也会作为 GitHub Release 资产上传：
+ 
+ | 附件 | 内容 | SHA-256 |
+ | --- | --- | --- |
+-| `MathGuide-v1.12.0-source.tar.gz` | **完整源码快照**（308 个文件，1,474,217 字节），由 `git archive` 从代码提交 `3456b4d` 生成 | `a56d3e15ec4d1522920527c540d0d4d9988b81eddb12bbf2d1fd0c3ea64249cf` |
+-| `v1.12.0.patch` | 相对 `v1.11.0` 的完整二进制补丁（392,907 字节，排除 `releases/` 附件） | `bc09ab1919b24ac9c4516cffef5d9767f87250db70dfb958dd767a03d434a417` |
+-| `MANIFEST.sha256` | 源码快照 308 个文件的逐文件 SHA-256（按归档内真实字节生成） | `a09a8cc32eb4528cd3df593a8d3c22d524d39f1605eb455b940260f23f910f05` |
++| `MathGuide-v1.13.0-source.tar.gz` | **完整源码快照**（317 个文件，1,518,902 字节），由 `git archive` 从代码提交 `56572b6` 生成 | `2f3e3403b81095fc3ab8dd49dc4a0bf4be9b262a9a4214f27983a17de54e3333` |
++| `v1.13.0.patch` | 相对 `v1.12.0` 的完整二进制补丁（248,646 字节，排除 `releases/` 附件） | `fd8f763de7e6508efa865d9d2fdbc4692ac8a425687ac02e9cba9b8e2d804878` |
++| `MANIFEST.sha256` | 源码快照 317 个文件的逐文件 SHA-256（按归档内真实字节生成） | `f534ddfde159c07036aa20528f52297dfcb1ebc2de5541591ee8402baa24f47f` |
+ | `SHA256SUMS` | 上述附件 + 校验脚本 + 本目录 README 的 SHA-256 | 见文件本身 |
+ | `verify_manifest.py` | 跨平台逐文件校验脚本 | `0d304ea57b0a76938d55f539f02a0f189b77d1a1496b26e7b84b358ba6fbf01a` |
+-| `README.md` | 附件说明与复核步骤 | `6d9218ba88df5f820127f1350961715c14939bc763adf33a1e8389b546f86721` |
++| `README.md` | 附件说明与复核步骤 | `dc427f87f6992a2fd3db0466cf0c5da5537c1b4a90663a163142d1a4f5b51196` |
+ 
+ 复核步骤：
+ 
+ ```bash
+-cd releases/v1.12.0
++cd releases/v1.13.0
+ sha256sum -c SHA256SUMS
+-tar -xzf MathGuide-v1.12.0-source.tar.gz
+-python verify_manifest.py MathGuide-v1.12.0   # checked=308 failures=0
++tar -xzf MathGuide-v1.13.0-source.tar.gz
++python verify_manifest.py MathGuide-v1.13.0   # checked=317 failures=0
+ ```
+ 
+ 源码包不包含 `.git`、`backend/.env.local`、`backend/data/`、`.venv/`、`node_modules/`
+@@ -184,29 +152,25 @@ python verify_manifest.py MathGuide-v1.12.0   # checked=308 failures=0
+ `export-ignore`。`MANIFEST.sha256` 按源码包内真实字节生成，Windows 工作树的
+ CRLF 转换不影响归档校验，请以解压后的源码目录为准。
+ 
+-## 九、已知限制
++## 八、已知限制
+ 
+-- 扫描件/纯图片 PDF 仍需先 OCR；当前不会自动识别图片文字。
+-- 论文表格转录依赖视觉模型：模糊、跨页、超宽表格可能缺格或截断；
+-  已提供逐格校对与「核对」提示，但不保证一次识别完全正确。
+-- 多文献对比只读取「我的论文」正文；仅元数据的外部文献不参与，
+-  避免用摘要硬凑对比表。单篇长文只取前 7,000 字符。
+-- 对比抽取由模型归纳，「核对」列只能发现原文中不存在的数字，
+-  无法自动发现张冠李戴；入库前仍需人工过一遍。
+-- 项目报告只包含归属于当前项目的数据表；未归属的数据表不会自动纳入。
+-- 图表目前为行序/单数值 X 轴，暂不支持误差棒、拟合线与多子图。
+-- 外部文献 PDF：Europe PMC 与 PMC 仍有反爬（403），实际覆盖以 arXiv 为主。
+-- 数据库仍是按用户 SQLite + 单进程缓存，多 worker 部署前需要重新评估锁与缓存一致性。
++- `authority_precision` 在综合、数学、物理仍偏低（10%–30%）；场所权重需用更大样本调参。
++- Semantic Scholar 无 key 走共享池，可能 429；配置免费 key 后改善。
++- OpenAlex 无 key 每日额度按网络共享；正式使用建议配置免费 key。
++- Unpaywall 只按 DOI 解析；无 DOI 的结果无法解析 OA。
++- 仅接受 HTTPS；出版社只提供 HTTP 链接时不会显示免费全文。
++- ChemRxiv API、ChinaXiv、CAS IR、ADS、CORE 尚未接入或网络不可达。
++- 不包含校园图书馆、CARSI、订阅 PDF、Sci-Hub 或任何付费墙绕过。
++- 场所分级为人工维护的种子表，不是 JCR/中科院分区，也不替代授权索引。
+ 
+-## 十、升级步骤
++## 九、升级步骤
+ 
+-1. 拉取 `v1.12.0`，安装依赖：
++1. 拉取 `v1.13.0`，安装依赖：
+    `pip install -r backend/requirements.txt` 与 `cd frontend && npm ci`。
+-2. 在 `backend/.env.local` 按需配置视觉模型：
+-   `MG_VISION_BASE_URL` / `MG_VISION_API_KEY` / `MG_VISION_MODEL`
+-   （缺省复用 `MG_ALIYUN_*`，模型默认 `qwen3.8-omni-flash`）。
+-3. 重启后端；数据表会自动补充 `source_json` / `row_sources_json` 列，
+-   旧表来源为空但不会影响读写。
++2. 在 `backend/.env.local` 配置：
++   `MG_UNPAYWALL_EMAIL`（必需）、`MG_OPENALEX_API_KEY`（建议）、
++   `MG_NCBI_API_KEY` / `MG_S2_API_KEY`（可选）。
++3. 重启后端；`docs` 表会自动补充来源元数据列，旧文档字段为空但读写不受影响。
+ 4. 前端 `npm run build`；按 `deploy/README.md` 配置 HTTPS/CSP 与双域 Cookie。
+ 5. 运行 `python -m pytest` 与 `npm test` 确认环境。
+-6. 需要核对发布包时，按第八节命令执行 SHA-256 与逐文件校验。
++6. 需要核对发布包时，按第七节命令执行 SHA-256 与逐文件校验。
+diff --git a/backend/README.md b/backend/README.md
+index 19a5507..0ce250b 100644
+--- a/backend/README.md
++++ b/backend/README.md
+@@ -214,11 +214,14 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
+ | POST | `/api/account/export` | 导出账号、用量元数据与诊断记录 → `200 {exportedAt, account, usage, diagnoses}` |
+ | POST | `/api/account/delete` | 注销账号(密码或 `confirm` 二次确认),级联删 token/用量/诊断 → `200 {ok:true}` |
+ | POST | `/api/chat/stream` | 聊天流式回复(SSE) |
+-| POST | `/api/research/docs?name=文件名&projectId=` | 上传论文(PDF/文本原始字节),按内容哈希去重、按用户隔离 → `{docId, duplicate, pages, chunks}` |
++| POST | `/api/research/docs?name=文件名&projectId=&temp=1` | 上传论文(PDF/文本原始字节),按内容哈希去重、按用户隔离 → `{docId, duplicate, pages, chunks}`;`temp=1` 进临时语料,供拖入后确认是否入库 |
+ | GET | `/api/research/docs` | 当前用户的论文列表(元数据,含 `projectId`) |
+ | GET | `/api/research/docs/{doc_id}` | 单篇论文来源元数据(场所、ISSN、许可、OA、撤稿),供阅读器顶部显示 |
+-| DELETE | `/api/research/docs` | 清空正式论文库及其批注、切片、章节树和原文件；保留临时浏览历史 |
+-| DELETE | `/api/research/docs/{doc_id}` | 删除论文、切片、章节树与原文件 |
++| GET | `/api/research/docs/{doc_id}/insights` | 论文结构缓存(研究问题/方法/结论/局限/章节);无缓存返回 `cached=false` |
++| POST | `/api/research/docs/{doc_id}/insights` | 生成或刷新论文结构 `{refresh?}`;按 docId + 内容哈希缓存 |
++| POST | `/api/research/docs/{doc_id}/progress` | 保存阅读页码 `{page}`;聊天记录不落库 |
++| DELETE | `/api/research/docs` | 清空正式论文库及其批注、切片、章节树、结构缓存和原文件；保留临时浏览历史 |
++| DELETE | `/api/research/docs/{doc_id}` | 删除论文、批注、切片、章节树、结构缓存与原文件 |
+ | POST | `/api/research/search` | 全文检索 `{query, topK?, docId?, projectId?, tree?}` → `{hits, mode, elapsed}`;BM25 + embedding 混合,未配置向量时纯 BM25 |
+ | GET | `/api/research/tree?docId=` | 论文章节树(节点扁平列表,`parentId` 组树) |
+ | GET | `/api/research/projects` | 研究项目列表(目标/思路/状态) |
+diff --git a/backend/main.py b/backend/main.py
+index 295869e..ed21036 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -105,6 +105,9 @@ routes = [
+     Route("/api/research/docs", research_corpus.clear_docs, methods=["DELETE"]),
+     Route("/api/research/docs/{doc_id}", research_corpus.get_doc, methods=["GET"]),
+     Route("/api/research/docs/{doc_id}", research_corpus.delete_doc, methods=["DELETE"]),
++    Route("/api/research/docs/{doc_id}/insights", research_corpus.get_insights),
++    Route("/api/research/docs/{doc_id}/insights", research_corpus.generate_insights, methods=["POST"]),
++    Route("/api/research/docs/{doc_id}/progress", research_corpus.save_progress, methods=["POST"]),
+     Route("/api/research/docs/{doc_id}/file", research_corpus.doc_file),
+     Route("/api/research/docs/{doc_id}/text", research_corpus.doc_text),
+     Route("/api/research/docs/{doc_id}/annotations", research_corpus.list_annotations),
+diff --git a/backend/research_corpus.py b/backend/research_corpus.py
+index c461819..d46d6e4 100644
+--- a/backend/research_corpus.py
++++ b/backend/research_corpus.py
+@@ -55,6 +55,7 @@ SNIPPET_CHARS = 320
+ # 上传与检索都触发磁盘/embedding 开销,按用户限流(聊天另有自己的限流器)
+ _upload_limiter = SlidingWindowLimiter(4, 300)    # 5 分钟最多 4 篇
+ _search_limiter = SlidingWindowLimiter(30, 60)    # 1 分钟最多 30 次检索
++_insights_limiter = SlidingWindowLimiter(6, 3600)  # 结构生成每小时最多 6 次
+ 
+ # BM25 参数(业界默认值)
+ K1 = 1.2
+@@ -177,9 +178,16 @@ def _connect(uid: str) -> sqlite3.Connection:
+         ("landing_url", "TEXT"),
+         ("retraction_status", "TEXT"),
+         ("version_of", "TEXT"),
++        ("last_page", "INTEGER NOT NULL DEFAULT 1"),
++        ("last_read_at", "REAL"),
+     ):
+         if column not in columns:
+             conn.execute(f"ALTER TABLE docs ADD COLUMN {column} {decl}")
++    conn.execute(
++        "CREATE TABLE IF NOT EXISTS doc_insights("
++        "doc_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL,"
++        " structure_json TEXT NOT NULL, created_at REAL NOT NULL)"
++    )
+     conn.execute(
+         "CREATE TABLE IF NOT EXISTS annotations("
+         "id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, page INTEGER NOT NULL,"
+@@ -1074,19 +1082,21 @@ def _load_rows(uid: str) -> tuple[list[dict], list[NodeRec], list[ChunkRec]]:
+              "createdAt": r[5], "projectId": r[6], "doi": r[7] or "",
+              "title": r[8] or r[1], "authors": r[9] or "",
+              "year": r[10] or 0, "venue": r[11] or "",
++             "sha": r[3] or "",
+              "status": r[12] or "uploaded", "originUrl": r[13] or "",
+              "lastViewedAt": r[14] or 0, "deletedAt": r[15] or 0,
+              "issn": r[16] or "", "publisher": r[17] or "",
+              "articleType": r[18] or "", "peerReviewed": bool(r[19]),
+              "oaStatus": r[20] or "unknown", "license": r[21] or "",
+              "accessSource": r[22] or "user_upload", "landingUrl": r[23] or "",
+-             "retractionStatus": r[24] or "none", "versionOf": r[25] or ""}
++             "retractionStatus": r[24] or "none", "versionOf": r[25] or "",
++             "lastPage": r[26] or 1, "lastReadAt": r[27] or 0}
+             for r in conn.execute(
+                 "SELECT id, name, size, sha, pages, created_at, project_id, doi,"
+                 " title, authors, year, venue, status, origin_url, last_viewed_at,"
+                 " deleted_at, issn, publisher, article_type, peer_reviewed,"
+                 " oa_status, license, access_source, landing_url, retraction_status,"
+-                " version_of FROM docs ORDER BY created_at DESC")
++                " version_of, last_page, last_read_at FROM docs ORDER BY created_at DESC")
+         ]
+         nodes = [NodeRec(*r) for r in conn.execute(
+             "SELECT id, doc_id, parent_id, title, summary, page_start, page_end, text FROM nodes")]
+@@ -1316,6 +1326,7 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
+                             "且没有可自动清理的无批注记录")
+                     if evicted:
+                         marks = ",".join("?" for _ in evicted)
++                        conn.execute(f"DELETE FROM doc_insights WHERE doc_id IN ({marks})", evicted)
+                         conn.execute(f"DELETE FROM chunks WHERE doc_id IN ({marks})", evicted)
+                         conn.execute(f"DELETE FROM nodes WHERE doc_id IN ({marks})", evicted)
+                         conn.execute(f"DELETE FROM docs WHERE id IN ({marks})", evicted)
+@@ -1403,6 +1414,7 @@ def _delete(uid: str, doc_id: str, *, expired_before: float | None = None) -> bo
+                     (doc_id, expired_before)).fetchone()
+             if not found:
+                 return False
++            conn.execute("DELETE FROM doc_insights WHERE doc_id = ?", (doc_id,))
+             conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+             conn.execute("DELETE FROM nodes WHERE doc_id = ?", (doc_id,))
+             conn.execute("DELETE FROM annotations WHERE doc_id = ?", (doc_id,))
+@@ -1438,7 +1450,7 @@ def _doc_row(uid: str, doc_id: str) -> dict | None:
+             "SELECT id, name, pages, mime, status, deleted_at, issn, publisher,"
+             " article_type, peer_reviewed, oa_status, license, access_source,"
+             " landing_url, retraction_status, version_of, doi, title, authors,"
+-            " year, venue, origin_url FROM docs WHERE id = ?",
++            " year, venue, origin_url, last_page, last_read_at FROM docs WHERE id = ?",
+             (doc_id,)).fetchone()
+         if not row:
+             return None
+@@ -1451,7 +1463,161 @@ def _doc_row(uid: str, doc_id: str) -> dict | None:
+                 "retractionStatus": row[14] or "none", "versionOf": row[15] or "",
+                 "doi": row[16] or "", "title": row[17] or row[1],
+                 "authors": row[18] or "", "year": row[19] or 0,
+-                "venue": row[20] or "", "originUrl": row[21] or ""}
++                "venue": row[20] or "", "originUrl": row[21] or "",
++                "lastPage": row[22] or 1, "lastReadAt": row[23] or 0}
++    finally:
++        conn.close()
++
++
++def _cached_structure(uid: str, doc_id: str) -> dict | None:
++    """缓存键带内容哈希:重新上传/替换同一篇论文后自动失效。"""
++    conn = _connect(uid)
++    try:
++        doc = conn.execute(
++            "SELECT sha FROM docs WHERE id = ? AND deleted_at IS NULL",
++            (doc_id,)).fetchone()
++        if not doc:
++            return None
++        row = conn.execute(
++            "SELECT content_hash, structure_json FROM doc_insights WHERE doc_id = ?",
++            (doc_id,)).fetchone()
++        if not row or str(row[0]) != str(doc[0] or ""):
++            return None
++        value = json.loads(row[1])
++        return value if isinstance(value, dict) else None
++    except (TypeError, ValueError, sqlite3.Error):
++        return None
++    finally:
++        conn.close()
++
++
++def _store_structure(uid: str, doc_id: str, content_hash: str, structure: dict) -> None:
++    conn = _connect(uid)
++    try:
++        conn.execute(
++            "INSERT INTO doc_insights(doc_id, content_hash, structure_json, created_at)"
++            " VALUES(?,?,?,?) ON CONFLICT(doc_id) DO UPDATE SET"
++            " content_hash=excluded.content_hash,"
++            " structure_json=excluded.structure_json, created_at=excluded.created_at",
++            (doc_id, content_hash, json.dumps(structure, ensure_ascii=False),
++             time.time()))
++        conn.commit()
++    finally:
++        conn.close()
++
++
++def _structure_source(uid: str, doc_id: str) -> tuple[dict, str]:
++    """取论文元数据与章节摘要,拼成一次性结构分析输入。"""
++    docs, nodes, chunks = _load_rows(uid)
++    doc = next((d for d in docs if d["id"] == doc_id and not d.get("deletedAt")), None)
++    if doc is None:
++        raise ValueError("not found")
++    parts = [
++        f"标题: {doc.get('title') or doc.get('name') or ''}",
++        f"作者: {doc.get('authors') or ''}",
++        f"年份: {doc.get('year') or ''}  场所: {doc.get('venue') or ''}",
++        "", "章节与摘要:",
++    ]
++    selected = [n for n in nodes if n.doc_id == doc_id]
++    for node in selected[:80]:
++        summary = re.sub(r"\s+", " ", node.summary or "")[:260]
++        parts.append(
++            f"- {node.title} (第 {node.page_start}-{node.page_end} 页): {summary}")
++    if not selected:
++        for chunk in [c for c in chunks if c.doc_id == doc_id][:12]:
++            summary = re.sub(r"\s+", " ", chunk.text)[:500]
++            parts.append(
++                f"- 第 {chunk.page_start}-{chunk.page_end} 页: {summary}")
++    return doc, "\n".join(parts)[:14000]
++
++
++def _normalize_outline(value: object, depth: int = 0) -> list[dict]:
++    if not isinstance(value, list) or depth > 3:
++        return []
++    out = []
++    for item in value[:40]:
++        if isinstance(item, str):
++            title = item.strip()[:120]
++            if title:
++                out.append({"title": title, "children": []})
++        elif isinstance(item, dict):
++            title = str(item.get("title") or "").strip()[:120]
++            if not title:
++                continue
++            out.append({
++                "title": title,
++                "children": _normalize_outline(item.get("children"), depth + 1),
++            })
++    return out
++
++
++def _parse_structure(text: str) -> dict:
++    raw = text.strip()
++    if raw.startswith("```"):
++        raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
++        raw = re.sub(r"\s*```$", "", raw)
++    start, end = raw.find("{"), raw.rfind("}")
++    if start < 0 or end <= start:
++        raise ValueError("模型未返回 JSON")
++    data = json.loads(raw[start:end + 1])
++    if not isinstance(data, dict):
++        raise ValueError("模型返回格式错误")
++
++    def strings(key: str, limit: int) -> list[str]:
++        value = data.get(key)
++        if isinstance(value, str):
++            value = [value]
++        if not isinstance(value, list):
++            return []
++        return [str(x).strip()[:300] for x in value if str(x).strip()][:limit]
++
++    structure = {
++        "question": str(data.get("question") or "").strip()[:600],
++        "methods": strings("methods", 8),
++        "conclusions": strings("conclusions", 8),
++        "limitations": strings("limitations", 8),
++        "outline": _normalize_outline(data.get("outline")),
++    }
++    if not any((structure["question"], structure["methods"],
++                structure["conclusions"], structure["limitations"],
++                structure["outline"])):
++        raise ValueError("模型返回内容为空")
++    return structure
++
++
++async def _build_structure(uid: str, doc_id: str) -> dict:
++    doc, context = await asyncio.to_thread(_structure_source, uid, doc_id)
++    system = (
++        "你是论文结构分析器。只根据给出的标题、章节与摘要提炼论文框架。"
++        "不要编造摘要中不存在的实验、数值或结论。"
++        "只输出一个 JSON 对象,不要解释、不要 Markdown 代码块。格式:\n"
++        '{"question":"核心研究问题",'
++        '"methods":["方法1","方法2"],'
++        '"conclusions":["结论1"],'
++        '"limitations":["局限1"],'
++        '"outline":[{"title":"章节","children":[{"title":"小节","children":[]}]}]}\n'
++        "methods/conclusions/limitations 各 1-6 条;outline 保留论文的主要章节层级,"
++        "最多三层、合计不超过 30 项。"
++    )
++    parts: list[str] = []
++    async for delta in llm_mod.stream_chat(
++            system, context, role="main", fallback=True, max_tokens=1800):
++        parts.append(delta)
++    structure = _parse_structure("".join(parts))
++    await asyncio.to_thread(
++        _store_structure, uid, doc_id, str(doc.get("sha") or ""), structure)
++    return structure
++
++
++def _set_progress(uid: str, doc_id: str, page: int) -> bool:
++    conn = _connect(uid)
++    try:
++        cursor = conn.execute(
++            "UPDATE docs SET last_page = ?, last_read_at = ?"
++            " WHERE id = ? AND deleted_at IS NULL",
++            (page, time.time(), doc_id))
++        conn.commit()
++        return cursor.rowcount > 0
+     finally:
+         conn.close()
+ 
+@@ -1873,6 +2039,7 @@ def _clear_all(uid: str) -> int:
+                 "SELECT id FROM docs WHERE status != 'temp'")]
+             if ids:
+                 marks = ",".join("?" for _ in ids)
++                conn.execute(f"DELETE FROM doc_insights WHERE doc_id IN ({marks})", ids)
+                 conn.execute(f"DELETE FROM chunks WHERE doc_id IN ({marks})", ids)
+                 conn.execute(f"DELETE FROM nodes WHERE doc_id IN ({marks})", ids)
+                 conn.execute(f"DELETE FROM annotations WHERE doc_id IN ({marks})", ids)
+@@ -1958,15 +2125,18 @@ async def upload_doc(request: Request) -> JSONResponse:
+     _rate(_upload_limiter, uid)
+     name = request.query_params.get("name", "").strip()
+     project_id = request.query_params.get("projectId", "").strip() or None
++    temp = request.query_params.get("temp", "").lower() in {"1", "true", "yes"}
+     data = await _read_limited(request)
+     if not data:
+         raise HTTPException(400, "empty file")
+     try:
+         result = await asyncio.to_thread(
+-            _ingest, uid, name, data, request.headers.get("content-type", ""), project_id)
++            _ingest, uid, name, data, request.headers.get("content-type", ""),
++            project_id, status="temp" if temp else "uploaded",
++            analyze=not temp)
+     except ValueError as exc:
+         raise HTTPException(400, str(exc)) from exc
+-    return JSONResponse({"ok": True, **result})
++    return JSONResponse({"ok": True, "temp": temp, **result})
+ 
+ 
+ async def list_docs(request: Request) -> JSONResponse:
+@@ -1991,6 +2161,73 @@ async def get_doc(request: Request) -> JSONResponse:
+     return JSONResponse({"doc": doc}, headers={"Cache-Control": "no-store"})
+ 
+ 
++async def get_insights(request: Request) -> JSONResponse:
++    """读取论文结构缓存;没有缓存时返回 cached=false,由前端决定是否生成。"""
++    rec = require_auth(request)
++    uid = str(rec.get("uid") or "")
++    doc_id = str(request.path_params.get("doc_id") or "")
++    doc = await asyncio.to_thread(_doc_row, uid, doc_id)
++    if doc is None or doc["deletedAt"]:
++        raise HTTPException(404, "not found")
++    structure = await asyncio.to_thread(_cached_structure, uid, doc_id)
++    return JSONResponse({
++        "docId": doc_id,
++        "cached": structure is not None,
++        "structure": structure,
++    }, headers={"Cache-Control": "no-store"})
++
++
++async def generate_insights(request: Request) -> JSONResponse:
++    """首次生成或手动刷新论文结构;结果按 docId + 内容哈希缓存。"""
++    rec = require_auth(request)
++    uid = str(rec.get("uid") or "")
++    doc_id = str(request.path_params.get("doc_id") or "")
++    doc = await asyncio.to_thread(_doc_row, uid, doc_id)
++    if doc is None or doc["deletedAt"]:
++        raise HTTPException(404, "not found")
++    body = await read_json_object(request)
++    refresh = bool(body.get("refresh"))
++    if not refresh:
++        cached = await asyncio.to_thread(_cached_structure, uid, doc_id)
++        if cached is not None:
++            return JSONResponse({
++                "docId": doc_id, "cached": True, "structure": cached,
++            }, headers={"Cache-Control": "no-store"})
++    if not llm_mod.is_configured():
++        raise HTTPException(503, "论文结构生成需要配置模型")
++    if not _insights_limiter.allow(uid):
++        raise HTTPException(429, "生成过于频繁,请稍后再试")
++    try:
++        structure = await _build_structure(uid, doc_id)
++    except ValueError as exc:
++        raise HTTPException(502, f"论文结构生成失败: {exc}") from exc
++    except Exception as exc:  # noqa: BLE001 模型/网络错误统一降级
++        raise HTTPException(502, f"论文结构生成失败: {type(exc).__name__}") from exc
++    return JSONResponse({
++        "docId": doc_id, "cached": False, "structure": structure,
++    }, headers={"Cache-Control": "no-store"})
++
++
++async def save_progress(request: Request) -> JSONResponse:
++    """保存阅读页码;聊天记录不落库,下次打开只恢复页码与批注。"""
++    rec = require_auth(request)
++    uid = str(rec.get("uid") or "")
++    doc_id = str(request.path_params.get("doc_id") or "")
++    body = await read_json_object(request)
++    raw = body.get("page")
++    if isinstance(raw, bool) or not isinstance(raw, int):
++        raise HTTPException(400, "page 必须是整数")
++    doc = await asyncio.to_thread(_doc_row, uid, doc_id)
++    if doc is None or doc["deletedAt"]:
++        raise HTTPException(404, "not found")
++    pages = int(doc.get("pages") or 0)
++    page = max(1, min(MAX_PAGES, pages or MAX_PAGES, raw))
++    ok = await asyncio.to_thread(_set_progress, uid, doc_id, page)
++    if not ok:
++        raise HTTPException(404, "not found")
++    return JSONResponse({"ok": True, "page": page})
++
++
+ async def delete_doc(request: Request) -> JSONResponse:
+     rec = require_auth(request)
+     uid = str(rec.get("uid") or "")
+diff --git a/backend/research_lit.py b/backend/research_lit.py
+index b452f9f..d2465ad 100644
+--- a/backend/research_lit.py
++++ b/backend/research_lit.py
+@@ -1024,7 +1024,7 @@ async def oa_lookup(request: Request) -> JSONResponse:
+         raise HTTPException(429, "检索过于频繁,请稍后再试")
+     async with httpx.AsyncClient(
+             timeout=TIMEOUT, follow_redirects=True,
+-            headers={"User-Agent": "MathGuide/1.13 (research oa resolver)"}) as client:
++            headers={"User-Agent": "MathGuide/1.14 (research oa resolver)"}) as client:
+         result = await oa_resolver.resolve_doi(client, doi)
+     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+ 
+@@ -1159,7 +1159,7 @@ async def search(request: Request) -> JSONResponse:
+         kind, value = identifier
+         async with httpx.AsyncClient(
+             timeout=TIMEOUT, follow_redirects=True,
+-            headers={"User-Agent": "MathGuide/1.13 (research literature identifier)"},
++            headers={"User-Agent": "MathGuide/1.14 (research literature identifier)"},
+         ) as client:
+             try:
+                 if kind == "doi":
+@@ -1212,7 +1212,7 @@ async def search(request: Request) -> JSONResponse:
+     warnings: list[str] = []
+     gathered: list[dict] = []
+     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True,
+-                                 headers={"User-Agent": "MathGuide/1.13 "
++                                 headers={"User-Agent": "MathGuide/1.14 "
+                                           "(research literature search)"}) as client:
+         outcomes = await _run_providers(
+             client, providers, query, limit, filters if has_filters else None,
+@@ -1227,7 +1227,7 @@ async def search(request: Request) -> JSONResponse:
+     if oa_only:
+         async with httpx.AsyncClient(
+                 timeout=TIMEOUT, follow_redirects=True,
+-                headers={"User-Agent": "MathGuide/1.13 (research oa fill)"}) as oa_client:
++                headers={"User-Agent": "MathGuide/1.14 (research oa fill)"}) as oa_client:
+             await _fill_oa(oa_client, results)
+     results = _filter_results(
+         results, peer_reviewed=peer_reviewed_only,
+diff --git a/backend/tests/test_research_workspace.py b/backend/tests/test_research_workspace.py
+new file mode 100644
+index 0000000..2feed17
+--- /dev/null
++++ b/backend/tests/test_research_workspace.py
+@@ -0,0 +1,151 @@
++"""论文工作台:阅读进度、结构缓存与结构解析。"""
++from __future__ import annotations
++
++import pytest
++from starlette.applications import Starlette
++from starlette.routing import Route
++from starlette.testclient import TestClient
++
++import research_corpus as rc
++
++TEXT = """Introduction
++We study paper workspaces and reading progress.
++
++2 Methods
++The reader keeps annotations and restores the last page.
++
++3 Results
++Structure is generated once and cached by content hash.
++"""
++
++
++@pytest.fixture()
++def corpus(tmp_path, monkeypatch):
++    monkeypatch.setattr(rc, "DATA_DIR", tmp_path / "research")
++    monkeypatch.setattr(rc.embed_mod, "is_configured", lambda: False)
++    rc._indexes.clear()
++    rc._index_paths.clear()
++    yield tmp_path
++    rc._indexes.clear()
++    rc._index_paths.clear()
++
++
++def _doc(uid: str = "u-ws") -> str:
++    return rc._ingest(uid, "workspace.txt", TEXT.encode(), "text/plain",
++                      analyze=False)["docId"]
++
++
++def test_progress_roundtrip(corpus):
++    doc_id = _doc()
++    assert rc._set_progress("u-ws", doc_id, 3) is True
++    row = rc._doc_row("u-ws", doc_id)
++    assert row["lastPage"] == 3
++    assert row["lastReadAt"] > 0
++    docs, _, _ = rc._load_rows("u-ws")
++    assert docs[0]["lastPage"] == 3
++    assert rc._set_progress("u-ws", "missing", 1) is False
++
++
++def test_structure_cache_is_keyed_by_content_hash(corpus):
++    doc_id = _doc()
++    structure = {"question": "Q", "methods": ["M"], "conclusions": ["C"],
++                 "limitations": ["L"], "outline": [{"title": "Intro", "children": []}]}
++    docs, _, _ = rc._load_rows("u-ws")
++    sha = next(d["sha"] for d in docs if d["id"] == doc_id)
++    rc._store_structure("u-ws", doc_id, sha, structure)
++    assert rc._cached_structure("u-ws", doc_id) == structure
++    # 内容哈希变化 = 缓存失效
++    rc._store_structure("u-ws", doc_id, "stale-hash", structure)
++    assert rc._cached_structure("u-ws", doc_id) is None
++
++
++def test_delete_removes_structure_cache(corpus):
++    doc_id = _doc("u-del")
++    docs, _, _ = rc._load_rows("u-del")
++    sha = next(d["sha"] for d in docs if d["id"] == doc_id)
++    rc._store_structure("u-del", doc_id, sha, {
++        "question": "Q", "methods": [], "conclusions": [], "limitations": [],
++        "outline": [],
++    })
++    assert rc._delete("u-del", doc_id) is True
++    conn = rc._connect("u-del")
++    try:
++        assert conn.execute(
++            "SELECT 1 FROM doc_insights WHERE doc_id = ?", (doc_id,)
++        ).fetchone() is None
++    finally:
++        conn.close()
++
++
++def test_parse_structure_tolerates_fences_and_nested_outline():
++    parsed = rc._parse_structure(
++        '```json\n{"question":"Q","methods":["M"],'
++        '"conclusions":["C"],"limitations":"L",'
++        '"outline":[{"title":"A","children":[{"title":"A1"}]}]}\n```')
++    assert parsed["question"] == "Q"
++    assert parsed["limitations"] == ["L"]
++    assert parsed["outline"][0]["children"][0]["title"] == "A1"
++    with pytest.raises(ValueError):
++        rc._parse_structure("not json")
++
++
++def test_temp_upload_stays_out_of_library(corpus, monkeypatch):
++    monkeypatch.setattr(rc, "require_auth", lambda request: {"uid": "u-drop"})
++    monkeypatch.setattr(rc, "_upload_limiter", rc.SlidingWindowLimiter(20, 60))
++    app = Starlette(routes=[
++        Route("/api/research/docs", rc.upload_doc, methods=["POST"]),
++        Route("/api/research/docs", rc.list_docs),
++    ])
++    client = TestClient(app)
++    res = client.post(
++        "/api/research/docs?name=dropped.txt&temp=1",
++        content=TEXT.encode(), headers={"content-type": "text/plain"})
++    assert res.status_code == 200, res.text
++    body = res.json()
++    assert body["temp"] is True
++    assert body["status"] == "temp"
++    assert rc._doc_row("u-drop", body["docId"])["status"] == "temp"
++    assert client.get("/api/research/docs").json()["docs"] == []
++
++
++def test_insights_endpoint_generates_once(corpus, monkeypatch):
++    doc_id = _doc("u-ins")
++    calls: list[str] = []
++
++    async def fake_build(uid, doc_id):
++        calls.append(doc_id)
++        docs, _, _ = rc._load_rows(uid)
++        sha = next(d["sha"] for d in docs if d["id"] == doc_id)
++        structure = {"question": "Q", "methods": ["M"], "conclusions": ["C"],
++                     "limitations": ["L"], "outline": []}
++        rc._store_structure(uid, doc_id, sha, structure)
++        return structure
++
++    monkeypatch.setattr(rc, "require_auth", lambda request: {"uid": "u-ins"})
++    monkeypatch.setattr(rc, "_build_structure", fake_build)
++    monkeypatch.setattr(rc.llm_mod, "is_configured", lambda: True)
++    monkeypatch.setattr(rc, "_insights_limiter", rc.SlidingWindowLimiter(20, 60))
++    app = Starlette(routes=[
++        Route("/api/research/docs/{doc_id}/insights", rc.get_insights),
++        Route("/api/research/docs/{doc_id}/insights", rc.generate_insights,
++              methods=["POST"]),
++        Route("/api/research/docs/{doc_id}/progress", rc.save_progress,
++              methods=["POST"]),
++    ])
++    client = TestClient(app)
++    first = client.get(f"/api/research/docs/{doc_id}/insights").json()
++    assert first["cached"] is False and first["structure"] is None
++    made = client.post(f"/api/research/docs/{doc_id}/insights", json={}).json()
++    assert made["cached"] is False and made["structure"]["question"] == "Q"
++    again = client.get(f"/api/research/docs/{doc_id}/insights").json()
++    assert again["cached"] is True and again["structure"]["question"] == "Q"
++    client.post(f"/api/research/docs/{doc_id}/insights", json={})
++    assert calls == [doc_id]
++    pages = int(rc._doc_row("u-ins", doc_id)["pages"] or 1)
++    progress = client.post(f"/api/research/docs/{doc_id}/progress", json={"page": 4})
++    assert progress.status_code == 200
++    assert rc._doc_row("u-ins", doc_id)["lastPage"] == min(pages, 4)
++    too_high = client.post(
++        f"/api/research/docs/{doc_id}/progress", json={"page": 999999})
++    assert too_high.status_code == 200
++    assert too_high.json()["page"] == pages
+diff --git a/backend/tools/lit_smoke.py b/backend/tools/lit_smoke.py
+index b612b02..f0f04a2 100644
+--- a/backend/tools/lit_smoke.py
++++ b/backend/tools/lit_smoke.py
+@@ -121,7 +121,7 @@ async def main_async(args: argparse.Namespace) -> int:
+     started = time.monotonic()
+     async with httpx.AsyncClient(
+             timeout=rl.TIMEOUT, follow_redirects=True,
+-            headers={"User-Agent": "MathGuide/1.13 (literature smoke)"}) as client:
++            headers={"User-Agent": "MathGuide/1.14 (literature smoke)"}) as client:
+         for field in fields:
+             queries = CASES[field]
+             if not args.full:
+diff --git a/docs/RESEARCH_SOURCE_PLAN_V2.md b/docs/RESEARCH_SOURCE_PLAN_V2.md
+index 1bb71ef..dde675e 100644
+--- a/docs/RESEARCH_SOURCE_PLAN_V2.md
++++ b/docs/RESEARCH_SOURCE_PLAN_V2.md
+@@ -546,7 +546,7 @@ frontend/src/utils/i18n.ts
+ - 前端默认仅同行评审、预印本默认关闭。
+ - bioRxiv/medRxiv 按 DOI 补充预印本元数据（关键词搜索仍走 Europe PMC）。
+ - `tools/lit_smoke.py`：分学科冒烟与金标准指标。
+-- 后端 378 条测试、前端自测、`vue-tsc`、`npm run build` 通过。
++- 后端 384 条测试、前端自测、`vue-tsc`、`npm run build` 通过。
+ 
+ 冒烟基线（2026-10-30，每学科 3 查询 × Top-10）：
+ 
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index f8f55f8..520ed48 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "mathguide-frontend",
+-  "version": "1.13.0",
++  "version": "1.14.0",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "mathguide-frontend",
+-      "version": "1.13.0",
++      "version": "1.14.0",
+       "dependencies": {
+         "gsap": "^3.13.0",
+         "katex": "^0.16.22",
+diff --git a/frontend/package.json b/frontend/package.json
+index 240acc2..b174110 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "mathguide-frontend",
+   "private": true,
+-  "version": "1.13.0",
++  "version": "1.14.0",
+   "type": "module",
+   "scripts": {
+     "dev": "vite",
+diff --git a/frontend/src/components/chat/ChatWorkspace.vue b/frontend/src/components/chat/ChatWorkspace.vue
+index 1ebb276..f55e9dc 100644
+--- a/frontend/src/components/chat/ChatWorkspace.vue
++++ b/frontend/src/components/chat/ChatWorkspace.vue
+@@ -19,11 +19,13 @@
+  * 问题分类由前端关键词预判,后端路由做最终裁决。
+  */
+ import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
+-import { useRoute, useRouter } from 'vue-router'
++import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+ import MathText from '@/components/chat/MathText.vue'
+ import CategoryPanel from '@/components/chat/CategoryPanel.vue'
+ import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
+ import ResearchArchivePanel from '@/components/chat/ResearchArchivePanel.vue'
++import PaperWorkspace from '@/components/research/PaperWorkspace.vue'
++import PaperImportPrompt from '@/components/research/PaperImportPrompt.vue'
+ import TodoPanel from '@/components/chat/TodoPanel.vue'
+ import DocModal from '@/components/chat/DocModal.vue'
+ import TodoReminder from '@/components/chat/TodoReminder.vue'
+@@ -35,6 +37,8 @@ import { COMMANDS, RESEARCH_COMMANDS } from '@/utils/commands'
+ import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
+ import { speechToMath, streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
+ import { getResearchTable } from '@/services/researchTableService'
++import { getResearchDocMeta, uploadTempPaper, type ResearchDoc } from '@/services/researchService'
++import { deletePaperHistory, importTempPaper } from '@/services/literatureService'
+ import { downloadBlob, exportSurveyPdf } from '@/services/docService'
+ import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyQuestion, isChitchat } from '@/utils/classifier'
+ import { settingsState, updateSettings } from '@/stores/settings'
+@@ -79,11 +83,23 @@ const workspaceBodyRef = ref<HTMLElement | null>(null)
+ const splitRatio = ref(loadSplitRatio())
+ const searchPaneRef = ref<{ locateForQuestion: (q: string) => Promise<void> } | null>(null)
+ const currentPaper = ref<{ docId: string; title: string } | null>(null)
++/** 拖入本次对话的论文:直接作为对话上下文,结束时再询问是否入库。 */
++const stagedPaper = ref<{ docId: string; title: string } | null>(null)
++const stagedPapers = ref<Array<{
++  docId: string
++  title: string
++  pages: number
++  msgId: number
++}>>([])
++const importPromptOpen = ref(false)
++const importPromptBusy = ref(false)
++let importPromptResolve: ((proceed: boolean) => void) | null = null
+ /** 从数据表页带过来的表:作为对话上下文,随消息发送 tableId */
+ const tableContext = ref<{ id: string; title: string } | null>(null)
+ 
+ function onPaperChange(paper: { docId: string; title: string } | null): void {
+   currentPaper.value = paper
++  if (paper) stagedPaper.value = null
+ }
+ 
+ async function loadTableContext(): Promise<void> {
+@@ -217,6 +233,12 @@ const input = ref('')
+ type PanelKind = 'summary' | 'scope' | 'notebook' | 'formula' | 'todo' | 'archive'
+ const activePanel = ref<PanelKind | null>(null)
+ const archivePanelRef = ref<InstanceType<typeof ResearchArchivePanel> | null>(null)
++const paperDocId = ref<string | null>(null)
++
++function openPaperWorkspace(doc: ResearchDoc): void {
++  activePanel.value = null
++  paperDocId.value = doc.id
++}
+ const docOpen = ref(false)
+ 
+ function closePanel(): void {
+@@ -617,7 +639,9 @@ function send(text?: string, cmd?: string) {
+     history,
+     // 搜索范围只属于科研链路:学习区不传,避免误触发跨区文献检索
+     sources: isResearch.value ? scopeForRequest() : undefined,
+-    paperId: isResearch.value ? currentPaper.value?.docId : undefined,
++    paperId: isResearch.value
++      ? (stagedPaper.value?.docId || currentPaper.value?.docId)
++      : undefined,
+     tableId: isResearch.value ? tableContext.value?.id : undefined,
+   })
+ }
+@@ -667,7 +691,8 @@ function runCommand(cmd: string) {
+ }
+ 
+ /** 新建对话:当前会话与其进行中的输出原样保留(后台继续生成),切换至新会话 */
+-function newConversation() {
++async function newConversation() {
++  if (!(await askPendingPapers())) return
+   createSession()
+   greet()
+ }
+@@ -905,7 +930,9 @@ function onFile(e: Event) {
+   const input = e.target as HTMLInputElement
+   const file = input.files?.[0]
+   input.value = ''
+-  if (file) attachFileItem(file)
++  if (!file) return
++  if (isResearch.value && isPaperFile(file)) void stagePaperFile(file)
++  else attachFileItem(file)
+ }
+ 
+ /** 文件入库:PDF(pdfjs 提取文本层)/ 文本类(.txt/.md)读取正文随附件保存,其余仅元信息 */
+@@ -950,7 +977,142 @@ async function importImageFile(file: File) {
+   }
+ }
+ 
+-/* ---------- 拖拽导入(电脑端:从桌面/资源管理器拖文件进对话框) ---------- */
++/** 拖入/选择的论文先进入临时语料,解析成功后再询问是否入库。 */
++const PAPER_EXT = /\.(pdf|docx|epub|html?|xml|rtf|tex)$/i
++
++function isPaperFile(file: File): boolean {
++  return file.type === 'application/pdf'
++    || file.type.includes('wordprocessingml')
++    || file.type === 'application/epub+zip'
++    || PAPER_EXT.test(file.name)
++}
++
++function findMessage(id: number): ChatMsg | null {
++  for (const session of sessions.value) {
++    const found = session.messages.find((m) => m.id === id)
++    if (found) return found
++  }
++  return null
++}
++
++function removeMessage(id: number): void {
++  for (const session of sessions.value) {
++    const index = session.messages.findIndex((m) => m.id === id)
++    if (index >= 0) {
++      session.messages.splice(index, 1)
++      return
++    }
++  }
++}
++
++/** 拖入即用:临时论文直接成为本次对话的上下文,不要求先入库。 */
++async function stagePaperFile(file: File): Promise<void> {
++  if (!activeSession.value) return
++  showToast(t('learn.paperParsing'))
++  try {
++    const res = await uploadTempPaper(file)
++    if (res.duplicate && res.status && res.status !== 'temp') {
++      showToast(t('learn.paperAlready'))
++      return
++    }
++    const meta = await getResearchDocMeta(res.docId).catch(() => null)
++    const title = meta?.title || file.name
++    const pages = res.pages || meta?.pages || 0
++    currentPaper.value = null
++    stagedPaper.value = { docId: res.docId, title }
++
++    const existing = stagedPapers.value.find((p) => p.docId === res.docId)
++    if (existing) {
++      persistSessions()
++      scrollBottom(false)
++      return
++    }
++    const session = activeSession.value
++    const message: ChatMsg = {
++      id: nextMsgId(),
++      role: 'assistant',
++      content: t('learn.paperReady'),
++      paperImport: { docId: res.docId, title, pages, status: 'pending' },
++    }
++    session.messages.push(message)
++    stagedPapers.value.push({
++      docId: res.docId, title, pages, msgId: message.id,
++    })
++    if (!flushSessions(true)) showToast(t('learn.toastStorage'))
++    scrollBottom(false)
++  } catch (err) {
++    const message = err instanceof Error && err.message ? err.message : 'unknown'
++    showToast(t('learn.paperParseFail', { msg: message }))
++  }
++}
++
++function askPendingPapers(): Promise<boolean> {
++  if (!stagedPapers.value.length) return Promise.resolve(true)
++  if (importPromptOpen.value) return Promise.resolve(false)
++  importPromptOpen.value = true
++  return new Promise((resolve) => {
++    importPromptResolve = resolve
++  })
++}
++
++async function confirmPaperChoices(
++  choices: Record<string, 'import' | 'temp' | 'ignore'>,
++): Promise<void> {
++  if (importPromptBusy.value) return
++  importPromptBusy.value = true
++  const selected = { ...choices }
++  const retry: typeof stagedPapers.value = []
++  let completed = false
++  let importedAny = false
++  try {
++    for (const paper of [...stagedPapers.value]) {
++      const choice = selected[paper.docId] || 'import'
++      const msg = findMessage(paper.msgId)
++      if (choice === 'import') {
++        try {
++          await importTempPaper(paper.docId, undefined, true)
++          if (msg?.paperImport) msg.paperImport.status = 'imported'
++          importedAny = true
++          showToast(t('learn.paperImported'))
++        } catch {
++          retry.push(paper)
++          showToast(t('learn.paperImportFail'))
++        }
++      } else if (choice === 'temp') {
++        if (msg?.paperImport) msg.paperImport.status = 'temp'
++        showToast(t('learn.paperKept'))
++      } else {
++        try {
++          await deletePaperHistory(paper.docId)
++        } catch {
++          /* 已入库或已删除:忽略删除失败 */
++        }
++        removeMessage(paper.msgId)
++        showToast(t('learn.paperIgnored'))
++      }
++    }
++    completed = retry.length === 0
++    if (importedAny) await archivePanelRef.value?.reload?.()
++  } finally {
++    const last = retry[retry.length - 1]
++    stagedPapers.value = retry
++    stagedPaper.value = last ? { docId: last.docId, title: last.title } : null
++    if (!flushSessions(true)) showToast(t('learn.toastStorage'))
++    importPromptBusy.value = false
++    importPromptOpen.value = false
++    importPromptResolve?.(completed)
++    importPromptResolve = null
++  }
++}
++
++function cancelPaperPrompt(): void {
++  if (importPromptBusy.value) return
++  importPromptOpen.value = false
++  importPromptResolve?.(false)
++  importPromptResolve = null
++}
++
++
+ 
+ const dragging = ref(false)
+ let dragHideTimer: ReturnType<typeof setTimeout> | null = null
+@@ -984,6 +1146,7 @@ async function onDropFiles(e: DragEvent) {
+   }
+   for (const f of files) {
+     if (f.type.startsWith('image/')) await importImageFile(f)
++    else if (isResearch.value && isPaperFile(f)) await stagePaperFile(f)
+     else await attachFileItem(f)
+   }
+ }
+@@ -1000,6 +1163,7 @@ function onPaste(e: ClipboardEvent) {
+     if (!f) continue
+     e.preventDefault()
+     if (f.type.startsWith('image/')) importImageFile(f)
++    else if (isResearch.value && isPaperFile(f)) void stagePaperFile(f)
+     else attachFileItem(f)
+     return
+   }
+@@ -1291,10 +1455,30 @@ function greet() {
+   scheduleStream(session, live, '', 0)
+ }
+ 
++function restoreStagedPapers(): void {
++  const seen = new Set<string>()
++  for (const session of sessions.value) {
++    for (const msg of session.messages) {
++      const info = msg.paperImport
++      if (!info || info.status !== 'pending' || seen.has(info.docId)) continue
++      seen.add(info.docId)
++      stagedPapers.value.push({
++        docId: info.docId,
++        title: info.title,
++        pages: info.pages,
++        msgId: msg.id,
++      })
++      stagedPaper.value = { docId: info.docId, title: info.title }
++    }
++  }
++}
++
+ onMounted(() => {
+   // 每次进入页面都开启全新对话;旧会话自动归档到相应板块
+   // (会话档案由 stores/sessions 在应用启动时恢复)
+-  sessions.value = sessions.value.filter((s) => s.cat || s.messages.some((m) => m.role === 'user'))
++  sessions.value = sessions.value.filter((s) => s.cat
++    || s.messages.some((m) => m.role === 'user' || m.paperImport))
++  restoreStagedPapers()
+   createSession()
+   greet()
+   // 文献检索页「基于这些结果提问」:证据已拼好,进对话后直接发送
+@@ -1307,10 +1491,24 @@ onMounted(() => {
+     void loadTableContext()
+   }
+   window.addEventListener('resize', onWorkspaceResize)
++  window.addEventListener('beforeunload', warnPendingPapers)
++})
++
++onBeforeRouteLeave(async () => {
++  if (!stagedPapers.value.length) return true
++  return askPendingPapers()
+ })
+ 
++function warnPendingPapers(event: BeforeUnloadEvent): void {
++  if (!stagedPapers.value.length) return
++  flushSessions(true)
++  event.preventDefault()
++  event.returnValue = ''
++}
++
+ onBeforeUnmount(() => {
+   window.removeEventListener('resize', onWorkspaceResize)
++  window.removeEventListener('beforeunload', warnPendingPapers)
+   stopAllStreams()
+   sr?.stop()
+   cancelConvert()
+@@ -1407,6 +1605,17 @@ onBeforeUnmount(() => {
+                 </div>
+               </div>
+             </div>
++            <div v-if="m.paperImport" class="paper-imp">
++              <div class="paper-imp-head">
++                <span class="paper-imp-icon">📄</span>
++                <span class="paper-imp-name" :title="m.paperImport.title">{{ m.paperImport.title }}</span>
++                <span class="paper-imp-pages">{{ t('learn.paperPages', { n: m.paperImport.pages }) }}</span>
++              </div>
++              <p class="paper-imp-q">{{ m.content }}</p>
++              <p v-if="m.paperImport.status !== 'pending'" class="paper-imp-state">
++                {{ m.paperImport.status === 'imported' ? t('learn.paperImported') : t('learn.paperKept') }}
++              </p>
++            </div>
+             <!-- 走 cmdName 而非裸键:契约键是中文,英文界面下会露出中文 -->
+             <span v-if="m.role === 'user' && m.cmd" class="cmd-tag">{{ cmdName(m.cmd) }}</span>
+             <span v-if="m.role === 'user' && activeSession.cat" class="cat-chip">
+@@ -1414,7 +1623,7 @@ onBeforeUnmount(() => {
+             </span>
+             <template v-if="m.role === 'assistant'">
+               <span v-if="m.thinking" class="thinking">{{ t('learn.thinking') }}<span class="dots">···</span></span>
+-              <div v-if="m.content" class="mg-blocks">
++              <div v-if="m.content && !m.paperImport" class="mg-blocks">
+                 <MathText v-for="(block, bi) in blocksOf(m.content)" :key="bi" :text="block" />
+               </div>
+               <span v-if="m.streaming && !m.thinking" class="cursor">▍</span>
+@@ -1456,6 +1665,15 @@ onBeforeUnmount(() => {
+ 
+     <!-- 输入区:输入行 + 指令栏 -->
+     <footer class="input-bar">
++      <div v-if="isResearch && stagedPaper" class="context-chip">
++        <span class="context-label">{{ t('chat.paperContext') }}</span>
++        <span class="context-name" :title="stagedPaper.title">{{ stagedPaper.title }}</span>
++        <button
++          class="context-remove"
++          :title="t('chat.removePaper')"
++          @click="stagedPaper = null"
++        >✕</button>
++      </div>
+       <div v-if="isResearch && tableContext" class="context-chip">
+         <span class="context-label">{{ t('chat.tableContext') }}</span>
+         <span class="context-name" :title="tableContext.title">{{ tableContext.title }}</span>
+@@ -1558,6 +1776,7 @@ onBeforeUnmount(() => {
+           :left="panelAnchor?.left"
+           :width="panelAnchor?.width"
+           @close="closePanel"
++          @open-doc="openPaperWorkspace"
+         />
+       </Transition>
+       <Transition name="nb-rise">
+@@ -1629,6 +1848,20 @@ onBeforeUnmount(() => {
+       <div v-if="activePanel" class="panel-overlay" @click="closePanel"></div>
+     </Transition>
+ 
++    <PaperImportPrompt
++      v-if="importPromptOpen"
++      :papers="stagedPapers"
++      @confirm="confirmPaperChoices"
++      @cancel="cancelPaperPrompt"
++    />
++
++    <!-- 论文工作台:研究档案「继续」进入,左对话右阅读器,第三栏结构/导图 -->
++    <PaperWorkspace
++      v-if="paperDocId"
++      :doc-id="paperDocId"
++      @close="paperDocId = null"
++    />
++
+     <!-- 生成文档:当前会话问答 / 问题归纳 / 独立要求 -->
+     <DocModal
+       v-if="docOpen"
+@@ -2306,6 +2539,86 @@ onBeforeUnmount(() => {
+   margin-bottom: 6px;
+ }
+ 
++.paper-imp {
++  min-width: 240px;
++  margin-bottom: 6px;
++  padding: 10px;
++  border: 1px solid var(--line-bright);
++  border-radius: 8px;
++  background: var(--bg-card);
++}
++
++.paper-imp-head {
++  display: flex;
++  align-items: center;
++  gap: 6px;
++  min-width: 0;
++}
++
++.paper-imp-icon {
++  flex: none;
++}
++
++.paper-imp-name {
++  min-width: 0;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  color: var(--text-hi);
++  font-size: 12.5px;
++}
++
++.paper-imp-pages {
++  flex: none;
++  color: var(--text-dim);
++  font-size: 10.5px;
++}
++
++.paper-imp-q {
++  margin: 7px 0 8px;
++  color: var(--text);
++  font-size: 12px;
++  line-height: 1.55;
++}
++
++.paper-imp-actions {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 6px;
++}
++
++.paper-imp-btn {
++  background: transparent;
++  border: 1px solid var(--line);
++  color: var(--text-dim);
++  border-radius: 5px;
++  font-size: 11px;
++  padding: 4px 8px;
++  cursor: pointer;
++}
++
++.paper-imp-btn.primary {
++  color: var(--cyan);
++  border-color: var(--line-bright);
++  background: color-mix(in srgb, var(--cyan) 10%, transparent);
++}
++
++.paper-imp-btn:hover {
++  color: var(--text-hi);
++  border-color: var(--line-bright);
++}
++
++.paper-imp-btn:disabled {
++  opacity: 0.55;
++  cursor: wait;
++}
++
++.paper-imp-state {
++  margin: 0;
++  color: var(--cyan);
++  font-size: 11px;
++}
++
+ .attach-img {
+   display: block;
+   max-width: 220px;
+diff --git a/frontend/src/components/chat/ResearchArchivePanel.vue b/frontend/src/components/chat/ResearchArchivePanel.vue
+index 586581f..3081b49 100644
+--- a/frontend/src/components/chat/ResearchArchivePanel.vue
++++ b/frontend/src/components/chat/ResearchArchivePanel.vue
+@@ -29,7 +29,7 @@ import {
+ } from '@/services/researchTableService'
+ 
+ const props = defineProps<{ left?: number; width?: number }>()
+-const emit = defineEmits<{ close: [] }>()
++const emit = defineEmits<{ close: []; openDoc: [doc: ResearchDoc] }>()
+ const router = useRouter()
+ 
+ const tab = ref<'goal' | 'files' | 'tables'>('goal')
+@@ -277,7 +277,7 @@ function confirmClose(): boolean {
+   return !hasUnsavedChanges() || window.confirm(t('archive.discardUnsaved'))
+ }
+ 
+-defineExpose({ confirmClose })
++defineExpose({ confirmClose, reload: load })
+ 
+ function warnBeforeUnload(event: BeforeUnloadEvent): void {
+   if (!hasUnsavedChanges()) return
+@@ -409,6 +409,7 @@ onBeforeRouteLeave(() => confirmClose())
+                 <span v-if="f.doi" class="doi"> · {{ f.doi }}</span>
+               </span>
+             </div>
++            <button class="mini primary" @click="emit('openDoc', f)">{{ t('workspace.continue') }}</button>
+             <button class="mini danger" @click="removeFile(f)">{{ t('archive.removeFile') }}</button>
+           </li>
+         </ul>
+@@ -541,6 +542,12 @@ onBeforeRouteLeave(() => confirmClose())
+   box-shadow: var(--glow-cyan);
+ }
+ 
++.mini.primary {
++  color: var(--text-hi);
++  border-color: var(--line-bright);
++  background: color-mix(in srgb, var(--cyan) 12%, transparent);
++}
++
+ .mini:disabled {
+   opacity: 0.55;
+   cursor: wait;
+diff --git a/frontend/src/components/research/DocumentViewer.vue b/frontend/src/components/research/DocumentViewer.vue
+index eb5229b..fc79b75 100644
+--- a/frontend/src/components/research/DocumentViewer.vue
++++ b/frontend/src/components/research/DocumentViewer.vue
+@@ -28,7 +28,7 @@ const props = defineProps<{
+   startPage?: number
+   projectId?: string | null
+ }>()
+-const emit = defineEmits<{ close: [] }>()
++const emit = defineEmits<{ close: []; pageChange: [page: number] }>()
+ 
+ /* 来源元数据:失败不阻塞阅读,只少一行徽标。 */
+ const docMeta = ref<ResearchDoc | null>(null)
+@@ -70,6 +70,7 @@ const canvasEl = ref<HTMLCanvasElement | null>(null)
+ const textLayerEl = ref<HTMLDivElement | null>(null)
+ const bodyEl = ref<HTMLElement | null>(null)
+ const page = ref(props.startPage && props.startPage > 0 ? props.startPage : 1)
++watch(page, (value) => emit('pageChange', value))
+ const total = ref(0)
+ const scale = ref(1.2)
+ const expanded = ref(false)
+@@ -353,7 +354,16 @@ async function showPassages(items: { page: number; quote: string }[]): Promise<v
+   }
+ }
+ 
+-defineExpose({ showPassages })
++async function flushPending(): Promise<boolean> {
++  if (!dirty.value) return true
++  return flush()
++}
++
++function hasPending(): boolean {
++  return dirty.value
++}
++
++defineExpose({ showPassages, requestClose, flushPending, hasPending })
+ 
+ function escapeHtml(text: string): string {
+   return text
+diff --git a/frontend/src/components/research/PaperImportPrompt.vue b/frontend/src/components/research/PaperImportPrompt.vue
+new file mode 100644
+index 0000000..039291c
+--- /dev/null
++++ b/frontend/src/components/research/PaperImportPrompt.vue
+@@ -0,0 +1,171 @@
++<script setup lang="ts">
++/**
++ * 结束对话前处理未入库论文:每篇可选导入 / 仅保留历史 / 忽略。
++ * 只收集选择,实际导入由父组件执行。
++ */
++import { reactive } from 'vue'
++import { t } from '@/utils/i18n'
++
++export interface StagedChoicePaper {
++  docId: string
++  title: string
++  pages: number
++}
++
++const props = defineProps<{ papers: StagedChoicePaper[] }>()
++const emit = defineEmits<{
++  confirm: [choices: Record<string, 'import' | 'temp' | 'ignore'>]
++  cancel: []
++}>()
++
++const choices = reactive<Record<string, 'import' | 'temp' | 'ignore'>>(
++  Object.fromEntries(props.papers.map((p) => [p.docId, 'import'])),
++)
++</script>
++
++<template>
++  <div class="pip-overlay" @click.self="emit('cancel')">
++    <section class="pip">
++      <header class="pip-head">
++        <span class="pip-title">{{ t('learn.paperPromptTitle') }}</span>
++      </header>
++      <p class="pip-hint">{{ t('learn.paperPromptHint') }}</p>
++      <ul class="pip-list">
++        <li v-for="p in papers" :key="p.docId" class="pip-item">
++          <div class="pip-info">
++            <span class="pip-name" :title="p.title">{{ p.title }}</span>
++            <span class="pip-pages">{{ t('learn.paperPages', { n: p.pages }) }}</span>
++          </div>
++          <select v-model="choices[p.docId]" class="pip-select">
++            <option value="import">{{ t('learn.paperImport') }}</option>
++            <option value="temp">{{ t('learn.paperKeepTemp') }}</option>
++            <option value="ignore">{{ t('learn.paperIgnore') }}</option>
++          </select>
++        </li>
++      </ul>
++      <footer class="pip-actions">
++        <button class="pip-btn" type="button" @click="emit('cancel')">
++          {{ t('learn.paperCancel') }}
++        </button>
++        <button class="pip-btn primary" type="button" @click="emit('confirm', choices)">
++          {{ t('learn.paperConfirm') }}
++        </button>
++      </footer>
++    </section>
++  </div>
++</template>
++
++<style scoped>
++.pip-overlay {
++  position: fixed;
++  inset: 0;
++  z-index: 1300;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  background: rgba(0, 0, 0, 0.48);
++}
++
++.pip {
++  width: min(460px, calc(100vw - 32px));
++  max-height: 70vh;
++  display: flex;
++  flex-direction: column;
++  background: var(--bg-panel);
++  border: 1px solid var(--line-bright);
++  border-radius: 10px;
++  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
++  overflow: hidden;
++}
++
++.pip-head {
++  padding: 11px 14px;
++  border-bottom: 1px solid var(--line);
++}
++
++.pip-title {
++  color: var(--cyan);
++  font-family: var(--font-tech);
++  font-size: 11.5px;
++  letter-spacing: 0.06em;
++}
++
++.pip-hint {
++  margin: 9px 14px 4px;
++  color: var(--text-dim);
++  font-size: 11.5px;
++  line-height: 1.55;
++}
++
++.pip-list {
++  list-style: none;
++  margin: 0;
++  padding: 6px 14px;
++  overflow-y: auto;
++}
++
++.pip-item {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  padding: 8px 0;
++  border-bottom: 1px solid var(--line);
++}
++
++.pip-item:last-child {
++  border-bottom: none;
++}
++
++.pip-info {
++  min-width: 0;
++  flex: 1;
++}
++
++.pip-name {
++  display: block;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  color: var(--text-hi);
++  font-size: 12.5px;
++}
++
++.pip-pages {
++  color: var(--text-dim);
++  font-size: 10.5px;
++}
++
++.pip-select {
++  flex: none;
++  background: var(--bg-card);
++  border: 1px solid var(--line);
++  border-radius: 5px;
++  color: var(--text);
++  font-size: 11.5px;
++  padding: 4px 6px;
++}
++
++.pip-actions {
++  display: flex;
++  justify-content: flex-end;
++  gap: 8px;
++  padding: 10px 14px;
++  border-top: 1px solid var(--line);
++}
++
++.pip-btn {
++  background: transparent;
++  border: 1px solid var(--line);
++  color: var(--text-dim);
++  border-radius: 6px;
++  font-size: 11.5px;
++  padding: 5px 12px;
++  cursor: pointer;
++}
++
++.pip-btn.primary {
++  color: var(--cyan);
++  border-color: var(--line-bright);
++  background: color-mix(in srgb, var(--cyan) 10%, transparent);
++}
++</style>
+diff --git a/frontend/src/components/research/PaperInsights.vue b/frontend/src/components/research/PaperInsights.vue
+new file mode 100644
+index 0000000..89bf507
+--- /dev/null
++++ b/frontend/src/components/research/PaperInsights.vue
+@@ -0,0 +1,327 @@
++<script setup lang="ts">
++/**
++ * 论文结构侧栏:研究问题/方法/结论/局限 + 思维导图 + 章节树。
++ * 数据由后端按 docId + 内容哈希缓存;这里只渲染,不重复调用模型。
++ */
++import { computed } from 'vue'
++import { t } from '@/utils/i18n'
++import type { OutlineNode, PaperStructure } from '@/services/researchService'
++
++const props = defineProps<{
++  structure: PaperStructure | null
++  loading: boolean
++  error: string
++}>()
++const emit = defineEmits<{ refresh: [] }>()
++
++const outlineRows = computed(() => {
++  const rows: { title: string; depth: number }[] = []
++  function walk(nodes: OutlineNode[], depth: number): void {
++    for (const node of nodes) {
++      if (rows.length >= 60) return
++      rows.push({ title: node.title, depth })
++      walk(node.children || [], depth + 1)
++    }
++  }
++  if (props.structure) walk(props.structure.outline || [], 0)
++  return rows
++})
++
++const question = computed(() => props.structure?.question || '')
++</script>
++
++<template>
++  <aside class="pi">
++    <header class="pi-head">
++      <span class="pi-title">{{ t('workspace.structure') }}</span>
++      <button
++        v-if="structure && !loading"
++        class="pi-refresh"
++        type="button"
++        @click="emit('refresh')"
++      >{{ t('workspace.refresh') }}</button>
++    </header>
++
++    <div v-if="loading" class="pi-state">
++      <span class="pi-spinner"></span>{{ t('workspace.generating') }}
++    </div>
++    <div v-else-if="error" class="pi-state error">
++      <span>{{ error }}</span>
++      <button class="pi-retry" type="button" @click="emit('refresh')">
++        {{ t('workspace.retry') }}
++      </button>
++    </div>
++
++    <div v-else-if="structure" class="pi-body">
++      <section class="pi-section">
++        <h4>{{ t('workspace.question') }}</h4>
++        <p v-if="question" class="pi-question">{{ question }}</p>
++        <p v-else class="pi-muted">—</p>
++      </section>
++
++      <section v-if="structure.methods.length" class="pi-section">
++        <h4>{{ t('workspace.methods') }}</h4>
++        <ul>
++          <li v-for="(item, i) in structure.methods" :key="`m${i}`">{{ item }}</li>
++        </ul>
++      </section>
++
++      <section v-if="structure.conclusions.length" class="pi-section">
++        <h4>{{ t('workspace.conclusions') }}</h4>
++        <ul>
++          <li v-for="(item, i) in structure.conclusions" :key="`c${i}`">{{ item }}</li>
++        </ul>
++      </section>
++
++      <section v-if="structure.limitations.length" class="pi-section">
++        <h4>{{ t('workspace.limitations') }}</h4>
++        <ul>
++          <li v-for="(item, i) in structure.limitations" :key="`l${i}`">{{ item }}</li>
++        </ul>
++      </section>
++
++      <section class="pi-section">
++        <h4>{{ t('workspace.mindmap') }}</h4>
++        <div class="mm">
++          <div class="mm-root">{{ t('workspace.paper') }}</div>
++          <div class="mm-branches">
++            <div v-if="question" class="mm-branch">
++              <span class="mm-label">{{ t('workspace.question') }}</span>
++              <span class="mm-leaf">{{ question }}</span>
++            </div>
++            <div v-if="structure.methods.length" class="mm-branch">
++              <span class="mm-label">{{ t('workspace.methods') }}</span>
++              <span v-for="(item, i) in structure.methods" :key="`mm${i}`" class="mm-leaf">{{ item }}</span>
++            </div>
++            <div v-if="structure.conclusions.length" class="mm-branch">
++              <span class="mm-label">{{ t('workspace.conclusions') }}</span>
++              <span v-for="(item, i) in structure.conclusions" :key="`mc${i}`" class="mm-leaf">{{ item }}</span>
++            </div>
++            <div v-if="structure.limitations.length" class="mm-branch">
++              <span class="mm-label">{{ t('workspace.limitations') }}</span>
++              <span v-for="(item, i) in structure.limitations" :key="`ml${i}`" class="mm-leaf">{{ item }}</span>
++            </div>
++            <div v-if="outlineRows.length" class="mm-branch">
++              <span class="mm-label">{{ t('workspace.outline') }}</span>
++              <span v-for="(row, i) in outlineRows" :key="`mo${i}`" class="mm-leaf">
++                {{ row.title }}
++              </span>
++            </div>
++          </div>
++        </div>
++      </section>
++
++      <section v-if="outlineRows.length" class="pi-section">
++        <h4>{{ t('workspace.outline') }}</h4>
++        <div class="pi-outline">
++          <div
++            v-for="(row, i) in outlineRows"
++            :key="`o${i}`"
++            class="pi-outline-row"
++            :style="{ paddingLeft: `${row.depth * 14}px` }"
++          >
++            <span class="pi-dot"></span>{{ row.title }}
++          </div>
++        </div>
++      </section>
++    </div>
++  </aside>
++</template>
++
++<style scoped>
++.pi {
++  display: flex;
++  flex-direction: column;
++  width: min(340px, 32vw);
++  min-width: 280px;
++  flex: none;
++  min-height: 0;
++  height: 100%;
++  background: var(--bg-panel);
++  border-left: 1px solid var(--line);
++}
++
++.pi-head {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 9px 12px;
++  border-bottom: 1px solid var(--line);
++  flex: none;
++}
++
++.pi-title {
++  color: var(--cyan);
++  font-family: var(--font-tech);
++  font-size: 11px;
++  letter-spacing: 0.06em;
++}
++
++.pi-refresh {
++  margin-left: auto;
++  background: transparent;
++  border: 1px solid var(--line);
++  color: var(--text-dim);
++  border-radius: 5px;
++  font-size: 10.5px;
++  padding: 2px 7px;
++  cursor: pointer;
++}
++
++.pi-refresh:hover {
++  color: var(--cyan);
++  border-color: var(--line-bright);
++}
++
++.pi-state {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 16px 12px;
++  color: var(--text-dim);
++  font-size: 12px;
++}
++
++.pi-state.error {
++  color: #ff8a8a;
++  flex-direction: column;
++  align-items: flex-start;
++}
++
++.pi-spinner {
++  width: 12px;
++  height: 12px;
++  border: 2px solid var(--line-bright);
++  border-top-color: var(--cyan);
++  border-radius: 50%;
++  animation: pi-spin 0.8s linear infinite;
++}
++
++@keyframes pi-spin {
++  to { transform: rotate(360deg); }
++}
++
++.pi-retry {
++  background: transparent;
++  border: 1px solid rgba(255, 138, 138, 0.45);
++  color: #ff8a8a;
++  border-radius: 5px;
++  font-size: 11px;
++  padding: 3px 8px;
++  cursor: pointer;
++}
++
++.pi-body {
++  overflow-y: auto;
++  padding: 10px 12px 18px;
++}
++
++.pi-section {
++  margin-bottom: 14px;
++}
++
++.pi-section h4 {
++  margin: 0 0 6px;
++  color: var(--text-dim);
++  font-family: var(--font-tech);
++  font-size: 10px;
++  letter-spacing: 0.08em;
++  font-weight: normal;
++}
++
++.pi-section ul {
++  margin: 0;
++  padding-left: 16px;
++  color: var(--text);
++  font-size: 12px;
++  line-height: 1.6;
++}
++
++.pi-question {
++  margin: 0;
++  color: var(--text-hi);
++  font-size: 12.5px;
++  line-height: 1.65;
++}
++
++.pi-muted {
++  color: var(--text-dim);
++  font-size: 12px;
++}
++
++.mm {
++  border: 1px solid var(--line);
++  border-radius: 8px;
++  padding: 10px;
++  background: var(--bg-card);
++}
++
++.mm-root {
++  display: inline-block;
++  padding: 4px 10px;
++  border: 1px solid var(--line-bright);
++  border-radius: 999px;
++  color: var(--cyan);
++  font-size: 11.5px;
++}
++
++.mm-branches {
++  margin: 8px 0 0 12px;
++  padding-left: 10px;
++  border-left: 1px solid var(--line-bright);
++}
++
++.mm-branch {
++  position: relative;
++  margin: 7px 0;
++  padding-left: 10px;
++  display: flex;
++  flex-direction: column;
++  gap: 3px;
++}
++
++.mm-branch::before {
++  content: '';
++  position: absolute;
++  left: 0;
++  top: 8px;
++  width: 8px;
++  border-top: 1px solid var(--line-bright);
++}
++
++.mm-label {
++  color: var(--cyan);
++  font-size: 10.5px;
++  font-family: var(--font-tech);
++}
++
++.mm-leaf {
++  color: var(--text);
++  font-size: 11.5px;
++  line-height: 1.5;
++}
++
++.pi-outline {
++  border-left: 1px solid var(--line);
++  padding-left: 8px;
++}
++
++.pi-outline-row {
++  position: relative;
++  padding-top: 3px;
++  padding-bottom: 3px;
++  color: var(--text);
++  font-size: 11.5px;
++  line-height: 1.45;
++}
++
++.pi-dot {
++  display: inline-block;
++  width: 4px;
++  height: 4px;
++  margin-right: 6px;
++  border-radius: 50%;
++  background: var(--cyan);
++  vertical-align: middle;
++}
++</style>
+diff --git a/frontend/src/components/research/PaperWorkspace.vue b/frontend/src/components/research/PaperWorkspace.vue
+new file mode 100644
+index 0000000..a91c142
+--- /dev/null
++++ b/frontend/src/components/research/PaperWorkspace.vue
+@@ -0,0 +1,642 @@
++<script setup lang="ts">
++/**
++ * 论文工作台:左对话、右阅读器,第三栏按需展开论文结构与思维导图。
++ * 对话只在本篇论文内检索;关闭后聊天记录丢弃,页码与批注保留。
++ */
++import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
++import { t } from '@/utils/i18n'
++import { showToast } from '@/utils/toast'
++import MathText from '@/components/chat/MathText.vue'
++import DocumentViewer from '@/components/research/DocumentViewer.vue'
++import PaperInsights from '@/components/research/PaperInsights.vue'
++import { streamReply, type ChatStreamHandle } from '@/services/chatService'
++import {
++  generateResearchDocInsights,
++  getResearchDocInsights,
++  listResearchDocs,
++  locatePaperPassages,
++  saveReadingProgress,
++  type PaperStructure,
++  type ResearchDoc,
++} from '@/services/researchService'
++
++const props = defineProps<{ docId: string }>()
++const emit = defineEmits<{ close: [] }>()
++
++const docs = ref<ResearchDoc[]>([])
++const currentId = ref(props.docId)
++const loadingDocs = ref(true)
++const viewerRef = ref<{
++  requestClose: () => void
++  flushPending: () => Promise<boolean>
++  hasPending: () => boolean
++  showPassages: (items: { page: number; quote: string }[]) => Promise<void>
++} | null>(null)
++
++const currentDoc = computed(() => docs.value.find((d) => d.id === currentId.value) ?? null)
++const kind = computed<'pdf' | 'text'>(() =>
++  currentDoc.value && /\.pdf$/i.test(currentDoc.value.name) ? 'pdf' : 'text')
++
++const showInsights = ref(false)
++const expanded = ref(false)
++const structure = ref<PaperStructure | null>(null)
++const insightsLoading = ref(false)
++const insightsError = ref('')
++const insightCache = new Map<string, PaperStructure>()
++let insightsSeq = 0
++
++interface Msg {
++  id: number
++  role: 'user' | 'assistant'
++  content: string
++  streaming?: boolean
++  thinking?: boolean
++}
++const messages = ref<Msg[]>([])
++const input = ref('')
++const streaming = ref(false)
++const listEl = ref<HTMLElement | null>(null)
++let nextMsgId = 1
++let streamHandle: ChatStreamHandle | null = null
++let progressTimer: ReturnType<typeof setTimeout> | undefined
++let closed = false
++const lastPage = ref(1)
++
++function scrollBottom(): void {
++  void nextTick(() => {
++    const el = listEl.value
++    if (el) el.scrollTop = el.scrollHeight
++  })
++}
++
++function resetChat(): void {
++  if (streamHandle) {
++    streamHandle.cancel()
++    streamHandle = null
++  }
++  messages.value = []
++  input.value = ''
++  streaming.value = false
++}
++
++function toggleInsights(): void {
++  showInsights.value = !showInsights.value
++  if (showInsights.value) void loadInsights(currentId.value)
++}
++
++async function loadDocs(): Promise<void> {
++  loadingDocs.value = true
++  try {
++    docs.value = await listResearchDocs()
++    if (!docs.value.some((d) => d.id === currentId.value) && docs.value.length) {
++      currentId.value = docs.value[0].id
++    }
++  } catch {
++    showToast(t('workspace.loadFail'))
++  } finally {
++    loadingDocs.value = false
++  }
++}
++
++async function loadInsights(id: string, refresh = false): Promise<void> {
++  const seq = ++insightsSeq
++  if (!refresh) {
++    const cached = insightCache.get(id)
++    if (cached) {
++      structure.value = cached
++      insightsError.value = ''
++      insightsLoading.value = false
++      return
++    }
++  }
++  structure.value = null
++  insightsError.value = ''
++  insightsLoading.value = true
++  try {
++    let data = refresh
++      ? await generateResearchDocInsights(id, true)
++      : await getResearchDocInsights(id)
++    if (!data.cached || !data.structure) {
++      data = await generateResearchDocInsights(id, false)
++    }
++    if (seq !== insightsSeq) return
++    if (!data.structure) throw new Error(t('workspace.generateFail'))
++    structure.value = data.structure
++    insightCache.set(id, data.structure)
++  } catch (err) {
++    if (seq !== insightsSeq) return
++    insightsError.value = err instanceof Error && err.message
++      ? err.message : t('workspace.generateFail')
++  } finally {
++    if (seq === insightsSeq) insightsLoading.value = false
++  }
++}
++
++async function onPickPaper(e: Event): Promise<void> {
++  const select = e.target as HTMLSelectElement
++  const next = select.value
++  if (!next || next === currentId.value) return
++  if (viewerRef.value?.hasPending()) {
++    const ok = await viewerRef.value.flushPending()
++    if (!ok) {
++      select.value = currentId.value
++      return
++    }
++  }
++  await flushProgress()
++  resetChat()
++  currentId.value = next
++  const doc = docs.value.find((d) => d.id === next)
++  lastPage.value = doc?.lastPage || 1
++  if (showInsights.value) void loadInsights(next)
++}
++
++function onPageChange(page: number): void {
++  lastPage.value = page
++  if (currentDoc.value) currentDoc.value.lastPage = page
++  if (progressTimer) clearTimeout(progressTimer)
++  progressTimer = setTimeout(() => {
++    progressTimer = undefined
++    saveReadingProgress(currentId.value, page).catch(() => {
++      /* 页码保存失败不打断阅读 */
++    })
++  }, 700)
++}
++
++async function flushProgress(): Promise<void> {
++  if (progressTimer) {
++    clearTimeout(progressTimer)
++    progressTimer = undefined
++  }
++  try {
++    await saveReadingProgress(currentId.value, lastPage.value)
++  } catch {
++    /* 忽略:下次翻页会再存 */
++  }
++}
++
++function finishClose(): void {
++  if (closed) return
++  closed = true
++  if (streamHandle) {
++    streamHandle.cancel()
++    streamHandle = null
++  }
++  void flushProgress()
++  insightsSeq += 1
++  emit('close')
++}
++
++function closeWorkspace(): void {
++  // 阅读器有未保存批注时,由它自己弹保存/丢弃确认
++  if (viewerRef.value?.hasPending()) {
++    viewerRef.value.requestClose()
++    return
++  }
++  finishClose()
++}
++
++function onViewerClose(): void {
++  finishClose()
++}
++
++async function locate(question: string): Promise<void> {
++  const docId = currentId.value
++  try {
++    const res = await locatePaperPassages(docId, question)
++    if (docId !== currentId.value) return
++    await viewerRef.value?.showPassages(res.passages)
++  } catch {
++    /* 定位失败不影响回答 */
++  }
++}
++
++function send(): void {
++  const prompt = input.value.trim()
++  if (!prompt || streaming.value) return
++  input.value = ''
++  messages.value.push({ id: nextMsgId++, role: 'user', content: prompt })
++  const reply: Msg = {
++    id: nextMsgId++, role: 'assistant', content: '', streaming: true, thinking: true,
++  }
++  messages.value.push(reply)
++  const live = messages.value[messages.value.length - 1]
++  streaming.value = true
++  scrollBottom()
++  void locate(prompt)
++
++  const history = messages.value
++    .filter((m) => m.id !== live.id && m.content)
++    .slice(-8)
++    .map((m) => ({ role: m.role, content: m.content }))
++
++  let failed = false
++  streamHandle = streamReply(prompt, {
++    onDelta: (text) => {
++      live.thinking = false
++      live.content += text
++      scrollBottom()
++    },
++    onDone: (_full, complete) => {
++      live.streaming = false
++      live.thinking = false
++      if (!live.content) live.content = t('workspace.chatFail')
++      else if (!complete && !failed) live.content += '\n\n…'
++      streaming.value = false
++      streamHandle = null
++      scrollBottom()
++    },
++    onError: () => {
++      failed = true
++      live.thinking = false
++      live.streaming = false
++      if (!live.content) live.content = t('workspace.chatFail')
++      streaming.value = false
++      streamHandle = null
++      scrollBottom()
++    },
++  }, {
++    workspace: 'research',
++    paperId: currentId.value,
++    history,
++  })
++}
++
++function stop(): void {
++  if (!streamHandle) return
++  streamHandle.cancel()
++  streamHandle = null
++  streaming.value = false
++  const last = messages.value[messages.value.length - 1]
++  if (last?.streaming) {
++    last.streaming = false
++    last.thinking = false
++  }
++}
++
++onMounted(async () => {
++  await loadDocs()
++  const doc = currentDoc.value
++  if (!doc) return
++  lastPage.value = doc.lastPage || 1
++})
++
++onBeforeUnmount(() => {
++  if (closed) return
++  if (streamHandle) {
++    streamHandle.cancel()
++    streamHandle = null
++  }
++  insightsSeq += 1
++  void flushProgress()
++})
++</script>
++
++<template>
++  <div class="pw" :class="{ expanded }">
++    <header class="pw-head">
++      <span class="pw-title">{{ t('workspace.title') }}</span>
++      <select
++        class="pw-select"
++        :value="currentId"
++        :aria-label="t('workspace.selectPaper')"
++        @change="onPickPaper"
++      >
++        <option v-for="d in docs" :key="d.id" :value="d.id">{{ d.title || d.name }}</option>
++      </select>
++      <span v-if="currentDoc" class="pw-progress">
++        {{ lastPage }} / {{ currentDoc.pages }}
++      </span>
++      <span class="pw-spacer"></span>
++      <button
++        class="pw-btn"
++        :class="{ on: showInsights }"
++        type="button"
++        @click="toggleInsights"
++      >{{ t('workspace.structureToggle') }}</button>
++      <button
++        class="pw-btn"
++        type="button"
++        :title="t('workspace.expand')"
++        @click="expanded = !expanded"
++      >{{ expanded ? '⤡' : '⤢' }}</button>
++      <button class="pw-close" type="button" @click="closeWorkspace">✕</button>
++    </header>
++
++    <div class="pw-body" :class="{ 'with-insights': showInsights }">
++      <section class="pw-chat">
++        <div ref="listEl" class="pw-messages">
++          <p v-if="!messages.length" class="pw-empty">{{ t('workspace.chatEmpty') }}</p>
++          <div
++            v-for="m in messages"
++            :key="m.id"
++            class="pw-msg"
++            :class="m.role"
++          >
++            <div class="pw-bubble">
++              <span v-if="m.thinking" class="pw-thinking">{{ t('workspace.thinking') }}</span>
++              <template v-else-if="m.role === 'assistant'">
++                <MathText :text="m.content" />
++                <span v-if="m.streaming" class="pw-cursor">▍</span>
++              </template>
++              <template v-else>{{ m.content }}</template>
++            </div>
++          </div>
++        </div>
++        <p class="pw-note">{{ t('workspace.chatCleared') }}</p>
++        <form class="pw-input" @submit.prevent="send">
++          <button
++            class="pw-insight-toggle"
++            type="button"
++            :class="{ on: showInsights }"
++            :title="t('workspace.structure')"
++            @click="toggleInsights"
++          >◫</button>
++          <input
++            v-model="input"
++            :placeholder="t('workspace.chatHint')"
++            :disabled="loadingDocs || !currentDoc"
++          />
++          <button v-if="streaming" class="pw-send stop" type="button" @click="stop">
++            {{ t('workspace.stop') }}
++          </button>
++          <button v-else class="pw-send" type="submit" :disabled="!input.trim()">
++            {{ t('workspace.send') }}
++          </button>
++        </form>
++      </section>
++
++      <section class="pw-reader">
++        <p v-if="loadingDocs" class="pw-loading">…</p>
++        <DocumentViewer
++          v-else-if="currentDoc"
++          ref="viewerRef"
++          :key="currentDoc.id"
++          :doc-id="currentDoc.id"
++          :title="currentDoc.title || currentDoc.name"
++          :kind="kind"
++          :start-page="currentDoc.lastPage || 1"
++          :project-id="currentDoc.projectId ?? null"
++          @close="onViewerClose"
++          @page-change="onPageChange"
++        />
++      </section>
++
++      <PaperInsights
++        v-if="showInsights"
++        :structure="structure"
++        :loading="insightsLoading"
++        :error="insightsError"
++        @refresh="loadInsights(currentId, true)"
++      />
++    </div>
++  </div>
++</template>
++
++<style scoped>
++.pw {
++  position: fixed;
++  inset: 64px 22px 22px 22px;
++  z-index: 1100;
++  display: flex;
++  flex-direction: column;
++  background: var(--bg);
++  border: 1px solid var(--line-bright);
++  border-radius: 10px;
++  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
++  overflow: hidden;
++}
++
++.pw.expanded {
++  inset: 0;
++  border-radius: 0;
++}
++
++.pw-head {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 7px 10px;
++  border-bottom: 1px solid var(--line);
++  background: var(--bg-panel);
++  flex: none;
++}
++
++.pw-title {
++  color: var(--cyan);
++  font-family: var(--font-tech);
++  font-size: 11px;
++  letter-spacing: 0.06em;
++  white-space: nowrap;
++}
++
++.pw-select {
++  min-width: 0;
++  max-width: 42%;
++  background: var(--bg-card);
++  border: 1px solid var(--line);
++  border-radius: 6px;
++  color: var(--text);
++  font-size: 12px;
++  padding: 4px 7px;
++}
++
++.pw-progress {
++  color: var(--text-dim);
++  font-family: var(--font-tech);
++  font-size: 10.5px;
++  white-space: nowrap;
++}
++
++.pw-spacer {
++  flex: 1;
++}
++
++.pw-btn,
++.pw-close {
++  background: transparent;
++  border: 1px solid var(--line);
++  color: var(--text-dim);
++  border-radius: 5px;
++  font-size: 11px;
++  padding: 3px 8px;
++  cursor: pointer;
++}
++
++.pw-btn:hover,
++.pw-btn.on {
++  color: var(--cyan);
++  border-color: var(--line-bright);
++}
++
++.pw-close {
++  border-color: transparent;
++  font-size: 14px;
++  padding: 1px 7px;
++}
++
++.pw-close:hover {
++  color: var(--cyan);
++}
++
++.pw-body {
++  display: flex;
++  min-height: 0;
++  flex: 1;
++}
++
++.pw-chat {
++  width: 38%;
++  min-width: 280px;
++  display: flex;
++  flex-direction: column;
++  border-right: 1px solid var(--line);
++  background: var(--bg-panel);
++}
++
++.pw-body.with-insights .pw-chat {
++  width: 30%;
++}
++
++.pw-messages {
++  flex: 1;
++  overflow-y: auto;
++  padding: 10px;
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++}
++
++.pw-empty,
++.pw-loading {
++  color: var(--text-dim);
++  font-size: 12px;
++  line-height: 1.7;
++  padding: 18px 4px;
++}
++
++.pw-msg {
++  display: flex;
++}
++
++.pw-msg.user {
++  justify-content: flex-end;
++}
++
++.pw-bubble {
++  max-width: 92%;
++  padding: 7px 10px;
++  border: 1px solid var(--line);
++  border-radius: 8px;
++  background: var(--bg-card);
++  color: var(--text);
++  font-size: 12.5px;
++  line-height: 1.65;
++  white-space: pre-wrap;
++  word-break: break-word;
++}
++
++.pw-msg.user .pw-bubble {
++  background: color-mix(in srgb, var(--cyan) 12%, var(--bg-card));
++  border-color: color-mix(in srgb, var(--cyan) 35%, var(--line));
++  color: var(--text-hi);
++}
++
++.pw-msg.assistant .pw-bubble {
++  white-space: normal;
++}
++
++.pw-thinking,
++.pw-cursor {
++  color: var(--text-dim);
++}
++
++.pw-note {
++  margin: 0;
++  padding: 0 12px 6px;
++  color: var(--text-dim);
++  font-size: 10px;
++  line-height: 1.5;
++}
++
++.pw-input {
++  display: flex;
++  align-items: center;
++  gap: 6px;
++  padding: 8px 10px 10px;
++  border-top: 1px solid var(--line);
++  flex: none;
++}
++
++.pw-input input {
++  flex: 1;
++  min-width: 0;
++  background: var(--bg-card);
++  border: 1px solid var(--line);
++  border-radius: 7px;
++  color: var(--text);
++  font-size: 12.5px;
++  padding: 7px 9px;
++  outline: none;
++}
++
++.pw-input input:focus {
++  border-color: var(--line-bright);
++}
++
++.pw-send,
++.pw-insight-toggle {
++  background: transparent;
++  border: 1px solid var(--line-bright);
++  color: var(--cyan);
++  border-radius: 6px;
++  font-size: 11.5px;
++  padding: 6px 10px;
++  cursor: pointer;
++  white-space: nowrap;
++}
++
++.pw-send:disabled {
++  opacity: 0.45;
++  cursor: default;
++}
++
++.pw-send.stop {
++  color: #ff8a8a;
++  border-color: rgba(255, 138, 138, 0.45);
++}
++
++.pw-insight-toggle {
++  padding: 6px 8px;
++}
++
++.pw-insight-toggle.on {
++  box-shadow: var(--glow-cyan);
++}
++
++.pw-reader {
++  position: relative;
++  flex: 1;
++  min-width: 0;
++}
++
++.pw-loading {
++  padding: 20px;
++}
++
++@media (max-width: 900px) {
++  .pw {
++    inset: 0;
++    border-radius: 0;
++  }
++
++  .pw-chat {
++    width: 42%;
++    min-width: 220px;
++  }
++
++  .pw-body.with-insights .pw-chat {
++    display: none;
++  }
++}
++</style>
+diff --git a/frontend/src/services/researchService.ts b/frontend/src/services/researchService.ts
+index a227988..70b6272 100644
+--- a/frontend/src/services/researchService.ts
++++ b/frontend/src/services/researchService.ts
+@@ -29,6 +29,8 @@ export interface ResearchDoc {
+   versionOf?: string
+   status?: string
+   originUrl?: string
++  lastPage?: number
++  lastReadAt?: number
+ }
+ 
+ export type ResearchStatus = 'exploring' | 'active' | 'paused' | 'done'
+@@ -89,6 +91,45 @@ export async function getResearchDocMeta(docId: string): Promise<ResearchDoc> {
+   return res.doc
+ }
+ 
++export interface OutlineNode {
++  title: string
++  children: OutlineNode[]
++}
++
++export interface PaperStructure {
++  question: string
++  methods: string[]
++  conclusions: string[]
++  limitations: string[]
++  outline: OutlineNode[]
++}
++
++export interface DocInsights {
++  docId: string
++  cached: boolean
++  structure: PaperStructure | null
++}
++
++export async function getResearchDocInsights(docId: string): Promise<DocInsights> {
++  return get<DocInsights>(
++    `/api/research/docs/${encodeURIComponent(docId)}/insights`, authHeaders())
++}
++
++export async function generateResearchDocInsights(
++  docId: string,
++  refresh = false,
++): Promise<DocInsights> {
++  return post<DocInsights>(
++    `/api/research/docs/${encodeURIComponent(docId)}/insights`,
++    { refresh }, authHeaders())
++}
++
++export async function saveReadingProgress(docId: string, page: number): Promise<void> {
++  await post(
++    `/api/research/docs/${encodeURIComponent(docId)}/progress`,
++    { page }, authHeaders())
++}
++
+ export async function uploadResearchDoc(
+   file: File,
+   projectId?: string,
+@@ -111,6 +152,27 @@ export async function uploadResearchDoc(
+   )
+ }
+ 
++/** 拖入的论文先进临时语料:解析成功后才询问是否入库。 */
++export async function uploadTempPaper(
++  file: File,
++): Promise<{
++  docId: string
++  duplicate: boolean
++  status?: string
++  pages?: number
++  doi?: string
++}> {
++  const type = file.type || (file.name.toLowerCase().endsWith('.pdf')
++    ? 'application/pdf'
++    : 'text/plain')
++  return upload(
++    `/api/research/docs?name=${encodeURIComponent(file.name)}&temp=1`,
++    file,
++    type,
++    authHeaders(),
++  )
++}
++
+ export async function deleteResearchDoc(docId: string): Promise<void> {
+   await del(`/api/research/docs/${encodeURIComponent(docId)}`, authHeaders())
+ }
+diff --git a/frontend/src/stores/sessions.ts b/frontend/src/stores/sessions.ts
+index 1e3efa3..a989fbc 100644
+--- a/frontend/src/stores/sessions.ts
++++ b/frontend/src/stores/sessions.ts
+@@ -46,6 +46,13 @@ export interface ChatMsg {
+   stopped?: boolean
+   /** 研究型回答(后端 meta 帧标记,非前端猜测):导出 PDF 入口只对它显示 */
+   research?: boolean
++  /** 拖入论文后的导入询问:用户选择后更新状态,随会话保存 */
++  paperImport?: {
++    docId: string
++    title: string
++    pages: number
++    status: 'pending' | 'imported' | 'temp'
++  }
+ }
+ 
+ export interface ChatSession {
+@@ -76,6 +83,7 @@ interface PersistedMsg {
+   interrupted?: boolean
+   research?: boolean
+   stopped?: boolean
++  paperImport?: ChatMsg['paperImport']
+ }
+ 
+ interface Persisted {
+@@ -145,7 +153,7 @@ function createSessionStore(workspace: Workspace): SessionStore {
+               attachment: m.attachment, chitchat: m.chitchat,
+               nav: m.nav, navGuideFor: m.navGuideFor,
+               interrupted: m.interrupted, research: m.research,
+-              stopped: m.stopped,
++              stopped: m.stopped, paperImport: m.paperImport,
+             }))
+             .slice(-120),
+         })),
+diff --git a/frontend/src/utils/aboutContent.ts b/frontend/src/utils/aboutContent.ts
+index d844e5a..166d8df 100644
+--- a/frontend/src/utils/aboutContent.ts
++++ b/frontend/src/utils/aboutContent.ts
+@@ -6,8 +6,8 @@
+  */
+ 
+ export const APP_NAME = 'MathGuide'
+-export const APP_VERSION = 'v1.13.0'
+-export const APP_STABLE_VERSION = 'v1.13.0'
++export const APP_VERSION = 'v1.14.0'
++export const APP_STABLE_VERSION = 'v1.14.0'
+ export const APP_STABLE_DATE = '2026-10-30'
+ export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
+ export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
+@@ -51,6 +51,33 @@ export const RELEASES: ReleaseEntry[] = [
+     version: APP_VERSION,
+     date: APP_STABLE_DATE,
+     status: 'latest',
++    items: [
++      {
++        zh: '论文工作台:研究档案每篇论文可点「继续」,左侧对话、右侧阅读器,第三栏展开论文结构与思维导图;页码与批注保存,聊天记录关闭即清空。',
++        en: 'Paper workspace: continue any archived paper into a left-chat, right-reader layout with an optional structure and mind-map pane; page and annotations are saved while chat is cleared on close.',
++      },
++      {
++        zh: '论文结构:模型提炼研究问题、方法、结论、局限与章节,按 docId + 内容哈希缓存,切换论文只读缓存,可手动重新生成。',
++        en: 'Paper structure: the model extracts the research question, methods, conclusions, limitations and outline, cached by docId plus content hash and reused across switches.',
++      },
++      {
++        zh: '阅读联动:提问后自动定位相关段落并跳页高亮;批注照常新增、修改、删除。',
++        en: 'Reading integration: questions locate and highlight the relevant passage and page; annotations can still be added, edited and deleted.',
++      },
++      {
++        zh: '拖拽论文入对话:科研区拖入 PDF/DOCX/EPUB 等文档即临时解析并直接提问,不必先入库;新建对话或离开页面时再逐篇选择导入研究档案、仅保留浏览历史或忽略。',
++        en: 'Drag papers into chat: in the research workspace a PDF/DOCX/EPUB is parsed as a temporary paper and can be queried immediately; on a new conversation or leaving the page, choose to import it, keep it in history or ignore it.',
++      },
++      {
++        zh: '导入联动:临时论文入库后与手动上传论文一致,出现在研究档案并可全文检索、阅读、批注与生成结构;刷新后未处理论文仍会恢复。',
++        en: 'Import integration: imported papers behave like manual uploads across search, reading, annotations and structure; unresolved papers are restored after a refresh.',
++      },
++    ],
++  },
++  {
++    version: 'v1.13.0',
++    date: '2026-10-30',
++    status: 'released',
+     items: [
+       {
+         zh: '文献来源分级:接入 Crossref、arXiv、Europe PMC、PubMed、INSPIRE、zbMATH、DOAJ、OpenAlex、Semantic Scholar,按学科标注 T0–T3 场所层级与预印本 P。',
+diff --git a/frontend/src/utils/i18n.ts b/frontend/src/utils/i18n.ts
+index 0549dcf..48c0851 100644
+--- a/frontend/src/utils/i18n.ts
++++ b/frontend/src/utils/i18n.ts
+@@ -109,6 +109,8 @@ const ZH: Dict = {
+   'learn.send': '发送',
+   'chat.tableContext': '数据表',
+   'chat.removeTable': '移除数据表上下文',
++  'chat.paperContext': '论文',
++  'chat.removePaper': '移除论文上下文',
+   'learn.stop': '停止生成',
+   'learn.stoppedNote': '⏹ 已停止生成',
+   'learn.interrupted': '⚠ 回答已中断(连接断开),以上内容可能不完整',
+@@ -176,6 +178,24 @@ const ZH: Dict = {
+   'learn.attachFile': '上传文件(本地 / 微信 / QQ / WPS)',
+   'learn.attachPaste': '粘贴导入(剪贴板)',
+   'learn.dropHint': '松开鼠标,导入文件(图片 / 文档)',
++  'learn.paperReady': '论文已加入本次对话，可直接提问；结束对话时可选择是否入库。',
++  'learn.paperPromptTitle': '处理本次对话中的论文',
++  'learn.paperPromptHint': '这些论文尚未入库。选择每篇的处理方式：',
++  'learn.paperConfirm': '确认',
++  'learn.paperCancel': '取消',
++  'learn.paperImporting': '正在处理…',
++  'learn.paperParsing': '正在解析论文…',
++  'learn.paperDetected': '检测到论文，是否导入研究档案？',
++  'learn.paperPages': '{n} 页',
++  'learn.paperImport': '导入研究档案',
++  'learn.paperKeepTemp': '仅加入浏览历史',
++  'learn.paperIgnore': '忽略',
++  'learn.paperImported': '已导入研究档案',
++  'learn.paperKept': '已保留在浏览历史',
++  'learn.paperIgnored': '已忽略该文件',
++  'learn.paperAlready': '这篇论文已在论文库中',
++  'learn.paperImportFail': '导入失败，请重试',
++  'learn.paperParseFail': '论文解析失败：{msg}',
+   'learn.toastPasteEmpty': '剪贴板为空或读取失败,请先复制内容再试',
+   'learn.toastDropTooMany': '一次最多导入 3 个文件,本次拖入已取消',
+   'learn.toastPdfNoText': '该 PDF 为扫描版(无文本层),已按普通文件接收',
+@@ -451,6 +471,31 @@ const ZH: Dict = {
+ 
+   /* 科学研究 */
+   'research.title': '科学研究 · 科研助手',
++  'workspace.continue': '继续',
++  'workspace.title': '论文工作台',
++  'workspace.paper': '论文',
++  'workspace.selectPaper': '切换论文',
++  'workspace.structure': '论文结构',
++  'workspace.structureToggle': '结构',
++  'workspace.mindmap': '思维导图',
++  'workspace.question': '研究问题',
++  'workspace.methods': '方法',
++  'workspace.conclusions': '结论',
++  'workspace.limitations': '局限',
++  'workspace.outline': '章节结构',
++  'workspace.generating': '正在生成论文结构…',
++  'workspace.generateFail': '结构生成失败',
++  'workspace.loadFail': '论文列表加载失败,请稍后重试',
++  'workspace.retry': '重试',
++  'workspace.refresh': '重新生成',
++  'workspace.chatHint': '针对当前论文提问…',
++  'workspace.chatEmpty': '对这篇论文提问，模型只在本篇范围内检索。',
++  'workspace.chatCleared': '关闭后聊天记录不会保存，页码与批注会保留。',
++  'workspace.send': '发送',
++  'workspace.stop': '停止',
++  'workspace.thinking': '思考中…',
++  'workspace.chatFail': '回答中断，请重试',
++  'workspace.expand': '切换全屏',
+   'archive.title': '研究档案',
+   'archive.tabGoal': '目标与思路',
+   'archive.tabFiles': '资料库',
+@@ -875,6 +920,8 @@ const EN: Dict = {
+   'learn.send': 'Send',
+   'chat.tableContext': 'Data table',
+   'chat.removeTable': 'Remove data table context',
++  'chat.paperContext': 'Paper',
++  'chat.removePaper': 'Remove paper context',
+   'learn.stop': 'Stop',
+   'learn.stoppedNote': '⏹ Stopped',
+   'learn.interrupted': '⚠ Answer interrupted (connection lost) — the text above may be incomplete',
+@@ -942,6 +989,24 @@ const EN: Dict = {
+   'learn.attachFile': 'Upload file (local / WeChat / QQ / WPS)',
+   'learn.attachPaste': 'Paste import (clipboard)',
+   'learn.dropHint': 'Release to import files (images / documents)',
++  'learn.paperReady': 'Paper added to this conversation. Ask away; you can import it when the conversation ends.',
++  'learn.paperPromptTitle': 'Papers in this conversation',
++  'learn.paperPromptHint': 'These papers are not in your archive yet. Choose what to do with each:',
++  'learn.paperConfirm': 'Confirm',
++  'learn.paperCancel': 'Cancel',
++  'learn.paperImporting': 'Processing…',
++  'learn.paperParsing': 'Parsing paper…',
++  'learn.paperDetected': 'Paper detected. Import it into your research archive?',
++  'learn.paperPages': '{n} pages',
++  'learn.paperImport': 'Import to archive',
++  'learn.paperKeepTemp': 'Keep in history only',
++  'learn.paperIgnore': 'Ignore',
++  'learn.paperImported': 'Imported to your research archive',
++  'learn.paperKept': 'Kept in reading history',
++  'learn.paperIgnored': 'File ignored',
++  'learn.paperAlready': 'This paper is already in your library',
++  'learn.paperImportFail': 'Import failed; please retry',
++  'learn.paperParseFail': 'Could not parse the paper: {msg}',
+   'learn.toastPasteEmpty': 'Clipboard is empty or unreadable — copy something first',
+   'learn.toastDropTooMany': 'Up to 3 files per drop — this drop was cancelled',
+   'learn.toastPdfNoText': 'This PDF is a scan (no text layer); received as a regular file',
+@@ -1208,6 +1273,31 @@ const EN: Dict = {
+   'common.close': 'Close',
+ 
+   'research.title': 'Research · Assistant',
++  'workspace.continue': 'Continue',
++  'workspace.title': 'Paper workspace',
++  'workspace.paper': 'Paper',
++  'workspace.selectPaper': 'Switch paper',
++  'workspace.structure': 'Paper structure',
++  'workspace.structureToggle': 'Structure',
++  'workspace.mindmap': 'Mind map',
++  'workspace.question': 'Research question',
++  'workspace.methods': 'Methods',
++  'workspace.conclusions': 'Conclusions',
++  'workspace.limitations': 'Limitations',
++  'workspace.outline': 'Outline',
++  'workspace.generating': 'Generating paper structure…',
++  'workspace.generateFail': 'Failed to generate structure',
++  'workspace.loadFail': 'Failed to load papers. Please try again.',
++  'workspace.retry': 'Retry',
++  'workspace.refresh': 'Regenerate',
++  'workspace.chatHint': 'Ask about this paper…',
++  'workspace.chatEmpty': 'Ask about this paper; the model searches only this document.',
++  'workspace.chatCleared': 'Chat history is cleared on close; page and annotations are kept.',
++  'workspace.send': 'Send',
++  'workspace.stop': 'Stop',
++  'workspace.thinking': 'Thinking…',
++  'workspace.chatFail': 'The answer was interrupted; please retry',
++  'workspace.expand': 'Toggle fullscreen',
+   'archive.title': 'Research Archive',
+   'archive.tabGoal': 'Goals & Approach',
+   'archive.tabFiles': 'Materials',
