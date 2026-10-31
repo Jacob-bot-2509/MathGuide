@@ -25,6 +25,13 @@ export interface ChatAttachment {
   text?: string
 }
 
+export interface ClarifyRequest {
+  /** ambiguous.ts 里的知识点 id */
+  topicId: string
+  /** 原始问题;用户选完方向后按这个重发 */
+  question: string
+}
+
 export interface ChatMsg {
   id: number
   role: 'user' | 'assistant'
@@ -46,6 +53,8 @@ export interface ChatMsg {
   stopped?: boolean
   /** 研究型回答(后端 meta 帧标记,非前端猜测):导出 PDF 入口只对它显示 */
   research?: boolean
+  /** 跨板块知识点:先问用户想了解哪一方面,选择后再请求 */
+  clarify?: ClarifyRequest
   /** 拖入论文后的导入询问:用户选择后更新状态,随会话保存 */
   paperImport?: {
     docId: string
@@ -83,6 +92,7 @@ interface PersistedMsg {
   interrupted?: boolean
   research?: boolean
   stopped?: boolean
+  clarify?: ClarifyRequest
   paperImport?: ChatMsg['paperImport']
 }
 
@@ -153,7 +163,7 @@ function createSessionStore(workspace: Workspace): SessionStore {
               attachment: m.attachment, chitchat: m.chitchat,
               nav: m.nav, navGuideFor: m.navGuideFor,
               interrupted: m.interrupted, research: m.research,
-              stopped: m.stopped, paperImport: m.paperImport,
+              stopped: m.stopped, clarify: m.clarify, paperImport: m.paperImport,
             }))
             .slice(-120),
         })),

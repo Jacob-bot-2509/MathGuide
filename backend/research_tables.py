@@ -1513,22 +1513,25 @@ def _match_formula_candidates(table: dict, saved: list[dict]) -> list[dict]:
                 result = compute(columns, rows, {
                     target_key.upper(): formula})
                 predicted = result["computed"].get(target_key.upper(), [])
-                matched = compared = 0
+                matched = compared = unverified = 0
                 max_error = Decimal(0)
                 samples: list[dict] = []
                 for index, row in enumerate(rows):
-                    if index >= len(predicted) or not predicted[index]:
-                        continue
                     actual_text = str(
                         row[target_index] if 0 <= target_index < len(row) else "").strip()
                     if not actual_text:
+                        continue
+                    if index >= len(predicted) or not predicted[index]:
+                        unverified += 1
                         continue
                     try:
                         actual = _dec(actual_text)
                         value = _dec(predicted[index])
                         if actual and (actual.adjusted() < -323 or actual.copy_abs() > Decimal("1e307")):
+                            unverified += 1
                             continue
                     except FormulaError:
+                        unverified += 1
                         continue
                     compared += 1
                     error = abs(actual - value)
@@ -1544,9 +1547,10 @@ def _match_formula_candidates(table: dict, saved: list[dict]) -> list[dict]:
                             "ok": ok,
                         })
                 if compared:
-                    score += 3 * matched / compared
+                    score += 3 * matched / (compared + unverified)
                     validation = {
-                        "matched": matched, "compared": compared,
+                        "matched": matched, "compared": compared, "unverified": unverified,
+                        "calculationErrors": len(result["errors"]),
                         "maxError": _stat_text(max_error),
                         "samples": samples,
                     }

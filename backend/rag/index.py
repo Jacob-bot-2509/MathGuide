@@ -87,6 +87,38 @@ class KnowledgeIndex:
                 score += W_KEYWORD * 0.5
         return score
 
+    def _diversify(self, scored: list[tuple[Chunk, float]], top_k: int,
+                   query: str) -> list[tuple[Chunk, float]]:
+        """跨主题问题:同一文档最多占一半名额,避免一个主题的多个片段把 top-k 占满。
+
+        只在检索结果里出现两个以上「关键词命中」文档时启用;单主题问题保持原排序,
+        不会为了多样性硬塞一份无关资料。候选不足时仍用被压下的同文档片段补齐。
+        """
+        if top_k <= 1 or len(scored) <= top_k:
+            return scored[:top_k]
+        keyword_docs = {
+            chunk.title for chunk, _ in scored
+            if self._keyword_score(chunk, query) > 0
+        }
+        if len(keyword_docs) < 2:
+            return scored[:top_k]
+        per_doc = max(1, (top_k + 1) // 2)
+        chosen: list[tuple[Chunk, float]] = []
+        deferred: list[tuple[Chunk, float]] = []
+        counts: dict[str, int] = {}
+        for item in scored:
+            title = item[0].title
+            if counts.get(title, 0) < per_doc:
+                chosen.append(item)
+                counts[title] = counts.get(title, 0) + 1
+            else:
+                deferred.append(item)
+            if len(chosen) >= top_k:
+                break
+        if len(chosen) < top_k:
+            chosen.extend(deferred[:top_k - len(chosen)])
+        return chosen
+
     def search(self, query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
         q = query.lower()
         q_grams = _bigrams(q)
@@ -118,4 +150,4 @@ class KnowledgeIndex:
             if score >= MIN_SCORE:
                 scored.append((c, score))
         scored.sort(key=lambda x: -x[1])
-        return scored[:top_k]
+        return self._diversify(scored, top_k, q)

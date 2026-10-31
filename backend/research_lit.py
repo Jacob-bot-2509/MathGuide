@@ -110,6 +110,20 @@ def _detect_identifier(query: str) -> tuple[str, str] | None:
     return None
 
 
+_ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(.+)$", re.IGNORECASE)
+
+
+def _arxiv_pdf_from_doi(doi: object) -> str:
+    """arXiv DOI → 站内可下载的 PDF 地址;其他 DOI 返回空。"""
+    match = _ARXIV_DOI.match(str(doi or "").strip())
+    if not match:
+        return ""
+    arxiv_id = match.group(1).strip()
+    if not re.fullmatch(r"\d{4}\.\d{4,5}(?:v\d+)?", arxiv_id):
+        return ""
+    return f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+
+
 def _result(**kwargs) -> dict:
     result = {
         "title": "", "authors": "", "year": 0, "venue": "", "doi": "",
@@ -878,12 +892,17 @@ async def _semantic_scholar(client: httpx.AsyncClient, query: str, limit: int,
         lowered = " ".join(pub_types).lower()
         oa = item.get("openAccessPdf") or {}
         oa_url = str(oa.get("url") or "") if isinstance(oa, dict) else ""
+        arxiv_id = _clean(ext.get("ArXiv"), 40)
+        arxiv_pdf = (f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+                     if re.fullmatch(r"\d{4}\.\d{4,5}(?:v\d+)?", arxiv_id) else "")
+        pdf_url = arxiv_pdf or (oa_url if _pdf_url_allowed(oa_url) else "")
         out.append(_result(
             title=title,
             authors=", ".join(a.get("name") or "" for a in item.get("authors", []))[:300],
             year=item.get("year") or 0, venue=_clean(item.get("venue"), 160),
             doi=_doi(ext.get("DOI")),
             url=item.get("url") or "",
+            pdfUrl=pdf_url,
             abstract=_clean(item.get("abstract")),
             citations=int(item.get("citationCount") or 0),
             sources=["semanticscholar"],
@@ -1016,6 +1035,8 @@ def _enrich(results: list[dict], field: str) -> list[dict]:
             else:
                 item["venueTier"] = "U"
         item["landingUrl"] = item.get("url") or ""
+        if not item.get("pdfUrl"):
+            item["pdfUrl"] = _arxiv_pdf_from_doi(item.get("doi"))
     return results
 
 

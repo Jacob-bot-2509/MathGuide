@@ -35,6 +35,17 @@ export interface ResearchDoc {
 
 export type ResearchStatus = 'exploring' | 'active' | 'paused' | 'done'
 
+/** 模型操作论文窗口:定位高亮、增改删批注(由后端 meta 帧下发) */
+export interface PaperAction {
+  type: 'highlight' | 'annotate' | 'updateAnnotation' | 'deleteAnnotation'
+  page?: number
+  quote?: string
+  note?: string
+  color?: string
+  id?: string
+  query?: string
+}
+
 export interface ResearchProject {
   id: string
   title: string

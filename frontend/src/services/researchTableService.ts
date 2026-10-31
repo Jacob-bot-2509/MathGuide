@@ -175,6 +175,8 @@ export interface FormulaCandidate {
   validation: {
     matched: number
     compared: number
+    unverified?: number
+    calculationErrors?: number
     maxError: string
     samples?: { row: number; actual: string; predicted: string; ok: boolean }[]
   } | null

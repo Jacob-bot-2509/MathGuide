@@ -9,6 +9,7 @@ import { showToast } from '@/utils/toast'
 import { getToken } from '@/stores/user'
 import {
   getResearchDocMeta,
+  type PaperAction,
   type ResearchDoc,
 } from '@/services/researchService'
 import {
@@ -255,11 +256,8 @@ function buildTextMap(root: HTMLElement): { nodes: { node: Text; start: number }
   return { nodes, full }
 }
 
-/** 归一化空白后按整段引文定位;跨 span 时返回覆盖整段的 Range */
-function findQuoteRange(root: HTMLElement, quote: string): Range | null {
-  const { nodes, full } = buildTextMap(root)
-  if (!full) return null
-
+/** 归一化空白并保留回原文的索引映射(用于跨 span 的 Range)。 */
+function normalizeText(full: string): { norm: string; back: number[] } {
   let norm = ''
   const back: number[] = []
   let lastSpace = false
@@ -277,6 +275,140 @@ function findQuoteRange(root: HTMLElement, quote: string): Range | null {
       lastSpace = false
     }
   }
+  return { norm, back }
+}
+
+function rangeInSpan(span: HTMLElement, needle: string): Range | null {
+  const node = [...span.childNodes].find((item) => item.nodeType === Node.TEXT_NODE)
+  if (!node || !needle) return null
+  const raw = node.textContent || ''
+  const { norm, back } = normalizeText(raw)
+  const index = norm.indexOf(needle)
+  if (index < 0) return null
+  const range = document.createRange()
+  range.setStart(node, back[index])
+  range.setEnd(node, back[Math.min(back.length - 1, index + needle.length - 1)] + 1)
+  return range
+}
+
+interface SpanPiece {
+  span: HTMLElement
+  node: Text
+  text: string
+  start: number
+}
+
+/** 同一视觉行内的多个 PDF span 合并后再匹配,处理出版商把一句话拆成多 span 的格式。 */
+function findQuoteLineRange(root: HTMLElement, quote: string): Range | null {
+  const pageRect = root.getBoundingClientRect()
+  if (!pageRect.width) return null
+  const infos: Array<{ span: HTMLElement; node: Text; text: string; rect: DOMRect }> = []
+  for (const span of Array.from(root.querySelectorAll('span')) as HTMLElement[]) {
+    const node = [...span.childNodes].find((item) => item.nodeType === Node.TEXT_NODE) as Text | undefined
+    if (!node || !node.textContent?.trim()) continue
+    infos.push({ span, node, text: node.textContent, rect: span.getBoundingClientRect() })
+  }
+  if (!infos.length) return null
+  infos.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left)
+  const lines: Array<typeof infos> = []
+  for (const info of infos) {
+    const line = lines[lines.length - 1]
+    if (!line) {
+      lines.push([info])
+      continue
+    }
+    const first = line[0]
+    const last = line[line.length - 1]
+    const sameLine = Math.abs(info.rect.top - first.rect.top)
+      <= Math.max(4, first.rect.height * 0.6)
+    const gap = info.rect.left - last.rect.right
+    if (sameLine && gap <= Math.max(16, pageRect.width * 0.06) && gap >= -8) {
+      line.push(info)
+    } else {
+      lines.push([info])
+    }
+  }
+  const target = quote.replace(/\s+/g, ' ').trim().toLowerCase()
+  for (const line of lines) {
+    const pieces: SpanPiece[] = []
+    let combined = ''
+    for (const info of line) {
+      const piece = { span: info.span, node: info.node, text: info.text, start: combined.length }
+      pieces.push(piece)
+      if (combined && !combined.endsWith(' ')) combined += ' '
+      combined += info.text
+    }
+    const { norm, back } = normalizeText(combined)
+    let index = target ? norm.indexOf(target) : -1
+    let length = target.length
+    if (index < 0 && target.length > 60) {
+      index = norm.indexOf(target.slice(0, 60))
+      length = 60
+    }
+    if (index < 0 || !length) continue
+    const startRaw = back[index]
+    const endRaw = back[Math.min(back.length - 1, index + length - 1)] + 1
+    const startPiece = pieces.find((piece) =>
+      startRaw >= piece.start && startRaw < piece.start + piece.text.length)
+    const endPiece = [...pieces].reverse().find((piece) =>
+      endRaw > piece.start && endRaw <= piece.start + piece.text.length + 1)
+    if (!startPiece || !endPiece) continue
+    const range = document.createRange()
+    range.setStart(startPiece.node, Math.min(startPiece.text.length,
+      Math.max(0, startRaw - startPiece.start)))
+    range.setEnd(endPiece.node, Math.min(endPiece.text.length,
+      Math.max(0, endRaw - endPiece.start)))
+    return range
+  }
+  return null
+}
+
+/** 先在单行文本 span 内精确匹配,避免跨栏/跨页的 Range 把框拉爆。
+ *  strict=true 时找不到单 span 命中就放弃,宁可少画也不画错。 */
+function findQuoteSpanRange(root: HTMLElement, quote: string, strict: boolean): Range | null {
+  const target = quote.replace(/\s+/g, ' ').trim().toLowerCase()
+  if (target.length < 2) return null
+  const spans = Array.from(root.querySelectorAll('span')) as HTMLElement[]
+  if (!spans.length) return null
+  for (const span of spans) {
+    const hit = rangeInSpan(span, target)
+    if (hit) return hit
+  }
+  if (target.length > 60) {
+    for (const span of spans) {
+      const hit = rangeInSpan(span, target.slice(0, 60))
+      if (hit) return hit
+    }
+  }
+  const lineHit = findQuoteLineRange(root, quote)
+  if (lineHit) return lineHit
+  // 引文几乎不可能整段落在单行时,只允许“全文唯一”的长词锚定,
+  // 多列/重复页眉里的短词不选,避免批注漂到别处。
+  const tokens = (quote.match(/[\p{L}\p{N}]{4,}/gu) || [])
+    .map((item) => item.toLowerCase())
+    .sort((a, b) => b.length - a.length)
+  for (const token of tokens.slice(0, 8)) {
+    const found: Range[] = []
+    for (const span of spans) {
+      const hit = rangeInSpan(span, token)
+      if (hit) found.push(hit)
+    }
+    if (found.length === 1) return found[0]
+    if (found.length > 1 && strict) continue
+    if (found.length > 1) return found[0]
+  }
+  return null
+}
+
+/** 归一化空白后按整段引文定位;优先单 span 精确命中,再退回整页匹配。 */
+function findQuoteRange(root: HTMLElement, quote: string, strict = false): Range | null {
+  const spanHit = findQuoteSpanRange(root, quote, strict)
+  if (spanHit) return spanHit
+  if (strict) return null
+  const { nodes, full } = buildTextMap(root)
+  if (!full) return null
+
+  const { norm, back } = normalizeText(full)
   const target = quote.replace(/\s+/g, ' ').trim().toLowerCase()
   let matchLength = target.length
   let index = target ? norm.indexOf(target) : -1
@@ -302,6 +434,13 @@ function findQuoteRange(root: HTMLElement, quote: string): Range | null {
   range.setStart(startNode.node, Math.min(startOrig - startNode.start, startNode.node.length))
   range.setEnd(endNode.node, Math.min(endOrig - endNode.start, endNode.node.length))
   return range
+}
+
+function cleanRects(rects: number[][]): number[][] {
+  // 一行文字的框通常只占页面很小高度;超过 1/5 页高的框基本是跨栏/跨页
+  // 的 Range 爆框,丢弃后宁可少画,避免盖住整页。
+  return rects.filter((rect) => rect[2] > 0 && rect[3] > 0
+    && rect[2] <= 0.98 && rect[3] <= 0.2)
 }
 
 /** 对话提问后:翻到命中页,把引文定位成高亮框 */
@@ -336,7 +475,9 @@ async function showPassages(items: { page: number; quote: string }[]): Promise<v
         ].map((n) => Number(n.toFixed(5))))
       }
       if (!rects.length) continue
-      hits.value.push({ page: item.page, rects })
+      const clean = cleanRects(rects)
+      if (!clean.length) continue
+      hits.value.push({ page: item.page, rects: clean })
       if (!firstRect) firstRect = range.getBoundingClientRect()
     }
     await nextTick()
@@ -385,7 +526,9 @@ async function showPassages(items: { page: number; quote: string }[]): Promise<v
       ].map((n) => Number(n.toFixed(5))))
     }
     if (!rects.length) continue
-    hits.value.push({ page: item.page, rects })
+    const clean = cleanRects(rects)
+    if (!clean.length) continue
+    hits.value.push({ page: item.page, rects: clean })
     if (!firstRect) firstRect = range.getBoundingClientRect()
   }
   await nextTick()
@@ -406,7 +549,177 @@ function hasPending(): boolean {
   return dirty.value
 }
 
-defineExpose({ showPassages, requestClose, flushPending, hasPending })
+/** 动作可能紧跟阅读器挂载到达:等 PDF/文本加载完成后再定位。 */
+async function waitViewerReady(): Promise<void> {
+  for (let i = 0; i < 120 && loading.value; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  await nextTick()
+}
+
+/** 模型动作:定位高亮 + 增改删批注。批注直接落服务端,和手动批注共用同一套数据。 */
+const appliedActionRequests = new Set<string>()
+let actionQueue: Promise<void> = Promise.resolve()
+
+function applyPaperActions(actions: PaperAction[], requestId = ''): Promise<void> {
+  if (!actions.length) return actionQueue
+  const key = requestId && requestId !== 'legacy'
+    ? requestId
+    : JSON.stringify(actions)
+  if (appliedActionRequests.has(key)) return actionQueue
+  appliedActionRequests.add(key)
+  if (appliedActionRequests.size > 50) {
+    const oldest = appliedActionRequests.values().next().value
+    if (oldest) appliedActionRequests.delete(oldest)
+  }
+  actionQueue = actionQueue
+    .then(() => applyPaperActionsNow(actions))
+    .catch(() => {
+      /* 单个动作失败已在内部提示,队列不能断 */
+    })
+  return actionQueue
+}
+
+async function applyPaperActionsNow(actions: PaperAction[]): Promise<void> {
+  await waitViewerReady()
+  for (const action of actions) {
+    if (action.type === 'deleteAnnotation' && action.id) {
+      await applyAiDelete(action.id)
+    }
+  }
+  for (const action of actions) {
+    if (action.type === 'updateAnnotation' && action.id) {
+      await applyAiUpdate(action)
+    }
+  }
+  for (const action of actions) {
+    if (action.type === 'annotate' && action.quote) {
+      await applyAiAnnotation(action)
+    }
+  }
+  const spots = actions
+    .filter((action) => action.type === 'highlight' && action.quote && action.page)
+    .map((action) => ({ page: Number(action.page), quote: String(action.quote) }))
+  if (spots.length) await showPassages(spots)
+}
+
+async function applyAiAnnotation(action: PaperAction): Promise<void> {
+  const page = Math.max(1, Number(action.page) || 1)
+  const quote = String(action.quote || '').slice(0, 2000)
+  if (!quote) return
+  try {
+    const rects = await rectsForQuote(page, quote)
+    const saved = await saveAnnotation(props.docId, {
+      page,
+      quote,
+      rects,
+      note: String(action.note || '').slice(0, 4000),
+      color: action.color || 'yellow',
+    })
+    annotations.value = [
+      ...annotations.value.filter((item) => item.id !== saved.id),
+      saved,
+    ].sort((a, b) => a.page - b.page)
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('viewer.saveFail'))
+  }
+}
+
+async function applyAiUpdate(action: PaperAction): Promise<void> {
+  const existing = annotations.value.find((item) => item.id === action.id)
+  if (!existing) return
+  // 手改草稿优先:同一批注已有未保存修改时,把 AI 更新并入草稿,
+  // 避免直接写库后又被关闭时的草稿覆盖。
+  const pending = pendingOps.value.find(
+    (op) => op.kind === 'save' && op.tempId === existing.id)
+  if (pending && pending.kind === 'save') {
+    if (action.note) {
+      existing.note = action.note
+      pending.input = { ...pending.input, note: action.note }
+    }
+    if (action.color) {
+      existing.color = action.color
+      pending.input = { ...pending.input, color: action.color }
+    }
+    return
+  }
+  if (pendingOps.value.some(
+    (op) => op.kind === 'delete' && op.id === existing.id)) return
+  try {
+    const saved = await saveAnnotation(props.docId, {
+      id: existing.id,
+      page: existing.page,
+      quote: existing.quote,
+      rects: existing.rects,
+      note: action.note ?? existing.note,
+      color: action.color || existing.color || 'yellow',
+    })
+    annotations.value = annotations.value.map((item) => item.id === saved.id ? saved : item)
+  } catch {
+    /* 批注可能已被用户删除;失败不阻断正文 */
+  }
+}
+
+async function applyAiDelete(id: string): Promise<void> {
+  const pending = pendingOps.value.find(
+    (op) => op.kind === 'save' && op.tempId === id)
+  if (pending) {
+    // 尚未落库的本地草稿:只从草稿队列移除,不需要请求服务端
+    pendingOps.value = pendingOps.value.filter((op) => op !== pending)
+    annotations.value = annotations.value.filter((item) => item.id !== id)
+    return
+  }
+  try {
+    await deleteAnnotation(props.docId, id)
+  } catch {
+    /* 已删除 / 网络失败:界面照常移除 */
+  }
+  annotations.value = annotations.value.filter((item) => item.id !== id)
+  if (editing.value?.id === id) editing.value = null
+}
+
+/** 在已渲染的文本层里定位引句,返回归一化矩形(供批注框显示)。 */
+async function rectsForQuote(pageNumber: number, quote: string): Promise<number[][]> {
+  if (props.kind !== 'pdf') return []
+  let layer: HTMLDivElement | null | undefined
+  let wrap: HTMLElement | null | undefined
+  if (scrollPdf.value) {
+    page.value = pageNumber
+    scrollToPage(pageNumber)
+    await renderScrollPage(pageNumber)
+    await nextTick()
+    layer = textLayerEls.get(pageNumber)
+    wrap = pageEls.get(pageNumber)
+  } else {
+    if (page.value !== pageNumber) {
+      page.value = pageNumber
+      await renderPdfPage()
+    }
+    await nextTick()
+    layer = textLayerEl.value
+    wrap = layer?.parentElement
+  }
+  if (!layer || !wrap) return []
+  const range = findQuoteRange(layer, quote, true)
+  if (!range) return []
+  const base = wrap.getBoundingClientRect()
+  if (!base.width || !base.height) return []
+  const rects: number[][] = []
+  for (const rect of Array.from(range.getClientRects()).slice(0, 40)) {
+    if (!rect.width || !rect.height) continue
+    rects.push([
+      Math.max(0, (rect.left - base.left) / base.width),
+      Math.max(0, (rect.top - base.top) / base.height),
+      Math.min(1, rect.width / base.width),
+      Math.min(1, rect.height / base.height),
+    ].map((value) => Number(value.toFixed(5))))
+  }
+  return cleanRects(rects)
+}
+
+defineExpose({
+  showPassages, requestClose, flushPending, hasPending, applyPaperActions,
+})
 
 function escapeHtml(text: string): string {
   return text

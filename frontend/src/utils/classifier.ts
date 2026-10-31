@@ -4,6 +4,8 @@
  * 后端接入后可替换为模型分类,接口保持不变。
  */
 
+import { detectAmbiguous, resolveAmbiguous } from './ambiguous'
+
 export interface CategoryInfo {
   key: string
   label: string
@@ -129,9 +131,21 @@ export const CATEGORIES: Category[] = [
 /** 未归类:匹配不到任何板块的问题(如闲聊、通用提问) */
 export const FALLBACK_CATEGORY: CategoryInfo = { key: 'other', label: '未归类', color: '#64748b' }
 
+
+export function categoryByKey(key: string): CategoryInfo | null {
+  const found = CATEGORIES.find((category) => category.key === key)
+  return found ? { key: found.key, label: found.label, color: found.color } : null
+}
+
 /** 去掉指令前缀(如 [章节知识导航])后分类;中英文关键词统一小写后匹配 */
 export function classifyQuestion(text: string): CategoryInfo {
   const content = text.replace(/^\s*\[.+?\]\s*/, '').toLowerCase()
+  // 跨板块词已有上下文 → 直接定方向;只有裸词 → 用登记表默认板块
+  // (界面在发送前会先问用户,不会直接走到这里)。
+  const resolved = resolveAmbiguous(content)
+  if (resolved) return categoryByKey(resolved.option.key) ?? FALLBACK_CATEGORY
+  const ambiguous = detectAmbiguous(content)
+  if (ambiguous) return categoryByKey(ambiguous.fallback) ?? FALLBACK_CATEGORY
   for (const c of CATEGORIES) {
     if (c.keywords.some((kw) => content.includes(kw))) {
       return { key: c.key, label: c.label, color: c.color }

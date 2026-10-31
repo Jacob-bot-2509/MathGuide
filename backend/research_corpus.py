@@ -1088,6 +1088,7 @@ class UserIndex:
             chunk = self.chunks[idx]
             doc = docs_by_id.get(chunk.doc_id, {})
             hits.append({
+                "chunkId": chunk.id,
                 "docId": chunk.doc_id,
                 "docName": doc.get("name", ""),
                 "nodeId": chunk.node_id,
@@ -2330,6 +2331,90 @@ def chat_hits(uid: str, question: str, top_k: int = 4,
     if not index.chunks:
         return []
     return index.search(question, top_k=top_k, doc_id=doc_id)["hits"]
+
+
+def find_passages(uid: str, doc_id: str, query: str, top_k: int = 6) -> list[dict]:
+    """论文窗口定位:只读检索,不碰外部源。供 locate 与动作规划共用。"""
+    return chat_hits(uid, query, top_k, doc_id)
+
+
+def get_live_doc(uid: str, doc_id: str) -> dict | None:
+    """按 id 取未删除文档;供动作校验页码/归属。"""
+    doc = _doc_row(uid, doc_id)
+    if doc is None or doc.get("deletedAt"):
+        return None
+    return doc
+
+
+def list_doc_annotations(uid: str, doc_id: str) -> list[dict]:
+    """论文批注列表;供动作规划读取现有 id,避免跨模块调私有函数。"""
+    return _list_annotations(uid, doc_id)
+
+
+def import_temp_doc(uid: str, doc_id: str, project_id: str | None = None,
+                    keep_annotations: bool = True) -> dict:
+    """临时论文转正式入库的公开入口;聊天指令和导入按钮共用。"""
+    return _import_temp(uid, doc_id, project_id, keep_annotations)
+
+
+def paper_context(uid: str, doc_id: str, question: str = "", top_k: int = 6,
+                  max_chars: int = 20000) -> dict | None:
+    """当前论文问答的正文上下文:只从该论文的本地切片取。
+
+    检索命中的片段排在前面,再接开头两段(标题/摘要/引言),这样
+    「总结这篇论文」这类问题即使没有关键词命中也有内容可答。
+    返回 None 表示文档不存在;chunks 为空表示解析后没有正文。
+    """
+    index = _get_index(uid)
+    doc = next((d for d in index.docs if d["id"] == doc_id), None)
+    if doc is None:
+        return None
+    chunks = [c for c in index.chunks if c.doc_id == doc_id]
+    by_id = {c.id: c for c in chunks}
+    picked: list[ChunkRec] = []
+    if chunks and question.strip():
+        try:
+            hits = index.search(question, top_k=top_k, doc_id=doc_id)["hits"]
+        except Exception as exc:  # noqa: BLE001 检索失败时退回开头片段
+            print(f"[research] 当前论文片段检索失败,改用开头片段: {exc}")
+            hits = []
+        for hit in hits:
+            chunk = by_id.get(str(hit.get("chunkId") or ""))
+            if chunk is not None:
+                picked.append(chunk)
+    if not picked:
+        picked = chunks[:max(top_k, 1)]
+    else:
+        # 开头片段补在命中片段之后,保证摘要/引言不被检索排序挤掉
+        head = chunks[:2]
+        seen = {c.id for c in picked}
+        picked = picked + [c for c in head if c.id not in seen]
+    out: list[dict] = []
+    used = 0
+    for chunk in picked:
+        text = (chunk.text or "").strip()
+        if not text:
+            continue
+        room = max_chars - used
+        if room <= 0:
+            break
+        if len(text) > room:
+            text = text[:room]
+        out.append({
+            "chunkId": chunk.id,
+            "section": chunk.section,
+            "pageStart": chunk.page_start,
+            "pageEnd": chunk.page_end,
+            "text": text,
+        })
+        used += len(text)
+    return {
+        "docId": doc_id,
+        "title": doc.get("title") or doc.get("name") or "当前论文",
+        "chunks": out,
+        "totalChunks": len(chunks),
+    }
+
 
 def docs_for_export(uid: str) -> list[dict]:
     """账号导出用:只含论文元数据,不含正文与原文件。"""

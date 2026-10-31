@@ -4,7 +4,7 @@
  * 检索在服务端完成:BM25 + embedding 混合排序,章节树先筛节点;
  * 命中带论文名、章节与页码,可直接作为提问依据。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
@@ -27,11 +27,13 @@ import {
   clearResearchDocs,
   compareResearchDocs,
   deleteResearchDoc,
+  getResearchDocMeta,
   listResearchDocs,
   listResearchProjects,
   locatePaperPassages,
   searchResearch,
   uploadResearchDoc,
+  type PaperAction,
   type ResearchDoc,
   type ResearchHit,
   type ResearchProject,
@@ -246,7 +248,12 @@ interface ViewerState {
 }
 
 const viewer = ref<ViewerState | null>(null)
-const viewerRef = ref<{ showPassages: (items: { page: number; quote: string }[]) => Promise<void> } | null>(null)
+const viewerRef = ref<{
+  showPassages: (items: { page: number; quote: string }[]) => Promise<void>
+  applyPaperActions: (actions: PaperAction[], requestId?: string) => Promise<void>
+} | null>(null)
+/** 无站内全文时的元数据预览:摘要、作者、DOI 都在右栏显示,不再跳外部网站 */
+const previewItem = ref<LiteratureItem | null>(null)
 
 /** 对话提问时定位当前论文的命中段落,交给阅读器高亮 */
 async function locateForQuestion(question: string): Promise<void> {
@@ -263,24 +270,77 @@ watch(viewer, (value) => {
   emit('paper-change', value ? { docId: value.docId, title: value.title } : null)
 })
 
-defineExpose({ locateForQuestion })
+/** 模型动作:把检索/高亮/批注转给当前阅读器执行 */
+async function applyPaperActions(
+  actions: PaperAction[], requestId = '',
+): Promise<void> {
+  await viewerRef.value?.applyPaperActions(actions, requestId)
+}
 
-/** 打开出版社落地页;不经过服务端代理 */
-function openLanding(item: LiteratureItem): void {
-  const url = item.landingUrl || item.url
-  if (!url) return
-  window.open(url, '_blank', 'noopener,noreferrer')
+/** 主对话里直接针对拖入论文提问:自动在右栏打开并执行动作 */
+async function openDocForActions(
+  docId: string,
+  title: string,
+  actions: PaperAction[],
+  requestId = '',
+): Promise<void> {
+  let kind: 'pdf' | 'text' = 'pdf'
+  let pageTitle = title
+  try {
+    const meta = await getResearchDocMeta(docId)
+    kind = /\.pdf$/i.test(meta.name) ? 'pdf' : 'text'
+    pageTitle = meta.title || meta.name || title
+  } catch {
+    /* 元数据失败按 PDF 打开,动作仍会尝试定位 */
+  }
+  viewer.value = {
+    docId, title: pageTitle, kind,
+    projectId: activeProject.value || null,
+  }
+  await nextTick()
+  for (let i = 0; i < 12 && !viewerRef.value; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  await viewerRef.value?.applyPaperActions(actions, requestId)
+}
+
+async function reloadDocs(): Promise<void> {
+  await loadDocs()
+}
+
+defineExpose({ locateForQuestion, reloadDocs, applyPaperActions, openDocForActions })
+
+/** 检索结果一律在右栏打开:有可读 PDF 走阅读器,否则显示站内元数据摘要。
+ *  不再 `window.open` 外部网站,避免离开工作区。 */
+async function openSearchItem(item: LiteratureItem): Promise<void> {
+  const url = readerUrl(item)
+  if (url) {
+    await openPdfInReader(item, url)
+    return
+  }
+  previewItem.value = item
+}
+
+/** 选择站内阅读器能安全下载的 PDF 地址(优先原始 PDF,其次 OA 地址)。 */
+function readerUrl(item: LiteratureItem): string {
+  return [item.pdfUrl, item.oaUrl].find((url) => !!url && pdfReaderAllowed(url)) || ''
+}
+
+function showPreview(item: LiteratureItem, message?: string): void {
+  previewItem.value = item
+  if (message) showToast(message)
 }
 
 function openFreeCopy(item: LiteratureItem): void {
-  if (item.oaUrl) {
-    window.open(item.oaUrl, '_blank', 'noopener,noreferrer')
+  const url = readerUrl(item)
+  if (url) {
+    void openPdfInReader(item, url)
     return
   }
-  if (item.pdfUrl) void openExternalPaper(item)
+  previewItem.value = item
 }
 
-/** 按 DOI 查 Unpaywall/OpenAlex;找到合法 OA 地址后打开 */
+/** 按 DOI 查 Unpaywall/OpenAlex;找到合法 OA 地址后仍在右栏打开 */
 async function findFreeCopy(item: LiteratureItem): Promise<void> {
   if (!item.doi || resolvingOa.value === item.doi) return
   resolvingOa.value = item.doi
@@ -292,7 +352,7 @@ async function findFreeCopy(item: LiteratureItem): Promise<void> {
       item.oaUrl = res.oaUrl
       item.oaStatus = res.oaStatus
       if (res.license) item.license = res.license
-      window.open(res.oaUrl, '_blank', 'noopener,noreferrer')
+      await openPdfInReader(item, res.oaUrl)
     } else {
       showToast(t('search.noFree'))
     }
@@ -335,15 +395,21 @@ function tempMeta(item: LiteratureItem) {
   }
 }
 
-/** 外部论文:先临时入库,再在覆盖层阅读;已入库直接读本地文件 */
+/** 外部论文:先临时入库,再在右栏阅读;已入库直接读本地文件。
+ *  非白名单 PDF 不再外跳,右栏显示摘要并提示无法站内打开全文。 */
 async function openExternalPaper(item: LiteratureItem): Promise<void> {
   if (!item.pdfUrl || openingPdf.value) return
-  // 非白名单 PDF(出版社 OA 等)只外跳,不经过服务端下载
-  if (!pdfReaderAllowed(item.pdfUrl)) {
-    window.open(item.pdfUrl, '_blank', 'noopener,noreferrer')
+  await openPdfInReader(item, item.pdfUrl)
+}
+
+async function openPdfInReader(item: LiteratureItem, url: string): Promise<void> {
+  if (openingPdf.value) return
+  if (!pdfReaderAllowed(url)) {
+    showPreview(item, t('search.pdfReaderUnavailable'))
     return
   }
   if (item.imported && item.docId) {
+    previewItem.value = null
     viewer.value = {
       docId: item.docId, title: item.title, kind: 'pdf',
       projectId: activeProject.value || null,
@@ -351,16 +417,18 @@ async function openExternalPaper(item: LiteratureItem): Promise<void> {
     return
   }
   if (item.tempDocId) {
+    previewItem.value = null
     viewer.value = {
       docId: item.tempDocId, title: item.title, kind: 'pdf',
       projectId: activeProject.value || null,
     }
     return
   }
-  openingPdf.value = item.pdfUrl
+  openingPdf.value = url
   try {
-    const res = await createTempPaper(item.pdfUrl, tempMeta(item))
+    const res = await createTempPaper(url, tempMeta(item))
     item.tempDocId = res.docId
+    previewItem.value = null
     viewer.value = {
       docId: res.docId,
       title: item.title || res.title || 'PDF',
@@ -368,7 +436,7 @@ async function openExternalPaper(item: LiteratureItem): Promise<void> {
       projectId: activeProject.value || null,
     }
   } catch (err) {
-    showToast(err instanceof Error && err.message ? err.message : t('search.pdfFail'))
+    showPreview(item, err instanceof Error && err.message ? err.message : t('search.pdfFail'))
   } finally {
     openingPdf.value = ''
   }
@@ -900,14 +968,11 @@ onMounted(async () => {
         </p>
         <article v-for="(item, i) in litItems" :key="(item.doi || item.title) + i" class="lit-item">
           <div class="lit-top">
-            <a
-              v-if="item.url"
+            <button
               class="lit-title"
-              :href="item.url"
-              target="_blank"
-              rel="noopener noreferrer"
-            >{{ item.title }}</a>
-            <span v-else class="lit-title">{{ item.title }}</span>
+              :title="t('search.readInApp')"
+              @click="openSearchItem(item)"
+            >{{ item.title }}</button>
             <span v-if="item.year" class="lit-year">{{ item.year }}</span>
           </div>
           <p v-if="item.authors || item.venue" class="lit-meta">
@@ -936,8 +1001,8 @@ onMounted(async () => {
               {{ t('search.litCited', { n: item.citations }) }}
             </span>
             <span class="lit-src">{{ item.sources.join(' · ') }}</span>
-            <button v-if="item.landingUrl || item.url" class="lit-pdf" @click="openLanding(item)">
-              {{ t('search.viewSource') }}
+            <button v-if="item.landingUrl || item.url" class="lit-pdf" @click="openSearchItem(item)">
+              {{ t('search.viewInApp') }}
             </button>
             <button
               v-if="item.oaUrl && !item.pdfUrl"
@@ -974,6 +1039,47 @@ onMounted(async () => {
         </template>
       </section>
     </main>
+
+    <section v-if="previewItem" class="lit-preview" role="dialog">
+      <header class="lp-head">
+        <span class="tech-label">{{ t('search.previewTitle') }}</span>
+        <button class="lp-close" @click="previewItem = null">✕</button>
+      </header>
+      <div class="lp-body">
+        <h2 class="lp-title">{{ previewItem.title }}</h2>
+        <p v-if="previewItem.authors || previewItem.venue" class="lp-meta">
+          {{ previewItem.authors }}<span v-if="previewItem.venue"> · {{ previewItem.venue }}</span>
+        </p>
+        <p class="lp-badges">
+          <span v-if="previewItem.year" class="lit-badge">{{ previewItem.year }}</span>
+          <span v-if="previewItem.venueTier" class="lit-badge tier" :class="`t-${previewItem.venueTier}`">
+            {{ previewItem.venueTier }} · {{ previewItem.venueLabel || previewItem.venue }}
+          </span>
+          <span v-if="previewItem.peerReviewed" class="lit-badge peer">{{ t('search.peerReviewed') }}</span>
+          <span
+            v-if="previewItem.oaStatus && !['unknown', 'closed'].includes(previewItem.oaStatus)"
+            class="lit-badge oa"
+          >{{ t('search.freeFullText') }}</span>
+        </p>
+        <p v-if="previewItem.abstract" class="lp-abstract">{{ previewItem.abstract }}</p>
+        <p v-else class="lp-empty">{{ t('search.previewNoAbstract') }}</p>
+        <p v-if="previewItem.doi" class="lp-doi">DOI · {{ previewItem.doi }}</p>
+        <div class="lp-actions">
+          <button
+            v-if="readerUrl(previewItem)"
+            class="lit-pdf"
+            :disabled="openingPdf === readerUrl(previewItem)"
+            @click="openSearchItem(previewItem)"
+          >{{ t('search.readInApp') }}</button>
+          <button
+            v-else-if="previewItem.doi"
+            class="lit-pdf"
+            :disabled="resolvingOa === previewItem.doi"
+            @click="findFreeCopy(previewItem)"
+          >{{ resolvingOa === previewItem.doi ? t('search.oaSearching') : t('search.findFree') }}</button>
+        </div>
+      </div>
+    </section>
 
     <DocumentViewer
       v-if="viewer"
@@ -1474,6 +1580,12 @@ onMounted(async () => {
   font-size: 13.5px;
   line-height: 1.45;
   text-decoration: none;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
 }
 
 .lit-title:hover {
@@ -1840,5 +1952,89 @@ onMounted(async () => {
   color: #ff8a8a;
   border-color: rgba(255, 138, 138, 0.55);
   background: rgba(255, 138, 138, 0.1);
+}
+
+/* 无站内全文时的摘要面板:占据检索栏右侧,不跳外部网站 */
+.lit-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+}
+
+.lp-head {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+  flex: none;
+}
+
+.lp-close {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.lp-body {
+  padding: 18px 20px 24px;
+}
+
+.lp-title {
+  margin: 0 0 8px;
+  color: var(--text-hi);
+  font-size: 17px;
+  line-height: 1.45;
+  font-weight: 500;
+}
+
+.lp-meta {
+  margin: 0 0 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.lp-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.lp-abstract {
+  margin: 0 0 14px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.lp-empty {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.lp-doi {
+  color: var(--cyan);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.lp-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.lp-actions .lit-pdf {
+  padding: 4px 12px;
 }
 </style>

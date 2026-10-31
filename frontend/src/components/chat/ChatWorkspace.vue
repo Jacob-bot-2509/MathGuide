@@ -35,12 +35,14 @@ import SpeechTips from '@/components/chat/SpeechTips.vue'
 import MgSwitch from '@/components/common/MgSwitch.vue'
 import { COMMANDS, RESEARCH_COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
-import { speechToMath, streamReply, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
+import { speechToMath, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
 import { getResearchTable } from '@/services/researchTableService'
-import { getResearchDocMeta, uploadTempPaper, type ResearchDoc } from '@/services/researchService'
+import { getResearchDocMeta, uploadTempPaper, type PaperAction, type ResearchDoc } from '@/services/researchService'
 import { deletePaperHistory, importTempPaper } from '@/services/literatureService'
 import { downloadBlob, exportSurveyPdf } from '@/services/docService'
-import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, classifyQuestion, isChitchat } from '@/utils/classifier'
+import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, categoryByKey, classifyQuestion, isChitchat } from '@/utils/classifier'
+import { detectAmbiguous, topicById, type AmbiguousOption } from '@/utils/ambiguous'
+import { usePaperChat } from '@/composables/usePaperChat'
 import { settingsState, updateSettings } from '@/stores/settings'
 import { isAllSelected, scopeForRequest, selectedSources } from '@/stores/researchScope'
 import {
@@ -81,7 +83,14 @@ const searchOpen = ref(false)
 const splitResizing = ref(false)
 const workspaceBodyRef = ref<HTMLElement | null>(null)
 const splitRatio = ref(loadSplitRatio())
-const searchPaneRef = ref<{ locateForQuestion: (q: string) => Promise<void> } | null>(null)
+const searchPaneRef = ref<{
+  locateForQuestion: (q: string) => Promise<void>
+  reloadDocs: () => Promise<void>
+  applyPaperActions: (actions: PaperAction[], requestId?: string) => Promise<void>
+  openDocForActions: (
+    docId: string, title: string, actions: PaperAction[], requestId?: string,
+  ) => Promise<void>
+} | null>(null)
 const currentPaper = ref<{ docId: string; title: string } | null>(null)
 /** 拖入本次对话的论文:直接作为对话上下文,结束时再询问是否入库。 */
 const stagedPaper = ref<{ docId: string; title: string } | null>(null)
@@ -100,6 +109,43 @@ const tableContext = ref<{ id: string; title: string } | null>(null)
 function onPaperChange(paper: { docId: string; title: string } | null): void {
   currentPaper.value = paper
   if (paper) stagedPaper.value = null
+}
+
+/** 论文动作与流式入口:和 PaperWorkspace 共用同一套动作帧处理。
+ *  只有科研区有论文上下文;学习区 getTarget 恒为 null,不会触发论文动作。 */
+const paperChat = usePaperChat({
+  getTarget: () => (isResearch.value
+    ? currentPaper.value || stagedPaper.value
+    : null),
+  applyActions: (target, actions, requestId) => {
+    void applyPaperActionsFromModel(actions, requestId, target)
+  },
+})
+
+/** 模型完成入库:更新拖入论文状态,刷新档案/检索页,后续按库内论文处理。 */
+function markPaperImported(info: {
+  docId: string; title?: string; status?: string; reason?: string
+}): void {
+  if (!info?.docId) return
+  const paper = stagedPapers.value.find((item) => item.docId === info.docId)
+  if (paper) {
+    const msg = findMessage(paper.msgId)
+    if (msg?.paperImport) {
+      msg.paperImport.status = info.status === 'imported' ? 'imported' : 'pending'
+    }
+    if (info.title) paper.title = info.title
+  }
+  if (stagedPaper.value?.docId === info.docId && info.title) {
+    stagedPaper.value = { ...stagedPaper.value, title: info.title }
+  }
+  if (info.status === 'imported') {
+    showToast(t('learn.paperImported'))
+    void searchPaneRef.value?.reloadDocs()
+    void archivePanelRef.value?.reload?.()
+  } else if (info.status === 'failed') {
+    showToast(info.reason || t('learn.paperImportFail'))
+  }
+  if (!flushSessions(true)) showToast(t('learn.toastStorage'))
 }
 
 async function loadTableContext(): Promise<void> {
@@ -187,6 +233,32 @@ function resetSplit(): void {
 
 function onSplitAsk(prompt: string): void {
   if (prompt) send(prompt)
+}
+
+/** 模型动作到达:确保右侧阅读器存在,再跳页/高亮/批注。
+ *  独立页面模式不强行跳转,避免打断当前对话。 */
+async function applyPaperActionsFromModel(
+  actions: PaperAction[],
+  requestId = '',
+  targetOverride: { docId: string; title?: string } | null = null,
+): Promise<void> {
+  if (!isResearch.value) return
+  const target = targetOverride || currentPaper.value || stagedPaper.value
+  if (!target) return
+  if (!searchPaneRef.value) {
+    if (settingsState.researchSearchMode === 'page'
+      || window.innerWidth < SPLIT_MIN_WIDTH) return
+    searchOpen.value = true
+    for (let i = 0; i < 20 && !searchPaneRef.value; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+  if (currentPaper.value) {
+    await searchPaneRef.value?.applyPaperActions(actions, requestId)
+  } else {
+    await searchPaneRef.value?.openDocForActions(
+      target.docId, target.title || '', actions, requestId)
+  }
 }
 
 /** 窗口变窄时收起分栏,避免聊天区被压到不可用 */
@@ -370,15 +442,70 @@ function autoGrow() {
     被中断的回答(interrupted)也排除:半截话混进上下文,模型
     会把它当成完整的一轮去理解,徒增困惑。
     上限 16 条:更早的对话由后端滚动摘要压缩,早期上下文不丢失 */
-function buildHistory(session: ChatSession): ChatMeta['history'] {
-  return session.messages
-    .slice(0, -1)
-    .filter((m) => !m.streaming && m.content && !m.interrupted && !m.stopped)
+function buildHistory(session: ChatSession, beforeId?: number): ChatMeta['history'] {
+  const end = beforeId === undefined
+    ? session.messages.length - 1
+    : session.messages.findIndex((message) => message.id === beforeId)
+  const upTo = end >= 0 ? session.messages.slice(0, end) : session.messages.slice(0, -1)
+  return upTo
+    .filter((m) => !m.streaming && !m.clarify && m.content && !m.interrupted && !m.stopped)
     .slice(-16)
     .map((m) => ({ role: m.role, content: (m.attachment?.text || m.content).slice(0, 400) }))
 }
 
-/** 打开着语言选择菜单的研究消息 id(同一时刻只开一个) */
+function clarifyScope(topicId: string): string {
+  const topic = topicById(topicId)
+  if (!topic) return ''
+  return settingsState.language === 'en' ? topic.scope.en : topic.scope.zh
+}
+
+function clarifyOptions(topicId: string): AmbiguousOption[] {
+  return topicById(topicId)?.options ?? []
+}
+
+function clarifyLabel(option: AmbiguousOption): string {
+  return settingsState.language === 'en' ? option.label.en : option.label.zh
+}
+
+function clarifyHint(option: AmbiguousOption): string {
+  return settingsState.language === 'en' ? option.hint.en : option.hint.zh
+}
+
+/** 用户选定跨板块方向后:把澄清气泡原地变成流式回答 */
+function pickClarify(msg: ChatMsg, optionIndex: number): void {
+  const clarity = msg.clarify
+  const topic = clarity ? topicById(clarity.topicId) : null
+  const option = topic?.options[optionIndex]
+  if (!clarity || !topic || !option) return
+  const session = sessions.value.find((item) => item.messages.some((message) => message.id === msg.id))
+  if (!session) return
+
+  const cat = categoryByKey(option.key)
+  if (cat) session.cat = cat
+  msg.clarify = undefined
+  msg.content = ''
+  msg.streaming = true
+  msg.thinking = true
+
+  const zh = settingsState.language !== 'en'
+  const label = zh ? option.label.zh : option.label.en
+  const hint = zh ? option.hint.zh : option.hint.en
+  const prompt = zh
+    ? `${clarity.question}\n\n[范围] 请从${label}角度回答,聚焦:${hint}。`
+    : `${clarity.question}\n\n[Scope] Answer from the ${label} perspective, focusing on: ${hint}.`
+  const history = buildHistory(session, msg.id)
+  activeId.value = session.id
+  pinnedToBottom = true
+  streamInto(session, msg, prompt, {
+    sessionId: session.id,
+    categoryKey: option.key,
+    history,
+  })
+  persistSessions()
+  scrollBottom()
+}
+
+
 const exportMenu = ref<number | null>(null)
 /** 正在生成 PDF 的研究消息 id(按钮转「生成中…」) */
 const exportingMsg = ref<number | null>(null)
@@ -424,11 +551,19 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
     // 贴底才跟随滚动:用户上拉阅读时不打扰
     if (session === activeSession.value && pinnedToBottom) scrollBottom(false)
   }
-  const stream = streamReply(prompt, {
+  const stream = paperChat.stream(prompt, {
     onMeta: (meta) => {
       // 后端路由才知道的标记:研究型回答打上 research,导出入口只对它显示
-      const inner = (meta as { mg_meta?: { research?: boolean } }).mg_meta
+      const inner = (meta as {
+        mg_meta?: {
+          research?: boolean
+          paperImported?: {
+            docId: string; title?: string; status?: string; reason?: string
+          }
+        }
+      }).mg_meta
       if (inner?.research) reply.research = true
+      if (inner?.paperImported) markPaperImported(inner.paperImported)
     },
     onDelta: (t) => {
       reply.thinking = false
@@ -565,14 +700,21 @@ function resumeReply(msg: ChatMsg) {
 function send(text?: string, cmd?: string) {
   let content = (text ?? input.value).trim()
   if (!content) return
-  // 阅读器打开时:先请求当前论文的命中段落,阅读器会滚到对应页并高亮
+  // 阅读器打开时:先请求当前论文的命中段落,阅读器会滚到对应页并高亮。
+  // 后端 paper_actions 到达后会以模型定位结果覆盖,两条路径都保留。
   if (isResearch.value && currentPaper.value && !cmd) {
     void searchPaneRef.value?.locateForQuestion(content)
   }
 
   // 寒暄/闲聊:不分类、不切换或新开会话,只就话答话
   const chitchat = isChitchat(content)
-  const catInfo = chitchat ? undefined : classifyQuestion(content)
+  // 科研区是一条持续对话:检索、定位、批注都依赖当前上下文,
+  // 不能因为问题换了板块就被分类器切到旧会话或新开对话。
+  // 学习区仍保留按板块切换会话的旧行为。
+  const keepCurrentSession = isResearch.value
+  // 跨板块知识点:裸词先问方向,不要在用户没选之前就绑定板块
+  const ambiguous = !isResearch.value && !cmd && !chitchat ? detectAmbiguous(content) : null
+  const catInfo = chitchat || ambiguous ? undefined : classifyQuestion(content)
 
   // 会话选择:同类型延续当前会话;不同类型检索同板块旧会话,否则新开;
   // 闲聊沿用当前会话(无会话则开一个未归类会话,不绑定板块、不进归纳面板)
@@ -583,7 +725,7 @@ function send(text?: string, cmd?: string) {
     if (!session.cat) {
       // 新会话首次提问:绑定板块
       session.cat = catInfo
-    } else if (session.cat.key !== catInfo.key) {
+    } else if (session.cat.key !== catInfo.key && !keepCurrentSession) {
       const current = session
       const existing = [...sessions.value].reverse().find((s) => s.cat?.key === catInfo.key && s.id !== current.id)
       if (existing) {
@@ -593,6 +735,11 @@ function send(text?: string, cmd?: string) {
         session = createSession(catInfo)
       }
     }
+  }
+
+  // 新问题进来时丢弃未回答的澄清气泡:同一时刻只保留一个待选方向
+  if (session.messages.some((m) => m.clarify)) {
+    session.messages = session.messages.filter((m) => !m.clarify)
   }
 
   // 章节知识导航:会话里已有教材文本时随指令携带正文,模型只划分章节列表
@@ -618,6 +765,20 @@ function send(text?: string, cmd?: string) {
   autoGrow()
   pinnedToBottom = true // 自己刚发消息:强制回底并恢复跟随
   scrollBottom()
+
+  // 跨板块裸词:先渲染一张选择卡,用户选完再请求后端
+  if (ambiguous) {
+    session.messages.push({
+      id: nextMsgId(),
+      role: 'assistant',
+      content: '',
+      clarify: { topicId: ambiguous.id, question: content },
+    })
+    persistSessions()
+    scrollBottom()
+    return
+  }
+
   persistSessions()
 
   // prompt 原文随流发送;指令与归属随 ChatMeta 传给后端(契约 ChatRequest);
@@ -1046,8 +1207,15 @@ async function stagePaperFile(file: File): Promise<void> {
   }
 }
 
+function pendingStagedPapers(): typeof stagedPapers.value {
+  return stagedPapers.value.filter((paper) => {
+    const msg = findMessage(paper.msgId)
+    return msg?.paperImport?.status !== 'imported'
+  })
+}
+
 function askPendingPapers(): Promise<boolean> {
-  if (!stagedPapers.value.length) return Promise.resolve(true)
+  if (!pendingStagedPapers().length) return Promise.resolve(true)
   if (importPromptOpen.value) return Promise.resolve(false)
   importPromptOpen.value = true
   return new Promise((resolve) => {
@@ -1068,6 +1236,8 @@ async function confirmPaperChoices(
     for (const paper of [...stagedPapers.value]) {
       const choice = selected[paper.docId] || 'import'
       const msg = findMessage(paper.msgId)
+      // 模型已经完成入库的论文不再重复处理,保留其上下文。
+      if (msg?.paperImport?.status === 'imported') continue
       if (choice === 'import') {
         try {
           await importTempPaper(paper.docId, undefined, true)
@@ -1094,8 +1264,13 @@ async function confirmPaperChoices(
     completed = retry.length === 0
     if (importedAny) await archivePanelRef.value?.reload?.()
   } finally {
-    const last = retry[retry.length - 1]
-    stagedPapers.value = retry
+    const imported = stagedPapers.value.filter((paper) => {
+      const msg = findMessage(paper.msgId)
+      return msg?.paperImport?.status === 'imported'
+    })
+    const next = [...imported, ...retry]
+    const last = next[next.length - 1]
+    stagedPapers.value = next
     stagedPaper.value = last ? { docId: last.docId, title: last.title } : null
     if (!flushSessions(true)) showToast(t('learn.toastStorage'))
     importPromptBusy.value = false
@@ -1495,12 +1670,12 @@ onMounted(() => {
 })
 
 onBeforeRouteLeave(async () => {
-  if (!stagedPapers.value.length) return true
+  if (!pendingStagedPapers().length) return true
   return askPendingPapers()
 })
 
 function warnPendingPapers(event: BeforeUnloadEvent): void {
-  if (!stagedPapers.value.length) return
+  if (!pendingStagedPapers().length) return
   flushSessions(true)
   event.preventDefault()
   event.returnValue = ''
@@ -1623,6 +1798,23 @@ onBeforeUnmount(() => {
             </span>
             <template v-if="m.role === 'assistant'">
               <span v-if="m.thinking" class="thinking">{{ t('learn.thinking') }}<span class="dots">···</span></span>
+              <!-- 跨板块知识点:先选方向,再发请求 -->
+              <div v-if="m.clarify" class="clarify">
+                <p class="clarify-title">{{ t('clarify.title') }}</p>
+                <p class="clarify-scope">{{ t('clarify.scope', { scope: clarifyScope(m.clarify.topicId) }) }}</p>
+                <div class="clarify-options">
+                  <button
+                    v-for="(option, oi) in clarifyOptions(m.clarify.topicId)"
+                    :key="`${option.key}-${oi}`"
+                    class="clarify-opt"
+                    type="button"
+                    @click.stop="pickClarify(m, oi)"
+                  >
+                    <span class="co-label">{{ clarifyLabel(option) }}</span>
+                    <span class="co-hint">{{ clarifyHint(option) }}</span>
+                  </button>
+                </div>
+              </div>
               <div v-if="m.content && !m.paperImport" class="mg-blocks">
                 <MathText v-for="(block, bi) in blocksOf(m.content)" :key="bi" :text="block" />
               </div>
@@ -2095,6 +2287,67 @@ onBeforeUnmount(() => {
   background: var(--bg-card);
   border: 1px solid var(--line);
   border-bottom-left-radius: 4px;
+}
+
+/* 跨板块澄清卡:给出范围 + 方向按钮 */
+.clarify {
+  width: min(500px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.clarify-title {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.clarify-scope {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.clarify-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.clarify-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 11px;
+  text-align: left;
+  color: var(--text);
+  background: var(--bg-void);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+.clarify-opt:hover,
+.clarify-opt:focus-visible {
+  border-color: var(--line-bright);
+  box-shadow: var(--glow-cyan);
+  outline: none;
+}
+
+.co-label {
+  color: var(--cyan);
+  font-size: 12.5px;
+}
+
+.co-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 /* 归纳跳转定位后的高亮 */

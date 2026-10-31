@@ -6,6 +6,7 @@
  *   - SSE 收尾契约(postSSE)
  *   - MathText 公式渲染 + 链接/转义安全(Vite SSR 真实渲染)
  *   - 回收站/本地数据/会话持久化
+ *   - 问题分类器(最小二乘上下文)
  *   - 待办清单时间与状态规则
  *   - 关于 MG 的版本记录与协议正文双语完整性
  *   - 账号导出:token 与内部标记不落进导出文件
@@ -63,6 +64,18 @@ const CASES = [
     bundle: 'node --check scripts/research-tables-test.mjs',
     run: 'node scripts/research-tables-test.mjs',
     artifact: '.research-tables-test.cjs',
+  },
+  {
+    name: '问题分类器',
+    bundle: 'npx esbuild scripts/classifier-test.ts --bundle --format=cjs --platform=node --outfile=.classifier-test.cjs',
+    run: 'node .classifier-test.cjs',
+    artifact: '.classifier-test.cjs',
+  },
+  {
+    name: '论文动作协议',
+    bundle: 'npx esbuild scripts/paper-actions-test.ts --bundle --format=cjs --platform=node --outfile=.paper-actions-test.cjs',
+    run: 'node .paper-actions-test.cjs',
+    artifact: '.paper-actions-test.cjs',
   },
   {
     name: '待办清单时间/状态',

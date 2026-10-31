@@ -6,16 +6,18 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
+import { usePaperChat } from '@/composables/usePaperChat'
 import MathText from '@/components/chat/MathText.vue'
 import DocumentViewer from '@/components/research/DocumentViewer.vue'
 import PaperInsights from '@/components/research/PaperInsights.vue'
-import { streamReply, type ChatStreamHandle } from '@/services/chatService'
+import { type ChatStreamHandle } from '@/services/chatService'
 import {
   generateResearchDocInsights,
   getResearchDocInsights,
   listResearchDocs,
   locatePaperPassages,
   saveReadingProgress,
+  type PaperAction,
   type PaperStructure,
   type ResearchDoc,
 } from '@/services/researchService'
@@ -31,11 +33,23 @@ const viewerRef = ref<{
   flushPending: () => Promise<boolean>
   hasPending: () => boolean
   showPassages: (items: { page: number; quote: string }[]) => Promise<void>
+  applyPaperActions: (actions: PaperAction[], requestId?: string) => Promise<void>
 } | null>(null)
 
 const currentDoc = computed(() => docs.value.find((d) => d.id === currentId.value) ?? null)
 const kind = computed<'pdf' | 'text'>(() =>
   currentDoc.value && /\.pdf$/i.test(currentDoc.value.name) ? 'pdf' : 'text')
+
+/** 与主聊天共用动作帧解析;执行仍由本工作台阅读器负责。 */
+const paperChat = usePaperChat({
+  getTarget: () => currentDoc.value
+    ? { docId: currentDoc.value.id, title: currentDoc.value.title || currentDoc.value.name }
+    : null,
+  applyActions: (target, actions, requestId) => {
+    if (target.docId !== currentId.value) return
+    return viewerRef.value?.applyPaperActions(actions, requestId)
+  },
+})
 
 const showInsights = ref(false)
 const expanded = ref(false)
@@ -223,6 +237,7 @@ function send(): void {
   const live = messages.value[messages.value.length - 1]
   streaming.value = true
   scrollBottom()
+  // 立即定位是本地预览;后端 paper_actions 到达后再以模型结果为准。
   void locate(prompt)
 
   const history = messages.value
@@ -231,7 +246,7 @@ function send(): void {
     .map((m) => ({ role: m.role, content: m.content }))
 
   let failed = false
-  streamHandle = streamReply(prompt, {
+  streamHandle = paperChat.stream(prompt, {
     onDelta: (text) => {
       live.thinking = false
       live.content += text

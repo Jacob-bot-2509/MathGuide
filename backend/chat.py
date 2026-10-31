@@ -26,6 +26,7 @@ import asyncio
 import json
 import random
 import re
+import secrets
 import time
 from collections import OrderedDict
 
@@ -35,6 +36,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 
 import config
 import rag
+import research_actions
 import research_corpus
 import research_tables
 import usage
@@ -313,6 +315,31 @@ def _validated_history(raw: object) -> list[dict]:
     return out
 
 
+# 追问标记:短问句里出现这些指代/承接词时,检索需要带上上一轮的提问。
+# 只认「那/它/这个/上述…」这类真正依赖前文的词,不把普通的「为什么/怎么」也算进来。
+_FOLLOWUP_RE = re.compile(
+    r"^(那|那么|这个|那个|它|其|它们|还有|以及|如果|and|so|then|what about|how about|it|this|that)?"
+    r"|(它|这个|那个|上述|前面|刚才|上面|该).*(关系|联系|区别|为什么|怎么|如何|呢|吗)",
+    re.IGNORECASE,
+)
+
+
+def _retrieval_query(question: str, history: list[dict] | None) -> str:
+    """普通问答的检索词:追问时拼上一轮用户问题,避免「它和积分有什么关系」只检索“积分”。
+
+    只影响检索,不改发给模型的 prompt;历史仍按原样交给 LLM。
+    """
+    if not history or not _FOLLOWUP_RE.search(question):
+        return question
+    previous = next(
+        (m["content"] for m in reversed(history) if m.get("role") == "user" and m.get("content")),
+        "",
+    )
+    if not previous:
+        return question
+    return f"{previous} {question}"[:500]
+
+
 # 会话滚动摘要:每 8 次请求压缩一次旧对话(便宜模型,失败静默),长对话保持早期上下文。
 # 与教材缓存一样按 (uid, workspace, sid) 隔离,避免客户端自增的 sessionId 跨用户/跨区撞号。
 async def _update_summary(uid: str, sid: int, old_turns: list[dict], prev: str,
@@ -401,6 +428,7 @@ def _research_cache_key(question: str, scope: list[str] | None = None,
 # ---------- 安全与用量(测试期防护) ----------
 
 PROMPT_MAX = 32000  # 服务端输入上限(字符):覆盖长文档教材(3万字)+ 指令前缀,超出静默截断
+PAPER_CONTEXT_CHARS = 20000  # 当前论文问答带入的正文上限:足够覆盖摘要+方法+结果,不挤爆上下文
 
 # 限流:每用户滑动窗口(防脚本刷接口烧 token 费;正常学习节奏碰不到上限)。
 # 公共实现会清理不活跃 key,游客登录不断产生新 uid 也不会让内存无界增长。
@@ -585,7 +613,7 @@ async def _verify_answer(question: str, answer: str, role: str) -> str | None:
 async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]],
                    history: list[dict] | None = None, role: str = "main", verify: bool = False,
                    summary: str = "", sid: int | None = None, uid: str = "",
-                   workspace: str = "learn"):
+                   workspace: str = "learn", paper_mode: bool = False):
     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
     verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过);
     summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)。
@@ -607,6 +635,19 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 "Cite source numbers such as [Source 1] for every key claim. "
                 "If the sources are insufficient, say so directly; do not use "
                 "outside knowledge and do not fabricate citations."
+            )
+        if paper_mode:
+            # 论文窗口动作已由服务端规划、前端执行;模型不要在正文里否认能力,
+            # 也不要重复输出动作清单,只解释内容并指出页码/章节。
+            system += (
+                "\n\n【论文窗口】系统已自动根据你的规划完成定位、跳页、高亮"
+                "和批注动作;不要说“我无法操作文档/无法高亮”。"
+                "回答时直接解释论文内容,并说明依据的页码和章节。"
+                if zh else
+                "\n\n[Paper window] The system has already executed the planned "
+                "locate, jump, highlight and annotation actions. Never claim you "
+                "cannot operate the document or highlight text. Explain the content "
+                "directly and cite the page and section."
             )
         if summary:
             system += f"\n\n【更早对话摘要】\n{summary}"
@@ -646,6 +687,99 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
         async for frame in _frames(_compose_direct(prompt, chunks)):
             yield frame
         return
+
+
+def _paper_actions_frame(actions: list[dict], request_id: str, doc_id: str) -> str:
+    if not actions:
+        return ""
+    return "data: " + json.dumps({
+        "mg_event": "paper_actions",
+        "requestId": request_id,
+        "docId": doc_id,
+        "actions": actions,
+    }, ensure_ascii=False) + "\n\n"
+
+
+async def _gen_paper_llm(question: str, cmd: str | None,
+                         chunks: list[tuple[rag.Chunk, float]], *,
+                         history: list[dict] | None = None,
+                         summary: str = "", sid: int | None = None,
+                         uid: str = "", workspace: str = "research",
+                         uid_for_actions: str = "", doc_id: str = "",
+                         request_id: str = "",
+                         excerpts: list[dict] | None = None,
+                         planner_history: list[dict] | None = None):
+    """论文回答与窗口动作并行:回答边生成,动作规划完成即下发 meta 帧。
+
+    先启动回答流和动作规划两路;谁先完成就先处理谁。这样模型不会为了
+    等批注规划而延迟第一个字,同时动作仍能在回答过程中到达前端。
+    """
+    answer = _gen_llm(
+        question, cmd, chunks, history=history, role=_pick_role(question),
+        verify=False, summary=summary, sid=sid, uid=uid, workspace=workspace,
+        paper_mode=True)
+    iterator = answer.__aiter__()
+    planner = asyncio.create_task(research_actions.plan_actions(
+        uid_for_actions, doc_id, question, excerpts, planner_history))
+    next_frame = asyncio.create_task(iterator.__anext__())
+    actions_sent = False
+    try:
+        while True:
+            waiting = {next_frame} if actions_sent else {next_frame, planner}
+            done, _ = await asyncio.wait(
+                waiting, return_when=asyncio.FIRST_COMPLETED)
+            if not actions_sent and planner in done:
+                actions_sent = True
+                try:
+                    actions = planner.result()
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[chat] 论文窗口动作规划失败(忽略): {exc}")
+                    actions = []
+                if actions:
+                    frame = _paper_actions_frame(actions, request_id, doc_id)
+                    if frame:
+                        yield frame
+            if next_frame not in done:
+                continue
+            try:
+                frame = next_frame.result()
+            except StopAsyncIteration:
+                # 回答先结束:动作规划还没回来时等它一下,保证批注/高亮
+                # 仍然在本次流结束前送达,而不是被取消。
+                if not actions_sent:
+                    actions_sent = True
+                    try:
+                        actions = await asyncio.wait_for(planner, timeout=15)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[chat] 论文窗口动作规划超时/失败(忽略): {exc}")
+                        actions = []
+                    if actions:
+                        frame = _paper_actions_frame(actions, request_id, doc_id)
+                        if frame:
+                            yield frame
+                break
+            yield frame
+            next_frame = asyncio.create_task(iterator.__anext__())
+    except asyncio.CancelledError:
+        raise
+    finally:
+        if not planner.done():
+            planner.cancel()
+        if not next_frame.done():
+            next_frame.cancel()
+
+
+_IMPORT_RE = re.compile(
+    r"入库|进库|加入.{0,6}(?:论文)?库|导入.{0,6}(?:论文)?库|"
+    r"存(?:进|到|入).{0,6}(?:论文)?库|保存.{0,6}(?:论文)?库|"
+    r"收(?:进|到).{0,6}(?:论文)?库|放(?:进|到|入).{0,6}(?:论文)?库|"
+    r"\bimport\b.{0,20}(?:this|the)?\s*paper|\bimport\b.{0,20}librar|\badd\b.{0,20}librar",
+    re.IGNORECASE,
+)
+
+
+def _is_import_request(question: str) -> bool:
+    return bool(_IMPORT_RE.search(question or ""))
 
 
 async def _gen_continue(question: str, partial: str, zh: bool):
@@ -1009,13 +1143,96 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     if _is_formula_clarify(question, cmd):
         return _sse(_gen_formula_clarify(question))
 
+    # 当前论文问答:论文已经解析入库,只用本地正文作答。
+    # 不能再走外部文献检索:附件/阅读器里提问时第三方源不可达或限额,
+    # 会把「论文已读完」的问题误答成「网络/限额无法查询」。
+    if workspace == "research" and paper_id:
+        ctx = await asyncio.to_thread(
+            research_corpus.paper_context, uid, paper_id, question,
+            6, PAPER_CONTEXT_CHARS)
+        excerpts = (ctx or {}).get("chunks") or []
+        if not excerpts:
+            return _stream_text(
+                "未能从当前论文中提取到可用正文,暂时无法基于全文作答。"
+                "请确认 PDF 有文字层后重新导入。"
+                if zh else
+                "No readable text was extracted from the current paper, so I cannot "
+                "answer from its full text. Please re-import a PDF with a text layer.")
+        paper_title = str((ctx or {}).get("title") or "当前论文")
+        paper_chunks = [
+            (rag.Chunk(
+                f"{paper_id}:{i}", paper_title, "",
+                f'第 {item["pageStart"]}-{item["pageEnd"]} 页 · {item["section"]}',
+                item["text"]), 9.0)
+            for i, item in enumerate(excerpts, 1)
+        ]
+        if table_context:
+            paper_chunks.append(
+                (rag.Chunk("research-table", "研究数据表", "",
+                           "用户当前数据表(数值以此为准)", table_context), 7.0))
+        # 用户要求“先入库”:只处理当前用户、当前论文,临时论文转正式,
+        # 入库后与论文库论文完全同权(检索、阅读、批注、项目归属、导出)。
+        if _is_import_request(question):
+            imported = None
+            try:
+                doc = await asyncio.to_thread(
+                    research_corpus.get_live_doc, uid, paper_id)
+                if doc:
+                    status = str(doc.get("status") or "")
+                    if status == "temp":
+                        await asyncio.to_thread(
+                            research_corpus.import_temp_doc, uid, paper_id)
+                        status = "imported"
+                    imported = {
+                        "docId": paper_id,
+                        "title": paper_title,
+                        "status": status,
+                    }
+            except Exception as exc:  # noqa: BLE001 入库失败要如实告知
+                print(f"[chat] 论文入库失败: {exc}")
+                imported = {
+                    "docId": paper_id, "title": paper_title,
+                    "status": "failed", "reason": str(exc)[:200],
+                }
+            if imported:
+                meta["paperImported"] = imported
+                if imported["status"] == "imported":
+                    paper_chunks.append((rag.Chunk(
+                        "paper-import", "系统状态", "",
+                        "文档状态",
+                        "这篇论文已经正式入库,具备论文库论文的全部功能:"
+                        "可在研究档案中打开、全文检索、批注、关联研究项目。"), 10.0))
+        meta["role"] = _pick_role(question)
+        sid = valid_session_id(body.get("sessionId"))
+        history = _validated_history(body.get("history"))
+        request_id = secrets.token_hex(8)
+        if rag.llm.is_configured():
+            summary = get_summary(uid, sid, workspace=workspace) if sid is not None else ""
+            # 回答与论文窗口动作并行:先出字,动作规划完成后再补发事件帧。
+            return _sse(_gen_paper_llm(
+                question, cmd, paper_chunks, history=history, summary=summary,
+                sid=sid, uid=uid, workspace=workspace,
+                uid_for_actions=uid, doc_id=paper_id, request_id=request_id,
+                excerpts=excerpts, planner_history=history))
+        # 未配置模型:至少做本地定位,再把直答内容返回。
+        try:
+            actions = await research_actions.plan_actions(
+                uid, paper_id, question, excerpts, history)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[chat] 论文窗口动作规划失败(忽略): {exc}")
+            actions = []
+        if actions:
+            meta["paperActions"] = actions
+            meta["paperRequestId"] = request_id
+        return _stream_text(_compose_direct(question, paper_chunks))
+
     # P0/P1 路由:研究型提问优先于知识直答
     # (「泰勒展开的最新研究进展」虽命中知识库,意图是查文献 → 走跨论文库深度搜索)
     # 必须先判意图、后检索:深度搜索内部自会检索知识库,
     # 这里若先检一遍,研究型提问就要白付一份 embedding 开销(结果还被丢掉)
     # 只允许科学研究工作区进入该链路:学习辅助区不跨区查文献
     if workspace == "research" and (
-            paper_id or table_context or rag.route.is_research_intent(question)):
+            table_context or rag.route.is_research_intent(question)):
         meta["research"] = True
         # 搜索范围(前端勾选的平台;缺省/空 = 全平台);非法名白名单校验在 deep_search 内
         scope = _clean_scope(body.get("sources"))
@@ -1052,9 +1269,12 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                 question, outcome, zh, ck=ck, extra=table_context))
         return _stream_text(_research_reply(outcome, zh))
 
+    # 追问的检索词带上上一轮用户问题;只影响检索,不改发给模型的 prompt
+    history = _validated_history(body.get("history"))
+    retrieval_query = _retrieval_query(question, history)
     # 检索含 embedding 请求(同步、冷启动可达数十秒)→ 线程池执行,
     # 不阻塞事件循环(否则这段等待会冻住所有并发会话)
-    chunks = await asyncio.to_thread(rag.search, question, 3)
+    chunks = await asyncio.to_thread(rag.search, retrieval_query, 3)
 
     # 科研区:无论是否命中研究意图,都先查用户自己的论文库。
     # 个人论文是私有且最对口的证据,排在公共知识库之前进入上下文。
@@ -1085,7 +1305,6 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         role = _pick_role(question)
         meta["role"] = role
         sid = valid_session_id(body.get("sessionId"))
-        history = _validated_history(body.get("history"))
         verify = bool(chunks) or rag.is_math_question(question) or _is_formula_followup(history)
         summary = get_summary(uid, sid, workspace=workspace) if sid is not None else ""
         return _sse(_gen_llm(question, cmd, chunks, history=history, role=role, verify=verify,

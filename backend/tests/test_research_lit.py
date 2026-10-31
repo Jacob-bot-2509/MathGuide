@@ -78,6 +78,17 @@ def test_pdf_url_allowlist():
     assert not rl._pdf_url_allowed("https://example.com/a.pdf")
 
 
+def test_arxiv_doi_maps_to_reader_pdf():
+    assert rl._arxiv_pdf_from_doi("10.48550/arXiv.2501.06425") == (
+        "https://arxiv.org/pdf/2501.06425.pdf")
+    assert rl._arxiv_pdf_from_doi("10.48550/arxiv.2501.06425v2") == (
+        "https://arxiv.org/pdf/2501.06425v2.pdf")
+    assert rl._arxiv_pdf_from_doi("10.1234/not-arxiv") == ""
+    item = rl._result(title="Tensor Product Attention", doi="10.48550/arxiv.2501.06425")
+    enriched = rl._enrich([item], "general")[0]
+    assert enriched["pdfUrl"] == "https://arxiv.org/pdf/2501.06425.pdf"
+
+
 def test_open_pdf_endpoint(monkeypatch, tmp_path):
     from starlette.applications import Starlette
     from starlette.routing import Route

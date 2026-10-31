@@ -36,6 +36,17 @@ def _doc(uid: str = "u-ws") -> str:
                       analyze=False)["docId"]
 
 
+def test_paper_context_returns_local_excerpts(corpus):
+    doc_id = _doc("u-paper")
+    ctx = rc.paper_context("u-paper", doc_id, "reading progress")
+    assert ctx is not None
+    assert ctx["docId"] == doc_id
+    assert ctx["chunks"]
+    assert any("reader" in item["text"].lower() for item in ctx["chunks"])
+    assert all(item["pageStart"] >= 1 for item in ctx["chunks"])
+    assert rc.paper_context("u-paper", "missing") is None
+
+
 def test_storage_stats_counts_files_and_derived(corpus):
     doc_id = _doc("u-storage")
     derived = rc._user_dir("u-storage") / "derived" / doc_id

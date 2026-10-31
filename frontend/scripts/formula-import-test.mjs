@@ -189,13 +189,21 @@ const bestJs = ts.transpileModule(bestNode.getText(matchAst), {
 const { computed } = await import('vue')
 const candidates = ref([])
 const best = new Function('candidates', 'computed', `${bestJs}\nreturn best`)(candidates, computed)
-const strong = { formula: '=A2', score: 10, validation: { compared: 1, matched: 1 } }
+const strong = { formula: '=A2', score: 10, validation: {
+  compared: 1, matched: 1, unverified: 0, calculationErrors: 0,
+} }
 candidates.value = [{ ...strong, unitConflicts: [{ variable: 'x', expected: 'm', actual: 'km' }] }]
 assert.equal(best.value, null, 'unit conflict must prevent a high-confidence recommendation')
 candidates.value.push({ ...strong, unitConflicts: [] })
 assert.equal(best.value, candidates.value[1], 'a valid lower-ranked candidate may be recommended')
 candidates.value = [{ ...strong }]
 assert.equal(best.value, null, 'unknown unit compatibility must not be called high-confidence')
+candidates.value = [{ ...strong, unitConflicts: [],
+  validation: { ...strong.validation, unverified: 1, calculationErrors: 1 } }]
+assert.equal(best.value, null, 'unverified rows must not be called high-confidence')
+candidates.value = [{ ...strong, unitConflicts: [],
+  validation: { compared: 1, matched: 1 } }]
+assert.equal(best.value, null, 'missing validation coverage must not be called high-confidence')
 const canApplyNode = ast.statements.find((s) => ts.isVariableStatement(s) &&
   s.declarationList.declarations.some((d) => d.name.getText(ast) === 'canApply'))
 assert.ok(canApplyNode)

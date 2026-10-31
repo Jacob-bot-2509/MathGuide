@@ -169,10 +169,10 @@ async def locate(request: Request) -> JSONResponse:
     query = str(body.get("query") or "").strip()
     if not query:
         raise HTTPException(400, "缺少 query")
-    doc = await asyncio.to_thread(rc._doc_row, uid, doc_id)
-    if doc is None or doc["deletedAt"]:
+    doc = await asyncio.to_thread(rc.get_live_doc, uid, doc_id)
+    if doc is None:
         raise HTTPException(404, "not found")
-    hits = await asyncio.to_thread(rc.chat_hits, uid, query, 6, doc_id)
+    hits = await asyncio.to_thread(rc.find_passages, uid, doc_id, query, 6)
     mode = _locate_mode(query)
     passages = [{
         "page": int(hit.get("pageStart") or 1),
@@ -237,7 +237,7 @@ async def import_paper(request: Request) -> JSONResponse:
     keep_annotations = body.get("keepAnnotations", True) is not False
     try:
         result = await asyncio.to_thread(
-            rc._import_temp, uid, doc_id, project, keep_annotations)
+            rc.import_temp_doc, uid, doc_id, project, keep_annotations)
     except FileNotFoundError as exc:
         raise HTTPException(404, "not found") from exc
     except ValueError as exc:

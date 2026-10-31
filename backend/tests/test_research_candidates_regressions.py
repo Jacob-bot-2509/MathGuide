@@ -52,6 +52,20 @@ def test_target_unit_conflict_is_reported():
     ]
 
 
+def test_validation_reports_rows_that_could_not_be_calculated():
+    table = {
+        'columns': [{'key': 'A', 'label': 'x', 'type': 'number'},
+                    {'key': 'B', 'label': 'y', 'type': 'number', 'role': 'calculated'}],
+        'rows': [['1', '1'], ['0', '1']], 'formulas': {},
+    }
+    saved = [{'id': 'f', 'target': 'y', 'expr': '1/x', 'variables': ['x'],
+              'variableMap': {'x': 'A'}}]
+    validation = tables._match_formula_candidates(table, saved)[0]['validation']
+    assert validation['matched'] == validation['compared'] == 1
+    assert validation['unverified'] == 1
+    assert validation['calculationErrors'] == 1
+
+
 def test_formula_compiler_does_not_rewrite_inserted_references():
     assert tables._compile_table_formula(
         'mass+B2', {'mass': 'B', 'B2': 'C'},

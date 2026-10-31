@@ -40,6 +40,7 @@ const best = computed(() => candidates.value.find((item) =>
   item.formula && item.score >= 8 &&
   Array.isArray(item.unitConflicts) && item.unitConflicts.length === 0 &&
   item.validation && item.validation.compared > 0 &&
+  item.validation.unverified === 0 && item.validation.calculationErrors === 0 &&
   item.validation.matched === item.validation.compared,
 ) ?? null)
 
@@ -92,6 +93,11 @@ onMounted(async () => {
               m: item.validation.matched,
               n: item.validation.compared,
               e: item.validation.maxError,
+            }) }}
+          </p>
+          <p v-if="item.validation && (item.validation.unverified || item.validation.calculationErrors)" class="fm-unit-warning">
+            {{ t('formula.matchIncompleteValidation', {
+              skipped: item.validation.unverified ?? 0, errors: item.validation.calculationErrors ?? 0,
             }) }}
           </p>
           <p
