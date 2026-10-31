@@ -1419,13 +1419,18 @@ def _compile_table_formula(expr: str, mapping: dict[str, str]) -> str:
             .replace("²", "^2").replace("³", "^3"))
     for name, target in _FUNC_MAP.items():
         text = re.sub(rf"\b{name}\s*\(", f"{target}(", text, flags=re.IGNORECASE)
-    for variable in sorted(mapping, key=len, reverse=True):
-        key = mapping[variable]
-        if not key:
-            return ""
-        text = re.sub(
-            rf"(?<![A-Za-z0-9_]){re.escape(variable)}(?![A-Za-z0-9_])",
-            f"{key}2", text)
+    if any(not variable or not key for variable, key in mapping.items()):
+        return ""
+    if mapping:
+        patterns = []
+        for variable in sorted(mapping, key=len, reverse=True):
+            escaped = re.escape(variable)
+            if re.fullmatch(r"[A-Za-z0-9_]+", variable):
+                escaped = rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])"
+            patterns.append(escaped)
+        functions = "|".join(map(re.escape, set(_FUNC_MAP.values())))
+        tokens = re.compile(rf"(\b(?:{functions})\s*\()|({'|'.join(patterns)})")
+        text = tokens.sub(lambda match: match.group(1) or f"{mapping[match.group(2)]}2", text)
     return "=" + text
 
 
@@ -1439,6 +1444,7 @@ def _match_formula_candidates(table: dict, saved: list[dict]) -> list[dict]:
         expr = str(item.get("expr") or "").strip()
         variables = item.get("variables") if isinstance(item.get("variables"), list) else []
         suggested = item.get("variableMap") if isinstance(item.get("variableMap"), dict) else {}
+        units = item.get("units") if isinstance(item.get("units"), dict) else {}
         if not target or not expr:
             continue
         target_col = next(
@@ -1463,6 +1469,13 @@ def _match_formula_candidates(table: dict, saved: list[dict]) -> list[dict]:
             if hit:
                 mapping[variable] = str(hit.get("key") or "")
                 matched_vars += 1
+                expected = str(units.get(variable) or "").strip()
+                actual_unit = str(hit.get("unit") or "").strip()
+                if expected and actual_unit:
+                    if expected.replace(" ", "") == actual_unit.replace(" ", ""):
+                        score += 0.5
+                    else:
+                        score -= 1
         score = matched_vars * 2
         if target_col:
             score += 2
@@ -1532,6 +1545,7 @@ def _match_formula_candidates(table: dict, saved: list[dict]) -> list[dict]:
             "expr": expr,
             "formula": formula,
             "mapping": mapping,
+            "units": {var: units.get(var, "") for var in mapping},
             "columnKey": target_key,
             "score": round(min(10.0, max(0.0, score)), 2),
             "validation": validation,

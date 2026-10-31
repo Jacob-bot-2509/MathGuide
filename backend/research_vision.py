@@ -46,6 +46,7 @@ SYSTEM = (
     "输出格式:\n"
     '{"formulas":[{"id":"f1","target":"速度","expr":"位移/时间",'
     '"variables":["位移","时间"],"variableMap":{"位移":"位移","时间":"时间"},'
+    '"units":{"速度":"m/s","位移":"m","时间":"s"},'
     '"handwriting":false,"confidence":0.0,"note":""}],'
     '"groups":[["f1"],["f2"]],"master":null,"warnings":[]}\n'
     "规则:\n"
@@ -128,6 +129,12 @@ def _clean_result(data: dict[str, Any]) -> dict[str, Any]:
             for k, v in (vmap.items() if isinstance(vmap, dict) else [])
             if isinstance(k, (str, int, float)) and isinstance(v, str)
         }
+        units_raw = item.get("units")
+        units = {
+            str(k)[:40]: str(v)[:30]
+            for k, v in (units_raw.items() if isinstance(units_raw, dict) else [])
+            if isinstance(k, (str, int, float)) and isinstance(v, str)
+        }
         try:
             confidence = float(item.get("confidence") or 0)
         except (TypeError, ValueError):
@@ -138,6 +145,7 @@ def _clean_result(data: dict[str, Any]) -> dict[str, Any]:
             "expr": expr,
             "variables": variables,
             "variableMap": variable_map,
+            "units": units,
             "handwriting": bool(item.get("handwriting")),
             "confidence": max(0.0, min(1.0, confidence)),
             "note": str(item.get("note") or "")[:200],

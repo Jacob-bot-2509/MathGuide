@@ -836,6 +836,8 @@ const ZH: Dict = {
   'formula.matchEmpty': '公式库里没有可用候选，请先识别或保存公式',
   'formula.matchApply': '应用这条公式',
   'formula.matchFail': '公式匹配失败',
+  'formula.matchHigh': '高置信匹配：变量与反算全部通过',
+  'formula.matchApplyBest': '采用最佳公式',
   'formula.apply': '应用到公式栏',
   'formula.mapFirst': '先把每个变量映射到表格列',
 
@@ -1668,6 +1670,8 @@ const EN: Dict = {
   'formula.matchEmpty': 'No candidates in the formula library; extract or save a formula first',
   'formula.matchApply': 'Apply this formula',
   'formula.matchFail': 'Formula matching failed',
+  'formula.matchHigh': 'High-confidence match: mapping and back-calculation passed',
+  'formula.matchApplyBest': 'Apply best formula',
   'formula.apply': 'Apply to formula panel',
   'formula.mapFirst': 'Map every variable to a table column first',
 

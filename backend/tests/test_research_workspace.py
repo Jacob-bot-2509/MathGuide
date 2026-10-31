@@ -66,11 +66,13 @@ def test_list_extracted_formulas_filters_by_table_and_doc(corpus):
     rc._save_extracted_formulas("u-formula-list", doc_id, table_id, [{
         "target": "速度", "expr": "位移/时间",
         "variables": ["位移", "时间"], "variableMap": {"位移": "A", "时间": "B"},
+        "units": {"位移": "m", "时间": "s"},
     }])
     by_table = rc._list_extracted_formulas("u-formula-list", table_id=table_id)
     assert len(by_table) == 1
     assert by_table[0]["target"] == "速度"
     assert by_table[0]["variableMap"]["位移"] == "A"
+    assert by_table[0]["units"]["时间"] == "s"
     assert rc._list_extracted_formulas("u-formula-list", doc_id=doc_id)
     assert rc._list_extracted_formulas("u-formula-list") == []
 

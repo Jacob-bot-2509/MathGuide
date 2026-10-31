@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 从公式库为当前表推荐 Top-3 候选;用户点选后由父组件写入公式。 */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import {
@@ -16,6 +16,13 @@ const emit = defineEmits<{
 
 const loading = ref(true)
 const candidates = ref<FormulaCandidate[]>([])
+
+const best = computed(() => {
+  const top = candidates.value[0]
+  if (!top || top.score < 8 || !top.validation) return null
+  if (top.validation.compared <= 0) return null
+  return top.validation.matched === top.validation.compared ? top : null
+})
 
 onMounted(async () => {
   try {
@@ -38,6 +45,12 @@ onMounted(async () => {
       <p v-if="loading" class="fm-state">{{ t('formula.matching') }}</p>
       <p v-else-if="!candidates.length" class="fm-state">{{ t('formula.matchEmpty') }}</p>
       <div v-else class="fm-list">
+        <div v-if="best" class="fm-best">
+          <span>{{ t('formula.matchHigh') }}</span>
+          <button type="button" @click="emit('apply', best)">
+            {{ t('formula.matchApplyBest') }}
+          </button>
+        </div>
         <article v-for="item in candidates" :key="item.formulaId || item.expr" class="fm-card">
           <div class="fm-row">
             <span class="fm-target">{{ item.target }}</span>
@@ -62,7 +75,8 @@ onMounted(async () => {
           </p>
           <div class="fm-map">
             <span v-for="(col, variable) in item.mapping" :key="variable" class="fm-map-item">
-              {{ variable }} → {{ col }}
+              {{ variable }} → {{ col }}<template v-if="item.units?.[variable]">
+                ({{ item.units[variable] }})</template>
             </span>
           </div>
           <button class="fm-apply" type="button" @click="emit('apply', item)">
@@ -128,6 +142,29 @@ onMounted(async () => {
   flex-direction: column;
   gap: 8px;
   padding: 12px 16px 16px;
+}
+
+.fm-best {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 45%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+  color: var(--text-hi);
+  font-size: 11.5px;
+}
+
+.fm-best button {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--line-bright);
+  color: var(--cyan);
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 3px 9px;
+  cursor: pointer;
 }
 
 .fm-card {

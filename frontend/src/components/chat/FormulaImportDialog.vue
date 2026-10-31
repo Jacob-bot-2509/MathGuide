@@ -95,7 +95,8 @@ function useSavedFormula(saved: SavedFormula): void {  const formula: ExtractedF
     expr: saved.expr,
     variables: saved.variables,
     variableMap: saved.variableMap,
-    handwriting: saved.handwriting !== false,
+    units: saved.units,
+    handwriting: saved.handwriting ?? true,
     note: '',
   }
   result.value = {

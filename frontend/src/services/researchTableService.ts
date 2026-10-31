@@ -129,6 +129,7 @@ export interface ExtractedFormula {
   expr: string
   variables: string[]
   variableMap: Record<string, string>
+  units?: Record<string, string>
   handwriting?: boolean
   confidence?: number
   note?: string
@@ -148,6 +149,7 @@ export interface FormulaCandidate {
   expr: string
   formula: string
   mapping: Record<string, string>
+  units?: Record<string, string>
   columnKey: string
   score: number
   validation: {
@@ -208,6 +210,7 @@ export interface SavedFormula {
   expr: string
   variables: string[]
   variableMap: Record<string, string>
+  units?: Record<string, string>
   handwriting?: boolean | null
   createdAt: number
 }

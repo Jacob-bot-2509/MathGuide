@@ -200,7 +200,8 @@ def _connect(uid: str) -> sqlite3.Connection:
         "id TEXT PRIMARY KEY, doc_id TEXT NOT NULL DEFAULT '',"
         " table_id TEXT NOT NULL DEFAULT '', target TEXT NOT NULL,"
         " expr TEXT NOT NULL, variables_json TEXT NOT NULL DEFAULT '[]',"
-        " mapping_json TEXT NOT NULL DEFAULT '{}', confidence REAL NOT NULL DEFAULT 0,"
+        " mapping_json TEXT NOT NULL DEFAULT '{}', units_json TEXT NOT NULL DEFAULT '{}',"
+        " confidence REAL NOT NULL DEFAULT 0,"
         " handwriting INTEGER, created_at REAL NOT NULL,"
         " UNIQUE(doc_id, table_id, target, expr))"
     )
@@ -213,7 +214,9 @@ def _connect(uid: str) -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_formulas_table ON formulas(table_id)")
     formula_columns = {row[1] for row in conn.execute("PRAGMA table_info(formulas)")}
-    for column, decl in (("handwriting", "INTEGER"), ("confidence", "REAL NOT NULL DEFAULT 0")):
+    for column, decl in (
+            ("handwriting", "INTEGER"), ("confidence", "REAL NOT NULL DEFAULT 0"),
+            ("units_json", "TEXT NOT NULL DEFAULT '{}'")):
         if column not in formula_columns:
             conn.execute(f"ALTER TABLE formulas ADD COLUMN {column} {decl}")
     conn.execute(
@@ -1549,20 +1552,35 @@ def _save_extracted_formulas(uid: str, doc_id: str, table_id: str,
             variables = variables if isinstance(variables, list) else []
             mapping = item.get("variableMap")
             mapping = mapping if isinstance(mapping, dict) else {}
+            units = item.get("units")
+            units = units if isinstance(units, dict) else {}
+            try:
+                confidence = float(item.get("confidence") or 0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            handwriting = (int(item["handwriting"])
+                           if isinstance(item.get("handwriting"), bool) else None)
             cur = conn.execute(
                 "INSERT OR IGNORE INTO formulas(id, doc_id, table_id, target, expr,"
-                " variables_json, mapping_json, confidence, created_at, handwriting)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                " variables_json, mapping_json, units_json, confidence, created_at,"
+                " handwriting) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (secrets.token_hex(10), doc_id, table_id, target, expr,
                  json.dumps(variables, ensure_ascii=False),
-                 json.dumps(mapping, ensure_ascii=False), 0.0, now,
-                 int(item["handwriting"]) if isinstance(item.get("handwriting"), bool) else None))
+                 json.dumps(mapping, ensure_ascii=False),
+                 json.dumps(units, ensure_ascii=False),
+                 max(0.0, min(1.0, confidence)), now, handwriting))
             inserted += max(0, cur.rowcount)
-            if not cur.rowcount and item.get("handwriting") is True:
+            if not cur.rowcount:
                 conn.execute(
-                    "UPDATE formulas SET handwriting = 1"
-                    " WHERE doc_id = ? AND table_id = ? AND target = ? AND expr = ?",
-                    (doc_id, table_id, target, expr))
+                    "UPDATE formulas SET handwriting = COALESCE(?, handwriting),"
+                    " units_json = ?, confidence = ?, variables_json = ?,"
+                    " mapping_json = ? WHERE doc_id = ? AND table_id = ?"
+                    " AND target = ? AND expr = ?",
+                    (handwriting, json.dumps(units, ensure_ascii=False),
+                     max(0.0, min(1.0, confidence)),
+                     json.dumps(variables, ensure_ascii=False),
+                     json.dumps(mapping, ensure_ascii=False),
+                     doc_id, table_id, target, expr))
         conn.commit()
         return inserted
     finally:
@@ -1626,8 +1644,8 @@ def _list_extracted_formulas(uid: str, table_id: str = "",
     conn = _connect(uid)
     try:
         rows = conn.execute(
-            "SELECT id, target, expr, variables_json, mapping_json, created_at, handwriting"
-            " FROM formulas WHERE " + " OR ".join(clauses)
+            "SELECT id, target, expr, variables_json, mapping_json, created_at,"
+            " handwriting, units_json FROM formulas WHERE " + " OR ".join(clauses)
             + " ORDER BY created_at DESC LIMIT 50", params).fetchall()
         out = []
         for row in rows:
@@ -1639,12 +1657,17 @@ def _list_extracted_formulas(uid: str, table_id: str = "",
                 mapping = json.loads(row[4])
             except (TypeError, ValueError):
                 mapping = {}
+            try:
+                units = json.loads(row[7])
+            except (TypeError, ValueError):
+                units = {}
             out.append({
                 "id": row[0], "target": row[1], "expr": row[2],
                 "variables": variables if isinstance(variables, list) else [],
                 "variableMap": mapping if isinstance(mapping, dict) else {},
                 "createdAt": row[5],
                 "handwriting": None if row[6] is None else bool(row[6]),
+                "units": units if isinstance(units, dict) else {},
             })
         return out
     finally:
