@@ -142,6 +142,25 @@ export interface FormulaExtractResult {
   warnings: string[]
 }
 
+export interface PageBlock {
+  kind: 'printed_text' | 'printed_formula' | 'printed_table' | 'handwriting' | 'figure'
+  text: string
+  latex: string
+  confidence: number
+}
+
+export async function analyzeResearchPage(
+  images: { mime: string; data: string }[],
+  text = '',
+  meta: { docId?: string; page?: number } = {},
+): Promise<{ blocks: PageBlock[]; warnings: string[]; saved: number }> {
+  return post(
+    '/api/research/pages/analyze',
+    { images, text, ...meta },
+    authHeaders(),
+  )
+}
+
 export interface FormulaCandidate {
   formulaId: string
   handwriting?: boolean | null

@@ -1628,6 +1628,47 @@ def _save_source_blocks(uid: str, doc_id: str, page: int,
         conn.close()
 
 
+def _save_page_blocks(uid: str, doc_id: str, page: int,
+                      blocks: list[dict]) -> int:
+    """整页解析区块入库;同一页重跑时替换旧区块。"""
+    doc_id = doc_id[:64]
+    if not doc_id or not blocks:
+        return 0
+    page = max(0, min(int(page or 0), 100000))
+    conn = _connect(uid)
+    try:
+        if not conn.execute(
+                "SELECT 1 FROM docs WHERE id = ? AND deleted_at IS NULL",
+                (doc_id,)).fetchone():
+            return 0
+        conn.execute(
+            "DELETE FROM source_blocks WHERE doc_id = ? AND page = ?", (doc_id, page))
+        now = time.time()
+        inserted = 0
+        for item in blocks[:60]:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()[:1200]
+            latex = str(item.get("latex") or "").strip()[:600]
+            kind = str(item.get("kind") or "").strip()[:40]
+            if not kind or (not text and not latex):
+                continue
+            try:
+                confidence = float(item.get("confidence") or 0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            conn.execute(
+                "INSERT INTO source_blocks(id, doc_id, page, kind, text, latex,"
+                " confidence, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (secrets.token_hex(10), doc_id, page, kind, text, latex,
+                 max(0.0, min(1.0, confidence)), now))
+            inserted += 1
+        conn.commit()
+        return inserted
+    finally:
+        conn.close()
+
+
 def _list_extracted_formulas(uid: str, table_id: str = "",
                              doc_id: str = "") -> list[dict]:
     table_id = table_id[:64]

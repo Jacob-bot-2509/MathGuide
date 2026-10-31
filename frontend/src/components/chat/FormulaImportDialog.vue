@@ -9,12 +9,14 @@ import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import { getResearchDocPageText } from '@/services/researchService'
 import {
+  analyzeResearchPage,
   extractFormulas,
   listSavedFormulas,
   validateTableFormula,
   type ExtractedFormula,
   type FormulaExtractResult,
   type FormulaValidation,
+  type PageBlock,
   type SavedFormula,
   type TableColumn,
 } from '@/services/researchTableService'
@@ -49,6 +51,8 @@ const contextText = ref('')
 const savedFormulas = ref<SavedFormula[]>([])
 const validations = ref<Record<string, FormulaValidation>>({})
 const validating = ref('')
+const pageAnalyzing = ref(false)
+const pageBlocks = ref<PageBlock[]>([])
 const handwritingConfirmed = ref<Set<string>>(new Set())
 
 async function loadSavedFormulas(): Promise<void> {
@@ -204,6 +208,28 @@ function defaultMapping(formula: ExtractedFormula, variable: string): string {
 function defaultTarget(formula: ExtractedFormula): string {
   const existing = props.columns.find((c) => c.label === formula.target)
   return existing?.key ?? '__new__'
+}
+
+async function analyzePage(): Promise<void> {
+  if (!images.value.length || pageAnalyzing.value) return
+  pageAnalyzing.value = true
+  pageBlocks.value = []
+  try {
+    const res = await analyzeResearchPage(
+      images.value.map((i) => ({ mime: i.mime, data: i.data })),
+      contextText.value,
+      { docId: props.sourceDocId, page: props.sourcePage },
+    )
+    pageBlocks.value = res.blocks
+  } catch {
+    showToast(t('formula.pageAnalyzeFail'))
+  } finally {
+    pageAnalyzing.value = false
+  }
+}
+
+function blockLabel(kind: PageBlock['kind']): string {
+  return t(`formula.block_${kind}`)
 }
 
 async function doExtract(): Promise<void> {
@@ -390,9 +416,20 @@ function onApply(): void {
           </button>
         </div>
 
+        <button class="mini extract" :disabled="!images.length || pageAnalyzing" @click="analyzePage">
+          {{ pageAnalyzing ? t('formula.pageAnalyzing') : t('formula.pageAnalyze') }}
+        </button>
         <button class="mini primary extract" :disabled="!images.length || extracting" @click="doExtract">
           {{ extracting ? t('formula.extracting') : t('formula.extract') }}
         </button>
+
+        <div v-if="pageBlocks.length" class="page-blocks">
+          <p v-for="(block, index) in pageBlocks" :key="index" class="page-block">
+            <span class="pb-kind">{{ blockLabel(block.kind) }}</span>
+            <span class="pb-text">{{ block.latex || block.text }}</span>
+            <span class="pb-conf">{{ Math.round(block.confidence * 100) }}%</span>
+          </p>
+        </div>
 
         <template v-if="result">
           <p v-if="result.master" class="master-note">{{ t('formula.masterDetected') }}</p>
@@ -651,6 +688,52 @@ function onApply(): void {
 
 .extract {
   margin-top: 12px;
+}
+
+.page-blocks {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-card);
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.page-block {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.page-block:last-child {
+  border-bottom: none;
+}
+
+.pb-kind {
+  flex: none;
+  color: var(--cyan);
+  font-family: var(--font-tech);
+  font-size: 9.5px;
+}
+
+.pb-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.pb-conf {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-dim);
+  font-size: 9px;
 }
 
 .master-note {

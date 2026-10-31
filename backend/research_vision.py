@@ -176,6 +176,89 @@ def _clean_result(data: dict[str, Any]) -> dict[str, Any]:
     return {"formulas": formulas, "groups": groups, "master": master, "warnings": warnings}
 
 
+PAGE_SYSTEM = (
+    "你是学术页面解析器。读取用户提供的整页图片,把页面拆成可用的区块。"
+    "只输出 JSON,不要解释,不要输出 Markdown 代码块。\n"
+    "输出格式:\n"
+    '{"blocks":[{"kind":"printed_text|printed_formula|printed_table|'
+    'handwriting|figure","text":"正文或说明","latex":"公式 LaTeX(可空)",'
+    '"confidence":0.0}],"warnings":[]}\n'
+    "规则:\n"
+    "1. 印刷正文归 printed_text;印刷公式归 printed_formula 并给 latex;"
+    "表格归 printed_table,只在 text 里写表题和表头摘要,不要逐格转录;\n"
+    "2. 手写内容归 handwriting;若手写的是公式,latex 填公式,并在 text 说明是实验数据还是公式;\n"
+    "3. 图片/图表归 figure,text 写图注;\n"
+    "4. 每块给 0~1 置信度;看不清就降低置信度,不要猜;\n"
+    "5. 最多 60 个区块,按页面从上到下排序。"
+)
+
+
+def _clean_page_result(raw: dict[str, Any]) -> dict[str, Any]:
+    blocks_raw = raw.get("blocks")
+    if not isinstance(blocks_raw, list):
+        raise ValueError("模型未返回 blocks")
+    kinds = {"printed_text", "printed_formula", "printed_table", "handwriting", "figure"}
+    blocks = []
+    for item in blocks_raw[:60]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind not in kinds:
+            continue
+        text = str(item.get("text") or "").strip()[:1200]
+        latex = str(item.get("latex") or "").strip()[:600]
+        if not text and not latex:
+            continue
+        try:
+            confidence = float(item.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        blocks.append({
+            "kind": kind, "text": text, "latex": latex,
+            "confidence": max(0.0, min(1.0, confidence)),
+        })
+    if not blocks:
+        raise ValueError("页面里没有识别到可用区块")
+    warnings = raw.get("warnings")
+    warnings = [str(w)[:200] for w in warnings][:10] if isinstance(warnings, list) else []
+    return {"blocks": blocks, "warnings": warnings}
+
+
+def _call_page(images: list[tuple[str, bytes]], text: str = "") -> dict[str, Any]:
+    cfg = _cfg()
+    if not (cfg["base"] and cfg["key"]):
+        raise RuntimeError("视觉模型未配置")
+    prompt = PAGE_SYSTEM
+    if text.strip():
+        prompt += "\n\n页面文字(可辅助判断区块类型):\n" + text.strip()[:8000]
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    for mime, data in images:
+        uri = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+        content.append({"type": "image_url", "image_url": {"url": uri}})
+    resp = httpx.post(
+        cfg["base"] + "/chat/completions",
+        headers={"Authorization": f"Bearer {cfg['key']}", "Content-Type": "application/json"},
+        json={"model": cfg["model"],
+              "messages": [{"role": "user", "content": content}],
+              "temperature": 0},
+        timeout=TIMEOUT,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"视觉模型返回 HTTP {resp.status_code}: {resp.text[:200]}")
+    body = resp.json()
+    try:
+        message = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("视觉模型返回格式异常") from exc
+    if isinstance(message, list):
+        raw = "".join(
+            part.get("text", "") for part in message
+            if isinstance(part, dict) and isinstance(part.get("text"), str))
+    else:
+        raw = str(message)
+    return _clean_page_result(_parse_json(raw))
+
+
 def _call_model(images: list[tuple[str, bytes]], columns: list[dict],
                 context: str = "") -> dict[str, Any]:
     cfg = _cfg()
@@ -435,6 +518,60 @@ def _decode_image(item: object) -> tuple[str, bytes]:
 def extract(images: list[tuple[str, bytes]], columns: list[dict],
             context: str = "") -> dict[str, Any]:
     return _call_model(images, columns, context)
+
+
+async def analyze_page(request: Request) -> JSONResponse:
+    """整页图片 → 区块结构(正文/公式/表格/手写/图注),可选落库。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    if not _limiter.allow(uid):
+        raise HTTPException(429, "too many requests")
+    if not is_configured():
+        raise HTTPException(503, "vision model not configured")
+    body = await read_json_object(request)
+    raw_images = body.get("images")
+    if not isinstance(raw_images, list) or not raw_images:
+        raise HTTPException(400, "images required")
+    if len(raw_images) > MAX_IMAGES:
+        raise HTTPException(400, f"最多上传 {MAX_IMAGES} 张图片")
+    try:
+        images = [_decode_image(item) for item in raw_images]
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if sum(len(data) for _, data in images) > MAX_TOTAL_BYTES:
+        raise HTTPException(413, "图片总大小超过 20MB")
+    text = body.get("text")
+    text = text[:8000] if isinstance(text, str) else ""
+    doc_id = body.get("docId") if isinstance(body.get("docId"), str) else ""
+    doc_id = doc_id[:64]
+    try:
+        page = int(body.get("page") or 0)
+    except (TypeError, ValueError):
+        page = 0
+    if doc_id:
+        try:
+            doc = await asyncio.to_thread(rc._doc_row, uid, doc_id)
+            if doc is None or doc["deletedAt"]:
+                doc_id = ""
+        except Exception:  # noqa: BLE001 文档校验失败不影响识别
+            doc_id = ""
+    try:
+        result = await asyncio.to_thread(_call_page, images, text)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"视觉模型连接失败: {type(exc).__name__}") from exc
+    saved = 0
+    if doc_id:
+        try:
+            saved = await asyncio.to_thread(
+                rc._save_page_blocks, uid, doc_id, page, result.get("blocks") or [])
+        except Exception as exc:  # noqa: BLE001 区块保存失败不影响识别
+            print(f"[vision] 页面区块保存失败(忽略): {exc}")
+    return JSONResponse({**result, "saved": saved},
+                        headers={"Cache-Control": "no-store"})
 
 
 async def extract_formulas(request: Request) -> JSONResponse:

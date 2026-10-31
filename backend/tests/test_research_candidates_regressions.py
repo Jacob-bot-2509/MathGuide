@@ -15,6 +15,24 @@ def test_incomplete_mapping_cannot_produce_an_applicable_formula():
     assert candidate['handwriting'] is True
 
 
+def test_units_affect_candidate_score_without_cross_candidate_state():
+    table = {
+        'columns': [{'key': 'A', 'label': 'x', 'unit': 's'}, {'key': 'B', 'label': 'y'}],
+        'rows': [], 'formulas': {},
+    }
+    saved = [
+        {'id': 'correct', 'target': 'y', 'expr': 'x', 'variables': ['x'],
+         'variableMap': {}, 'units': {'x': 's'}},
+        {'id': 'wrong', 'target': 'y', 'expr': 'x', 'variables': ['x'],
+         'variableMap': {}, 'units': {'x': 'ms'}},
+        {'id': 'unknown', 'target': 'y', 'expr': 'x', 'variables': ['x'],
+         'variableMap': {}, 'units': {}},
+    ]
+    result = tables._match_formula_candidates(table, saved)
+    scores = {candidate['formulaId']: candidate['score'] for candidate in result}
+    assert scores == {'correct': 5.5, 'unknown': 5.0, 'wrong': 4.0}
+
+
 def test_formula_compiler_does_not_rewrite_inserted_references():
     assert tables._compile_table_formula(
         'mass+B2', {'mass': 'B', 'B2': 'C'},

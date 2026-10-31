@@ -12,6 +12,21 @@ PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
        "/x8AAusB9Y9Zl9sAAAAASUVORK5CYII=")
 
 
+def test_clean_page_result_filters_and_clamps():
+    out = rv._clean_page_result({
+        "blocks": [
+            {"kind": "printed_formula", "latex": "v=d/t", "confidence": 1.4},
+            {"kind": "handwriting", "text": "实验数据", "confidence": 0.7},
+            {"kind": "unknown", "text": "drop"},
+            {"kind": "figure", "text": "", "latex": ""},
+        ],
+        "warnings": ["模糊"],
+    })
+    assert [b["kind"] for b in out["blocks"]] == ["printed_formula", "handwriting"]
+    assert out["blocks"][0]["confidence"] == 1.0
+    assert out["warnings"] == ["模糊"]
+
+
 def test_parse_json_accepts_fenced_output():
     data = rv._parse_json('```json\n{"formulas":[{"id":"f1"}]}\n```')
     assert data["formulas"][0]["id"] == "f1"

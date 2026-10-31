@@ -151,6 +151,7 @@ routes = [
     Route("/api/research/report", research_report.export_report, methods=["POST"]),
     Route("/api/research/tables/{table_id}/print", research_tables.print_table, methods=["POST"]),
     Route("/api/research/formulas/extract", research_vision.extract_formulas, methods=["POST"]),
+    Route("/api/research/pages/analyze", research_vision.analyze_page, methods=["POST"]),
     Route("/api/research/formulas", research_corpus.list_extracted_formulas),
     Route("/api/diagnosis", diagnosis.diagnose, methods=["POST"]),
     Route("/api/diagnosis/report", diagnosis.weak_points),

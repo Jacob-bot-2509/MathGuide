@@ -36,6 +36,29 @@ def _doc(uid: str = "u-ws") -> str:
                       analyze=False)["docId"]
 
 
+def test_page_blocks_replace_and_purge(corpus):
+    doc_id = _doc("u-page")
+    blocks = [
+        {"kind": "printed_formula", "latex": "v=d/t", "confidence": 0.9},
+        {"kind": "handwriting", "text": "实验数据", "confidence": 0.7},
+    ]
+    assert rc._save_page_blocks("u-page", doc_id, 2, blocks) == 2
+    assert rc._save_page_blocks("u-page", doc_id, 2, blocks[:1]) == 1
+    conn = rc._connect("u-page")
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM source_blocks WHERE doc_id = ? AND page = 2",
+            (doc_id,)).fetchone()[0] == 1
+    finally:
+        conn.close()
+    assert rc._delete("u-page", doc_id) is True
+    conn = rc._connect("u-page")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM source_blocks").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_source_blocks_are_saved_and_purged(corpus):
     doc_id = _doc("u-block")
     saved = rc._save_source_blocks("u-block", doc_id, 3, [{
