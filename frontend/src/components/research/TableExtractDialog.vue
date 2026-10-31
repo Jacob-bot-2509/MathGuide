@@ -27,6 +27,15 @@ const title = ref(props.preview.title || t('tableExtract.defaultTitle'))
 const columns = ref(props.preview.columns.map((v) => v.slice(0, 60)))
 const rows = ref(props.preview.rows.map((row) => [...row]))
 const saving = ref(false)
+const handwriting = computed(() => props.preview.handwriting)
+const includeHandwriting = ref(Boolean(props.preview.handwriting?.detected))
+const handwrittenCells = computed(() => new Set(
+  (props.preview.handwriting?.cells ?? []).map(([r, c]) => `${r}:${c}`),
+))
+
+function isHandwritten(ri: number, ci: number): boolean {
+  return handwrittenCells.value.has(`${ri}:${ci}`)
+}
 
 const warnings = computed(() => props.preview.warnings.filter(Boolean))
 
@@ -60,10 +69,20 @@ async function save(): Promise<void> {
   if (saving.value) return
   saving.value = true
   try {
+    const exportRows = rows.value.map((row) => [...row])
+    if (handwriting.value?.detected && !includeHandwriting.value) {
+      if (!handwrittenCells.value.size) {
+        showToast(t('tableExtract.handwritingNoCells'))
+        return
+      }
+      for (const [r, c] of handwriting.value.cells) {
+        if (exportRows[r] && c < exportRows[r].length) exportRows[r][c] = ''
+      }
+    }
     const created = await createResearchTable({
       title: title.value.trim().slice(0, 120) || t('tableExtract.defaultTitle'),
       columns: buildColumns(),
-      rows: rows.value.map((row) => row.map((v) => String(v).slice(0, 200))),
+      rows: exportRows.map((row) => row.map((v) => String(v).slice(0, 200))),
       formulas: {},
       rowLabels: rows.value.map(() => ''),
       merges: [],
@@ -110,6 +129,15 @@ async function save(): Promise<void> {
       </p>
       <p class="te-hint">{{ t('tableExtract.hint') }}</p>
 
+      <label v-if="handwriting?.detected" class="te-handwriting">
+        <input v-model="includeHandwriting" type="checkbox" />
+        <span>
+          {{ t('tableExtract.handwritingAsk') }}
+          <em v-if="handwriting.note">— {{ handwriting.note }}</em>
+          <small>{{ t('tableExtract.handwritingCells', { n: handwriting.cells.length }) }}</small>
+        </span>
+      </label>
+
       <div class="te-grid-wrap">
         <table class="te-grid">
           <thead>
@@ -124,7 +152,11 @@ async function save(): Promise<void> {
             <tr v-for="(_, ri) in rows" :key="ri">
               <td class="te-no">{{ ri + 1 }}</td>
               <td v-for="(_, ci) in columns" :key="ci">
-                <input v-model="rows[ri][ci]" class="te-cell" />
+                <input
+                  v-model="rows[ri][ci]"
+                  class="te-cell"
+                  :class="{ 'te-hand-cell': isHandwritten(ri, ci) }"
+                />
               </td>
             </tr>
           </tbody>
@@ -229,6 +261,37 @@ async function save(): Promise<void> {
   line-height: 1.6;
 }
 
+.te-handwriting {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 16px 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 209, 102, 0.45);
+  border-radius: 7px;
+  background: color-mix(in srgb, #ffd166 9%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+  cursor: pointer;
+}
+
+.te-handwriting input {
+  margin-top: 3px;
+  accent-color: var(--cyan);
+}
+
+.te-handwriting em {
+  color: #ffd166;
+  font-style: normal;
+}
+
+.te-handwriting small {
+  display: block;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
 .te-grid-wrap {
   flex: 1;
   min-height: 120px;
@@ -293,6 +356,11 @@ async function save(): Promise<void> {
 .te-cell:focus,
 .te-head-input:focus {
   box-shadow: inset 0 0 0 1px var(--line-bright);
+}
+
+.te-cell.te-hand-cell {
+  background: color-mix(in srgb, #ffd166 13%, var(--bg-card));
+  box-shadow: inset 0 0 0 1px rgba(255, 209, 102, 0.35);
 }
 
 .te-foot {

@@ -475,6 +475,16 @@ async function removeHistory(item: HistoryItem): Promise<void> {
   }
 }
 
+async function purgeHistory(item: HistoryItem): Promise<void> {
+  if (!window.confirm(t('history.purgeConfirm'))) return
+  try {
+    await deletePaperHistory(item.id, true)
+    await loadHistory()
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('history.fail'))
+  }
+}
+
 async function restoreHistory(item: HistoryItem): Promise<void> {
   try {
     await restorePaperHistory(item.id)
@@ -861,6 +871,7 @@ onMounted(async () => {
                 <template v-if="item.lastViewedAt"> · {{ fmtHistoryDate(item.lastViewedAt) }}</template>
               </span>
               <button class="hist-action" @click="removeHistory(item)">{{ t('history.delete') }}</button>
+              <button class="hist-action danger" @click="purgeHistory(item)">{{ t('history.purge') }}</button>
             </div>
           </template>
           <template v-else>
@@ -1823,5 +1834,11 @@ onMounted(async () => {
 .hist-action:hover {
   color: #ff8a8a;
   border-color: #ff8a8a66;
+}
+
+.hist-action.danger {
+  color: #ff8a8a;
+  border-color: rgba(255, 138, 138, 0.55);
+  background: rgba(255, 138, 138, 0.1);
 }
 </style>

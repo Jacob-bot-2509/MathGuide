@@ -28,35 +28,33 @@ const count = computed(() => Math.max(
   0,
 ))
 
-const numericX = computed(() => {
-  const xs = props.xValues
-  return !!xs && xs.some((v) => typeof v === 'number' && Number.isFinite(v))
-})
+const numericX = computed(() => props.xValues != null)
 
-const xRaw = computed<number[]>(() => Array.from({ length: count.value }, (_, i) => {
+const xRaw = computed<(number | null)[]>(() => Array.from({ length: count.value }, (_, i) => {
   const value = props.xValues?.[i]
-  return numericX.value && typeof value === 'number' && Number.isFinite(value)
-    ? value
-    : i
+  if (!numericX.value) return i
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }))
+
+const validX = computed(() => xRaw.value.filter((x): x is number => x !== null))
 
 const xMin = computed(() => {
   if (!numericX.value) return -0.5
-  return Math.min(...xRaw.value)
+  return validX.value.length ? Math.min(...validX.value) : 0
 })
 
 const xMax = computed(() => {
   if (!numericX.value) return Math.max(count.value - 0.5, 0.5)
-  const max = Math.max(...xRaw.value)
+  const max = validX.value.length ? Math.max(...validX.value) : 1
   return max === (xMin.value) ? max + 1 : max
 })
 
 const yRange = computed(() => {
   const values: number[] = []
   for (const s of props.series) {
-    for (const v of s.values) {
-      if (typeof v === 'number' && Number.isFinite(v)) values.push(v)
-    }
+    s.values.forEach((v, i) => {
+      if (xRaw.value[i] != null && typeof v === 'number' && Number.isFinite(v)) values.push(v)
+    })
   }
   if (!values.length) return { min: 0, max: 1 }
   let min = Math.min(...values)
@@ -113,7 +111,7 @@ const xTicks = computed(() => {
 })
 
 function pointX(i: number): number {
-  return sx(xRaw.value[i] ?? i)
+  return sx(xRaw.value[i]!)
 }
 
 function pointY(value: number): number {
@@ -124,7 +122,7 @@ const lineSegments = computed(() => props.series.map((s, si) => {
   const segments: string[] = []
   let current: string[] = []
   s.values.forEach((v, i) => {
-    if (typeof v === 'number' && Number.isFinite(v)) {
+    if (xRaw.value[i] != null && typeof v === 'number' && Number.isFinite(v)) {
       current.push(`${pointX(i)},${pointY(v)}`)
     } else if (current.length) {
       segments.push(current.join(' '))
@@ -136,7 +134,7 @@ const lineSegments = computed(() => props.series.map((s, si) => {
 }))
 
 const scatterPoints = computed(() => props.series.flatMap((s, si) =>
-  s.values.flatMap((v, i) => (typeof v === 'number' && Number.isFinite(v)
+  s.values.flatMap((v, i) => (xRaw.value[i] != null && typeof v === 'number' && Number.isFinite(v)
     ? [{ x: pointX(i), y: pointY(v), color: COLORS[si % COLORS.length], key: `${si}-${i}` }]
     : []))))
 
@@ -148,7 +146,7 @@ const bars = computed(() => {
   const out: { x: number; y: number; w: number; h: number; color: string; key: string }[] = []
   props.series.forEach((s, si) => {
     s.values.forEach((v, i) => {
-      if (typeof v !== 'number' || !Number.isFinite(v)) return
+      if (xRaw.value[i] == null || typeof v !== 'number' || !Number.isFinite(v)) return
       const center = pointX(i) - (groupWidth * 0.72) / 2 + barWidth * si + barWidth / 2
       const y = sy(v)
       out.push({
@@ -164,8 +162,7 @@ const bars = computed(() => {
   return out
 })
 
-const hasData = computed(() => props.series.some(
-  (s) => s.values.some((v) => typeof v === 'number' && Number.isFinite(v))))
+const hasData = computed(() => scatterPoints.value.length > 0)
 
 /** 序列化 SVG(补 xmlns,脱离页面样式也能打开) */
 function svgText(): string {
@@ -312,14 +309,16 @@ defineExpose({ downloadSvg, downloadPng })
       </g>
       <g v-else>
         <template v-if="chartType === 'line'">
-          <polyline
-            v-for="(line, li) in lineSegments"
-            :key="`ln-${li}`"
-            fill="none"
-            :stroke="line.color"
-            stroke-width="2"
-            :points="line.segments.join(' ')"
-          />
+          <template v-for="(line, li) in lineSegments" :key="`ln-${li}`">
+            <polyline
+              v-for="(segment, i) in line.segments"
+              :key="i"
+              fill="none"
+              :stroke="line.color"
+              stroke-width="2"
+              :points="segment"
+            />
+          </template>
           <circle
             v-for="point in scatterPoints"
             :key="`p-${point.key}`"

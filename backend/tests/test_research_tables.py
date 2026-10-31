@@ -96,6 +96,106 @@ def test_exponent_guard():
     assert "指数" in result["errors"][0]["error"]
 
 
+def test_match_formula_candidates_scores_and_validates():
+    table = {
+        "columns": [
+            {"key": "A", "label": "位移", "type": "number", "role": "measured"},
+            {"key": "B", "label": "时间", "type": "number", "role": "measured"},
+            {"key": "C", "label": "速度", "type": "number", "role": "calculated"},
+        ],
+        "rows": [["1", "2", "0.5"], ["3", "4", "0.75"]],
+        "formulas": {},
+    }
+    saved = [{
+        "id": "f1", "target": "速度", "expr": "位移/时间",
+        "variables": ["位移", "时间"],
+        "variableMap": {"位移": "A", "时间": "B"},
+    }]
+    candidates = rt._match_formula_candidates(table, saved)
+    assert len(candidates) == 1
+    top = candidates[0]
+    assert top["columnKey"] == "C"
+    assert top["formula"] == "=A2/B2"
+    assert top["validation"]["matched"] == 2
+    assert top["score"] > 0
+
+
+def test_parse_topic_clamps_confidence():
+    parsed = rt._parse_topic('```json\n{"title":"自由落体实验","confidence":1.7}\n```')
+    assert parsed["title"] == "自由落体实验"
+    assert parsed["confidence"] == 1.0
+    parsed = rt._parse_topic('{"title":"","confidence":0}')
+    assert parsed["title"] == "" and parsed["confidence"] == 0
+
+
+def test_validate_formula_compares_existing_values(tables, monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    table = rt._create_table("u-val", {
+        "title": "反算",
+        "columns": [
+            {"key": "A", "label": "位移", "type": "number"},
+            {"key": "B", "label": "时间", "type": "number"},
+            {"key": "C", "label": "速度", "type": "number"},
+        ],
+        "rows": [["1", "2", "0.5"], ["3", "4", "0.75"]],
+        "formulas": {},
+    }, None)
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-val"})
+    app = Starlette(routes=[
+        Route("/api/research/tables/{table_id}/validate-formula",
+              rt.validate_formula, methods=["POST"]),
+    ])
+    res = TestClient(app).post(
+        f"/api/research/tables/{table['id']}/validate-formula",
+        json={"columnKey": "C", "formula": "=A2/B2"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["matched"] == 2
+    assert body["compared"] == 2
+    assert body["maxError"] == "0.0000"
+
+
+def test_infer_roles_from_formulas(tables):
+    table = rt._create_table("u-infer", {
+        "title": "推断",
+        "columns": [
+            {"key": "A", "label": "时间", "type": "number"},
+            {"key": "B", "label": "位移", "type": "number"},
+            {"key": "C", "label": "速度", "type": "number"},
+            {"key": "D", "label": "样本编号", "type": "text"},
+        ],
+        "rows": [["1", "2", "", "s1"]],
+        "formulas": {"C": "=B2/A2"},
+    }, None)
+    loaded = rt._get_table("u-infer", table["id"])
+    roles = {c["key"]: c.get("role") for c in loaded["columns"]}
+    assert roles["A"] == "measured"
+    assert roles["B"] == "measured"
+    assert roles["C"] == "calculated"
+    assert roles["D"] == "identifier"
+
+
+def test_column_roles_roundtrip_and_calculated_marking(tables):
+    table = rt._create_table("u-roles", {
+        "title": "角色",
+        "columns": [
+            {"key": "A", "label": "时间", "type": "number", "role": "measured", "unit": "s"},
+            {"key": "B", "label": "速度", "type": "number"},
+        ],
+        "rows": [["1", "2"]],
+        "formulas": {"B": "=A2*2"},
+    }, None)
+    loaded = rt._get_table("u-roles", table["id"])
+    assert loaded["columns"][0]["role"] == "measured"
+    assert loaded["columns"][0]["unit"] == "s"
+    result = rt.compute(loaded["columns"], loaded["rows"], loaded["formulas"])
+    assert result["columns"][1]["role"] == "calculated"
+    assert result["computed"]["B"] == ["2.0000"]
+
+
 def test_no_data_cells_stay_blank_instead_of_crashing():
     result = rt.compute(
         [{"key": "A", "label": "a", "type": "number"},

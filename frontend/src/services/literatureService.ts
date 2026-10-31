@@ -195,8 +195,13 @@ export async function listPaperTrash(): Promise<HistoryItem[]> {
   return res.items
 }
 
-export async function deletePaperHistory(docId: string): Promise<void> {
-  await del(`/api/research/history/${encodeURIComponent(docId)}`, authHeaders())
+export async function deletePaperHistory(
+  docId: string,
+  hard = false,
+): Promise<void> {
+  const query = hard ? '?hard=1' : ''
+  await del(
+    `/api/research/history/${encodeURIComponent(docId)}${query}`, authHeaders())
 }
 
 export async function restorePaperHistory(docId: string): Promise<void> {

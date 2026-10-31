@@ -35,6 +35,15 @@ def test_clean_result_groups_and_master_validation():
     assert out["warnings"] == ["低置信度"]
 
 
+def test_clean_result_keeps_handwriting_and_confidence():
+    out = rv._clean_result({"formulas": [{
+        "id": "f1", "target": "速度", "expr": "位移/时间",
+        "variables": ["位移", "时间"], "handwriting": True, "confidence": 1.4,
+    }]})
+    assert out["formulas"][0]["handwriting"] is True
+    assert out["formulas"][0]["confidence"] == 1.0
+
+
 def test_clean_result_rejects_empty():
     with pytest.raises(ValueError):
         rv._clean_result({"formulas": []})
@@ -61,6 +70,17 @@ def test_clean_table_result_uses_text_first_row_as_header():
     })
     assert out["columns"] == ["时间", "位移"]
     assert out["rows"] == [["1", "2"], ["3", "4"]]
+
+
+def test_clean_table_result_reads_handwriting_cells():
+    out = rv._clean_table_result({
+        "columns": ["t", "x"],
+        "rows": [["1", "2"], ["3", "4"]],
+        "handwriting": {"detected": True, "cells": [[0, 1], [1, 0]], "note": "手写"},
+    })
+    assert out["handwriting"]["detected"] is True
+    assert out["handwriting"]["cells"] == [[0, 1], [1, 0]]
+    assert out["handwriting"]["note"] == "手写"
 
 
 def test_clean_table_result_rejects_empty():

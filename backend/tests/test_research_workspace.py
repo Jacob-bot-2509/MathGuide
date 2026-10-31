@@ -7,6 +7,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 import research_corpus as rc
+import research_tables as rt
 
 TEXT = """Introduction
 We study paper workspaces and reading progress.
@@ -33,6 +34,78 @@ def corpus(tmp_path, monkeypatch):
 def _doc(uid: str = "u-ws") -> str:
     return rc._ingest(uid, "workspace.txt", TEXT.encode(), "text/plain",
                       analyze=False)["docId"]
+
+
+def test_source_blocks_are_saved_and_purged(corpus):
+    doc_id = _doc("u-block")
+    saved = rc._save_source_blocks("u-block", doc_id, 3, [{
+        "target": "速度", "expr": "位移/时间",
+        "handwriting": True, "confidence": 0.8,
+    }])
+    assert saved == 1
+    conn = rc._connect("u-block")
+    try:
+        row = conn.execute(
+            "SELECT page, kind, confidence FROM source_blocks").fetchone()
+        assert row == (3, "handwriting_formula", 0.8)
+    finally:
+        conn.close()
+    assert rc._delete("u-block", doc_id) is True
+    conn = rc._connect("u-block")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM source_blocks").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_list_extracted_formulas_filters_by_table_and_doc(corpus):
+    doc_id = _doc("u-formula-list")
+    table_id = rt._create_table("u-formula-list", {
+        "columns": [{"key": "A", "label": "A", "type": "number"}], "rows": [["1"]],
+    }, None)["id"]
+    rc._save_extracted_formulas("u-formula-list", doc_id, table_id, [{
+        "target": "速度", "expr": "位移/时间",
+        "variables": ["位移", "时间"], "variableMap": {"位移": "A", "时间": "B"},
+    }])
+    by_table = rc._list_extracted_formulas("u-formula-list", table_id=table_id)
+    assert len(by_table) == 1
+    assert by_table[0]["target"] == "速度"
+    assert by_table[0]["variableMap"]["位移"] == "A"
+    assert rc._list_extracted_formulas("u-formula-list", doc_id=doc_id)
+    assert rc._list_extracted_formulas("u-formula-list") == []
+
+
+def test_extracted_formulas_are_saved_and_purged(corpus):
+    doc_id = _doc("u-formula")
+    table_id = rt._create_table("u-formula", {
+        "columns": [{"key": "A", "label": "A", "type": "number"}], "rows": [["1"]],
+    }, None)["id"]
+    formula = {"target": "速度", "expr": "位移/时间",
+               "variables": ["位移", "时间"], "variableMap": {"位移": "A", "时间": "B"}}
+    assert rc._save_extracted_formulas("u-formula", doc_id, table_id, [formula]) == 1
+    assert rc._save_extracted_formulas("u-formula", doc_id, table_id, [formula]) == 0
+    conn = rc._connect("u-formula")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM formulas").fetchone()[0] == 1
+    finally:
+        conn.close()
+    assert rc._delete("u-formula", doc_id) is True
+    conn = rc._connect("u-formula")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM formulas").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_delete_removes_derived_assets(corpus):
+    doc_id = _doc("u-hard")
+    derived = rc._user_dir("u-hard") / "derived" / doc_id
+    derived.mkdir(parents=True)
+    (derived / "crop.png").write_bytes(b"png")
+    assert rc._delete("u-hard", doc_id) is True
+    assert not derived.exists()
+    assert rc._doc_row("u-hard", doc_id) is None
+    rc._vacuum("u-hard")
 
 
 def test_progress_roundtrip(corpus):

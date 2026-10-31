@@ -4,14 +4,18 @@
  * 流程:上传 1~4 张照片 → 视觉模型提取 → 用户确认独立公式组与列映射 → 写入表格公式。
  * 图片只在内存中转为 base64 发给后端,不落盘。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import { getResearchDocPageText } from '@/services/researchService'
 import {
   extractFormulas,
+  listSavedFormulas,
+  validateTableFormula,
   type ExtractedFormula,
   type FormulaExtractResult,
+  type FormulaValidation,
+  type SavedFormula,
   type TableColumn,
 } from '@/services/researchTableService'
 
@@ -19,10 +23,16 @@ const props = defineProps<{
   columns: TableColumn[]
   sourceDocId?: string
   sourcePage?: number
+  tableId?: string
 }>()
 const emit = defineEmits<{
   close: []
-  apply: [items: { targetLabel: string; formula: string; targetColumnKey: string | null }[]]
+  apply: [items: {
+    targetLabel: string
+    formula: string
+    targetColumnKey: string | null
+    mapping: Record<string, string>
+  }[]]
 }>()
 
 interface ImageItem {
@@ -36,8 +46,40 @@ const images = ref<ImageItem[]>([])
 const extracting = ref(false)
 const result = ref<FormulaExtractResult | null>(null)
 const contextText = ref('')
+const savedFormulas = ref<SavedFormula[]>([])
+const validations = ref<Record<string, FormulaValidation>>({})
+const validating = ref('')
+const handwritingConfirmed = ref<Set<string>>(new Set())
+
+async function loadSavedFormulas(): Promise<void> {
+  if (!props.tableId && !props.sourceDocId) return
+  try {
+    savedFormulas.value = await listSavedFormulas(props.tableId, props.sourceDocId)
+  } catch {
+    savedFormulas.value = []
+  }
+}
+
+/** 按表头匹配度排序,最多展示 3 条历史候选。 */
+const sortedSavedFormulas = computed(() => {
+  const labels = props.columns.map((c) => `${c.label} ${c.key}`.toLowerCase())
+  function score(item: SavedFormula): number {
+    let value = 0
+    if (props.columns.some((c) => c.label === item.target)) value += 4
+    for (const variable of item.variables) {
+      const v = variable.toLowerCase()
+      if (labels.some((label) => label.includes(v) || v.includes(label))) value += 2
+    }
+    if (item.variableMap && Object.keys(item.variableMap).length) value += 1
+    return value
+  }
+  return [...savedFormulas.value]
+    .sort((a, b) => score(b) - score(a))
+    .slice(0, 3)
+})
 
 onMounted(async () => {
+  void loadSavedFormulas()
   if (!props.sourceDocId || contextText.value) return
   try {
     const page = await getResearchDocPageText(props.sourceDocId, props.sourcePage || 1)
@@ -46,9 +88,36 @@ onMounted(async () => {
     /* 来源页读取失败时保留手动输入 */
   }
 })
+
+function useSavedFormula(saved: SavedFormula): void {  const formula: ExtractedFormula = {
+    id: saved.id,
+    target: saved.target,
+    expr: saved.expr,
+    variables: saved.variables,
+    variableMap: saved.variableMap,
+    handwriting: saved.handwriting !== false,
+    note: '',
+  }
+  result.value = {
+    formulas: [formula],
+    groups: [[formula.id]],
+    master: null,
+    warnings: [],
+  }
+  mappings.value = { [formula.id]: {} }
+  for (const variable of formula.variables) {
+    mappings.value[formula.id][variable] = defaultMapping(formula, variable)
+  }
+  targetKeys.value[formula.id] = defaultTarget(formula)
+  selectedGroups.value = new Set([0])
+}
 const selectedGroups = ref<Set<number>>(new Set())
 const mappings = ref<Record<string, Record<string, string>>>({})
 const targetKeys = ref<Record<string, string>>({})
+watch([mappings, targetKeys, result], () => {
+  validations.value = {}
+  handwritingConfirmed.value = new Set()
+}, { deep: true, flush: 'sync' })
 const fileEl = ref<HTMLInputElement | null>(null)
 
 const MAX_IMAGES = 4
@@ -145,6 +214,11 @@ async function doExtract(): Promise<void> {
       images.value.map((i) => ({ mime: i.mime, data: i.data })),
       props.columns,
       contextText.value,
+      {
+        docId: props.sourceDocId,
+        tableId: props.tableId,
+        page: props.sourcePage,
+      },
     )
     result.value = res
     const nextMappings: Record<string, Record<string, string>> = {}
@@ -192,11 +266,18 @@ function compileExpr(formula: ExtractedFormula): string {
     expr = expr.replace(new RegExp(`\\b${name}\\s*\\(`, 'gi'), `${target}(`)
   }
   const map = mappings.value[formula.id] ?? {}
-  const variables = Object.keys(map).sort((a, b) => b.length - a.length)
-  for (const variable of variables) {
-    const key = map[variable]
-    if (!key) continue
-    expr = expr.replace(new RegExp(escapeRegExp(variable), 'g'), `${key}2`)
+  const variables = Object.keys(map).filter((v) => v && map[v]).sort((a, b) => b.length - a.length)
+  if (variables.length) {
+    const patterns = variables.map((variable) => {
+      const escaped = escapeRegExp(variable)
+      return /^[A-Za-z0-9_]+$/.test(variable)
+        ? `(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`
+        : escaped
+    })
+    const functions = [...new Set(Object.values(FUNC_NAMES))].join('|')
+    const tokens = new RegExp(`(\\b(?:${functions})\\s*\\()|(${patterns.join('|')})`, 'g')
+    expr = expr.replace(tokens, (_match, fn: string | undefined, variable: string) =>
+      fn ?? `${map[variable]}2`)
   }
   return `=${expr}`
 }
@@ -206,8 +287,37 @@ function mappingComplete(formula: ExtractedFormula): boolean {
   return formula.variables.every((v) => !!map[v])
 }
 
+async function runValidation(formula: ExtractedFormula): Promise<void> {
+  const target = targetKeys.value[formula.id]
+  if (!props.tableId || !target || target === '__new__' || validating.value) return
+  const expression = compileExpr(formula)
+  const sourceResult = result.value
+  delete validations.value[formula.id]
+  validating.value = formula.id
+  try {
+    const validation = await validateTableFormula(props.tableId, target, expression)
+    if (result.value === sourceResult && targetKeys.value[formula.id] === target &&
+        compileExpr(formula) === expression) {
+      validations.value[formula.id] = validation
+    }
+  } catch {
+    showToast(t('formula.validateFail'))
+  } finally {
+    validating.value = ''
+  }
+}
+
 const canApply = computed(() =>
-  activeFormulas.value.length > 0 && activeFormulas.value.every(mappingComplete))
+  activeFormulas.value.length > 0
+  && activeFormulas.value.every((f) => mappingComplete(f)
+    && (!f.handwriting || handwritingConfirmed.value.has(f.id))))
+
+function toggleHandwritingConfirmed(id: string): void {
+  const next = new Set(handwritingConfirmed.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  handwritingConfirmed.value = next
+}
 
 function onApply(): void {
   if (!canApply.value) {
@@ -220,6 +330,7 @@ function onApply(): void {
       targetLabel: formula.target,
       formula: compileExpr(formula),
       targetColumnKey: key && key !== '__new__' ? key : null,
+      mapping: { ...(mappings.value[formula.id] ?? {}) },
     }
   }))
 }
@@ -264,6 +375,20 @@ function onApply(): void {
           :placeholder="t('formula.contextHint')"
         ></textarea>
 
+        <div v-if="sortedSavedFormulas.length && !result" class="saved-formulas">
+          <p class="context-label">{{ t('formula.savedTitle') }}</p>
+          <button
+            v-for="saved in sortedSavedFormulas"
+            :key="saved.id"
+            class="saved-formula"
+            type="button"
+            @click="useSavedFormula(saved)"
+          >
+            <span class="sf-target">{{ saved.target }}</span>
+            <span class="sf-expr">{{ saved.expr }}</span>
+          </button>
+        </div>
+
         <button class="mini primary extract" :disabled="!images.length || extracting" @click="doExtract">
           {{ extracting ? t('formula.extracting') : t('formula.extract') }}
         </button>
@@ -292,7 +417,16 @@ function onApply(): void {
               <div class="f-head">
                 <span class="f-target">{{ formula.target }}</span>
                 <span class="f-expr">{{ formula.expr }}</span>
+                <span v-if="formula.handwriting" class="f-hand">{{ t('formula.handwriting') }}</span>
               </div>
+              <label v-if="formula.handwriting" class="f-confirm">
+                <input
+                  type="checkbox"
+                  :checked="handwritingConfirmed.has(formula.id)"
+                  @change="toggleHandwritingConfirmed(formula.id)"
+                />
+                <span>{{ t('formula.handwritingConfirm') }}</span>
+              </label>
               <div class="f-row">
                 <span class="f-label">{{ t('formula.targetColumn') }}</span>
                 <select v-model="targetKeys[formula.id]" class="f-select">
@@ -318,6 +452,27 @@ function onApply(): void {
               <div class="preview">
                 <span class="f-label">{{ t('formula.preview') }}</span>
                 <code>{{ compileExpr(formula) }}</code>
+              </div>
+              <div v-if="tableId && targetKeys[formula.id] && targetKeys[formula.id] !== '__new__'" class="validate">
+                <button
+                  class="validate-btn"
+                  type="button"
+                  :disabled="validating === formula.id"
+                  @click="runValidation(formula)"
+                >{{ validating === formula.id ? t('formula.validating') : t('formula.validate') }}</button>
+                <span v-if="validations[formula.id]" class="validate-result">
+                  <template v-if="validations[formula.id].compared">
+                    {{ t('formula.validateResult', {
+                      m: validations[formula.id].matched,
+                      n: validations[formula.id].compared,
+                      e: validations[formula.id].maxError,
+                    }) }}
+                  </template>
+                  <template v-else>{{ t('formula.validateNoData') }}</template>
+                  <span v-for="(error, i) in validations[formula.id].errors" :key="i">
+                    · {{ error.col }}{{ error.row >= 0 ? error.row + 2 : '' }}: {{ error.error }}
+                  </span>
+                </span>
               </div>
             </div>
           </div>
@@ -453,6 +608,46 @@ function onApply(): void {
   border-color: var(--line-bright);
 }
 
+.saved-formulas {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.saved-formula {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.saved-formula:hover {
+  border-color: var(--line-bright);
+}
+
+.sf-target {
+  flex: none;
+  color: var(--cyan);
+  font-size: 11.5px;
+}
+
+.sf-expr {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
 .extract {
   margin-top: 12px;
 }
@@ -510,6 +705,25 @@ function onApply(): void {
   margin-bottom: 7px;
 }
 
+.f-hand {
+  margin-left: auto;
+  color: #ffd166;
+  border: 1px solid rgba(255, 209, 102, 0.45);
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 9.5px;
+}
+
+.f-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 7px;
+  color: #ffd166;
+  font-size: 11px;
+  cursor: pointer;
+}
+
 .f-target {
   color: var(--cyan);
   font-size: 13px;
@@ -553,6 +767,34 @@ function onApply(): void {
   font-family: var(--font-tech);
   font-size: 12px;
   word-break: break-all;
+}
+
+.validate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.validate-btn {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--cyan);
+  border-radius: 5px;
+  font-size: 10.5px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.validate-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.validate-result {
+  color: var(--text-dim);
+  font-size: 10.5px;
 }
 
 .mini {

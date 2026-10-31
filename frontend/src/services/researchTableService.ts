@@ -6,11 +6,15 @@ import { del, get, post, upload } from '@/api/http'
 import { getToken } from '@/stores/user'
 
 export type TableColumnType = 'number' | 'text' | 'computed'
+export type TableColumnRole =
+  | 'measured' | 'calculated' | 'identifier' | 'unit' | 'note'
 
 export interface TableColumn {
   key: string
   label: string
   type: TableColumnType
+  role?: TableColumnRole
+  unit?: string
 }
 
 export interface TableMerge {
@@ -125,6 +129,8 @@ export interface ExtractedFormula {
   expr: string
   variables: string[]
   variableMap: Record<string, string>
+  handwriting?: boolean
+  confidence?: number
   note?: string
 }
 
@@ -135,15 +141,100 @@ export interface FormulaExtractResult {
   warnings: string[]
 }
 
+export interface FormulaCandidate {
+  formulaId: string
+  handwriting?: boolean | null
+  target: string
+  expr: string
+  formula: string
+  mapping: Record<string, string>
+  columnKey: string
+  score: number
+  validation: {
+    matched: number
+    compared: number
+    maxError: string
+    samples?: { row: number; actual: string; predicted: string; ok: boolean }[]
+  } | null
+}
+
+export async function matchTableFormulas(
+  tableId: string,
+  docId?: string,
+): Promise<FormulaCandidate[]> {
+  const res = await post<{ candidates: FormulaCandidate[] }>(
+    `/api/research/tables/${encodeURIComponent(tableId)}/match-formulas`,
+    { docId }, authHeaders())
+  return res.candidates
+}
+
+export interface TopicSuggestion {
+  title: string
+  confidence: number
+}
+
+export async function suggestTableTopic(tableId: string): Promise<TopicSuggestion> {
+  return post<TopicSuggestion>(
+    `/api/research/tables/${encodeURIComponent(tableId)}/suggest-topic`,
+    {},
+    authHeaders(),
+  )
+}
+
+export interface FormulaValidation {
+  columnKey: string
+  matched: number
+  compared: number
+  maxError: string
+  samples: { row: number; actual: string; predicted: string; ok: boolean }[]
+  errors: TableError[]
+}
+
+export async function validateTableFormula(
+  tableId: string,
+  columnKey: string,
+  formula: string,
+): Promise<FormulaValidation> {
+  return post<FormulaValidation>(
+    `/api/research/tables/${encodeURIComponent(tableId)}/validate-formula`,
+    { columnKey, formula },
+    authHeaders(),
+  )
+}
+
+export interface SavedFormula {
+  id: string
+  target: string
+  expr: string
+  variables: string[]
+  variableMap: Record<string, string>
+  handwriting?: boolean | null
+  createdAt: number
+}
+
+export async function listSavedFormulas(
+  tableId?: string,
+  docId?: string,
+): Promise<SavedFormula[]> {
+  const params = new URLSearchParams()
+  if (tableId) params.set('tableId', tableId)
+  if (docId) params.set('docId', docId)
+  if (!params.size) return []
+  const res = await get<{ formulas: SavedFormula[] }>(
+    `/api/research/formulas?${params.toString()}`, authHeaders())
+  return res.formulas
+}
+
 /** 图片公式识别:图片只以 base64 发送,服务端不落盘 */
 export async function extractFormulas(
   images: { mime: string; data: string }[],
   columns: TableColumn[],
   text = '',
+  meta: { docId?: string; tableId?: string; page?: number } = {},
 ): Promise<FormulaExtractResult> {
   return post<FormulaExtractResult>(
     '/api/research/formulas/extract',
-    { images, columns, text },
+    { images, columns, text, ...meta },
     authHeaders(),
   )
 }

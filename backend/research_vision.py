@@ -29,6 +29,7 @@ from starlette.responses import JSONResponse
 from auth import require_auth
 from http_utils import read_json_object
 from rate_limit import SlidingWindowLimiter
+import research_corpus as rc
 
 MAX_IMAGES = 4
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -45,14 +46,15 @@ SYSTEM = (
     "输出格式:\n"
     '{"formulas":[{"id":"f1","target":"速度","expr":"位移/时间",'
     '"variables":["位移","时间"],"variableMap":{"位移":"位移","时间":"时间"},'
-    '"note":""}],'
+    '"handwriting":false,"confidence":0.0,"note":""}],'
     '"groups":[["f1"],["f2"]],"master":null,"warnings":[]}\n'
     "规则:\n"
     "1. expr 用变量名书写,不用单元格引用,不要带等号左边;target 是这条公式要计算的量;\n"
     "2. variables 列出 expr 中出现的变量;variableMap 给出变量到表头名称的建议映射,不确定填空;\n"
     "3. 若若干公式互不依赖,分别放入不同的 groups;若一条总公式把若干子公式联系起来,"
     "把总公式 id 填入 master,groups 仍保留子公式分组;\n"
-    "4. 图片模糊或公式不完整时写入 warnings,不要猜;\n"
+    "4. 图片模糊或公式不完整时写入 warnings,不要猜;每条形如 handwriting 标明是否手写,"
+    "confidence 填 0 到 1 的识别置信度;\n"
     "5. 不要输出 Markdown 代码块,不要输出 JSON 以外的内容;\n"
     "6. 若同时提供页面文字,用其中的变量定义、单位与实验对象补全 variableMap 和 note,"
     "忽略与公式无关的段落,不要从文字中臆造公式。"
@@ -126,12 +128,18 @@ def _clean_result(data: dict[str, Any]) -> dict[str, Any]:
             for k, v in (vmap.items() if isinstance(vmap, dict) else [])
             if isinstance(k, (str, int, float)) and isinstance(v, str)
         }
+        try:
+            confidence = float(item.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0.0
         formulas.append({
             "id": fid,
             "target": target,
             "expr": expr,
             "variables": variables,
             "variableMap": variable_map,
+            "handwriting": bool(item.get("handwriting")),
+            "confidence": max(0.0, min(1.0, confidence)),
             "note": str(item.get("note") or "")[:200],
         })
         ids.add(fid)
@@ -252,13 +260,18 @@ TABLE_SYSTEM = (
     "只输出 JSON,不要解释,不要输出 Markdown 代码块。\n"
     "输出格式:\n"
     '{"title":"表格标题","columns":["列1","列2"],"rows":[["单元格","单元格"]],'
-    '"notes":"表注/单位/条件","warnings":[]}\n'
+    '"notes":"表注/单位/条件",'
+    '"handwriting":{"detected":false,"cells":[[行下标,列下标]],"note":""},'
+    '"warnings":[]}\n'
     "规则:\n"
     "1. 严格按截图逐格转录,数字、小数点、正负号、单位保持原样,不做换算,不补算缺失值;\n"
     "2. 第一行表头放入 columns;数据行放入 rows;合并单元格在覆盖位置留空字符串;\n"
     "3. 看不清的单元格留空,并在 warnings 里说明,不要猜测;\n"
     "4. 只转录一张表;若截图里有多张,转录最完整的一张并写入 warnings;\n"
-    "5. 最多 30 列、200 行,超出部分截断。"
+    "5. 最多 30 列、200 行,超出部分截断;\n"
+    "6. 判断单元格是印刷还是手写。若存在手写实验数据,把 detected 设为 true,"
+    "cells 填入手写单元格的 [数据行下标, 列下标](都从 0 开始),note 简要说明;"
+    "单元格类型不确定时不要标成手写。"
 )
 
 
@@ -309,7 +322,7 @@ def _clean_table_result(raw: dict[str, Any]) -> dict[str, Any]:
     for item in rows_raw[:200]:
         if not isinstance(item, list):
             continue
-        rows.append([str(v).strip()[:200] for v in item[:30]])
+        rows.append(["" if v is None else str(v).strip()[:200] for v in item[:30]])
     if not rows:
         raise ValueError("没有识别到表格数据")
 
@@ -337,11 +350,39 @@ def _clean_table_result(raw: dict[str, Any]) -> dict[str, Any]:
     if len(rows_raw) > 200 or any(len(r) > 30 for r in rows_raw if isinstance(r, list)):
         warnings.append("表格过大,已按 30 列 / 200 行截断")
     notes = str(raw.get("notes") or "").strip()[:500]
+    hw_raw = raw.get("handwriting")
+    hw_raw = hw_raw if isinstance(hw_raw, dict) else {}
+    hw_cells: list[list[int]] = []
+    raw_cells = hw_raw.get("cells")
+    invalid_cells = any(not isinstance(row, list) for row in rows_raw[:200])
+    if isinstance(raw_cells, list):
+        invalid_cells = invalid_cells or len(raw_cells) > 400
+        for pair in raw_cells[:400]:
+            if (not isinstance(pair, list) or len(pair) != 2
+                    or any(type(index) is not int for index in pair)
+                    or not (0 <= pair[0] < len(padded) and 0 <= pair[1] < width)):
+                invalid_cells = True
+                break
+            hw_cells.append(pair)
+    elif raw_cells is not None:
+        invalid_cells = True
+    detected = (hw_raw.get("detected") is True or raw.get("hasHandwriting") is True
+                or bool(raw_cells))
+    if invalid_cells:
+        hw_cells = []
+    if detected and not hw_cells:
+        warnings.append("检测到手写数据,但未定位到具体单元格,请逐格核对")
+    handwriting = {
+        "detected": detected,
+        "cells": hw_cells,
+        "note": str(hw_raw.get("note") or "").strip()[:300],
+    }
     return {
         "title": title,
         "columns": columns,
         "rows": padded,
         "notes": notes,
+        "handwriting": handwriting,
         "warnings": warnings,
     }
 
@@ -411,6 +452,21 @@ async def extract_formulas(request: Request) -> JSONResponse:
     columns = columns if isinstance(columns, list) else []
     context = body.get("text")
     context = context[:8000] if isinstance(context, str) else ""
+    doc_id = body.get("docId") if isinstance(body.get("docId"), str) else ""
+    table_id = body.get("tableId") if isinstance(body.get("tableId"), str) else ""
+    doc_id = doc_id[:64]
+    table_id = table_id[:64]
+    try:
+        page = int(body.get("page") or 0)
+    except (TypeError, ValueError):
+        page = 0
+    if doc_id:
+        try:
+            doc = await asyncio.to_thread(rc._doc_row, uid, doc_id)
+            if doc is None or doc["deletedAt"]:
+                doc_id = ""
+        except Exception:  # noqa: BLE001 文档校验失败不影响识别
+            doc_id = ""
     try:
         result = await asyncio.to_thread(extract, images, columns, context)
     except ValueError as exc:
@@ -419,4 +475,21 @@ async def extract_formulas(request: Request) -> JSONResponse:
         raise HTTPException(502, str(exc)) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"视觉模型连接失败: {type(exc).__name__}") from exc
-    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    saved = 0
+    blocks = 0
+    if doc_id or table_id:
+        try:
+            saved = await asyncio.to_thread(
+                rc._save_extracted_formulas, uid, doc_id, table_id,
+                result.get("formulas") or [])
+        except Exception as exc:  # noqa: BLE001 公式库写入失败不影响本次识别
+            print(f"[vision] 公式候选保存失败(忽略): {exc}")
+    if doc_id:
+        try:
+            blocks = await asyncio.to_thread(
+                rc._save_source_blocks, uid, doc_id, page,
+                result.get("formulas") or [])
+        except Exception as exc:  # noqa: BLE001 区块写入失败不影响本次识别
+            print(f"[vision] 公式来源区块保存失败(忽略): {exc}")
+    return JSONResponse({**result, "saved": saved, "blocks": blocks},
+                        headers={"Cache-Control": "no-store"})

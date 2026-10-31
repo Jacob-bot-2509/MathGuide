@@ -75,10 +75,17 @@ async def history_delete(request: Request) -> JSONResponse:
     rec = require_auth(request)
     uid = str(rec.get("uid") or "")
     doc_id = str(request.path_params.get("doc_id") or "")
-    ok = await asyncio.to_thread(rc._history_delete, uid, doc_id)
+    hard = request.query_params.get("hard", "").lower() in {"1", "true", "yes"}
+    if hard:
+        ok = await asyncio.to_thread(rc._delete, uid, doc_id)
+        if ok:
+            await asyncio.to_thread(rc._vacuum, uid)
+    else:
+        ok = await asyncio.to_thread(rc._history_delete, uid, doc_id)
     if not ok:
         raise HTTPException(404, "not found")
-    return JSONResponse({"ok": True, "days": rc.HISTORY_TTL_DAYS})
+    return JSONResponse({"ok": True, "hard": hard,
+                         "days": 0 if hard else rc.HISTORY_TTL_DAYS})
 
 
 async def history_restore(request: Request) -> JSONResponse:

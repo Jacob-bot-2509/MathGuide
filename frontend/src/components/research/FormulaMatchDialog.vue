@@ -1,0 +1,209 @@
+<script setup lang="ts">
+/** 从公式库为当前表推荐 Top-3 候选;用户点选后由父组件写入公式。 */
+import { onMounted, ref } from 'vue'
+import { t } from '@/utils/i18n'
+import { showToast } from '@/utils/toast'
+import {
+  matchTableFormulas,
+  type FormulaCandidate,
+} from '@/services/researchTableService'
+
+const props = defineProps<{ tableId: string; docId?: string }>()
+const emit = defineEmits<{
+  close: []
+  apply: [candidate: FormulaCandidate]
+}>()
+
+const loading = ref(true)
+const candidates = ref<FormulaCandidate[]>([])
+
+onMounted(async () => {
+  try {
+    candidates.value = await matchTableFormulas(props.tableId, props.docId)
+  } catch {
+    showToast(t('formula.matchFail'))
+  } finally {
+    loading.value = false
+  }
+})
+</script>
+
+<template>
+  <div class="fm-overlay" @click.self="emit('close')">
+    <section class="fm-panel">
+      <header class="fm-head">
+        <span class="fm-title">{{ t('formula.matchTitle') }}</span>
+        <button class="fm-close" @click="emit('close')">✕</button>
+      </header>
+      <p v-if="loading" class="fm-state">{{ t('formula.matching') }}</p>
+      <p v-else-if="!candidates.length" class="fm-state">{{ t('formula.matchEmpty') }}</p>
+      <div v-else class="fm-list">
+        <article v-for="item in candidates" :key="item.formulaId || item.expr" class="fm-card">
+          <div class="fm-row">
+            <span class="fm-target">{{ item.target }}</span>
+            <span class="fm-score">score {{ item.score.toFixed(2) }}</span>
+          </div>
+          <code class="fm-expr">{{ item.formula || item.expr }}</code>
+          <p v-if="item.validation" class="fm-valid">
+            {{ t('formula.validateResult', {
+              m: item.validation.matched,
+              n: item.validation.compared,
+              e: item.validation.maxError,
+            }) }}
+          </p>
+          <p
+            v-for="sample in (item.validation?.samples ?? []).slice(0, 3)"
+            :key="sample.row"
+            class="fm-sample"
+            :class="{ bad: !sample.ok }"
+          >
+            {{ t('tables.rowNo', { n: sample.row + 1 }) }}:
+            {{ sample.actual }} → {{ sample.predicted }}
+          </p>
+          <div class="fm-map">
+            <span v-for="(col, variable) in item.mapping" :key="variable" class="fm-map-item">
+              {{ variable }} → {{ col }}
+            </span>
+          </div>
+          <button class="fm-apply" type="button" @click="emit('apply', item)">
+            {{ t('formula.matchApply') }}
+          </button>
+        </article>
+      </div>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+.fm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 8, 18, 0.66);
+  backdrop-filter: blur(3px);
+}
+
+.fm-panel {
+  width: min(620px, calc(100vw - 32px));
+  max-height: 78vh;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+
+.fm-head {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fm-title {
+  color: var(--cyan);
+  font-family: var(--font-tech);
+  font-size: 12px;
+}
+
+.fm-close {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.fm-state {
+  padding: 24px 16px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.fm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px 16px;
+}
+
+.fm-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--bg-card);
+}
+
+.fm-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.fm-target {
+  color: var(--cyan);
+  font-size: 13px;
+}
+
+.fm-score {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-family: var(--font-tech);
+}
+
+.fm-expr {
+  display: block;
+  margin-top: 5px;
+  color: #ffd166;
+  font-family: var(--font-tech);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.fm-valid {
+  margin: 5px 0 0;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.fm-sample {
+  margin: 2px 0 0;
+  color: var(--text-dim);
+  font-family: var(--font-tech);
+  font-size: 10px;
+}
+
+.fm-sample.bad {
+  color: #ff8a8a;
+}
+
+.fm-map {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.fm-map-item {
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.fm-apply {
+  margin-top: 8px;
+  background: transparent;
+  border: 1px solid var(--line-bright);
+  color: var(--cyan);
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+</style>

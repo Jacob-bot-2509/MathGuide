@@ -245,6 +245,11 @@ export interface ExtractedPaperTable {
   columns: string[]
   rows: string[][]
   notes: string
+  handwriting?: {
+    detected: boolean
+    cells: number[][]
+    note: string
+  }
   warnings: string[]
 }
 

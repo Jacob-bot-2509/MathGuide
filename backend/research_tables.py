@@ -18,7 +18,7 @@ import os
 import re
 import secrets
 import time
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, getcontext
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, getcontext, localcontext
 from pathlib import Path
 from urllib.parse import quote
 
@@ -29,6 +29,8 @@ from starlette.responses import JSONResponse, Response
 import research_corpus as rc
 from auth import require_auth
 from http_utils import read_json_object
+from rag import llm as llm_mod
+from rate_limit import SlidingWindowLimiter
 
 getcontext().prec = 28
 
@@ -39,6 +41,7 @@ MAX_CELL_CHARS = 200
 MAX_FORMULA_CHARS = 500
 
 OUTPUT_QUANT = Decimal("0.0001")
+_topic_limiter = SlidingWindowLimiter(12, 3600)
 
 _REF_RE = re.compile(
     r"(?<![A-Za-z])(\$?)([A-Za-z]{1,2})(\$?)(\d+)(?![A-Za-z0-9])")
@@ -82,12 +85,13 @@ def _index_to_col(index: int) -> str:
 def _dec(value: object) -> Decimal:
     if value is None or value == "":
         raise FormulaError("空值")
-    if isinstance(value, Decimal):
-        return value
     try:
-        return Decimal(str(value).strip())
+        number = value if isinstance(value, Decimal) else Decimal(str(value).strip())
     except (InvalidOperation, ValueError) as exc:
         raise FormulaError("非数字") from exc
+    if not number.is_finite():
+        raise FormulaError("非有限数值")
+    return number
 
 
 def _fmt4(value: Decimal) -> str:
@@ -348,7 +352,8 @@ def compute(columns: list[dict], rows: list[list[str]], formulas: dict[str, str]
         for target in formulas:
             visit(target, [])
     except FormulaError as exc:
-        return {"computed": {}, "errors": [{"col": "", "row": -1, "error": str(exc)}]}
+        return {"computed": {}, "errors": [{"col": "", "row": -1, "error": str(exc)}],
+                "columns": columns}
 
     computed: dict[str, list[Decimal | None]] = {}
     errors: list[dict] = []
@@ -381,12 +386,14 @@ def compute(columns: list[dict], rows: list[list[str]], formulas: dict[str, str]
     display: dict[str, list[str]] = {}
     for target, values in computed.items():
         display[target] = ["" if v is None else _fmt4(v) for v in values]
+    inferred = _infer_roles(columns, formulas)
     return {
         "computed": display,
         "errors": errors,
         "columns": [
-            {**col, "type": "computed"} if str(col.get("key", "")).upper() in formulas else col
-            for col in columns
+            {**col, "type": "computed"} if str(col.get("key", "")).upper() in formulas
+            else col
+            for col in inferred
         ],
     }
 
@@ -399,7 +406,7 @@ def _stat_text(value: Decimal | None) -> str:
     try:
         return _fmt4(value)
     except FormulaError:
-        return format(value, "f")[:40]
+        return str(value)
 
 
 def _percentile(sorted_values: list[Decimal], p: Decimal) -> Decimal | None:
@@ -416,7 +423,7 @@ def _percentile(sorted_values: list[Decimal], p: Decimal) -> Decimal | None:
 
 def _numeric_columns(
     columns: list[dict], rows: list[list[str]], formulas: dict[str, str],
-    computed: dict[str, list[str]],
+    computed: dict[str, list[str]], errors: list[dict],
 ) -> list[dict]:
     """挑出可统计的数值列;文本列只有整列都能解析为数字才算。"""
     out: list[dict] = []
@@ -429,13 +436,22 @@ def _numeric_columns(
             raw = [row[i] if i < len(row) else "" for row in rows]
         values: list[Decimal | None] = []
         parse_failed = False
-        for cell in raw:
+        for row_index, cell in enumerate(raw):
             text = str(cell).strip()
             if not text:
                 values.append(None)
                 continue
             try:
-                values.append(Decimal(text))
+                value = Decimal(text)
+                # shortcut: 图表数值限制在 1e-323 至 1e307；支持更宽范围时升级图表数值表示。
+                if (not value.is_finite() or
+                        (value and (value.adjusted() < -323 or value.copy_abs() > Decimal("1e307")))):
+                    if ctype in ("number", "computed"):
+                        errors.append({"col": key, "row": row_index, "error": "非有限数值或超出支持范围"})
+                    values.append(None)
+                    parse_failed = True
+                    continue
+                values.append(value if value else Decimal(0))
             except (InvalidOperation, ValueError):
                 values.append(None)
                 parse_failed = True
@@ -478,58 +494,64 @@ def analyze(columns: list[dict], rows: list[list[str]],
     """描述性统计 + Pearson 相关 + 绘图序列;全部 Decimal,输出 4 位小数。"""
     result = compute(columns, rows, formulas)
     computed = result["computed"]
-    numeric = _numeric_columns(columns, rows, formulas, computed)
-    stats: list[dict] = []
-    series: list[dict] = []
-    for col in numeric:
-        values = [v for v in col["values"] if v is not None]
-        ordered = sorted(values)
-        n = len(values)
-        mean = sum(values) / Decimal(n) if n else None
-        stdev = None
-        if n >= 2:
-            variance = sum((v - mean) ** 2 for v in values) / Decimal(n - 1)
-            stdev = variance.sqrt()
-        stats.append({
-            "key": col["key"], "label": col["label"], "n": n,
-            "missing": len(col["values"]) - n,
-            "mean": _stat_text(mean),
-            "median": _stat_text(_percentile(ordered, Decimal("0.5"))),
-            "stdev": _stat_text(stdev),
-            "min": _stat_text(ordered[0] if ordered else None),
-            "max": _stat_text(ordered[-1] if ordered else None),
-            "q1": _stat_text(_percentile(ordered, Decimal("0.25"))),
-            "q3": _stat_text(_percentile(ordered, Decimal("0.75"))),
-        })
-        series.append({
-            "key": col["key"], "label": col["label"],
-            "values": [None if v is None else float(v) for v in col["values"]],
-        })
-    correlations: list[dict] = []
-    for i in range(len(numeric)):
-        for j in range(i + 1, len(numeric)):
-            r = _pearson(numeric[i]["values"], numeric[j]["values"])
-            if r is None:
-                continue
-            correlations.append({
-                "x": numeric[i]["key"], "y": numeric[j]["key"],
-                "r": _stat_text(r),
+    numeric = _numeric_columns(columns, rows, formulas, computed, result["errors"])
+    numbers = [v for col in numeric for v in col["values"] if v is not None]
+    with localcontext() as ctx:
+        if numbers:
+            ctx.prec = max(ctx.prec, max(v.adjusted() for v in numbers)
+                           - min(v.as_tuple().exponent for v in numbers)
+                           + len(str(len(rows))) + 10)
+        stats: list[dict] = []
+        series: list[dict] = []
+        for col in numeric:
+            values = [v for v in col["values"] if v is not None]
+            ordered = sorted(values)
+            n = len(values)
+            mean = sum(values) / Decimal(n) if n else None
+            stdev = None
+            if n >= 2:
+                variance = sum((v - mean) ** 2 for v in values) / Decimal(n - 1)
+                stdev = variance.sqrt()
+            stats.append({
+                "key": col["key"], "label": col["label"], "n": n,
+                "missing": len(col["values"]) - n,
+                "mean": _stat_text(mean),
+                "median": _stat_text(_percentile(ordered, Decimal("0.5"))),
+                "stdev": _stat_text(stdev),
+                "min": _stat_text(ordered[0] if ordered else None),
+                "max": _stat_text(ordered[-1] if ordered else None),
+                "q1": _stat_text(_percentile(ordered, Decimal("0.25"))),
+                "q3": _stat_text(_percentile(ordered, Decimal("0.75"))),
             })
-    labels_in = row_labels if isinstance(row_labels, list) else []
-    row_labels_out = [
-        str(labels_in[i])[:60] if i < len(labels_in) and labels_in[i] else str(i + 1)
-        for i in range(len(rows))
-    ]
-    return {
-        "stats": stats,
-        "correlations": correlations,
-        "series": series,
-        "labels": [str(i + 1) for i in range(len(rows))],
-        "rowLabels": row_labels_out,
-        "computed": computed,
-        "errors": result["errors"],
-        "columns": result["columns"],
-    }
+            series.append({
+                "key": col["key"], "label": col["label"],
+                "values": [None if v is None else float(v) for v in col["values"]],
+            })
+        correlations: list[dict] = []
+        for i in range(len(numeric)):
+            for j in range(i + 1, len(numeric)):
+                r = _pearson(numeric[i]["values"], numeric[j]["values"])
+                if r is None:
+                    continue
+                correlations.append({
+                    "x": numeric[i]["key"], "y": numeric[j]["key"],
+                    "r": _stat_text(r),
+                })
+        labels_in = row_labels if isinstance(row_labels, list) else []
+        row_labels_out = [
+            str(labels_in[i])[:60] if i < len(labels_in) and labels_in[i] else str(i + 1)
+            for i in range(len(rows))
+        ]
+        return {
+            "stats": stats,
+            "correlations": correlations,
+            "series": series,
+            "labels": [str(i + 1) for i in range(len(rows))],
+            "rowLabels": row_labels_out,
+            "computed": computed,
+            "errors": result["errors"],
+            "columns": result["columns"],
+        }
 
 
 def context_text(table: dict, max_rows: int = 40) -> str:
@@ -754,11 +776,47 @@ def _clean_row_sources(raw: object, n_rows: int) -> list[dict]:
     return sources
 
 
+_IDENT_RE = re.compile(
+    r"(编号|序号|样本|样品|组别|分组|日期|时间点|(?<![A-Za-z])(?:id|sample|group|index|no\.?|date)(?![A-Za-z]))",
+    re.IGNORECASE)
+
+
+def _infer_roles(columns: list[dict], formulas: dict[str, str]) -> list[dict]:
+    """按公式依赖补列角色:目标=计算,被引用=实测;已有合法角色不覆盖。"""
+    targets = {str(k).upper() for k in formulas}
+    refs: set[str] = set()
+    for expr in formulas.values():
+        for match in re.finditer(
+                r"(?<![A-Za-z])\$?([A-Za-z]{1,2})\$?\d+(?![A-Za-z0-9])",
+                str(expr)):
+            refs.add(match.group(1).upper())
+        for match in _RANGE_RE.finditer(str(expr)):
+            start = _col_to_index(match.group(2))
+            end = _col_to_index(match.group(6))
+            refs.update(_index_to_col(i) for i in range(min(start, end), max(start, end) + 1))
+    out = []
+    for col in columns:
+        item = dict(col)
+        key = str(item.get("key") or "").upper()
+        role = str(item.get("role") or "")
+        if key in targets:
+            item["role"] = "calculated"
+        elif role not in ("measured", "calculated", "identifier", "unit", "note"):
+            if key in refs:
+                item["role"] = "measured"
+            elif _IDENT_RE.search(str(item.get("label") or "")):
+                item["role"] = "identifier"
+        out.append(item)
+    return out
+
+
 def _row_to_table(row: tuple) -> dict:
+    columns = json.loads(row[3])
+    formulas = json.loads(row[5])
     return {
         "id": row[0], "projectId": row[1], "title": row[2],
-        "columns": json.loads(row[3]), "rows": json.loads(row[4]),
-        "formulas": json.loads(row[5]), "createdAt": row[6], "updatedAt": row[7],
+        "columns": _infer_roles(columns, formulas), "rows": json.loads(row[4]),
+        "formulas": formulas, "createdAt": row[6], "updatedAt": row[7],
         "rowLabels": _json_list(row[8] if len(row) > 8 else []),
         "merges": _json_list(row[9] if len(row) > 9 else []),
         "colWidths": _json_list(row[10] if len(row) > 10 else []),
@@ -871,7 +929,14 @@ def _validate_table_payload(
         ctype = str(col.get("type") or "text")
         if ctype not in ("number", "text", "computed"):
             ctype = "text"
-        clean_cols.append({"key": key, "label": label, "type": ctype})
+        item = {"key": key, "label": label, "type": ctype}
+        role = str(col.get("role") or "")
+        if role in ("measured", "calculated", "identifier", "unit", "note"):
+            item["role"] = role
+        unit = str(col.get("unit") or "").strip()[:30]
+        if unit:
+            item["unit"] = unit
+        clean_cols.append(item)
     clean_rows: list[list[str]] = []
     for row in rows:
         if not isinstance(row, list):
@@ -1000,6 +1065,7 @@ def tables_for_export(uid: str) -> list[dict]:
 def _delete_table(uid: str, table_id: str, *, hard: bool = False) -> bool:
     conn = _connect(uid)
     try:
+        conn.execute("DELETE FROM formulas WHERE table_id = ?", (table_id,))
         cur = conn.execute("DELETE FROM tables WHERE id = ?", (table_id,))
         conn.commit()
         if cur.rowcount <= 0:
@@ -1270,6 +1336,281 @@ async def compute_table(request: Request) -> JSONResponse:
     result = await asyncio.to_thread(
         compute, saved["columns"], saved["rows"], saved["formulas"])
     return JSONResponse({"table": saved, **result})
+
+
+async def validate_formula(request: Request) -> JSONResponse:
+    """反算校验:用候选公式重算目标列,与已有数值比对;不落库。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    table_id = str(request.path_params.get("table_id") or "")
+    table = await asyncio.to_thread(_get_table, uid, table_id)
+    if table is None:
+        raise HTTPException(404, "not found")
+    body = await read_json_object(request)
+    column_key = str(body.get("columnKey") or "").strip().upper()
+    formula = str(body.get("formula") or "").strip()[:MAX_FORMULA_CHARS]
+    if not column_key or not formula:
+        raise HTTPException(400, "缺少 columnKey 或 formula")
+    columns = table.get("columns") or []
+    target_index = next(
+        (i for i, col in enumerate(columns)
+         if str(col.get("key") or "").upper() == column_key), None)
+    if target_index is None:
+        raise HTTPException(400, "目标列不存在")
+    rows = table.get("rows") or []
+    result = await asyncio.to_thread(
+        compute, columns, rows, {column_key: formula})
+    predicted = result["computed"].get(column_key, [])
+    matched = 0
+    compared = 0
+    max_error = Decimal(0)
+    samples: list[dict] = []
+    for index, row in enumerate(rows):
+        actual_text = str(row[target_index] if target_index < len(row) else "").strip()
+        if not actual_text or index >= len(predicted) or not predicted[index]:
+            continue
+        try:
+            actual = _dec(actual_text)
+            value = _dec(predicted[index])
+            if actual and (actual.adjusted() < -323 or actual.copy_abs() > Decimal("1e307")):
+                raise FormulaError("数值超出支持范围")
+        except FormulaError as exc:
+            result["errors"].append({"col": column_key, "row": index, "error": str(exc)})
+            continue
+        compared += 1
+        error = abs(actual - value)
+        if error > max_error:
+            max_error = error
+        tolerance = max(abs(actual) * Decimal("0.000001"), Decimal("0.00005"))
+        ok = error <= tolerance
+        if ok:
+            matched += 1
+        if len(samples) < 5:
+            samples.append({
+                "row": index,
+                "actual": _stat_text(actual),
+                "predicted": predicted[index],
+                "ok": ok,
+            })
+    return JSONResponse({
+        "columnKey": column_key,
+        "matched": matched,
+        "compared": compared,
+        "maxError": _stat_text(max_error) if compared else "",
+        "samples": samples,
+        "errors": result["errors"][:5],
+    }, headers={"Cache-Control": "no-store"})
+
+
+_FUNC_MAP = {
+    "sqrt": "SQRT", "abs": "ABS", "ln": "LN", "log": "LOG", "exp": "EXP",
+    "round": "ROUND", "sum": "SUM", "avg": "AVERAGE", "mean": "AVERAGE",
+    "min": "MIN", "max": "MAX", "power": "POWER",
+}
+
+
+def _compile_table_formula(expr: str, mapping: dict[str, str]) -> str:
+    """符号公式 → 表格 Excel 公式;变量必须全部映射。"""
+    text = str(expr or "").strip()
+    if "=" in text:
+        text = text[text.rfind("=") + 1:]
+    text = (text.replace("×", "*").replace("÷", "/")
+            .replace("−", "-").replace("–", "-").replace("·", "*")
+            .replace("²", "^2").replace("³", "^3"))
+    for name, target in _FUNC_MAP.items():
+        text = re.sub(rf"\b{name}\s*\(", f"{target}(", text, flags=re.IGNORECASE)
+    for variable in sorted(mapping, key=len, reverse=True):
+        key = mapping[variable]
+        if not key:
+            return ""
+        text = re.sub(
+            rf"(?<![A-Za-z0-9_]){re.escape(variable)}(?![A-Za-z0-9_])",
+            f"{key}2", text)
+    return "=" + text
+
+
+def _match_formula_candidates(table: dict, saved: list[dict]) -> list[dict]:
+    """按表头、变量映射和反算结果给已保存公式打分,返回 Top-3。"""
+    columns = table.get("columns") or []
+    rows = table.get("rows") or []
+    candidates = []
+    for item in saved[:50]:
+        target = str(item.get("target") or "").strip()
+        expr = str(item.get("expr") or "").strip()
+        variables = item.get("variables") if isinstance(item.get("variables"), list) else []
+        suggested = item.get("variableMap") if isinstance(item.get("variableMap"), dict) else {}
+        if not target or not expr:
+            continue
+        target_col = next(
+            (c for c in columns if str(c.get("label") or "") == target), None)
+        target_key = str(target_col.get("key") or "") if target_col else ""
+        target_index = (next((i for i, c in enumerate(columns)
+                              if c is target_col), -1)
+                        if target_col else -1)
+        mapping: dict[str, str] = {}
+        matched_vars = 0
+        for variable in variables:
+            hint = str(suggested.get(variable) or "").strip()
+            hit = next(
+                (c for c in columns
+                 if hint and (str(c.get("label") or "") == hint
+                              or str(c.get("key") or "") == hint)), None)
+            if hit is None:
+                hit = next(
+                    (c for c in columns
+                     if variable and (variable in str(c.get("label") or "")
+                                      or str(c.get("label") or "") in variable)), None)
+            if hit:
+                mapping[variable] = str(hit.get("key") or "")
+                matched_vars += 1
+        score = matched_vars * 2
+        if target_col:
+            score += 2
+            role = str(target_col.get("role") or "")
+            if role == "calculated":
+                score += 2
+            if target_key:
+                empty = all(
+                    target_index >= len(row)
+                    or not str(row[target_index]).strip() for row in rows)
+                if empty:
+                    score += 1
+        if variables and matched_vars < len(variables):
+            score -= 2
+        formula = (_compile_table_formula(expr, mapping)
+                   if mapping and matched_vars == len(variables) else "")
+        validation = None
+        if formula and target_col and target_key.upper() not in {
+                str(k).upper() for k in (table.get("formulas") or {})}:
+            try:
+                result = compute(columns, rows, {
+                    target_key.upper(): formula})
+                predicted = result["computed"].get(target_key.upper(), [])
+                matched = compared = 0
+                max_error = Decimal(0)
+                samples: list[dict] = []
+                for index, row in enumerate(rows):
+                    if index >= len(predicted) or not predicted[index]:
+                        continue
+                    actual_text = str(
+                        row[target_index] if 0 <= target_index < len(row) else "").strip()
+                    if not actual_text:
+                        continue
+                    try:
+                        actual = _dec(actual_text)
+                        value = _dec(predicted[index])
+                        if actual and (actual.adjusted() < -323 or actual.copy_abs() > Decimal("1e307")):
+                            continue
+                    except FormulaError:
+                        continue
+                    compared += 1
+                    error = abs(actual - value)
+                    max_error = max(max_error, error)
+                    ok = error <= max(abs(actual) * Decimal("0.000001"), Decimal("0.00005"))
+                    if ok:
+                        matched += 1
+                    if len(samples) < 3:
+                        samples.append({
+                            "row": index,
+                            "actual": _stat_text(actual),
+                            "predicted": predicted[index],
+                            "ok": ok,
+                        })
+                if compared:
+                    score += 3 * matched / compared
+                    validation = {
+                        "matched": matched, "compared": compared,
+                        "maxError": _stat_text(max_error),
+                        "samples": samples,
+                    }
+            except Exception:  # noqa: BLE001 反算失败不影响候选
+                validation = None
+        candidates.append({
+            "formulaId": item.get("id") or "",
+            "handwriting": item.get("handwriting"),
+            "target": target,
+            "expr": expr,
+            "formula": formula,
+            "mapping": mapping,
+            "columnKey": target_key,
+            "score": round(min(10.0, max(0.0, score)), 2),
+            "validation": validation,
+        })
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+    return candidates[:3]
+
+
+async def match_formulas(request: Request) -> JSONResponse:
+    """从已保存公式库给当前表格推荐 Top-3 候选;不落库。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    table_id = str(request.path_params.get("table_id") or "")
+    table = await asyncio.to_thread(_get_table, uid, table_id)
+    if table is None:
+        raise HTTPException(404, "not found")
+    body = await read_json_object(request)
+    doc_id = str(body.get("docId") or "").strip()
+    saved = await asyncio.to_thread(
+        rc._list_extracted_formulas, uid, table_id, doc_id)
+    candidates = await asyncio.to_thread(_match_formula_candidates, table, saved)
+    return JSONResponse({"candidates": candidates},
+                        headers={"Cache-Control": "no-store"})
+
+
+def _parse_topic(text: str) -> dict:
+    raw = text.strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("模型未返回 JSON")
+    data = json.loads(raw[start:end + 1])
+    title = str(data.get("title") or "").strip().replace("\n", " ")[:40]
+    try:
+        confidence = float(data.get("confidence") or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return {"title": title, "confidence": max(0.0, min(1.0, confidence))}
+
+
+async def suggest_topic(request: Request) -> JSONResponse:
+    """根据表头、样例数据与来源论文建议表格主题;不落库。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    table_id = str(request.path_params.get("table_id") or "")
+    table = await asyncio.to_thread(_get_table, uid, table_id)
+    if table is None:
+        raise HTTPException(404, "not found")
+    if not llm_mod.is_configured():
+        raise HTTPException(503, "模型未配置")
+    if not _topic_limiter.allow(uid):
+        raise HTTPException(429, "主题建议过于频繁,请稍后再试")
+    columns = table.get("columns") or []
+    labels = [str(c.get("label") or c.get("key") or "") for c in columns][:30]
+    rows = table.get("rows") or []
+    sample = [" | ".join(str(v) for v in row[:30]) for row in rows[:8]]
+    source = table.get("source") or {}
+    context = (
+        f"表名: {table.get('title') or ''}\n"
+        f"来源论文: {source.get('docName') or ''}\n"
+        f"列: {'、'.join(labels)}\n"
+        "样例数据:\n" + "\n".join(sample)
+    )
+    system = (
+        "你是科研数据表命名助手。根据列名、样例数据和来源论文,判断这张表的简短主题。"
+        "只输出 JSON,不要解释。格式:"
+        '{"title":"不超过20字的主题","confidence":0到1之间的小数}。'
+        "主题必须是具体研究对象或实验主题,不要用“数据表”“实验结果”这类空泛名称。"
+        "信息不足时把 title 留空、confidence 设为 0。"
+    )
+    parts: list[str] = []
+    async for delta in llm_mod.stream_chat(
+            system, context, role="main", fallback=True, max_tokens=200):
+        parts.append(delta)
+    try:
+        result = _parse_topic("".join(parts))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(502, f"主题建议失败: {exc}") from exc
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 async def stats_table(request: Request) -> JSONResponse:

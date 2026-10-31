@@ -189,6 +189,34 @@ def _connect(uid: str) -> sqlite3.Connection:
         " structure_json TEXT NOT NULL, created_at REAL NOT NULL)"
     )
     conn.execute(
+        "CREATE TABLE IF NOT EXISTS source_blocks("
+        "id TEXT PRIMARY KEY, doc_id TEXT NOT NULL DEFAULT '', page INTEGER NOT NULL DEFAULT 0,"
+        " kind TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '',"
+        " latex TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0,"
+        " created_at REAL NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS formulas("
+        "id TEXT PRIMARY KEY, doc_id TEXT NOT NULL DEFAULT '',"
+        " table_id TEXT NOT NULL DEFAULT '', target TEXT NOT NULL,"
+        " expr TEXT NOT NULL, variables_json TEXT NOT NULL DEFAULT '[]',"
+        " mapping_json TEXT NOT NULL DEFAULT '{}', confidence REAL NOT NULL DEFAULT 0,"
+        " handwriting INTEGER, created_at REAL NOT NULL,"
+        " UNIQUE(doc_id, table_id, target, expr))"
+    )
+    if "handwriting" not in {row[1] for row in conn.execute("PRAGMA table_info(formulas)")}:
+        conn.execute("ALTER TABLE formulas ADD COLUMN handwriting INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_source_blocks_doc ON source_blocks(doc_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_formulas_doc ON formulas(doc_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_formulas_table ON formulas(table_id)")
+    formula_columns = {row[1] for row in conn.execute("PRAGMA table_info(formulas)")}
+    for column, decl in (("handwriting", "INTEGER"), ("confidence", "REAL NOT NULL DEFAULT 0")):
+        if column not in formula_columns:
+            conn.execute(f"ALTER TABLE formulas ADD COLUMN {column} {decl}")
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS annotations("
         "id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, page INTEGER NOT NULL,"
         " quote TEXT NOT NULL DEFAULT '', rects TEXT NOT NULL DEFAULT '[]',"
@@ -1415,6 +1443,8 @@ def _delete(uid: str, doc_id: str, *, expired_before: float | None = None) -> bo
             if not found:
                 return False
             conn.execute("DELETE FROM doc_insights WHERE doc_id = ?", (doc_id,))
+            conn.execute("DELETE FROM formulas WHERE doc_id = ?", (doc_id,))
+            conn.execute("DELETE FROM source_blocks WHERE doc_id = ?", (doc_id,))
             conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
             conn.execute("DELETE FROM nodes WHERE doc_id = ?", (doc_id,))
             conn.execute("DELETE FROM annotations WHERE doc_id = ?", (doc_id,))
@@ -1433,9 +1463,25 @@ def _delete(uid: str, doc_id: str, *, expired_before: float | None = None) -> bo
                     path.unlink()
                 except OSError:
                     pass
+        # 派生资产(公式裁剪图、页面 OCR JSON 等)与文档同生命周期
+        shutil.rmtree(_user_dir(uid) / "derived" / doc_id, ignore_errors=True)
         with _index_lock:
             _indexes.pop(uid, None)
+            _index_paths.pop(uid, None)
         return True
+
+
+def _vacuum(uid: str) -> None:
+    """彻底清除后回收 SQLite 空闲页并截断 WAL;失败不影响删除结果。"""
+    try:
+        conn = _connect(uid)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        print(f"[research] 彻底清除后压缩失败(忽略): {exc}")
 
 
 def corpus_stamp(uid: str) -> str:
@@ -1465,6 +1511,142 @@ def _doc_row(uid: str, doc_id: str) -> dict | None:
                 "authors": row[18] or "", "year": row[19] or 0,
                 "venue": row[20] or "", "originUrl": row[21] or "",
                 "lastPage": row[22] or 1, "lastReadAt": row[23] or 0}
+    finally:
+        conn.close()
+
+
+def _save_extracted_formulas(uid: str, doc_id: str, table_id: str,
+                             formulas: list[dict]) -> int:
+    """保存图片识别公式的候选记录:按 doc/table/target/expr 去重。"""
+    doc_id = doc_id[:64]
+    table_id = table_id[:64]
+    if not doc_id and not table_id:
+        return 0
+    conn = _connect(uid)
+    inserted = 0
+    try:
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        if doc_id and not conn.execute(
+                "SELECT 1 FROM docs WHERE id = ? AND deleted_at IS NULL", (doc_id,)).fetchone():
+            return 0
+        if table_id:
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tables'"
+            ).fetchone()
+            if not exists or not conn.execute(
+                    "SELECT 1 FROM tables WHERE id = ?", (table_id,)).fetchone():
+                return 0
+        now = time.time()
+        for item in formulas[:20]:
+            if not isinstance(item, dict):
+                continue
+            target = str(item.get("target") or "").strip()[:60]
+            expr = str(item.get("expr") or "").strip()[:300]
+            if not target or not expr:
+                continue
+            variables = item.get("variables")
+            variables = variables if isinstance(variables, list) else []
+            mapping = item.get("variableMap")
+            mapping = mapping if isinstance(mapping, dict) else {}
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO formulas(id, doc_id, table_id, target, expr,"
+                " variables_json, mapping_json, confidence, created_at, handwriting)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (secrets.token_hex(10), doc_id, table_id, target, expr,
+                 json.dumps(variables, ensure_ascii=False),
+                 json.dumps(mapping, ensure_ascii=False), 0.0, now,
+                 int(item["handwriting"]) if isinstance(item.get("handwriting"), bool) else None))
+            inserted += max(0, cur.rowcount)
+            if not cur.rowcount and item.get("handwriting") is True:
+                conn.execute(
+                    "UPDATE formulas SET handwriting = 1"
+                    " WHERE doc_id = ? AND table_id = ? AND target = ? AND expr = ?",
+                    (doc_id, table_id, target, expr))
+        conn.commit()
+        return inserted
+    finally:
+        conn.close()
+
+
+def _save_source_blocks(uid: str, doc_id: str, page: int,
+                        formulas: list[dict]) -> int:
+    """保存公式识别来源区块;手写公式单独标记,供后续低置信复核。"""
+    doc_id = doc_id[:64]
+    if not doc_id or not formulas:
+        return 0
+    page = max(0, min(int(page or 0), 100000))
+    conn = _connect(uid)
+    inserted = 0
+    try:
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        if not conn.execute(
+                "SELECT 1 FROM docs WHERE id = ? AND deleted_at IS NULL", (doc_id,)).fetchone():
+            return 0
+        now = time.time()
+        for item in formulas[:20]:
+            if not isinstance(item, dict):
+                continue
+            expr = str(item.get("expr") or "").strip()[:300]
+            target = str(item.get("target") or "").strip()[:60]
+            if not expr:
+                continue
+            kind = "handwriting_formula" if item.get("handwriting") else "printed_formula"
+            try:
+                confidence = float(item.get("confidence") or 0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            conn.execute(
+                "INSERT INTO source_blocks(id, doc_id, page, kind, text, latex,"
+                " confidence, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (secrets.token_hex(10), doc_id, page, kind,
+                 f"{target} = {expr}"[:500], expr, max(0.0, min(1.0, confidence)),
+                 now))
+            inserted += 1
+        conn.commit()
+        return inserted
+    finally:
+        conn.close()
+
+
+def _list_extracted_formulas(uid: str, table_id: str = "",
+                             doc_id: str = "") -> list[dict]:
+    table_id = table_id[:64]
+    doc_id = doc_id[:64]
+    if not table_id and not doc_id:
+        return []
+    clauses, params = [], []
+    if table_id:
+        clauses.append("table_id = ?")
+        params.append(table_id)
+    if doc_id:
+        clauses.append("doc_id = ?")
+        params.append(doc_id)
+    conn = _connect(uid)
+    try:
+        rows = conn.execute(
+            "SELECT id, target, expr, variables_json, mapping_json, created_at, handwriting"
+            " FROM formulas WHERE " + " OR ".join(clauses)
+            + " ORDER BY created_at DESC LIMIT 50", params).fetchall()
+        out = []
+        for row in rows:
+            try:
+                variables = json.loads(row[3])
+            except (TypeError, ValueError):
+                variables = []
+            try:
+                mapping = json.loads(row[4])
+            except (TypeError, ValueError):
+                mapping = {}
+            out.append({
+                "id": row[0], "target": row[1], "expr": row[2],
+                "variables": variables if isinstance(variables, list) else [],
+                "variableMap": mapping if isinstance(mapping, dict) else {},
+                "createdAt": row[5],
+                "handwriting": None if row[6] is None else bool(row[6]),
+            })
+        return out
     finally:
         conn.close()
 
@@ -2040,6 +2222,8 @@ def _clear_all(uid: str) -> int:
             if ids:
                 marks = ",".join("?" for _ in ids)
                 conn.execute(f"DELETE FROM doc_insights WHERE doc_id IN ({marks})", ids)
+                conn.execute(f"DELETE FROM formulas WHERE doc_id IN ({marks})", ids)
+                conn.execute(f"DELETE FROM source_blocks WHERE doc_id IN ({marks})", ids)
                 conn.execute(f"DELETE FROM chunks WHERE doc_id IN ({marks})", ids)
                 conn.execute(f"DELETE FROM nodes WHERE doc_id IN ({marks})", ids)
                 conn.execute(f"DELETE FROM annotations WHERE doc_id IN ({marks})", ids)
@@ -2055,6 +2239,8 @@ def _clear_all(uid: str) -> int:
                     path.unlink()
                 except OSError:
                     pass
+        for doc_id in ids:
+            shutil.rmtree(_user_dir(uid) / "derived" / doc_id, ignore_errors=True)
         with _index_lock:
             _indexes.pop(uid, None)
             _index_paths.pop(uid, None)
@@ -2161,6 +2347,19 @@ async def get_doc(request: Request) -> JSONResponse:
     return JSONResponse({"doc": doc}, headers={"Cache-Control": "no-store"})
 
 
+async def list_extracted_formulas(request: Request) -> JSONResponse:
+    """返回当前表格或论文已保存的公式候选,供再次识别时复用。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    table_id = (request.query_params.get("tableId") or "").strip()
+    doc_id = (request.query_params.get("docId") or "").strip()
+    if not table_id and not doc_id:
+        raise HTTPException(400, "缺少 tableId 或 docId")
+    items = await asyncio.to_thread(
+        _list_extracted_formulas, uid, table_id, doc_id)
+    return JSONResponse({"formulas": items}, headers={"Cache-Control": "no-store"})
+
+
 async def get_insights(request: Request) -> JSONResponse:
     """读取论文结构缓存;没有缓存时返回 cached=false,由前端决定是否生成。"""
     rec = require_auth(request)
@@ -2232,10 +2431,13 @@ async def delete_doc(request: Request) -> JSONResponse:
     rec = require_auth(request)
     uid = str(rec.get("uid") or "")
     doc_id = str(request.path_params.get("doc_id") or "")
+    hard = request.query_params.get("hard", "").lower() in {"1", "true", "yes"}
     ok = await asyncio.to_thread(_delete, uid, doc_id)
     if not ok:
         raise HTTPException(404, "not found")
-    return JSONResponse({"ok": True})
+    if hard:
+        await asyncio.to_thread(_vacuum, uid)
+    return JSONResponse({"ok": True, "hard": hard})
 
 
 async def doc_file(request: Request) -> FileResponse:

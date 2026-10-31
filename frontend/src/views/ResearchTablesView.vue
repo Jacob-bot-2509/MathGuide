@@ -9,6 +9,7 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import FormulaImportDialog from '@/components/chat/FormulaImportDialog.vue'
+import FormulaMatchDialog from '@/components/research/FormulaMatchDialog.vue'
 import TableChart from '@/components/research/TableChart.vue'
 import {
   createResearchTable,
@@ -21,6 +22,8 @@ import {
   printResearchTable,
   saveResearchTable,
   statsResearchTable,
+  suggestTableTopic,
+  type FormulaCandidate,
   type ResearchTable,
   type TableColumn,
   type TableError,
@@ -47,6 +50,9 @@ const switching = ref(false)
 const fileEl = ref<HTMLInputElement | null>(null)
 const gridEl = ref<HTMLTableElement | null>(null)
 const formulaDialogOpen = ref(false)
+const formulaMatchOpen = ref(false)
+const formulaMatchSnapshot = ref<{ id: string; data: string } | null>(null)
+const suggestingTopic = ref(false)
 const dirty = ref(false)
 
 /* ---------- 左侧列表重命名 ---------- */
@@ -566,6 +572,38 @@ async function onCompute(silent = false): Promise<void> {
   }
 }
 
+async function suggestTopic(): Promise<void> {
+  if (!table.value || suggestingTopic.value || saving.value || computing.value || printing.value || switching.value) return
+  suggestingTopic.value = true
+  try {
+    const id = table.value.id
+    if (dirty.value && !(await saveNow(true))) return
+    if (!table.value || table.value.id !== id) return
+    const snapshot = JSON.stringify(payload())
+    const res = await suggestTableTopic(id)
+    if (!table.value || table.value.id !== id || JSON.stringify(payload()) !== snapshot) {
+      showToast(t('tables.suggestionStale'))
+      return
+    }
+    if (!res.title || res.confidence < 0.7) {
+      showToast(t('tables.topicUnclear'))
+      return
+    }
+    const current = table.value.title.trim()
+    if (current && current !== t('tables.defaultTitle')
+        && !window.confirm(t('tables.topicReplaceConfirm', { title: res.title }))) {
+      return
+    }
+    table.value.title = res.title
+    dirty.value = true
+    showToast(t('tables.topicSuggested', { title: res.title }))
+  } catch {
+    showToast(t('tables.topicFail'))
+  } finally {
+    suggestingTopic.value = false
+  }
+}
+
 async function deleteTableById(id: string, hard = false): Promise<void> {
   if (switching.value || saving.value || computing.value || printing.value) return
   const confirmKey = hard ? 'tables.purgeConfirm' : 'tables.deleteConfirm'
@@ -642,6 +680,20 @@ async function onPrint(): Promise<void> {
   } finally {
     printing.value = false
   }
+}
+
+async function openMatchDialog(): Promise<void> {
+  if (!table.value || saving.value || computing.value || printing.value || switching.value) return
+  if (dirty.value && !(await saveNow(true))) return
+  if (!table.value) return
+  formulaMatchSnapshot.value = { id: table.value.id, data: JSON.stringify(payload()) }
+  formulaMatchOpen.value = true
+}
+
+async function openFormulaDialog(): Promise<void> {
+  if (!table.value || saving.value || computing.value || printing.value || switching.value) return
+  if (dirty.value && !(await saveNow(true))) return
+  formulaDialogOpen.value = true
 }
 
 async function onChat(): Promise<void> {
@@ -777,18 +829,51 @@ function ensureComputedColumn(label: string): string {
 }
 
 function applyExtracted(
-  items: { targetLabel: string; formula: string; targetColumnKey: string | null }[],
+  items: {
+    targetLabel: string
+    formula: string
+    targetColumnKey: string | null
+    mapping: Record<string, string>
+  }[],
 ): void {
   if (!table.value) return
   for (const item of items) {
     const key = item.targetColumnKey || ensureComputedColumn(item.targetLabel)
     if (!key) continue
     table.value.formulas[key] = item.formula
+    const target = table.value.columns.find((c) => c.key === key)
+    if (target) {
+      target.type = 'computed'
+      target.role = 'calculated'
+    }
+    for (const colKey of Object.values(item.mapping)) {
+      if (!colKey || colKey === key) continue
+      const source = table.value.columns.find((c) => c.key === colKey)
+      if (source && !source.role) source.role = 'measured'
+    }
   }
   formulaDialogOpen.value = false
   computed.value = {}
   errors.value = []
   dirty.value = true
+}
+
+function applyMatched(candidate: FormulaCandidate): void {
+  if (!candidate.formula) return
+  if (!table.value || !formulaMatchSnapshot.value || table.value.id !== formulaMatchSnapshot.value.id ||
+      JSON.stringify(payload()) !== formulaMatchSnapshot.value.data) {
+    formulaMatchOpen.value = false
+    showToast(t('tables.suggestionStale'))
+    return
+  }
+  if (candidate.handwriting !== false && !window.confirm(t('formula.handwritingConfirm'))) return
+  applyExtracted([{
+    targetLabel: candidate.target,
+    formula: candidate.formula,
+    targetColumnKey: candidate.columnKey || null,
+    mapping: candidate.mapping,
+  }])
+  formulaMatchOpen.value = false
 }
 
 function cellError(col: string, row: number): string {
@@ -1164,6 +1249,9 @@ onBeforeUnmount(() => {
       <section v-if="table" class="editor">
         <div class="editor-bar">
           <input v-model="table.title" class="title-input" :placeholder="t('tables.defaultTitle')" />
+          <button class="mini" :disabled="suggestingTopic || saving || computing || printing || switching" @click="suggestTopic">
+            {{ suggestingTopic ? t('tables.suggestingTopic') : t('tables.suggestTopic') }}
+          </button>
           <span class="dirty" :class="{ on: dirty }">{{ dirty ? t('tables.unsaved') : t('tables.savedShort') }}</span>
           <button class="mini" :disabled="saving" @click="saveNow()">{{ t('tables.save') }}</button>
           <button class="mini primary" :disabled="computing" @click="onCompute()">
@@ -1206,7 +1294,9 @@ onBeforeUnmount(() => {
                   <div class="th-box">
                     <span class="col-key tech-label">{{ col.key }}</span>
                     <input v-model="col.label" class="col-label" />
-                    <span v-if="col.type === 'computed'" class="computed-tag">{{ t('tables.computed') }}</span>
+                    <span v-if="col.role === 'measured'" class="role-tag measured">{{ t('tables.measured') }}</span>
+                    <span v-else-if="col.role === 'calculated'" class="role-tag calculated">{{ t('tables.calculated') }}</span>
+                    <span v-else-if="col.type === 'computed'" class="computed-tag">{{ t('tables.computed') }}</span>
                   </div>
                   <button
                     v-if="table.columns.length > 1"
@@ -1423,7 +1513,12 @@ onBeforeUnmount(() => {
         <div class="formulas">
           <div class="formulas-head">
             <p class="side-title tech-label">{{ t('tables.formulas') }}</p>
-            <button class="mini" @click="formulaDialogOpen = true">{{ t('formula.add') }}</button>
+            <button
+              class="mini"
+              :disabled="saving || computing || printing || switching"
+              @click="openMatchDialog"
+            >{{ t('formula.match') }}</button>
+            <button class="mini" :disabled="saving || computing || printing || switching" @click="openFormulaDialog">{{ t('formula.add') }}</button>
           </div>
           <p v-if="!computedColumns.length" class="hint">{{ t('formula.emptyHint') }}</p>
           <div v-for="col in computedColumns" :key="col.key" class="formula-row">
@@ -1455,8 +1550,17 @@ onBeforeUnmount(() => {
       :columns="table.columns"
       :source-doc-id="table.source?.docId"
       :source-page="table.source?.page"
+      :table-id="table.id"
       @close="formulaDialogOpen = false"
       @apply="applyExtracted"
+    />
+
+    <FormulaMatchDialog
+      v-if="formulaMatchOpen && table"
+      :table-id="table.id"
+      :doc-id="table.source?.docId"
+      @close="formulaMatchOpen = false"
+      @apply="applyMatched"
     />
   </div>
 </template>
@@ -1979,6 +2083,24 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(255, 209, 102, 0.4);
   border-radius: 999px;
   padding: 0 5px;
+}
+
+.role-tag {
+  flex: none;
+  font-size: 9px;
+  border-radius: 999px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+}
+
+.role-tag.measured {
+  color: var(--cyan);
+  border-color: color-mix(in srgb, var(--cyan) 40%, transparent);
+}
+
+.role-tag.calculated {
+  color: #ffd166;
+  border-color: rgba(255, 209, 102, 0.4);
 }
 
 .row-no {

@@ -17,6 +17,18 @@ import { rmSync } from 'node:fs'
 
 const CASES = [
   {
+    name: 'Formula variable mapping',
+    bundle: 'node --check scripts/formula-import-test.mjs',
+    run: 'node scripts/formula-import-test.mjs',
+    artifact: '.formula-import-test.cjs',
+  },
+  {
+    name: 'Table chart gaps and missing values',
+    bundle: 'node --check scripts/table-chart-test.mjs',
+    run: 'node scripts/table-chart-test.mjs',
+    artifact: '.table-chart-test.cjs',
+  },
+  {
     name: '语音数学编译器',
     bundle: 'npx esbuild scripts/speech-math-test.ts --bundle --format=cjs --outfile=.speech-math-test.cjs',
     run: 'node .speech-math-test.cjs',
