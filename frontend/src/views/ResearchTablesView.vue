@@ -566,12 +566,13 @@ async function onCompute(silent = false): Promise<void> {
   }
 }
 
-async function deleteTableById(id: string): Promise<void> {
+async function deleteTableById(id: string, hard = false): Promise<void> {
   if (switching.value || saving.value || computing.value || printing.value) return
-  if (!window.confirm(t('tables.deleteConfirm'))) return
+  const confirmKey = hard ? 'tables.purgeConfirm' : 'tables.deleteConfirm'
+  if (!window.confirm(t(confirmKey))) return
   switching.value = true
   try {
-    await deleteResearchTable(id)
+    await deleteResearchTable(id, hard)
     if (table.value?.id === id) {
       if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
       table.value = null
@@ -590,6 +591,10 @@ async function deleteTableById(id: string): Promise<void> {
 
 function onDelete(): Promise<void> {
   return table.value ? deleteTableById(table.value.id) : Promise.resolve()
+}
+
+function onPurge(): Promise<void> {
+  return table.value ? deleteTableById(table.value.id, true) : Promise.resolve()
 }
 
 async function onExport(format: 'csv' | 'xlsx'): Promise<void> {
@@ -1173,6 +1178,7 @@ onBeforeUnmount(() => {
             {{ printing ? t('tables.printing') : t('tables.print') }}
           </button>
           <button class="mini danger" @click="onDelete">{{ t('tables.delete') }}</button>
+          <button class="mini danger purge" @click="onPurge">{{ t('tables.purge') }}</button>
         </div>
 
         <div v-if="table.source?.docId" class="source-bar">
@@ -1447,6 +1453,8 @@ onBeforeUnmount(() => {
     <FormulaImportDialog
       v-if="formulaDialogOpen && table"
       :columns="table.columns"
+      :source-doc-id="table.source?.docId"
+      :source-page="table.source?.page"
       @close="formulaDialogOpen = false"
       @apply="applyExtracted"
     />
@@ -1714,6 +1722,11 @@ onBeforeUnmount(() => {
 .mini.danger {
   color: #ff8a8a;
   border-color: rgba(255, 138, 138, 0.4);
+}
+
+.mini.purge {
+  background: rgba(255, 138, 138, 0.12);
+  border-color: rgba(255, 138, 138, 0.65);
 }
 
 .source-bar {

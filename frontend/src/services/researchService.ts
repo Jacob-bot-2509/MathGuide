@@ -91,6 +91,15 @@ export async function getResearchDocMeta(docId: string): Promise<ResearchDoc> {
   return res.doc
 }
 
+export async function getResearchDocPageText(
+  docId: string,
+  page = 1,
+): Promise<{ text: string; total: number; page: number }> {
+  return get<{ text: string; total: number; page: number }>(
+    `/api/research/docs/${encodeURIComponent(docId)}/text?page=${page}`,
+    authHeaders())
+}
+
 export interface OutlineNode {
   title: string
   children: OutlineNode[]

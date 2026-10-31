@@ -377,6 +377,7 @@ onBeforeUnmount(() => {
           :kind="kind"
           :start-page="currentDoc.lastPage || 1"
           :project-id="currentDoc.projectId ?? null"
+          scroll-mode
           @close="onViewerClose"
           @page-change="onPageChange"
         />
@@ -400,10 +401,12 @@ onBeforeUnmount(() => {
   z-index: 1100;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
   border: 1px solid var(--line-bright);
   border-radius: 10px;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
   overflow: hidden;
 }
 
@@ -418,7 +421,7 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 7px 10px;
   border-bottom: 1px solid var(--line);
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 74%, transparent);
   flex: none;
 }
 
@@ -491,7 +494,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--line);
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 70%, transparent);
 }
 
 .pw-body.with-insights .pw-chat {
@@ -618,6 +621,15 @@ onBeforeUnmount(() => {
   position: relative;
   flex: 1;
   min-width: 0;
+}
+
+/* 阅读器与结构栏跟随工作台玻璃底:PDF 页面本身仍是白纸,四周留白透出背景 */
+.pw-reader :deep(.viewer) {
+  background: transparent;
+}
+
+.pw-body :deep(.pi) {
+  background: color-mix(in srgb, var(--bg-panel) 72%, transparent);
 }
 
 .pw-loading {

@@ -21,13 +21,15 @@ import {
 import { explainRegion, extractPaperTable, type ExtractedPaperTable } from '@/services/researchService'
 import TableExtractDialog from '@/components/research/TableExtractDialog.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   docId: string
   title: string
   kind: 'pdf' | 'text'
   startPage?: number
   projectId?: string | null
-}>()
+  /** 连续下拉阅读:PDF 全部页面纵向堆叠,不显示翻页与页码跳转 */
+  scrollMode?: boolean
+}>(), { scrollMode: false })
 const emit = defineEmits<{ close: []; pageChange: [page: number] }>()
 
 /* 来源元数据:失败不阻塞阅读,只少一行徽标。 */
@@ -71,6 +73,7 @@ const textLayerEl = ref<HTMLDivElement | null>(null)
 const bodyEl = ref<HTMLElement | null>(null)
 const page = ref(props.startPage && props.startPage > 0 ? props.startPage : 1)
 watch(page, (value) => emit('pageChange', value))
+const scrollPdf = computed(() => props.scrollMode && props.kind === 'pdf')
 const total = ref(0)
 const scale = ref(1.2)
 const expanded = ref(false)
@@ -117,8 +120,8 @@ const regionAnswer = ref('')
 const regionLoading = ref(false)
 let regionStart: { x: number; y: number } | null = null
 
-function pagePoint(e: MouseEvent): { x: number; y: number } | null {
-  const canvas = canvasEl.value
+function pagePoint(e: MouseEvent, pageNumber?: number): { x: number; y: number } | null {
+  const canvas = pageNumber ? canvasEls.get(pageNumber) : canvasEl.value
   const wrap = canvas?.parentElement
   if (!canvas || !wrap) return null
   const rect = wrap.getBoundingClientRect()
@@ -134,11 +137,14 @@ function toggleRegion(): void {
   if (regionMode.value) clearSelection()
 }
 
-function onRegionDown(e: MouseEvent): void {
+function onRegionDown(e: MouseEvent, pageNumber?: number): void {
   if (!regionMode.value || props.kind !== 'pdf') return
-  const point = pagePoint(e)
+  const targetPage = pageNumber ?? page.value
+  const point = pagePoint(e, pageNumber)
   if (!point) return
   e.preventDefault()
+  page.value = targetPage
+  regionPage.value = targetPage
   regionStart = point
   region.value = { x: point.x, y: point.y, w: 0, h: 0 }
   // 原生文本选择会吞掉后续 mouseover,拖拽改用窗口级事件
@@ -148,7 +154,7 @@ function onRegionDown(e: MouseEvent): void {
 
 function onRegionMove(e: MouseEvent): void {
   if (!regionStart || !region.value) return
-  const point = pagePoint(e)
+  const point = pagePoint(e, regionPage.value)
   if (!point) return
   region.value = {
     x: Math.min(regionStart.x, point.x),
@@ -305,6 +311,43 @@ async function showPassages(items: { page: number; quote: string }[]): Promise<v
   const usable = items.filter((i) => i.quote && i.page > 0)
   if (!usable.length) return
   const first = usable[0]
+  if (scrollPdf.value) {
+    page.value = first.page
+    scrollToPage(first.page)
+    await nextTick()
+    let firstRect: DOMRect | null = null
+    for (const item of usable.slice(0, 4)) {
+      await renderScrollPage(item.page)
+      const layer = textLayerEls.get(item.page)
+      const wrap = pageEls.get(item.page)
+      if (!layer || !wrap) continue
+      const range = findQuoteRange(layer, item.quote)
+      if (!range) continue
+      const base = wrap.getBoundingClientRect()
+      if (!base.width || !base.height) continue
+      const rects: number[][] = []
+      for (const rect of Array.from(range.getClientRects()).slice(0, 40)) {
+        if (!rect.width || !rect.height) continue
+        rects.push([
+          Math.max(0, (rect.left - base.left) / base.width),
+          Math.max(0, (rect.top - base.top) / base.height),
+          Math.min(1, rect.width / base.width),
+          Math.min(1, rect.height / base.height),
+        ].map((n) => Number(n.toFixed(5))))
+      }
+      if (!rects.length) continue
+      hits.value.push({ page: item.page, rects })
+      if (!firstRect) firstRect = range.getBoundingClientRect()
+    }
+    await nextTick()
+    if (firstRect && bodyEl.value) {
+      const box = bodyEl.value.getBoundingClientRect()
+      if (firstRect.top < box.top || firstRect.bottom > box.bottom) {
+        bodyEl.value.scrollTop += firstRect.top - box.top - 80
+      }
+    }
+    return
+  }
   if (first.page !== page.value) {
     page.value = first.page
     await (props.kind === 'pdf' ? renderPdfPage() : loadTextPage())
@@ -454,7 +497,7 @@ function clearSelection(): void {
   noteText.value = ''
 }
 
-function onMouseUp(e: MouseEvent): void {
+function onMouseUp(e: MouseEvent, pageNumber?: number): void {
   if (regionMode.value || region.value) return
   const sel = window.getSelection()
   if (!sel || sel.isCollapsed) return
@@ -476,10 +519,12 @@ function onMouseUp(e: MouseEvent): void {
       Math.max(0, Math.min(1, rect.height / base.height)),
     ].map((n) => Number(n.toFixed(5))))
   }
+  const targetPage = pageNumber ?? page.value
+  page.value = targetPage
   selection.value = {
     quote: quote.slice(0, 2000),
     rects,
-    page: page.value,
+    page: targetPage,
     x: Math.min(e.clientX, window.innerWidth - 300),
     y: Math.min(e.clientY + 12, window.innerHeight - 190),
   }
@@ -597,11 +642,43 @@ async function loadAnnotations(): Promise<void> {
   pendingOps.value = []
 }
 
+function annotationsFor(pageNumber: number): Annotation[] {
+  return annotations.value.filter((a) => a.page === pageNumber)
+}
+
+function hitsFor(pageNumber: number): { page: number; rects: number[][] }[] {
+  return hits.value.filter((h) => h.page === pageNumber)
+}
+
+function setPageEl(pageNumber: number, el: unknown): void {
+  if (el instanceof HTMLElement) pageEls.set(pageNumber, el)
+  else pageEls.delete(pageNumber)
+}
+
+function setCanvasEl(pageNumber: number, el: unknown): void {
+  if (el instanceof HTMLCanvasElement) canvasEls.set(pageNumber, el)
+  else canvasEls.delete(pageNumber)
+}
+
+function setTextLayerEl(pageNumber: number, el: unknown): void {
+  if (el instanceof HTMLDivElement) textLayerEls.set(pageNumber, el)
+  else textLayerEls.delete(pageNumber)
+}
+
 /* ---------- PDF ---------- */
 let pdfDoc: any = null
 let pdfjs: any = null
 let renderTask: any = null
 let loadSeq = 0
+
+/* 连续阅读模式的页面 DOM 与懒渲染状态 */
+const pageEls = new Map<number, HTMLElement>()
+const canvasEls = new Map<number, HTMLCanvasElement>()
+const textLayerEls = new Map<number, HTMLDivElement>()
+const renderedPages = new Set<number>()
+const renderTasks = new Map<number, any>()
+let pageObserver: IntersectionObserver | null = null
+const regionPage = ref(1)
 
 function fail(message: string): void {
   error.value = message
@@ -664,6 +741,139 @@ async function renderPdfPage(): Promise<void> {
   }
 }
 
+async function renderScrollPage(pageNumber: number): Promise<void> {
+  if (!pdfDoc || renderedPages.has(pageNumber)) return
+  const pending = renderTasks.get(pageNumber)
+  if (pending) {
+    try {
+      await pending.promise
+    } catch {
+      /* 已取消或失败 */
+    }
+    return
+  }
+  const canvas = canvasEls.get(pageNumber)
+  const layer = textLayerEls.get(pageNumber)
+  if (!canvas) return
+  try {
+    const pdfPage = await pdfDoc.getPage(pageNumber)
+    const base = pdfPage.getViewport({ scale: 1 })
+    if (autoFit.value) {
+      const width = (bodyEl.value?.clientWidth ?? 0) - 28
+      if (width > 0) {
+        scale.value = Number(
+          Math.min(2, Math.max(0.4, width / base.width)).toFixed(3))
+      }
+    }
+    const viewport = pdfPage.getViewport({ scale: scale.value })
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    canvas.width = Math.floor(viewport.width * dpr)
+    canvas.height = Math.floor(viewport.height * dpr)
+    canvas.style.width = `${viewport.width}px`
+    canvas.style.height = `${viewport.height}px`
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('canvas unavailable')
+    const task = pdfPage.render({
+      canvasContext: context,
+      viewport,
+      transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
+    })
+    renderTasks.set(pageNumber, task)
+    await task.promise
+    renderedPages.add(pageNumber)
+    if (layer && pdfjs) {
+      layer.replaceChildren()
+      layer.style.setProperty('--scale-factor', String(scale.value))
+      layer.style.width = `${viewport.width}px`
+      layer.style.height = `${viewport.height}px`
+      const content = await pdfPage.getTextContent()
+      const textLayer = new pdfjs.TextLayer({
+        textContentSource: content,
+        container: layer,
+        viewport,
+      })
+      await textLayer.render()
+    }
+  } catch (err) {
+    if ((err as { name?: string })?.name !== 'RenderingCancelledException') {
+      console.warn('[viewer] page render failed', pageNumber, err)
+    }
+  } finally {
+    renderTasks.delete(pageNumber)
+  }
+}
+
+function resetScrollPages(): void {
+  pageObserver?.disconnect()
+  pageObserver = null
+  for (const task of renderTasks.values()) {
+    try {
+      task.cancel()
+    } catch {
+      /* 已结束 */
+    }
+  }
+  renderTasks.clear()
+  renderedPages.clear()
+}
+
+function clearScrollDom(): void {
+  resetScrollPages()
+  pageEls.clear()
+  canvasEls.clear()
+  textLayerEls.clear()
+}
+
+async function setupScrollPages(): Promise<void> {
+  await nextTick()
+  pageObserver?.disconnect()
+  if (typeof IntersectionObserver === 'undefined') {
+    for (let n = 1; n <= total.value; n += 1) void renderScrollPage(n)
+    return
+  }
+  pageObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue
+      const n = Number((entry.target as HTMLElement).dataset.page || 0)
+      if (n > 0) void renderScrollPage(n)
+    }
+  }, { root: bodyEl.value, rootMargin: '900px 0px' })
+  for (const [n, el] of pageEls) {
+    el.dataset.page = String(n)
+    pageObserver.observe(el)
+  }
+  const start = Math.max(1, page.value)
+  for (let n = start; n <= Math.min(total.value, start + 2); n += 1) {
+    void renderScrollPage(n)
+  }
+}
+
+async function rerenderScrollPages(): Promise<void> {
+  resetScrollPages()
+  await nextTick()
+  await setupScrollPages()
+}
+
+function scrollToPage(pageNumber: number): void {
+  const el = pageEls.get(pageNumber)
+  if (el) el.scrollIntoView({ block: 'start' })
+}
+
+function onScroll(): void {
+  if (!scrollPdf.value) return
+  const body = bodyEl.value
+  if (!body) return
+  const top = body.getBoundingClientRect().top + 12
+  let current = page.value
+  for (const [n, el] of pageEls) {
+    if (el.getBoundingClientRect().bottom > top) {
+      current = n
+      break
+    }
+  }
+  if (current !== page.value) page.value = current
+}
+
 async function loadPdf(): Promise<void> {
   const seq = ++loadSeq
   loading.value = true
@@ -680,7 +890,13 @@ async function loadPdf(): Promise<void> {
     if (seq !== loadSeq) return
     total.value = pdfDoc.numPages
     page.value = Math.min(Math.max(1, page.value), total.value)
-    await renderPdfPage()
+    if (scrollPdf.value) {
+      await nextTick()
+      await setupScrollPages()
+      loading.value = false
+    } else {
+      await renderPdfPage()
+    }
   } catch (err) {
     fail(err instanceof Error ? err.message : t('viewer.loadFail'))
   }
@@ -719,6 +935,10 @@ function go(delta: number): void {
   page.value = next
   clearSelection()
   textHits.value = []
+  if (scrollPdf.value) {
+    scrollToPage(next)
+    return
+  }
   void (props.kind === 'pdf' ? renderPdfPage() : loadTextPage())
 }
 
@@ -726,12 +946,20 @@ function jump(): void {
   if (total.value) page.value = Math.min(Math.max(1, page.value), total.value)
   clearSelection()
   textHits.value = []
+  if (scrollPdf.value) {
+    scrollToPage(page.value)
+    return
+  }
   void (props.kind === 'pdf' ? renderPdfPage() : loadTextPage())
 }
 
 function zoom(delta: number): void {
   autoFit.value = false
   scale.value = Math.min(3, Math.max(0.5, Number((scale.value + delta).toFixed(2))))
+  if (scrollPdf.value) {
+    void rerenderScrollPages()
+    return
+  }
   if (props.kind === 'pdf') void renderPdfPage()
 }
 
@@ -740,6 +968,10 @@ async function toggleExpand(): Promise<void> {
   if (props.kind !== 'pdf') return
   autoFit.value = true
   await nextTick()
+  if (scrollPdf.value) {
+    await rerenderScrollPages()
+    return
+  }
   setTimeout(() => { void renderPdfPage() }, 60)
 }
 
@@ -764,6 +996,7 @@ function onKey(e: KeyboardEvent): void {
 window.addEventListener('keydown', onKey)
 
 watch(() => [props.docId, props.kind], () => {
+  clearScrollDom()
   page.value = props.startPage && props.startPage > 0 ? props.startPage : 1
   textBody.value = ''
   total.value = 0
@@ -778,6 +1011,7 @@ void load()
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   loadSeq += 1
+  clearScrollDom()
   try {
     if (renderTask) renderTask.cancel()
   } catch {
@@ -796,16 +1030,19 @@ onBeforeUnmount(() => {
     <header class="v-head">
       <span class="v-title" :title="title">{{ title }}</span>
       <span class="v-spacer"></span>
-      <button class="v-btn" :title="t('viewer.prev')" @click="go(-1)">‹</button>
-      <input
-        v-model.number="page"
-        class="v-page"
-        inputmode="numeric"
-        @keydown.enter="jump"
-        @blur="jump"
-      />
-      <span class="v-total">/ {{ total || '…' }}</span>
-      <button class="v-btn" :title="t('viewer.next')" @click="go(1)">›</button>
+      <template v-if="!scrollPdf">
+        <button class="v-btn" :title="t('viewer.prev')" @click="go(-1)">‹</button>
+        <input
+          v-model.number="page"
+          class="v-page"
+          inputmode="numeric"
+          @keydown.enter="jump"
+          @blur="jump"
+        />
+        <span class="v-total">/ {{ total || '…' }}</span>
+        <button class="v-btn" :title="t('viewer.next')" @click="go(1)">›</button>
+      </template>
+      <span v-else class="v-total">{{ page }} / {{ total || '…' }}</span>
       <template v-if="kind === 'pdf'">
         <button class="v-btn" :title="t('viewer.region')" :class="{ on: regionMode }" @click="toggleRegion">▣</button>
         <button class="v-btn" :title="t('viewer.zoomOut')" @click="zoom(-0.15)">−</button>
@@ -854,12 +1091,55 @@ onBeforeUnmount(() => {
       >{{ t('viewer.publisherPage') }}</a>
     </div>
 
-    <div ref="bodyEl" class="v-body">
+    <div ref="bodyEl" class="v-body" @scroll="onScroll">
       <p v-if="error" class="v-error">{{ error }}</p>
       <p v-else-if="loading && !textBody && kind === 'text'" class="v-loading">
         {{ t('viewer.loading') }}
       </p>
-      <template v-if="kind === 'pdf'">
+      <template v-if="scrollPdf">
+        <div class="v-scroll">
+          <div
+            v-for="n in total"
+            :key="n"
+            :ref="(el) => setPageEl(n, el)"
+            class="v-page-wrap v-page-block"
+            @mouseup="onMouseUp($event, n)"
+            @mousedown="onRegionDown($event, n)"
+          >
+            <canvas :ref="(el) => setCanvasEl(n, el)" class="v-canvas"></canvas>
+            <div :ref="(el) => setTextLayerEl(n, el)" class="v-text-layer"></div>
+            <div class="v-annot-layer">
+              <template v-for="a in annotationsFor(n)" :key="a.id">
+                <span
+                  v-for="(rect, ri) in a.rects"
+                  :key="`${a.id}-${ri}`"
+                  class="v-annot-rect"
+                  :class="`c-${a.color || 'yellow'}`"
+                  :title="a.note || a.quote"
+                  :style="rectStyle(rect)"
+                  @click.stop="beginEdit(a)"
+                ></span>
+              </template>
+            </div>
+            <div class="v-hit-layer">
+              <template v-for="(hit, hi) in hitsFor(n)" :key="`hit-${n}-${hi}`">
+                <span
+                  v-for="(rect, ri) in hit.rects"
+                  :key="`hit-${n}-${hi}-${ri}`"
+                  class="v-hit-rect"
+                  :style="rectStyle(rect)"
+                ></span>
+              </template>
+            </div>
+            <div
+              v-if="region && regionPage === n"
+              class="v-region"
+              :style="{ left: `${region.x}px`, top: `${region.y}px`, width: `${region.w}px`, height: `${region.h}px` }"
+            ></div>
+          </div>
+        </div>
+      </template>
+      <template v-else-if="kind === 'pdf'">
         <div
           class="v-page-wrap"
           @mouseup="onMouseUp($event)"
@@ -1162,6 +1442,19 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-start;
   align-items: flex-start;
+}
+
+.v-scroll {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.v-page-block {
+  margin: 0;
+  flex: none;
 }
 
 .v-page-wrap {

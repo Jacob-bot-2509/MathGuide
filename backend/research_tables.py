@@ -222,6 +222,7 @@ def _call(name: str, args: list, row: int, rows: list[list[str]],
         if name == "COUNT":
             return Decimal(len(vals))
         if not vals:
+            # 没有数据就不产出结果:SUM 也不按 Excel 返回 0,避免把空表算成 0
             raise FormulaError("区域为空")
         if name == "SUM":
             return sum(vals, Decimal(0))
@@ -371,6 +372,10 @@ def compute(columns: list[dict], rows: list[list[str]], formulas: dict[str, str]
             except (SyntaxError, ValueError, TypeError) as exc:
                 values.append(None)
                 errors.append({"col": target, "row": row_idx, "error": f"公式错误:{exc}"})
+            except Exception as exc:  # noqa: BLE001 防单格异常拖垮整表计算
+                values.append(None)
+                errors.append({"col": target, "row": row_idx,
+                               "error": f"计算失败:{type(exc).__name__}"})
         computed[target] = values
 
     display: dict[str, list[str]] = {}
@@ -992,12 +997,21 @@ def tables_for_export(uid: str) -> list[dict]:
         conn.close()
 
 
-def _delete_table(uid: str, table_id: str) -> bool:
+def _delete_table(uid: str, table_id: str, *, hard: bool = False) -> bool:
     conn = _connect(uid)
     try:
         cur = conn.execute("DELETE FROM tables WHERE id = ?", (table_id,))
         conn.commit()
-        return cur.rowcount > 0
+        if cur.rowcount <= 0:
+            return False
+        if hard:
+            # 彻底清除:回收空闲页并截断 WAL;之后新写入不会复用旧页
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("VACUUM")
+            except Exception as exc:  # noqa: BLE001 清理失败不影响删除结果
+                print(f"[tables] 彻底清除后压缩失败(忽略): {exc}")
+        return True
     finally:
         conn.close()
 
@@ -1234,10 +1248,11 @@ async def delete_table(request: Request) -> JSONResponse:
     rec = require_auth(request)
     uid = str(rec.get("uid") or "")
     table_id = str(request.path_params.get("table_id") or "")
-    ok = await asyncio.to_thread(_delete_table, uid, table_id)
+    hard = request.query_params.get("hard", "").lower() in {"1", "true", "yes"}
+    ok = await asyncio.to_thread(_delete_table, uid, table_id, hard=hard)
     if not ok:
         raise HTTPException(404, "not found")
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "hard": hard})
 
 
 async def compute_table(request: Request) -> JSONResponse:

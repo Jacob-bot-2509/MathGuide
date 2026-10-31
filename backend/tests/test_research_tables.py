@@ -96,6 +96,46 @@ def test_exponent_guard():
     assert "指数" in result["errors"][0]["error"]
 
 
+def test_no_data_cells_stay_blank_instead_of_crashing():
+    result = rt.compute(
+        [{"key": "A", "label": "a", "type": "number"},
+         {"key": "B", "label": "b", "type": "number"},
+         {"key": "C", "label": "c", "type": "computed"},
+         {"key": "D", "label": "d", "type": "computed"}],
+        [["", ""], ["2", ""]],
+        {"C": "=A2/B2", "D": "=SUM(A2:A2)"})
+    assert result["computed"]["C"] == ["", ""]
+    assert result["computed"]["D"] == ["", "2.0000"]
+    assert result["errors"]
+    # 单格失败不影响同表其他行
+    assert result["computed"]["D"][1] == "2.0000"
+
+
+def test_finish_computes_every_formula_column():
+    result = rt.compute(
+        [{"key": "A", "label": "a", "type": "number"},
+         {"key": "B", "label": "b", "type": "number"},
+         {"key": "C", "label": "c", "type": "computed"},
+         {"key": "D", "label": "d", "type": "computed"}],
+        [["1", "2", ""], ["3", "4", ""]],
+        {"C": "=A2/B2", "D": "=A2+B2"})
+    assert result["computed"]["C"] == ["0.5000", "0.7500"]
+    assert result["computed"]["D"] == ["3.0000", "7.0000"]
+    assert result["errors"] == []
+
+
+def test_delete_table_hard_removes_row(tables):
+    table = rt._create_table("u-del", {
+        "title": "待清除",
+        "columns": COLS,
+        "rows": [["1", "2", ""]],
+        "formulas": {"C": "=A2/B2"},
+    }, None)
+    assert rt._delete_table("u-del", table["id"], hard=True) is True
+    assert rt._get_table("u-del", table["id"]) is None
+    assert rt._delete_table("u-del", table["id"], hard=True) is False
+
+
 def test_merge_labels_widths_roundtrip(tables):
     table = rt._create_table("u-1", {
         "title": "m",

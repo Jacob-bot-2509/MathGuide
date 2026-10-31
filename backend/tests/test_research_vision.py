@@ -116,13 +116,19 @@ def test_endpoint_with_mocked_model(monkeypatch):
     from starlette.routing import Route
     from starlette.testclient import TestClient
 
+    seen: dict[str, str] = {}
+
+    def fake_extract(images, columns, context=""):
+        seen["context"] = context
+        return {
+            "formulas": [{"id": "f1", "target": "速度", "expr": "位移/时间"}],
+            "groups": [["f1"]], "master": None, "warnings": [],
+        }
+
     monkeypatch.setattr(rv, "require_auth", lambda request: {"uid": "u-vision"})
     monkeypatch.setattr(rv, "is_configured", lambda: True)
     monkeypatch.setattr(rv, "_limiter", rv.SlidingWindowLimiter(100, 60))
-    monkeypatch.setattr(rv, "extract", lambda images, columns: {
-        "formulas": [{"id": "f1", "target": "速度", "expr": "位移/时间"}],
-        "groups": [["f1"]], "master": None, "warnings": [],
-    })
+    monkeypatch.setattr(rv, "extract", fake_extract)
     app = Starlette(routes=[
         Route("/api/research/formulas/extract", rv.extract_formulas, methods=["POST"]),
     ])
@@ -130,10 +136,12 @@ def test_endpoint_with_mocked_model(monkeypatch):
     res = client.post("/api/research/formulas/extract", json={
         "images": [{"mime": "image/png", "data": PNG}],
         "columns": [{"key": "A", "label": "时间"}],
+        "text": "式中 d 为位移，t 为时间。",
     })
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["formulas"][0]["target"] == "速度"
+    assert "t 为时间" in seen["context"]
 
 
 def test_endpoint_requires_vision_config(monkeypatch):

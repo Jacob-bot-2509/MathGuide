@@ -4,9 +4,10 @@
  * 流程:上传 1~4 张照片 → 视觉模型提取 → 用户确认独立公式组与列映射 → 写入表格公式。
  * 图片只在内存中转为 base64 发给后端,不落盘。
  */
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
+import { getResearchDocPageText } from '@/services/researchService'
 import {
   extractFormulas,
   type ExtractedFormula,
@@ -14,7 +15,11 @@ import {
   type TableColumn,
 } from '@/services/researchTableService'
 
-const props = defineProps<{ columns: TableColumn[] }>()
+const props = defineProps<{
+  columns: TableColumn[]
+  sourceDocId?: string
+  sourcePage?: number
+}>()
 const emit = defineEmits<{
   close: []
   apply: [items: { targetLabel: string; formula: string; targetColumnKey: string | null }[]]
@@ -30,6 +35,17 @@ interface ImageItem {
 const images = ref<ImageItem[]>([])
 const extracting = ref(false)
 const result = ref<FormulaExtractResult | null>(null)
+const contextText = ref('')
+
+onMounted(async () => {
+  if (!props.sourceDocId || contextText.value) return
+  try {
+    const page = await getResearchDocPageText(props.sourceDocId, props.sourcePage || 1)
+    if (!contextText.value && page.text) contextText.value = page.text
+  } catch {
+    /* 来源页读取失败时保留手动输入 */
+  }
+})
 const selectedGroups = ref<Set<number>>(new Set())
 const mappings = ref<Record<string, Record<string, string>>>({})
 const targetKeys = ref<Record<string, string>>({})
@@ -37,9 +53,6 @@ const fileEl = ref<HTMLInputElement | null>(null)
 
 const MAX_IMAGES = 4
 
-const computedColumns = computed(() => props.columns.filter((c) => c.type === 'computed'))
-
-/** 当前生效的公式 id:有 master 时全部采用;否则按勾选的组取并集 */
 const activeIds = computed(() => {
   const res = result.value
   if (!res) return []
@@ -119,7 +132,7 @@ function defaultMapping(formula: ExtractedFormula, variable: string): string {
 }
 
 function defaultTarget(formula: ExtractedFormula): string {
-  const existing = computedColumns.value.find((c) => c.label === formula.target)
+  const existing = props.columns.find((c) => c.label === formula.target)
   return existing?.key ?? '__new__'
 }
 
@@ -131,6 +144,7 @@ async function doExtract(): Promise<void> {
     const res = await extractFormulas(
       images.value.map((i) => ({ mime: i.mime, data: i.data })),
       props.columns,
+      contextText.value,
     )
     result.value = res
     const nextMappings: Record<string, Record<string, string>> = {}
@@ -242,6 +256,14 @@ function onApply(): void {
           </div>
         </div>
 
+        <label class="context-label">{{ t('formula.contextLabel') }}</label>
+        <textarea
+          v-model="contextText"
+          class="context-input"
+          rows="3"
+          :placeholder="t('formula.contextHint')"
+        ></textarea>
+
         <button class="mini primary extract" :disabled="!images.length || extracting" @click="doExtract">
           {{ extracting ? t('formula.extracting') : t('formula.extract') }}
         </button>
@@ -275,8 +297,8 @@ function onApply(): void {
                 <span class="f-label">{{ t('formula.targetColumn') }}</span>
                 <select v-model="targetKeys[formula.id]" class="f-select">
                   <option value="__new__">{{ t('formula.newColumn') }}</option>
-                  <option v-for="c in computedColumns" :key="c.key" :value="c.key">
-                    {{ c.label }} ({{ c.key }})
+                  <option v-for="c in props.columns" :key="c.key" :value="c.key">
+                    {{ c.label }} ({{ c.key }}{{ c.type === 'computed' ? ' · ' + t('formula.computed') : '' }})
                   </option>
                 </select>
               </div>
@@ -401,6 +423,34 @@ function onApply(): void {
   border-radius: 4px;
   font-size: 10px;
   cursor: pointer;
+}
+
+.context-label {
+  display: block;
+  margin: 12px 0 5px;
+  color: var(--text-dim);
+  font-family: var(--font-tech);
+  font-size: 10.5px;
+}
+
+.context-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 64px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 7px 9px;
+  outline: none;
+}
+
+.context-input:focus {
+  border-color: var(--line-bright);
 }
 
 .extract {

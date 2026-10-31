@@ -32,6 +32,26 @@ const props = defineProps<{ left?: number; width?: number }>()
 const emit = defineEmits<{ close: []; openDoc: [doc: ResearchDoc] }>()
 const router = useRouter()
 
+/** 面板宽 640,以触发按钮中心对齐;靠近屏幕边缘时向内收,避免被裁掉。 */
+const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
+const panelWidth = computed(() => Math.min(640, viewportWidth.value - 32))
+const panelLeft = computed(() => {
+  if (props.left === undefined || props.width === undefined) {
+    return viewportWidth.value / 2
+  }
+  const center = props.left + props.width / 2
+  const half = panelWidth.value / 2
+  const margin = 16
+  return Math.min(
+    Math.max(center, half + margin),
+    viewportWidth.value - half - margin,
+  )
+})
+
+function onViewportResize(): void {
+  viewportWidth.value = window.innerWidth
+}
+
 const tab = ref<'goal' | 'files' | 'tables'>('goal')
 const fileEl = ref<HTMLInputElement | null>(null)
 const projects = ref<ResearchProject[]>([])
@@ -287,16 +307,20 @@ function warnBeforeUnload(event: BeforeUnloadEvent): void {
 
 onMounted(() => {
   window.addEventListener('beforeunload', warnBeforeUnload)
+  window.addEventListener('resize', onViewportResize)
   void load()
 })
-onBeforeUnmount(() => window.removeEventListener('beforeunload', warnBeforeUnload))
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', warnBeforeUnload)
+  window.removeEventListener('resize', onViewportResize)
+})
 onBeforeRouteLeave(() => confirmClose())
 </script>
 
 <template>
   <div
     class="ra-wrap"
-    :style="{ left: props.left !== undefined && props.width !== undefined ? `${props.left + props.width / 2}px` : '50%' }"
+    :style="{ left: `${panelLeft}px` }"
   >
     <section class="ra-panel">
       <header class="panel-head">
@@ -451,7 +475,7 @@ onBeforeRouteLeave(() => confirmClose())
   display: flex;
   flex-direction: column;
   width: min(640px, calc(100vw - 32px));
-  max-height: 62vh;
+  max-height: min(62vh, calc(100vh - 96px));
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 12px;

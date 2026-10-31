@@ -53,7 +53,9 @@ SYSTEM = (
     "3. 若若干公式互不依赖,分别放入不同的 groups;若一条总公式把若干子公式联系起来,"
     "把总公式 id 填入 master,groups 仍保留子公式分组;\n"
     "4. 图片模糊或公式不完整时写入 warnings,不要猜;\n"
-    "5. 不要输出 Markdown 代码块,不要输出 JSON 以外的内容。"
+    "5. 不要输出 Markdown 代码块,不要输出 JSON 以外的内容;\n"
+    "6. 若同时提供页面文字,用其中的变量定义、单位与实验对象补全 variableMap 和 note,"
+    "忽略与公式无关的段落,不要从文字中臆造公式。"
 )
 
 
@@ -71,13 +73,20 @@ def is_configured() -> bool:
     return bool(cfg["base"] and cfg["key"] and cfg["model"])
 
 
-def _prompt(columns: list[dict]) -> str:
+def _prompt(columns: list[dict], context: str = "") -> str:
     labels = [str(c.get("label") or c.get("key") or "") for c in columns][:30]
-    return (
+    prompt = (
         SYSTEM
         + "\n\n当前表格表头(供 variableMap 参考):" + "、".join(labels)
         + "\n请提取图片中的全部公式。"
     )
+    if context.strip():
+        prompt += (
+            "\n\n页面文字说明(用于确定变量含义、单位、适用实验对象;"
+            "忽略与本页公式无关的段落):\n"
+            + context.strip()[:8000]
+        )
+    return prompt
 
 
 def _parse_json(text: str) -> dict[str, Any]:
@@ -151,11 +160,12 @@ def _clean_result(data: dict[str, Any]) -> dict[str, Any]:
     return {"formulas": formulas, "groups": groups, "master": master, "warnings": warnings}
 
 
-def _call_model(images: list[tuple[str, bytes]], columns: list[dict]) -> dict[str, Any]:
+def _call_model(images: list[tuple[str, bytes]], columns: list[dict],
+                context: str = "") -> dict[str, Any]:
     cfg = _cfg()
     if not (cfg["base"] and cfg["key"]):
         raise RuntimeError("视觉模型未配置")
-    content: list[dict] = [{"type": "text", "text": _prompt(columns)}]
+    content: list[dict] = [{"type": "text", "text": _prompt(columns, context)}]
     for mime, data in images:
         uri = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
         content.append({"type": "image_url", "image_url": {"url": uri}})
@@ -373,8 +383,9 @@ def _decode_image(item: object) -> tuple[str, bytes]:
     return mime, data
 
 
-def extract(images: list[tuple[str, bytes]], columns: list[dict]) -> dict[str, Any]:
-    return _call_model(images, columns)
+def extract(images: list[tuple[str, bytes]], columns: list[dict],
+            context: str = "") -> dict[str, Any]:
+    return _call_model(images, columns, context)
 
 
 async def extract_formulas(request: Request) -> JSONResponse:
@@ -398,8 +409,10 @@ async def extract_formulas(request: Request) -> JSONResponse:
         raise HTTPException(413, "图片总大小超过 20MB")
     columns = body.get("columns")
     columns = columns if isinstance(columns, list) else []
+    context = body.get("text")
+    context = context[:8000] if isinstance(context, str) else ""
     try:
-        result = await asyncio.to_thread(extract, images, columns)
+        result = await asyncio.to_thread(extract, images, columns, context)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except RuntimeError as exc:

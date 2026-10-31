@@ -139,10 +139,11 @@ export interface FormulaExtractResult {
 export async function extractFormulas(
   images: { mime: string; data: string }[],
   columns: TableColumn[],
+  text = '',
 ): Promise<FormulaExtractResult> {
   return post<FormulaExtractResult>(
     '/api/research/formulas/extract',
-    { images, columns },
+    { images, columns, text },
     authHeaders(),
   )
 }
@@ -212,8 +213,12 @@ export async function printResearchTable(
     `/api/research/tables/${encodeURIComponent(tableId)}/print`, payload, authHeaders())
 }
 
-export async function deleteResearchTable(tableId: string): Promise<void> {
-  await del(`/api/research/tables/${encodeURIComponent(tableId)}`, authHeaders())
+export async function deleteResearchTable(
+  tableId: string,
+  hard = false,
+): Promise<void> {
+  const query = hard ? '?hard=1' : ''
+  await del(`/api/research/tables/${encodeURIComponent(tableId)}${query}`, authHeaders())
 }
 
 export async function importResearchTable(
