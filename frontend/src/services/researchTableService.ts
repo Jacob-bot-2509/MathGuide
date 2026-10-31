@@ -169,6 +169,7 @@ export interface FormulaCandidate {
   formula: string
   mapping: Record<string, string>
   units?: Record<string, string>
+  unitConflicts?: { variable: string; expected: string; actual: string }[]
   columnKey: string
   score: number
   validation: {

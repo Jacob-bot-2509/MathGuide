@@ -177,4 +177,23 @@ actionState.table.value = { id: 'other', title: 'other', rows: [['2']] }
 actionState.resolve({ title: 'wrong table', confidence: 0.9 })
 await topicPending
 assert.equal(actionState.table.value.title, 'other', 'late topic must not overwrite another table')
+const matchSource = readFileSync(new URL('../src/components/research/FormulaMatchDialog.vue', import.meta.url), 'utf8')
+const matchScript = parse(matchSource).descriptor.scriptSetup.content
+const matchAst = ts.createSourceFile('match.ts', matchScript, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+const bestNode = matchAst.statements.find((s) => ts.isVariableStatement(s) &&
+  s.declarationList.declarations.some((d) => d.name.getText(matchAst) === 'best'))
+assert.ok(bestNode)
+const bestJs = ts.transpileModule(bestNode.getText(matchAst), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022 },
+}).outputText
+const { computed } = await import('vue')
+const candidates = ref([])
+const best = new Function('candidates', 'computed', `${bestJs}\nreturn best`)(candidates, computed)
+const strong = { formula: '=A2', score: 10, validation: { compared: 1, matched: 1 } }
+candidates.value = [{ ...strong, unitConflicts: [{ variable: 'x', expected: 'm', actual: 'km' }] }]
+assert.equal(best.value, null, 'unit conflict must prevent a high-confidence recommendation')
+candidates.value.push({ ...strong, unitConflicts: [] })
+assert.equal(best.value, candidates.value[1], 'a valid lower-ranked candidate may be recommended')
+candidates.value = [{ ...strong }]
+assert.equal(best.value, null, 'unknown unit compatibility must not be called high-confidence')
 console.log('Formula mapping and validation tests passed')

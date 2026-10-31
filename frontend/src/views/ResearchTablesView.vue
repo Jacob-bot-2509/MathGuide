@@ -874,6 +874,7 @@ function applyMatched(candidate: FormulaCandidate): void {
     mapping: candidate.mapping,
   }])
   formulaMatchOpen.value = false
+  void onCompute()
 }
 
 function cellError(col: string, row: number): string {

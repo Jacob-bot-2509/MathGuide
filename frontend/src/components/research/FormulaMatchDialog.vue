@@ -17,12 +17,12 @@ const emit = defineEmits<{
 const loading = ref(true)
 const candidates = ref<FormulaCandidate[]>([])
 
-const best = computed(() => {
-  const top = candidates.value[0]
-  if (!top || top.score < 8 || !top.validation) return null
-  if (top.validation.compared <= 0) return null
-  return top.validation.matched === top.validation.compared ? top : null
-})
+const best = computed(() => candidates.value.find((item) =>
+  item.formula && item.score >= 8 &&
+  Array.isArray(item.unitConflicts) && item.unitConflicts.length === 0 &&
+  item.validation && item.validation.compared > 0 &&
+  item.validation.matched === item.validation.compared,
+) ?? null)
 
 onMounted(async () => {
   try {
@@ -57,6 +57,11 @@ onMounted(async () => {
             <span class="fm-score">score {{ item.score.toFixed(2) }}</span>
           </div>
           <code class="fm-expr">{{ item.formula || item.expr }}</code>
+          <p v-for="conflict in item.unitConflicts" :key="conflict.variable" class="fm-unit-warning">
+            {{ t('formula.matchUnitConflict', {
+              name: conflict.variable, expected: conflict.expected, actual: conflict.actual,
+            }) }}
+          </p>
           <p v-if="item.validation" class="fm-valid">
             {{ t('formula.validateResult', {
               m: item.validation.matched,
@@ -214,7 +219,8 @@ onMounted(async () => {
   font-size: 10px;
 }
 
-.fm-sample.bad {
+.fm-sample.bad,
+.fm-unit-warning {
   color: #ff8a8a;
 }
 

@@ -31,6 +31,25 @@ def test_units_affect_candidate_score_without_cross_candidate_state():
     result = tables._match_formula_candidates(table, saved)
     scores = {candidate['formulaId']: candidate['score'] for candidate in result}
     assert scores == {'correct': 5.5, 'unknown': 5.0, 'wrong': 4.0}
+    by_id = {candidate['formulaId']: candidate for candidate in result}
+    assert by_id['correct']['unitConflicts'] == []
+    assert by_id['wrong']['unitConflicts'] == [
+        {'variable': 'x', 'expected': 'ms', 'actual': 's'},
+    ]
+
+
+def test_target_unit_conflict_is_reported():
+    table = {
+        'columns': [{'key': 'A', 'label': 'x', 'unit': 's'},
+                    {'key': 'B', 'label': 'y', 'unit': 'km'}],
+        'rows': [['1', '1']], 'formulas': {},
+    }
+    saved = [{'id': 'f', 'target': 'y', 'expr': 'x', 'variables': ['x'],
+              'variableMap': {}, 'units': {'x': 's', 'y': 'm'}}]
+    candidate = tables._match_formula_candidates(table, saved)[0]
+    assert candidate['unitConflicts'] == [
+        {'variable': 'y', 'expected': 'm', 'actual': 'km'},
+    ]
 
 
 def test_formula_compiler_does_not_rewrite_inserted_references():

@@ -1455,6 +1455,8 @@ def _match_formula_candidates(table: dict, saved: list[dict]) -> list[dict]:
                         if target_col else -1)
         mapping: dict[str, str] = {}
         matched_vars = 0
+        score = 0.0
+        unit_conflicts: list[dict] = []
         for variable in variables:
             hint = str(suggested.get(variable) or "").strip()
             hit = next(
@@ -1476,9 +1478,22 @@ def _match_formula_candidates(table: dict, saved: list[dict]) -> list[dict]:
                         score += 0.5
                     else:
                         score -= 1
-        score = matched_vars * 2
+                        unit_conflicts.append({
+                            "variable": variable, "expected": expected, "actual": actual_unit,
+                        })
+        score += matched_vars * 2
         if target_col:
             score += 2
+            expected = str(units.get(target) or "").strip()
+            actual_unit = str(target_col.get("unit") or "").strip()
+            if expected and actual_unit:
+                if expected.replace(" ", "") == actual_unit.replace(" ", ""):
+                    score += 0.5
+                else:
+                    score -= 1
+                    unit_conflicts.append({
+                        "variable": target, "expected": expected, "actual": actual_unit,
+                    })
             role = str(target_col.get("role") or "")
             if role == "calculated":
                 score += 2
@@ -1493,8 +1508,7 @@ def _match_formula_candidates(table: dict, saved: list[dict]) -> list[dict]:
         formula = (_compile_table_formula(expr, mapping)
                    if mapping and matched_vars == len(variables) else "")
         validation = None
-        if formula and target_col and target_key.upper() not in {
-                str(k).upper() for k in (table.get("formulas") or {})}:
+        if formula and target_col:
             try:
                 result = compute(columns, rows, {
                     target_key.upper(): formula})
@@ -1546,6 +1560,7 @@ def _match_formula_candidates(table: dict, saved: list[dict]) -> list[dict]:
             "formula": formula,
             "mapping": mapping,
             "units": {var: units.get(var, "") for var in mapping},
+            "unitConflicts": unit_conflicts,
             "columnKey": target_key,
             "score": round(min(10.0, max(0.0, score)), 2),
             "validation": validation,
