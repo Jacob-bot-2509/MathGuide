@@ -100,6 +100,24 @@ export async function getResearchDocPageText(
     authHeaders())
 }
 
+export interface ResearchStorage {
+  docs: number
+  temp: number
+  trash: number
+  filesBytes: number
+  derivedBytes: number
+  dbBytes: number
+  totalBytes: number
+}
+
+export async function getResearchStorage(): Promise<ResearchStorage> {
+  return get<ResearchStorage>('/api/research/storage', authHeaders())
+}
+
+export async function purgeResearchCaches(): Promise<void> {
+  await post('/api/research/cache/purge', {}, authHeaders())
+}
+
 export interface OutlineNode {
   title: string
   children: OutlineNode[]

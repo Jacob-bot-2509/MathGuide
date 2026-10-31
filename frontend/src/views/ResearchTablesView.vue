@@ -866,7 +866,9 @@ function applyMatched(candidate: FormulaCandidate): void {
     showToast(t('tables.suggestionStale'))
     return
   }
-  if (candidate.handwriting !== false && !window.confirm(t('formula.handwritingConfirm'))) return
+  if (candidate.handwriting !== false && !window.confirm(t(
+    candidate.handwriting ? 'formula.handwritingConfirm' : 'formula.handwritingUnknownConfirm',
+  ))) return
   applyExtracted([{
     targetLabel: candidate.target,
     formula: candidate.formula,

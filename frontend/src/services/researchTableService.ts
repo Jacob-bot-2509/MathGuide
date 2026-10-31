@@ -130,7 +130,7 @@ export interface ExtractedFormula {
   variables: string[]
   variableMap: Record<string, string>
   units?: Record<string, string>
-  handwriting?: boolean
+  handwriting?: boolean | null
   confidence?: number
   note?: string
 }

@@ -79,7 +79,7 @@ const saved = { id: 'f', target: 'y', expr: 'x', variables: ['x'], variableMap: 
 useSavedFormula({ ...saved, handwriting: true })
 assert.equal(savedEnv.result.value.formulas[0].handwriting, true)
 useSavedFormula({ ...saved, handwriting: null })
-assert.equal(savedEnv.result.value.formulas[0].handwriting, true, 'unknown origin requires review')
+assert.equal(savedEnv.result.value.formulas[0].handwriting, null, 'unknown origin stays unverified')
 useSavedFormula({ ...saved, handwriting: false })
 assert.equal(savedEnv.result.value.formulas[0].handwriting, false)
 
@@ -114,12 +114,12 @@ let applied = 0
 let confirmed = false
 const applyEnv = {
   window: { confirm: () => confirmed }, t: (key) => key,
-  applyExtracted: () => { applied++ }, formulaMatchOpen: ref(true),
+  applyExtracted: () => { applied++ }, onCompute: async () => {}, formulaMatchOpen: ref(true),
   table: ref({ id: 't' }), formulaMatchSnapshot: ref({ id: 't', data: '{"title":"saved"}' }),
   payload: () => ({ title: 'saved' }), showToast: () => {},
 }
 const applyMatched = new Function('env', `
-  const { window, t, applyExtracted, formulaMatchOpen, table, formulaMatchSnapshot, payload, showToast } = env
+  const { window, t, applyExtracted, onCompute, formulaMatchOpen, table, formulaMatchSnapshot, payload, showToast } = env
   ${applyJs}
   return applyMatched
 `)(applyEnv)
@@ -196,4 +196,20 @@ candidates.value.push({ ...strong, unitConflicts: [] })
 assert.equal(best.value, candidates.value[1], 'a valid lower-ranked candidate may be recommended')
 candidates.value = [{ ...strong }]
 assert.equal(best.value, null, 'unknown unit compatibility must not be called high-confidence')
+const canApplyNode = ast.statements.find((s) => ts.isVariableStatement(s) &&
+  s.declarationList.declarations.some((d) => d.name.getText(ast) === 'canApply'))
+assert.ok(canApplyNode)
+const canApplyJs = ts.transpileModule(canApplyNode.getText(ast), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022 },
+}).outputText
+const activeFormulas = ref([{ id: 'f', handwriting: null }])
+const handwritingConfirmed = ref(new Set())
+const canApply = new Function('activeFormulas', 'handwritingConfirmed', 'mappingComplete', 'computed',
+  `${canApplyJs}\nreturn canApply`)(activeFormulas, handwritingConfirmed, () => true, computed)
+assert.equal(canApply.value, false, 'unknown formula origin must require review')
+handwritingConfirmed.value = new Set(['f'])
+assert.equal(canApply.value, true)
+handwritingConfirmed.value = new Set()
+activeFormulas.value = [{ id: 'f', handwriting: false }]
+assert.equal(canApply.value, true, 'known printed formulas may be applied without handwriting review')
 console.log('Formula mapping and validation tests passed')

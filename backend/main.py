@@ -103,6 +103,8 @@ routes = [
     Route("/api/research/docs", research_corpus.upload_doc, methods=["POST"]),
     Route("/api/research/docs", research_corpus.list_docs),
     Route("/api/research/docs", research_corpus.clear_docs, methods=["DELETE"]),
+    Route("/api/research/storage", research_corpus.storage_usage),
+    Route("/api/research/cache/purge", research_corpus.purge_caches, methods=["POST"]),
     Route("/api/research/docs/{doc_id}", research_corpus.get_doc, methods=["GET"]),
     Route("/api/research/docs/{doc_id}", research_corpus.delete_doc, methods=["DELETE"]),
     Route("/api/research/docs/{doc_id}/insights", research_corpus.get_insights),

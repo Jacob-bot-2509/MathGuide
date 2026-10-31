@@ -100,7 +100,7 @@ function useSavedFormula(saved: SavedFormula): void {  const formula: ExtractedF
     variables: saved.variables,
     variableMap: saved.variableMap,
     units: saved.units,
-    handwriting: saved.handwriting ?? true,
+    handwriting: saved.handwriting ?? null,
     note: '',
   }
   result.value = {
@@ -337,7 +337,7 @@ async function runValidation(formula: ExtractedFormula): Promise<void> {
 const canApply = computed(() =>
   activeFormulas.value.length > 0
   && activeFormulas.value.every((f) => mappingComplete(f)
-    && (!f.handwriting || handwritingConfirmed.value.has(f.id))))
+    && (f.handwriting === false || handwritingConfirmed.value.has(f.id))))
 
 function toggleHandwritingConfirmed(id: string): void {
   const next = new Set(handwritingConfirmed.value)
@@ -455,15 +455,15 @@ function onApply(): void {
               <div class="f-head">
                 <span class="f-target">{{ formula.target }}</span>
                 <span class="f-expr">{{ formula.expr }}</span>
-                <span v-if="formula.handwriting" class="f-hand">{{ t('formula.handwriting') }}</span>
+                <span v-if="formula.handwriting !== false" class="f-hand">{{ t(formula.handwriting ? 'formula.handwriting' : 'formula.handwritingUnknown') }}</span>
               </div>
-              <label v-if="formula.handwriting" class="f-confirm">
+              <label v-if="formula.handwriting !== false" class="f-confirm">
                 <input
                   type="checkbox"
                   :checked="handwritingConfirmed.has(formula.id)"
                   @change="toggleHandwritingConfirmed(formula.id)"
                 />
-                <span>{{ t('formula.handwritingConfirm') }}</span>
+                <span>{{ t(formula.handwriting ? 'formula.handwritingConfirm' : 'formula.handwritingUnknownConfirm') }}</span>
               </label>
               <div class="f-row">
                 <span class="f-label">{{ t('formula.targetColumn') }}</span>

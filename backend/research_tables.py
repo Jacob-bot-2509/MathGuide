@@ -1594,11 +1594,7 @@ def _parse_topic(text: str) -> dict:
         raise ValueError("模型未返回 JSON")
     data = json.loads(raw[start:end + 1])
     title = str(data.get("title") or "").strip().replace("\n", " ")[:40]
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    return {"title": title, "confidence": max(0.0, min(1.0, confidence))}
+    return {"title": title, "confidence": rc._confidence(data.get("confidence"))}
 
 
 async def suggest_topic(request: Request) -> JSONResponse:

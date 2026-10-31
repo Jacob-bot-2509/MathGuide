@@ -113,6 +113,16 @@ def _user_dir(uid: str) -> Path:
     return path
 
 
+def _confidence(value: object) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return max(0.0, min(1.0, number)) if math.isfinite(number) else 0.0
+
+
 def _db_path(uid: str) -> Path:
     return _user_dir(uid) / "index.sqlite3"
 
@@ -193,8 +203,11 @@ def _connect(uid: str) -> sqlite3.Connection:
         "id TEXT PRIMARY KEY, doc_id TEXT NOT NULL DEFAULT '', page INTEGER NOT NULL DEFAULT 0,"
         " kind TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '',"
         " latex TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0,"
-        " created_at REAL NOT NULL)"
+        " created_at REAL NOT NULL, source_type TEXT NOT NULL DEFAULT 'legacy')"
     )
+    if "source_type" not in {row[1] for row in conn.execute("PRAGMA table_info(source_blocks)")}:
+        # shortcut: legacy blocks lack provenance; retain them until their source can be recovered.
+        conn.execute("ALTER TABLE source_blocks ADD COLUMN source_type TEXT NOT NULL DEFAULT 'legacy'")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS formulas("
         "id TEXT PRIMARY KEY, doc_id TEXT NOT NULL DEFAULT '',"
@@ -1554,10 +1567,7 @@ def _save_extracted_formulas(uid: str, doc_id: str, table_id: str,
             mapping = mapping if isinstance(mapping, dict) else {}
             units = item.get("units")
             units = units if isinstance(units, dict) else {}
-            try:
-                confidence = float(item.get("confidence") or 0)
-            except (TypeError, ValueError):
-                confidence = 0.0
+            confidence = _confidence(item.get("confidence"))
             handwriting = (int(item["handwriting"])
                            if isinstance(item.get("handwriting"), bool) else None)
             cur = conn.execute(
@@ -1568,16 +1578,18 @@ def _save_extracted_formulas(uid: str, doc_id: str, table_id: str,
                  json.dumps(variables, ensure_ascii=False),
                  json.dumps(mapping, ensure_ascii=False),
                  json.dumps(units, ensure_ascii=False),
-                 max(0.0, min(1.0, confidence)), now, handwriting))
+                 confidence, now, handwriting))
             inserted += max(0, cur.rowcount)
             if not cur.rowcount:
                 conn.execute(
-                    "UPDATE formulas SET handwriting = COALESCE(?, handwriting),"
-                    " units_json = ?, confidence = ?, variables_json = ?,"
-                    " mapping_json = ? WHERE doc_id = ? AND table_id = ?"
+                    "UPDATE formulas SET handwriting = CASE WHEN handwriting = 1 OR ? = 1 THEN 1 ELSE handwriting END,"
+                    " units_json = COALESCE(NULLIF(?, '{}'), units_json), confidence = ?,"
+                    " variables_json = COALESCE(NULLIF(?, '[]'), variables_json),"
+                    " mapping_json = COALESCE(NULLIF(?, '{}'), mapping_json)"
+                    " WHERE doc_id = ? AND table_id = ?"
                     " AND target = ? AND expr = ?",
                     (handwriting, json.dumps(units, ensure_ascii=False),
-                     max(0.0, min(1.0, confidence)),
+                     confidence,
                      json.dumps(variables, ensure_ascii=False),
                      json.dumps(mapping, ensure_ascii=False),
                      doc_id, table_id, target, expr))
@@ -1610,17 +1622,16 @@ def _save_source_blocks(uid: str, doc_id: str, page: int,
             target = str(item.get("target") or "").strip()[:60]
             if not expr:
                 continue
-            kind = "handwriting_formula" if item.get("handwriting") else "printed_formula"
-            try:
-                confidence = float(item.get("confidence") or 0)
-            except (TypeError, ValueError):
-                confidence = 0.0
+            handwriting = item.get("handwriting")
+            kind = ("handwriting_formula" if handwriting is True else
+                    "printed_formula" if handwriting is False else "unknown_formula")
+            confidence = _confidence(item.get("confidence"))
             conn.execute(
                 "INSERT INTO source_blocks(id, doc_id, page, kind, text, latex,"
-                " confidence, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                " confidence, created_at, source_type) VALUES(?,?,?,?,?,?,?,?,?)",
                 (secrets.token_hex(10), doc_id, page, kind,
-                 f"{target} = {expr}"[:500], expr, max(0.0, min(1.0, confidence)),
-                 now))
+                 f"{target} = {expr}"[:500], expr, confidence,
+                 now, "formula"))
             inserted += 1
         conn.commit()
         return inserted
@@ -1637,12 +1648,15 @@ def _save_page_blocks(uid: str, doc_id: str, page: int,
     page = max(0, min(int(page or 0), 100000))
     conn = _connect(uid)
     try:
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
         if not conn.execute(
                 "SELECT 1 FROM docs WHERE id = ? AND deleted_at IS NULL",
                 (doc_id,)).fetchone():
             return 0
         conn.execute(
-            "DELETE FROM source_blocks WHERE doc_id = ? AND page = ?", (doc_id, page))
+            "DELETE FROM source_blocks WHERE doc_id = ? AND page = ? AND source_type = 'page'",
+            (doc_id, page))
         now = time.time()
         inserted = 0
         for item in blocks[:60]:
@@ -1653,15 +1667,12 @@ def _save_page_blocks(uid: str, doc_id: str, page: int,
             kind = str(item.get("kind") or "").strip()[:40]
             if not kind or (not text and not latex):
                 continue
-            try:
-                confidence = float(item.get("confidence") or 0)
-            except (TypeError, ValueError):
-                confidence = 0.0
+            confidence = _confidence(item.get("confidence"))
             conn.execute(
                 "INSERT INTO source_blocks(id, doc_id, page, kind, text, latex,"
-                " confidence, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                " confidence, created_at, source_type) VALUES(?,?,?,?,?,?,?,?,?)",
                 (secrets.token_hex(10), doc_id, page, kind, text, latex,
-                 max(0.0, min(1.0, confidence)), now))
+                 confidence, now, "page"))
             inserted += 1
         conn.commit()
         return inserted
@@ -2553,6 +2564,76 @@ async def doc_text(request: Request) -> JSONResponse:
         "docId": doc_id, "name": doc["name"], "page": page, "total": total,
         "text": item[1],
     }, headers={"Cache-Control": "no-store"})
+
+
+def _tree_bytes(path: Path) -> int:
+    total = 0
+    try:
+        for item in path.rglob("*"):
+            try:
+                if item.is_file():
+                    total += item.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return total
+    return total
+
+
+def _storage_stats(uid: str) -> dict:
+    root = _user_dir(uid)
+    files = _tree_bytes(root / "files")
+    derived = _tree_bytes(root / "derived")
+    db_bytes = 0
+    for name in ("index.sqlite3", "index.sqlite3-wal", "index.sqlite3-shm"):
+        path = root / name
+        try:
+            if path.exists():
+                db_bytes += path.stat().st_size
+        except OSError:
+            continue
+    docs = temp = trash = 0
+    conn = _connect(uid)
+    try:
+        for status, deleted, count in conn.execute(
+                "SELECT status, deleted_at, COUNT(*) FROM docs GROUP BY status, deleted_at"):
+            if deleted:
+                trash += count
+            elif status == "temp":
+                temp += count
+            else:
+                docs += count
+    except sqlite3.Error:
+        pass
+    finally:
+        conn.close()
+    return {
+        "docs": docs, "temp": temp, "trash": trash,
+        "filesBytes": files, "derivedBytes": derived, "dbBytes": db_bytes,
+        "totalBytes": files + derived + db_bytes,
+    }
+
+
+def _purge_user_caches(uid: str) -> dict:
+    with _index_lock:
+        had_index = uid in _indexes
+        _indexes.pop(uid, None)
+        _index_paths.pop(uid, None)
+    return {"indexCleared": had_index}
+
+
+async def storage_usage(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    stats = await asyncio.to_thread(_storage_stats, uid)
+    return JSONResponse(stats, headers={"Cache-Control": "no-store"})
+
+
+async def purge_caches(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    result = await asyncio.to_thread(_purge_user_caches, uid)
+    return JSONResponse({"ok": True, **result})
 
 
 async def clear_docs(request: Request) -> JSONResponse:

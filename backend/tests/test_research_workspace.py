@@ -36,6 +36,21 @@ def _doc(uid: str = "u-ws") -> str:
                       analyze=False)["docId"]
 
 
+def test_storage_stats_counts_files_and_derived(corpus):
+    doc_id = _doc("u-storage")
+    derived = rc._user_dir("u-storage") / "derived" / doc_id
+    derived.mkdir(parents=True)
+    (derived / "crop.png").write_bytes(b"x" * 10)
+    stats = rc._storage_stats("u-storage")
+    assert stats["docs"] == 1
+    assert stats["filesBytes"] > 0
+    assert stats["derivedBytes"] == 10
+    assert stats["dbBytes"] > 0
+    assert stats["totalBytes"] >= stats["filesBytes"] + stats["derivedBytes"] + stats["dbBytes"]
+    result = rc._purge_user_caches("u-storage")
+    assert result["indexCleared"] in (True, False)
+
+
 def test_page_blocks_replace_and_purge(corpus):
     doc_id = _doc("u-page")
     blocks = [

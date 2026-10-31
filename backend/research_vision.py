@@ -135,10 +135,7 @@ def _clean_result(data: dict[str, Any]) -> dict[str, Any]:
             for k, v in (units_raw.items() if isinstance(units_raw, dict) else [])
             if isinstance(k, (str, int, float)) and isinstance(v, str)
         }
-        try:
-            confidence = float(item.get("confidence") or 0)
-        except (TypeError, ValueError):
-            confidence = 0.0
+        confidence = rc._confidence(item.get("confidence"))
         formulas.append({
             "id": fid,
             "target": target,
@@ -146,8 +143,9 @@ def _clean_result(data: dict[str, Any]) -> dict[str, Any]:
             "variables": variables,
             "variableMap": variable_map,
             "units": units,
-            "handwriting": bool(item.get("handwriting")),
-            "confidence": max(0.0, min(1.0, confidence)),
+            "handwriting": (item["handwriting"]
+                            if isinstance(item.get("handwriting"), bool) else None),
+            "confidence": confidence,
             "note": str(item.get("note") or "")[:200],
         })
         ids.add(fid)
@@ -209,13 +207,10 @@ def _clean_page_result(raw: dict[str, Any]) -> dict[str, Any]:
         latex = str(item.get("latex") or "").strip()[:600]
         if not text and not latex:
             continue
-        try:
-            confidence = float(item.get("confidence") or 0)
-        except (TypeError, ValueError):
-            confidence = 0.0
+        confidence = rc._confidence(item.get("confidence"))
         blocks.append({
             "kind": kind, "text": text, "latex": latex,
-            "confidence": max(0.0, min(1.0, confidence)),
+            "confidence": confidence,
         })
     if not blocks:
         raise ValueError("页面里没有识别到可用区块")

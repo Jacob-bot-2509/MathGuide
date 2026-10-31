@@ -3,6 +3,7 @@
  * 隐私与安全:相册访问授权(头像)、语音识别授权、个性化学习数据开关,
  * 以及本地数据管理。
  */
+import { onMounted, ref } from 'vue'
 import { settingsState, updateSettings } from '@/stores/settings'
 import { clearLearningData } from '@/stores/localData'
 import { clearAllTodoData } from '@/stores/todo'
@@ -10,6 +11,45 @@ import SettingsShell from '@/components/common/SettingsShell.vue'
 import MgSwitch from '@/components/common/MgSwitch.vue'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
+import {
+  getResearchStorage,
+  purgeResearchCaches,
+  type ResearchStorage,
+} from '@/services/researchService'
+
+const storage = ref<ResearchStorage | null>(null)
+const storageLoading = ref(false)
+
+function fmtBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+async function loadStorage(): Promise<void> {
+  storageLoading.value = true
+  try {
+    storage.value = await getResearchStorage()
+  } catch {
+    storage.value = null
+  } finally {
+    storageLoading.value = false
+  }
+}
+
+async function purgeCache(): Promise<void> {
+  if (!window.confirm(t('privacy.purgeCacheConfirm'))) return
+  try {
+    await purgeResearchCaches()
+    await loadStorage()
+    showToast(t('privacy.purgeCacheDone'))
+  } catch {
+    showToast(t('privacy.purgeCacheFail'))
+  }
+}
+
+onMounted(loadStorage)
 
 
 /** 开关变更:目标值由 MgSwitch 给出(原先函数内自行取反,值在两处各算一次) */
@@ -72,6 +112,37 @@ function clearLocalData() {
           <span class="desc">{{ t('privacy.clearDesc') }}</span>
         </div>
         <button class="danger-btn" @click="clearLocalData">{{ t('privacy.clearBtn') }}</button>
+      </div>
+    </div>
+
+    <p class="section tech-label">{{ t('privacy.serverData') }}</p>
+    <div class="card">
+      <div class="row">
+        <div class="row-text">
+          <span class="k">{{ t('privacy.serverUsage') }}</span>
+          <span v-if="storage" class="desc">
+            {{ t('privacy.serverDocs', { n: storage.docs, t: storage.temp, r: storage.trash }) }}<br />
+            {{ t('privacy.serverFiles', {
+              f: fmtBytes(storage.filesBytes),
+              d: fmtBytes(storage.derivedBytes),
+              db: fmtBytes(storage.dbBytes),
+            }) }}<br />
+            {{ t('privacy.serverTotal', { total: fmtBytes(storage.totalBytes) }) }}
+          </span>
+          <span v-else class="desc">
+            {{ storageLoading ? t('privacy.loading') : t('privacy.serverUnavailable') }}
+          </span>
+        </div>
+        <button class="danger-btn" :disabled="storageLoading" @click="loadStorage">
+          {{ t('privacy.refresh') }}
+        </button>
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <span class="k">{{ t('privacy.purgeCache') }}</span>
+          <span class="desc">{{ t('privacy.purgeCacheDesc') }}</span>
+        </div>
+        <button class="danger-btn" @click="purgeCache">{{ t('privacy.purgeCacheBtn') }}</button>
       </div>
     </div>
 
