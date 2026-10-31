@@ -879,6 +879,27 @@ function applyMatched(candidate: FormulaCandidate): void {
   void onCompute()
 }
 
+function applyMatchedMany(candidates: FormulaCandidate[]): void {
+  const usable = candidates.filter((c) => c.formula)
+  if (!usable.length) return
+  if (!table.value || !formulaMatchSnapshot.value || table.value.id !== formulaMatchSnapshot.value.id ||
+      JSON.stringify(payload()) !== formulaMatchSnapshot.value.data) {
+    formulaMatchOpen.value = false
+    showToast(t('tables.suggestionStale'))
+    return
+  }
+  const uncertain = usable.some((c) => c.handwriting !== false)
+  if (uncertain && !window.confirm(t('formula.handwritingConfirm'))) return
+  applyExtracted(usable.map((candidate) => ({
+    targetLabel: candidate.target,
+    formula: candidate.formula,
+    targetColumnKey: candidate.columnKey || null,
+    mapping: candidate.mapping,
+  })))
+  formulaMatchOpen.value = false
+  void onCompute()
+}
+
 function cellError(col: string, row: number): string {
   return errors.value.find((e) => e.col === col && e.row === row)?.error ?? ''
 }
@@ -1564,6 +1585,7 @@ onBeforeUnmount(() => {
       :doc-id="table.source?.docId"
       @close="formulaMatchOpen = false"
       @apply="applyMatched"
+      @apply-many="applyMatchedMany"
     />
   </div>
 </template>

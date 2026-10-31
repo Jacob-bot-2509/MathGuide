@@ -12,10 +12,29 @@ const props = defineProps<{ tableId: string; docId?: string }>()
 const emit = defineEmits<{
   close: []
   apply: [candidate: FormulaCandidate]
+  applyMany: [candidates: FormulaCandidate[]]
 }>()
 
 const loading = ref(true)
 const candidates = ref<FormulaCandidate[]>([])
+const selected = ref<Set<string>>(new Set())
+
+function keyOf(item: FormulaCandidate): string {
+  return item.formulaId || item.expr
+}
+
+function toggle(item: FormulaCandidate): void {
+  const key = keyOf(item)
+  const next = new Set(selected.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  selected.value = next
+}
+
+function applySelected(): void {
+  const chosen = candidates.value.filter((item) => selected.value.has(keyOf(item)))
+  if (chosen.length) emit('applyMany', chosen)
+}
 
 const best = computed(() => candidates.value.find((item) =>
   item.formula && item.score >= 8 &&
@@ -27,6 +46,7 @@ const best = computed(() => candidates.value.find((item) =>
 onMounted(async () => {
   try {
     candidates.value = await matchTableFormulas(props.tableId, props.docId)
+    if (best.value) selected.value = new Set([keyOf(best.value)])
   } catch {
     showToast(t('formula.matchFail'))
   } finally {
@@ -53,6 +73,11 @@ onMounted(async () => {
         </div>
         <article v-for="item in candidates" :key="item.formulaId || item.expr" class="fm-card">
           <div class="fm-row">
+            <input
+              type="checkbox"
+              :checked="selected.has(keyOf(item))"
+              @change="toggle(item)"
+            />
             <span class="fm-target">{{ item.target }}</span>
             <span class="fm-score">score {{ item.score.toFixed(2) }}</span>
           </div>
@@ -88,6 +113,11 @@ onMounted(async () => {
             {{ t('formula.matchApply') }}
           </button>
         </article>
+        <footer class="fm-foot">
+          <button class="fm-apply" type="button" :disabled="!selected.size" @click="applySelected">
+            {{ t('formula.matchApplySelected', { n: selected.size }) }}
+          </button>
+        </footer>
       </div>
     </section>
   </div>
@@ -183,6 +213,21 @@ onMounted(async () => {
   display: flex;
   align-items: baseline;
   gap: 8px;
+}
+
+.fm-row input {
+  accent-color: var(--cyan);
+}
+
+.fm-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.fm-apply:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .fm-target {

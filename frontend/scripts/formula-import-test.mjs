@@ -212,4 +212,31 @@ assert.equal(canApply.value, true)
 handwritingConfirmed.value = new Set()
 activeFormulas.value = [{ id: 'f', handwriting: false }]
 assert.equal(canApply.value, true, 'known printed formulas may be applied without handwriting review')
+const manyNode = viewAst.statements.find((s) => ts.isFunctionDeclaration(s) && s.name?.text === 'applyMatchedMany')
+assert.ok(manyNode)
+const manyJs = ts.transpileModule(manyNode.getText(viewAst), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022 },
+}).outputText
+const manyState = {
+  table: ref({ id: 't', columns: [{ key: 'A', label: 'A', type: 'number' }] }),
+  formulaMatchSnapshot: ref({ id: 't', data: '{}' }), formulaMatchOpen: ref(true),
+  payload: () => ({}), showToast: (message) => { manyState.lastToast = message },
+  window: { confirm: () => true }, t: (key) => key,
+  applyExtracted: (items) => { manyState.applied = items }, onCompute: async () => {},
+}
+const applyMany = new Function('env', `
+  const { table, formulaMatchSnapshot, formulaMatchOpen, payload, showToast,
+    window, t, applyExtracted, onCompute } = env
+  ${manyJs}
+  return applyMatchedMany
+`)(manyState)
+const makeCandidate = (columnKey, target) => ({
+  columnKey, target, formula: '=A2', mapping: {}, handwriting: false,
+})
+applyMany([makeCandidate('A', 'one'), makeCandidate('A', 'two')])
+assert.equal(manyState.applied, undefined, 'duplicate target columns must not silently overwrite')
+applyMany([makeCandidate('', 'new'), makeCandidate('', 'new')])
+assert.equal(manyState.applied, undefined, 'duplicate new columns must not silently overwrite')
+applyMany([makeCandidate('A', 'one'), makeCandidate('', 'new')])
+assert.equal(manyState.applied.length, 2, 'distinct targets remain applicable')
 console.log('Formula mapping and validation tests passed')

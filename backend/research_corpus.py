@@ -2582,14 +2582,20 @@ def _tree_bytes(path: Path) -> int:
 
 def _storage_stats(uid: str) -> dict:
     root = _user_dir(uid)
-    files = _tree_bytes(root / "files")
+    files = 0
     derived = _tree_bytes(root / "derived")
-    db_bytes = 0
-    for name in ("index.sqlite3", "index.sqlite3-wal", "index.sqlite3-shm"):
-        path = root / name
+    for path in (root / "files").rglob("*"):
         try:
-            if path.exists():
-                db_bytes += path.stat().st_size
+            if path.is_file():
+                if path.name.endswith(".pages.json"):
+                    derived += path.stat().st_size
+                else:
+                    files += path.stat().st_size
+        except OSError:
+            continue
+    for name in (".embeddings.json", ".embeddings.json.tmp"):
+        try:
+            derived += (root / name).stat().st_size
         except OSError:
             continue
     docs = temp = trash = 0
@@ -2607,6 +2613,12 @@ def _storage_stats(uid: str) -> dict:
         pass
     finally:
         conn.close()
+    db_bytes = 0
+    for name in ("index.sqlite3", "index.sqlite3-wal", "index.sqlite3-shm"):
+        try:
+            db_bytes += (root / name).stat().st_size
+        except OSError:
+            continue
     return {
         "docs": docs, "temp": temp, "trash": trash,
         "filesBytes": files, "derivedBytes": derived, "dbBytes": db_bytes,

@@ -64,6 +64,48 @@ CASES = [
         "roles": {"A": "measured", "B": "measured", "C": "calculated"},
     },
     {
+        "name": "功=力×距离",
+        "table": {
+            "columns": [
+                {"key": "A", "label": "力", "type": "number", "unit": "N"},
+                {"key": "B", "label": "距离", "type": "number", "unit": "m"},
+                {"key": "C", "label": "功", "type": "number"},
+            ],
+            "rows": [["2", "3", "6"], ["4", "5", "20"]],
+            "formulas": {"C": "=A2*B2"},
+        },
+        "saved": [{
+            "id": "f3", "target": "功", "expr": "力*距离",
+            "variables": ["力", "距离"],
+            "variableMap": {"力": "A", "距离": "B"},
+            "units": {"力": "N", "距离": "m", "功": "J"},
+        }],
+        "target": "C",
+        "mapping": {"力": "A", "距离": "B"},
+        "roles": {"A": "measured", "B": "measured", "C": "calculated"},
+    },
+    {
+        "name": "浓度=溶质/溶液",
+        "table": {
+            "columns": [
+                {"key": "A", "label": "溶质质量", "type": "number", "unit": "g"},
+                {"key": "B", "label": "溶液体积", "type": "number", "unit": "L"},
+                {"key": "C", "label": "浓度", "type": "number"},
+            ],
+            "rows": [["10", "2", "5"], ["18", "3", "6"]],
+            "formulas": {"C": "=A2/B2"},
+        },
+        "saved": [{
+            "id": "f4", "target": "浓度", "expr": "溶质质量/溶液体积",
+            "variables": ["溶质质量", "溶液体积"],
+            "variableMap": {"溶质质量": "A", "溶液体积": "B"},
+            "units": {"溶质质量": "g", "溶液体积": "L", "浓度": "g/L"},
+        }],
+        "target": "C",
+        "mapping": {"溶质质量": "A", "溶液体积": "B"},
+        "roles": {"A": "measured", "B": "measured", "C": "calculated"},
+    },
+    {
         "name": "编号列识别",
         "table": {
             "columns": [
