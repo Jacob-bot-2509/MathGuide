@@ -888,8 +888,29 @@ function applyMatchedMany(candidates: FormulaCandidate[]): void {
     showToast(t('tables.suggestionStale'))
     return
   }
+  const targets = new Set<string>()
+  let additions = 0
+  for (const candidate of usable) {
+    const label = candidate.target.trim() || t('tables.computedCol')
+    const existing = table.value.columns.find((c) => c.type === 'computed' && c.label === label)
+    const key = candidate.columnKey || existing?.key
+    const target = key ? `column:${key}` : `new:${label}`
+    if (targets.has(target)) {
+      showToast(t('formula.matchDuplicateTarget'))
+      return
+    }
+    targets.add(target)
+    if (!key) additions++
+  }
+  if (table.value.columns.length + additions > 30) {
+    showToast(t('tables.colLimit'))
+    return
+  }
   const uncertain = usable.some((c) => c.handwriting !== false)
-  if (uncertain && !window.confirm(t('formula.handwritingConfirm'))) return
+  const unknown = usable.some((c) => c.handwriting == null)
+  if (uncertain && !window.confirm(t(
+    unknown ? 'formula.handwritingUnknownConfirm' : 'formula.handwritingConfirm',
+  ))) return
   applyExtracted(usable.map((candidate) => ({
     targetLabel: candidate.target,
     formula: candidate.formula,

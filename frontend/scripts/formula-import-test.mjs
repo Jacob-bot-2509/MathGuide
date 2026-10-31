@@ -239,4 +239,13 @@ applyMany([makeCandidate('', 'new'), makeCandidate('', 'new')])
 assert.equal(manyState.applied, undefined, 'duplicate new columns must not silently overwrite')
 applyMany([makeCandidate('A', 'one'), makeCandidate('', 'new')])
 assert.equal(manyState.applied.length, 2, 'distinct targets remain applicable')
+manyState.applied = undefined
+manyState.table.value.columns = [{ key: 'B', label: 'existing', type: 'computed' }]
+applyMany([makeCandidate('B', 'first'), makeCandidate('', 'existing')])
+assert.equal(manyState.applied, undefined, 'an existing computed target must not be assigned twice')
+manyState.table.value.columns = Array.from({ length: 30 }, (_, i) => ({
+  key: String(i), label: String(i), type: 'number',
+}))
+applyMany([makeCandidate('0', 'one'), makeCandidate('', 'new')])
+assert.equal(manyState.applied, undefined, 'an over-capacity batch must not partially apply')
 console.log('Formula mapping and validation tests passed')
