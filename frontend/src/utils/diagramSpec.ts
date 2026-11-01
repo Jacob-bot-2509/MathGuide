@@ -253,10 +253,39 @@ export function appendDiagram(
   existing: DiagramBlock[] | undefined,
   incoming: DiagramBlock,
 ): DiagramBlock[] {
-  if ((existing || []).some((item) => item.id === incoming.id)) {
-    return existing || []
+  const current = existing || []
+  if (current.some((item) => item.id === incoming.id)) return current
+  if (current.length >= 2) return current
+  return [...current, incoming]
+}
+
+/** 树/关系图折叠:隐藏被折叠节点的全部后代,保留节点本身。 */
+export function filterCollapsed(
+  spec: DiagramSpec,
+  collapsed: Set<string>,
+): DiagramSpec {
+  if (!collapsed.size || (spec.type !== 'tree' && spec.type !== 'relation')) {
+    return spec
   }
-  return [...(existing || []), incoming]
+  const children = new Map<string, string[]>()
+  for (const node of spec.nodes) children.set(node.id, [])
+  for (const edge of spec.edges) {
+    children.get(edge.from)?.push(edge.to)
+  }
+  const hidden = new Set<string>()
+  const hide = (id: string): void => {
+    for (const child of children.get(id) || []) {
+      if (hidden.has(child)) continue
+      hidden.add(child)
+      hide(child)
+    }
+  }
+  for (const id of collapsed) hide(id)
+  return {
+    ...spec,
+    nodes: spec.nodes.filter((node) => !hidden.has(node.id)),
+    edges: spec.edges.filter((edge) => !hidden.has(edge.from) && !hidden.has(edge.to)),
+  }
 }
 
 export interface PaperOutlineLike {

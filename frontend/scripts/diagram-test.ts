@@ -5,6 +5,7 @@ declare const process: { exit(code: number): void }
 import {
   appendDiagram,
   buildPaperDiagram,
+  filterCollapsed,
   parseDiagramEvent,
   parseDiagramSpec,
   splitMessageBlocks,
@@ -65,6 +66,16 @@ check('非法事件拒绝', parseDiagramEvent({ mg_event: 'diagram', diagram: { 
 const firstAppend = appendDiagram(undefined, event!)
 const secondAppend = appendDiagram(firstAppend, event!)
 check('图解去重', firstAppend.length === 1 && secondAppend.length === 1)
+const thirdEvent = {
+  ...event!,
+  id: 'd2',
+}
+const fourthEvent = {
+  ...event!,
+  id: 'd3',
+}
+const capped = appendDiagram(appendDiagram(secondAppend, thirdEvent), fourthEvent)
+check('单消息最多两张图', capped.length === 2)
 
 const treeSpec: DiagramSpec = {
   type: 'tree',
@@ -81,6 +92,12 @@ check('树布局节点完整', tree.nodes.length === 3)
 check('树布局父子顺序', tree.nodes[0].y < tree.nodes[1].y)
 check('树布局尺寸有效', tree.width > 0 && tree.height > 0)
 check('树布局边完整', tree.edges.length === 2)
+const collapsedRoot = filterCollapsed(treeSpec, new Set(['root']))
+check('折叠根节点只留根', collapsedRoot.nodes.length === 1
+  && collapsedRoot.edges.length === 0)
+const collapsedChild = filterCollapsed(treeSpec, new Set(['a']))
+check('折叠子节点不影响兄弟', collapsedChild.nodes.length === 3
+  && collapsedChild.edges.length === 2)
 
 const relationSpec: DiagramSpec = {
   type: 'relation', nodes: [

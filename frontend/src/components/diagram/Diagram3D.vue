@@ -212,6 +212,7 @@ function dispose(): void {
     scene = null
   }
   renderer?.dispose()
+  renderer?.forceContextLoss()
   renderer?.domElement.remove()
   renderer = null
   camera = null

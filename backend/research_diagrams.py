@@ -17,7 +17,7 @@ from rag import llm
 from rate_limit import SlidingWindowLimiter
 
 PREFIX = "[[MG_DIAGRAM:"
-_MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:([a-z0-9_]+)\]\]")
+_MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]")
 _TYPES = {"tree", "relation", "flow", "geometry2d", "plot2d",
           "geometry3d", "surface3d"}
 _SHAPES = {"point", "segment", "line", "vector", "circle", "polygon",
@@ -204,6 +204,8 @@ class DiagramMarker:
 class MarkerStream:
     """逐 delta 剥离隐藏标记;完整 marker 交给调用方规划图解。"""
 
+    MAX_MARKER = 80
+
     def __init__(self, request_id: str):
         self.request_id = request_id[:80]
         self._buffer = ""
@@ -217,6 +219,18 @@ class MarkerStream:
                 return size
         return 0
 
+    def _emit(self, out: list[str], text: str) -> None:
+        if not text:
+            return
+        out.append(text)
+        # 前端 JS 字符串按 UTF-16 code unit 计数,emoji 不能按 Python 码点算。
+        self._visible_len += len(text.encode("utf-16-le")) // 2
+
+    def _malformed_tail(self, text: str) -> str:
+        """未闭合标记只剥掉前缀和类型名,后面的正文必须还给用户。"""
+        tail = text[len(PREFIX):] if text.startswith(PREFIX) else text
+        return re.sub(r"^[a-z0-9_]*", "", tail)
+
     def feed(self, text: str) -> str:
         self._buffer += text or ""
         out: list[str] = []
@@ -226,22 +240,29 @@ class MarkerStream:
                 hold = self._partial_prefix()
                 if hold:
                     if len(self._buffer) > hold:
-                        out.append(self._buffer[:-hold])
+                        self._emit(out, self._buffer[:-hold])
                     self._buffer = self._buffer[-hold:]
                 else:
-                    out.append(self._buffer)
+                    self._emit(out, self._buffer)
                     self._buffer = ""
                 break
             if start:
-                out.append(self._buffer[:start])
+                self._emit(out, self._buffer[:start])
             end = self._buffer.find("]]", start)
             if end < 0:
-                self._buffer = self._buffer[start:]
+                if len(self._buffer) - start > self.MAX_MARKER:
+                    tail = self._malformed_tail(self._buffer[start:])
+                    self._emit(out, tail)
+                    self._buffer = ""
+                else:
+                    self._buffer = self._buffer[start:]
                 break
             raw = self._buffer[start:end + 2]
             self._buffer = self._buffer[end + 2:]
             match = _MARKER_RE.fullmatch(raw)
             if not match:
+                # 畸形标记不能吞掉中间正文;保留标记以外内容。
+                self._emit(out, self._malformed_tail(raw))
                 continue
             kind = match.group(1)
             if kind not in _TYPES:
@@ -252,9 +273,7 @@ class MarkerStream:
                 kind=kind,
                 anchor_index=self._visible_len,
             ))
-        clean = "".join(out)
-        self._visible_len += len(clean)
-        return clean
+        return "".join(out)
 
     def drain(self) -> list[DiagramMarker]:
         out = self._markers
@@ -262,8 +281,16 @@ class MarkerStream:
         return out
 
     def finish(self) -> str:
+        if not self._buffer:
+            return ""
+        tail = self._malformed_tail(self._buffer)
         self._buffer = ""
-        return ""
+        return tail
+
+    def drain(self) -> list[DiagramMarker]:
+        out = self._markers
+        self._markers = []
+        return out
 
 
 def diagram_event(diagram: dict, request_id: str, anchor_id: str,
@@ -292,6 +319,7 @@ _PLAN_SYSTEM = (
     "3. type 只能是 tree/relation/flow/geometry2d/plot2d/geometry3d/surface3d。\n"
     "4. 优先表达概念之间的内在联系、因果、步骤或几何直观。\n"
     "5. 不要输出 HTML、脚本、图片或任意 SVG 代码。\n"
+    "6. plot2d/geometry2d 的曲线必须给出 points 采样点,不要只给 expr。\n"
 )
 
 
@@ -316,6 +344,7 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
     if kind not in _TYPES or not llm.is_configured(role):
         return None
     context: list[str] = [
+        f"请求图解类型:{kind}",
         f"用户问题:{_text(question, 1000)}",
         f"当前回答(标记前):{_text(before, 6000)}",
         "资料:",

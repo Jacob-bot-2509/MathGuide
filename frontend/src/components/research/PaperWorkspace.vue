@@ -108,17 +108,20 @@ function previousQuestion(msg: Msg): string {
     .reverse().find((item) => item.role === 'user')?.content || ''
 }
 
-async function requestDiagram(msg: Msg, question = ''): Promise<void> {
-  if (diagramBusy.value === msg.id || !msg.content.trim()) return
+async function requestDiagram(
+  msg: Msg, question = '', silent = false,
+): Promise<void> {
+  const prompt = question || previousQuestion(msg)
+  if (diagramBusy.value === msg.id || !msg.content.trim() || !prompt.trim()) return
   diagramBusy.value = msg.id
   try {
     const spec = await planDiagram({
-      question: question || previousQuestion(msg),
+      question: prompt,
       answer: msg.content,
       paperId: currentId.value,
     })
     if (!spec) {
-      showToast(t('diagram.fail'))
+      if (!silent) showToast(t('diagram.fail'))
       return
     }
     msg.diagrams = appendDiagram(msg.diagrams, {
@@ -127,7 +130,7 @@ async function requestDiagram(msg: Msg, question = ''): Promise<void> {
       spec,
     })
   } catch {
-    showToast(t('diagram.fail'))
+    if (!silent) showToast(t('diagram.fail'))
   } finally {
     diagramBusy.value = null
   }
@@ -316,7 +319,7 @@ function send(): void {
       scrollBottom()
       if (!failed && complete && live.content && needsDiagram(prompt)
         && !live.diagrams?.length) {
-        void requestDiagram(live, prompt)
+        void requestDiagram(live, prompt, true)
       }
     },
     onError: () => {
@@ -414,7 +417,7 @@ onBeforeUnmount(() => {
                   <DiagramBlockView v-else-if="block.diagram" :spec="block.diagram.spec" />
                 </template>
                 <button
-                  v-if="m.content && !m.streaming"
+                  v-if="m.content && !m.streaming && previousQuestion(m)"
                   class="pw-diagram-btn"
                   type="button"
                   :disabled="diagramBusy === m.id"

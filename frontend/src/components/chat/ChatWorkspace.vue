@@ -574,18 +574,21 @@ function previousQuestion(msg: ChatMsg): string {
   return ''
 }
 
-async function requestDiagram(msg: ChatMsg, question = ''): Promise<void> {
-  if (diagramBusy.value === msg.id || !msg.content.trim()) return
+async function requestDiagram(
+  msg: ChatMsg, question = '', silent = false,
+): Promise<void> {
+  const prompt = question || previousQuestion(msg)
+  if (diagramBusy.value === msg.id || !msg.content.trim() || !prompt.trim()) return
   diagramBusy.value = msg.id
   try {
     const paperId = currentPaper.value?.docId || stagedPaper.value?.docId
     const spec = await planDiagram({
-      question: question || previousQuestion(msg),
+      question: prompt,
       answer: msg.content,
       paperId,
     })
     if (!spec) {
-      showToast(t('diagram.fail'))
+      if (!silent) showToast(t('diagram.fail'))
       return
     }
     msg.diagrams = appendDiagram(msg.diagrams, {
@@ -595,7 +598,7 @@ async function requestDiagram(msg: ChatMsg, question = ''): Promise<void> {
     })
     persistSessions()
   } catch {
-    showToast(t('diagram.fail'))
+    if (!silent) showToast(t('diagram.fail'))
   } finally {
     diagramBusy.value = null
   }
@@ -669,7 +672,7 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
       persistSessions()
       if (!failed && complete && reply.content && needsDiagram(prompt)
         && !reply.diagrams?.length) {
-        void requestDiagram(reply, prompt)
+        void requestDiagram(reply, prompt, true)
       }
     },
     // 请求失败(典型:后端未启动 / 限流 429)时,若一字未出则显示对应提示,
@@ -1898,7 +1901,7 @@ onBeforeUnmount(() => {
                 </template>
               </div>
               <button
-                v-if="m.content && !m.streaming && !m.paperImport"
+                v-if="m.content && !m.streaming && !m.paperImport && previousQuestion(m)"
                 class="diagram-btn"
                 type="button"
                 :disabled="diagramBusy === m.id"

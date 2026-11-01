@@ -659,21 +659,24 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             system += (
                 "\n\n【图解】当用户明确表达“怎么理解/几何直观/关系/区别/为什么/"
                 "步骤”等困惑,且文字解释中有一个关键关系值得具象化时,"
-                "在该段落后单独输出隐藏标记 [[MG_DIAGRAM:type]],"
-                "type 只能是 tree/relation/flow/geometry2d/plot2d/geometry3d/surface3d。"
+                "在该段落后单独输出隐藏标记 [[MG_DIAGRAM:relation]],"
+                "其中 relation 换成实际类型;type 只能是 "
+                "tree/relation/flow/geometry2d/plot2d/geometry3d/surface3d。"
                 "全篇最多 2 个;寒暄、简单事实、短答案不要标记;"
                 "标记必须独占一行,不要在标记前后解释它。"
                 if zh else
                 "\n\n[Diagram] When the user is clearly confused about how to "
                 "understand a concept, a relationship, a geometric intuition, or "
                 "a multi-step explanation, insert a hidden marker on its own line "
-                "after that paragraph: [[MG_DIAGRAM:type]], where type is one of "
-                "tree/relation/flow/geometry2d/plot2d/geometry3d/surface3d. "
-                "At most two markers; never for greetings, simple facts, or short answers."
+                "after that paragraph, for example [[MG_DIAGRAM:relation]] (replace "
+                "relation with the type; allowed: tree/relation/flow/geometry2d/"
+                "plot2d/geometry3d/surface3d). At most two markers; never for "
+                "greetings, simple facts, or short answers."
             )
         markers = research_diagrams.MarkerStream(
             diagram_request_id or secrets.token_hex(8)) if diagram_mode else None
         diagram_tasks: list[tuple[research_diagrams.DiagramMarker, asyncio.Task]] = []
+        scheduled_diagrams = 0
         if markers is None:
             async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
                 answer.append(delta)
@@ -691,6 +694,9 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                     answer.append(clean)
                     yield f"data: {json.dumps(clean, ensure_ascii=False)}\n\n"
                 for marker in markers.drain():
+                    if scheduled_diagrams >= 2:
+                        continue
+                    scheduled_diagrams += 1
                     task = asyncio.create_task(research_diagrams.plan_diagram(
                         diagram_question or prompt, "".join(answer),
                         excerpt_items, marker.kind, "main"))
@@ -712,15 +718,16 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             if tail:
                 answer.append(tail)
                 yield f"data: {json.dumps(tail, ensure_ascii=False)}\n\n"
-            for marker, task in diagram_tasks:
-                try:
-                    diagram = await asyncio.wait_for(task, timeout=12)
-                except Exception:  # noqa: BLE001
-                    diagram = None
-                if diagram:
-                    yield research_diagrams.diagram_event(
-                        diagram, markers.request_id,
-                        marker.anchor_id, marker.anchor_index)
+            if diagram_tasks:
+                results = await asyncio.gather(*(
+                    asyncio.wait_for(task, timeout=12)
+                    for _marker, task in diagram_tasks
+                ), return_exceptions=True)
+                for (marker, _task), diagram in zip(diagram_tasks, results):
+                    if isinstance(diagram, dict):
+                        yield research_diagrams.diagram_event(
+                            diagram, markers.request_id,
+                            marker.anchor_id, marker.anchor_index)
         if verify:
             # 解答者与复核者错开模型保证独立:deep 解答 → main 复核;main 解答 → deep 复核
             vrole = "main" if role == "deep" else rag.llm.pick("deep")
@@ -742,6 +749,11 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                     _update_summary(uid, sid, history[:-8],
                                     get_summary(uid, sid, workspace=workspace),
                                     workspace=workspace))
+    except asyncio.CancelledError:
+        for _marker, task in diagram_tasks:
+            if not task.done():
+                task.cancel()
+        raise
     except Exception as exc:  # noqa: BLE001 模型侧错误不区分类型,统一降级
         for _marker, task in diagram_tasks:
             if not task.done():

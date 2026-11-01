@@ -88,7 +88,7 @@ const paperDiagram = computed(() => props.structure
 
       <section class="pi-section">
         <h4>{{ t('workspace.mindmap') }}</h4>
-        <DiagramSvg v-if="paperDiagram" :spec="paperDiagram" />
+        <DiagramSvg v-if="paperDiagram" :spec="paperDiagram" collapsible />
       </section>
 
       <section v-if="outlineRows.length" class="pi-section">

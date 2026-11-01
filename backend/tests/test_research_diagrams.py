@@ -27,6 +27,34 @@ def test_marker_split_across_chunks():
     assert markers[0].anchor_index == 1
 
 
+def test_anchor_counts_text_before_markers_in_same_feed():
+    stream = MarkerStream("r1b")
+    clean = stream.feed(
+        "AAA[[MG_DIAGRAM:relation]]BBB[[MG_DIAGRAM:flow]]CCC")
+    assert clean == "AAABBBCCC"
+    markers = stream.drain()
+    assert [m.anchor_index for m in markers] == [3, 6]
+
+
+def test_unclosed_marker_preserves_visible_tail():
+    stream = MarkerStream("r1c")
+    assert stream.feed("前[[MG_DIAGRAM:relation 后文") == "前"
+    assert stream.finish() == " 后文"
+
+
+def test_anchor_uses_utf16_units_for_emoji():
+    stream = MarkerStream("r1e")
+    assert stream.feed("😀[[MG_DIAGRAM:relation]]") == "😀"
+    assert stream.drain()[0].anchor_index == 2
+
+
+def test_marker_accepts_type_prefix():
+    stream = MarkerStream("r1d")
+    assert stream.feed("前[[MG_DIAGRAM:type=flow]]后") == "前后"
+    markers = stream.drain()
+    assert len(markers) == 1 and markers[0].kind == "flow"
+
+
 def test_multiple_markers_have_stable_ids():
     stream = MarkerStream("r2")
     assert stream.feed("A" + _marker("flow") + "B" + _marker("tree")) == "AB"
@@ -93,6 +121,7 @@ def test_plan_diagram_uses_answer_context(monkeypatch):
     assert "为什么 A 推出 B" in seen["user"]
     assert "前面解释 A" in seen["user"]
     assert "资料" in seen["user"]
+    assert "relation" in seen["user"]
 
 
 def test_plan_diagram_rejects_bad_model_output(monkeypatch):

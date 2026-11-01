@@ -436,6 +436,28 @@ def test_diagram_planner_failure_does_not_break_text(monkeypatch):
     assert not any("mg_event" in frame for frame in frames)
 
 
+def test_chat_caps_diagrams_at_two_per_message(monkeypatch):
+    async def fake_stream(system, user, history=None, role="main"):
+        yield "A[[MG_DIAGRAM:relation]]B[[MG_DIAGRAM:flow]]C[[MG_DIAGRAM:tree]]D"
+
+    calls: list[str] = []
+
+    async def fake_plan(question, before, excerpts, kind, role="main"):
+        calls.append(kind)
+        return {"type": kind, "nodes": [{"id": "a", "label": "A"}],
+                "edges": [], "shapes": [], "annotations": []}
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat.research_diagrams, "plan_diagram", fake_plan)
+    frames = asyncio.run(_collect_gen(chat._gen_llm(
+        "q", None, [], diagram_mode=True, diagram_request_id="r3")))
+    events = [json.loads(frame[6:].strip()) for frame in frames
+              if frame.startswith("data: ") and "mg_event" in frame]
+    assert len(calls) == 2
+    assert len(events) == 2
+    assert [event["anchorIndex"] for event in events] == [1, 2]
+
+
 def _joined_frames(frames: list[str]) -> str:
     parts: list[str] = []
     for frame in frames:

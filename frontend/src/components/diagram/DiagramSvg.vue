@@ -1,15 +1,21 @@
 <script setup lang="ts">
 /** 2D 图解渲染:结构化节点/形状,支持拖动、缩放、重置,不自动动画。 */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
+import { filterCollapsed } from '@/utils/diagramSpec'
 import { layoutForSpec } from '@/utils/diagramLayout'
 
-const props = defineProps<{ spec: DiagramSpec }>()
+const props = withDefaults(defineProps<{ spec: DiagramSpec; collapsible?: boolean }>(), {
+  collapsible: false,
+})
+const collapsed = ref<Set<string>>(new Set())
 
 const svgEl = ref<SVGSVGElement | null>(null)
 const view = ref({ x: 0, y: 0, w: 1, h: 1 })
 const zoom = ref(1)
 let drag: { id: number; x: number; y: number } | null = null
+const pointers = new Map<number, { x: number; y: number }>()
+let pinchDistance = 0
 
 function num(value: unknown, fallback = 0): number {
   const parsed = Number(value)
@@ -19,6 +25,18 @@ function num(value: unknown, fallback = 0): number {
 function pair(value: unknown): [number, number] {
   if (!Array.isArray(value) || value.length < 2) return [0, 0]
   return [num(value[0]), num(value[1])]
+}
+
+function labelLines(label: string, width: number): string[] {
+  const max = Math.max(7, Math.floor((width - 14) / 6.2))
+  const chars = Array.from(label)
+  if (chars.length <= max) return [label]
+  const first = chars.slice(0, max).join('')
+  const rest = chars.slice(max)
+  const second = rest.length > max
+    ? `${rest.slice(0, Math.max(1, max - 1)).join('')}…`
+    : rest.join('')
+  return [first, second]
 }
 
 function boundsOfShapes(shapes: DiagramShape[], annotations: DiagramSpec['annotations']) {
@@ -57,11 +75,15 @@ function boundsOfShapes(shapes: DiagramShape[], annotations: DiagramSpec['annota
   }
 }
 
+const visibleSpec = computed(() => filterCollapsed(props.spec, collapsed.value))
+
 const layout = computed(() => {
-  if (props.spec.type === 'tree' || props.spec.type === 'relation' || props.spec.type === 'flow') {
-    return layoutForSpec(props.spec)
+  if (visibleSpec.value.type === 'tree'
+    || visibleSpec.value.type === 'relation'
+    || visibleSpec.value.type === 'flow') {
+    return layoutForSpec(visibleSpec.value)
   }
-  const b = boundsOfShapes(props.spec.shapes, props.spec.annotations)
+  const b = boundsOfShapes(visibleSpec.value.shapes, visibleSpec.value.annotations)
   const pad = 30
   return {
     nodes: [], edges: [],
@@ -77,25 +99,50 @@ const worldHeight = computed(() => Math.max(90, layout.value.height))
 const minX = computed(() => ('minX' in layout.value ? Number(layout.value.minX) : 0))
 const minY = computed(() => ('minY' in layout.value ? Number(layout.value.minY) : 0))
 
+const plotAxes = computed(() => {
+  if (visibleSpec.value.type !== 'plot2d') return []
+  const b = boundsOfShapes(visibleSpec.value.shapes, visibleSpec.value.annotations)
+  return [
+    { x1: b.minX, y1: 0, x2: b.maxX, y2: 0 },
+    { x1: 0, y1: b.minY, x2: 0, y2: b.maxY },
+  ]
+})
+const hasUnsampledCurve = computed(() =>
+  visibleSpec.value.type === 'plot2d'
+  && visibleSpec.value.shapes.some((shape) =>
+    shape.kind === 'curve' && (!Array.isArray(shape.points) || !shape.points.length)))
+
 function resetView(): void {
   view.value = { x: minX.value, y: minY.value, w: worldWidth.value, h: worldHeight.value }
   zoom.value = 1
 }
 
+function hasChildren(id: string): boolean {
+  return props.spec.edges.some((edge) => edge.from === id)
+}
+
+function toggleNode(id: string): void {
+  if (!props.collapsible || !hasChildren(id)) return
+  const next = new Set(collapsed.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  collapsed.value = next
+}
+
+watch(visibleSpec, () => resetView())
+
 function applyViewBox(): void {
   resetView()
 }
 
-function onWheel(event: WheelEvent): void {
-  event.preventDefault()
+function zoomAt(factor: number, clientX: number, clientY: number): void {
   const svg = svgEl.value
   if (!svg) return
   const rect = svg.getBoundingClientRect()
   if (!rect.width || !rect.height) return
-  const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12
   const next = Math.min(8, Math.max(0.35, zoom.value * factor))
-  const mx = view.value.x + ((event.clientX - rect.left) / rect.width) * view.value.w
-  const my = view.value.y + ((event.clientY - rect.top) / rect.height) * view.value.h
+  const mx = view.value.x + ((clientX - rect.left) / rect.width) * view.value.w
+  const my = view.value.y + ((clientY - rect.top) / rect.height) * view.value.h
   const ratio = next / zoom.value
   view.value = {
     x: mx - (mx - view.value.x) / ratio,
@@ -106,15 +153,37 @@ function onWheel(event: WheelEvent): void {
   zoom.value = next
 }
 
+function onWheel(event: WheelEvent): void {
+  event.preventDefault()
+  zoomAt(event.deltaY < 0 ? 1.12 : 1 / 1.12, event.clientX, event.clientY)
+}
+
 function onPointerDown(event: PointerEvent): void {
   if (event.button !== 0) return
   const svg = svgEl.value
   if (!svg) return
-  drag = { id: event.pointerId, x: event.clientX, y: event.clientY }
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+  if (pointers.size >= 2) {
+    const [a, b] = [...pointers.values()]
+    pinchDistance = Math.hypot(a.x - b.x, a.y - b.y)
+    drag = null
+  } else {
+    drag = { id: event.pointerId, x: event.clientX, y: event.clientY }
+  }
   svg.setPointerCapture(event.pointerId)
 }
 
 function onPointerMove(event: PointerEvent): void {
+  pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+  if (pointers.size >= 2) {
+    const [a, b] = [...pointers.values()]
+    const distance = Math.hypot(a.x - b.x, a.y - b.y)
+    if (pinchDistance > 0 && distance > 0) {
+      zoomAt(distance / pinchDistance, (a.x + b.x) / 2, (a.y + b.y) / 2)
+    }
+    pinchDistance = distance
+    return
+  }
   if (!drag || drag.id !== event.pointerId) return
   const svg = svgEl.value
   if (!svg) return
@@ -126,7 +195,9 @@ function onPointerMove(event: PointerEvent): void {
   drag = { ...drag, x: event.clientX, y: event.clientY }
 }
 
-function onPointerUp(): void {
+function onPointerUp(event: PointerEvent): void {
+  pointers.delete(event.pointerId)
+  if (pointers.size < 2) pinchDistance = 0
   drag = null
 }
 
@@ -162,19 +233,46 @@ resetView()
           :y="(edge.y1 + edge.y2) / 2 - 4"
           class="diagram-edge-label"
         >{{ edge.label }}</text>
-        <g v-for="node in layout.nodes" :key="node.id">
+        <g
+          v-for="node in layout.nodes"
+          :key="node.id"
+          :class="{ 'diagram-node-group': collapsible && hasChildren(node.id) }"
+          @click.stop="toggleNode(node.id)"
+        >
           <rect
             :x="node.x" :y="node.y" :width="node.w" :height="node.h"
             rx="7" class="diagram-node"
           />
           <text
-            :x="node.x + node.w / 2" :y="node.y + node.h / 2 + 4"
+            :x="node.x + node.w / 2" :y="node.y + node.h / 2"
             text-anchor="middle" class="diagram-node-label"
-          >{{ node.label }}</text>
+          >
+            <title>{{ node.label }}</title>
+            <tspan
+              v-for="(line, li) in labelLines(node.label, node.w)"
+              :key="li"
+              :x="node.x + node.w / 2"
+              :dy="li === 0 ? (labelLines(node.label, node.w).length === 1 ? 4 : -3) : 13"
+            >{{ line }}</tspan>
+          </text>
+          <text
+            v-if="collapsible && hasChildren(node.id)"
+            :x="node.x + node.w - 9" :y="node.y + 13"
+            class="diagram-fold-mark"
+          >{{ collapsed.has(node.id) ? '+' : '−' }}</text>
         </g>
       </g>
 
       <g v-else>
+        <line
+          v-for="(axis, ai) in plotAxes"
+          :key="`axis-${ai}`"
+          :x1="axis.x1" :y1="axis.y1" :x2="axis.x2" :y2="axis.y2"
+          class="diagram-axis"
+        />
+        <text v-if="hasUnsampledCurve" x="0" y="-12" class="diagram-warning">
+          曲线缺少采样点
+        </text>
         <g v-for="(shape, i) in spec.shapes" :key="`shape-${i}`">
           <circle
             v-if="shape.kind === 'point'"
@@ -182,10 +280,10 @@ resetView()
             class="diagram-point"
           />
           <line
-            v-else-if="shape.kind === 'segment' || shape.kind === 'line' || shape.kind === 'vector'"
+            v-else-if="shape.kind === 'segment' || shape.kind === 'line' || shape.kind === 'vector' || shape.kind === 'axis'"
             :x1="pair(shape.from)[0]" :y1="pair(shape.from)[1]"
             :x2="pair(shape.to)[0]" :y2="pair(shape.to)[1]"
-            class="diagram-shape-line"
+            :class="shape.kind === 'axis' ? 'diagram-axis' : 'diagram-shape-line'"
           />
           <circle
             v-else-if="shape.kind === 'circle'"
@@ -243,6 +341,16 @@ resetView()
   cursor: grabbing;
 }
 
+.diagram-node-group {
+  cursor: pointer;
+}
+
+.diagram-fold-mark {
+  fill: var(--text-dim);
+  font-size: 10px;
+  text-anchor: end;
+}
+
 .diagram-reset {
   position: absolute;
   right: 8px;
@@ -290,6 +398,17 @@ resetView()
   fill: none;
   stroke: var(--cyan);
   stroke-width: 1.5;
+}
+
+.diagram-axis {
+  stroke: var(--text-dim);
+  stroke-width: 0.9;
+  opacity: 0.7;
+}
+
+.diagram-warning {
+  fill: #ffd166;
+  font-size: 10px;
 }
 
 .diagram-shape-fill {
