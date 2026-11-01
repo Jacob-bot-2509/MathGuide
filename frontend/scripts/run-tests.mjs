@@ -78,6 +78,12 @@ const CASES = [
     artifact: '.paper-actions-test.cjs',
   },
   {
+    name: '图解协议',
+    bundle: 'npx esbuild scripts/diagram-test.ts --bundle --format=cjs --platform=node --outfile=.diagram-test.cjs',
+    run: 'node .diagram-test.cjs',
+    artifact: '.diagram-test.cjs',
+  },
+  {
     name: '待办清单时间/状态',
     bundle: 'npx esbuild scripts/todo-test.ts --bundle --format=cjs --platform=node --outfile=.todo-test.cjs',
     run: 'node .todo-test.cjs',
