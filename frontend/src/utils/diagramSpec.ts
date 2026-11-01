@@ -93,7 +93,7 @@ function sanitizeShape(raw: unknown): DiagramShape | null {
   const kind = text(item.kind, 40)
   if (!kind) return null
   const out: DiagramShape = { kind }
-  for (const key of ['x', 'y', 'z', 'r', 'radius', 'width', 'height', 'label',
+  for (const key of ['x', 'y', 'z', 'r', 'radius', 'width', 'height', 'depth', 'label',
     'expr', 'domain', 'color', 'points']) {
     if (!(key in item)) continue
     const value = item[key]

@@ -50,7 +50,7 @@ def _shape(raw: object) -> dict | None:
     if kind not in _SHAPES:
         return None
     out: dict = {"kind": kind}
-    for key in ("x", "y", "z", "r", "radius", "width", "height"):
+    for key in ("x", "y", "z", "r", "radius", "width", "height", "depth"):
         if key in raw:
             parsed = _num(raw[key])
             if parsed is None:
