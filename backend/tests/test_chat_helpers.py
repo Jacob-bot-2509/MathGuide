@@ -15,6 +15,10 @@ async def _collect(response) -> list[str]:
     return [frame async for frame in response.body_iterator]
 
 
+async def _collect_gen(generator) -> list[str]:
+    return [frame async for frame in generator]
+
+
 def _joined(response) -> str:
     """把 SSE 帧拼回正文,便于断言跨帧文本。"""
     parts: list[str] = []
@@ -376,6 +380,77 @@ def test_paper_import_requires_explicit_intent(monkeypatch):
 
 async def _no_actions():
     return []
+
+
+def test_diagram_marker_stripped_and_event_emitted(monkeypatch):
+    """模型标记从正文剥离,图解事件带锚点;正文在标记前后都保留。"""
+    async def fake_stream(system, user, history=None, role="main"):
+        yield "前[[MG_DIA"
+        yield "GRAM:relation]]后"
+
+    async def fake_plan(question, before, excerpts, kind, role="main"):
+        return {
+            "type": "relation",
+            "nodes": [{"id": "a", "label": "A"}],
+            "edges": [],
+            "shapes": [],
+            "annotations": [],
+        }
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat.research_diagrams, "plan_diagram", fake_plan)
+    frames = asyncio.run(_collect_gen(chat._gen_llm(
+        "怎么理解 A", None, [], diagram_mode=True,
+        diagram_question="怎么理解 A", diagram_request_id="r1")))
+    text = _joined_frames(frames)
+    assert text == "前后"
+    diagrams = [json.loads(frame[6:].strip()) for frame in frames
+                if frame.startswith("data: ") and "mg_event" in frame]
+    assert len(diagrams) == 1
+    assert diagrams[0]["mg_event"] == "diagram"
+    assert diagrams[0]["anchorIndex"] == 1
+    assert diagrams[0]["anchorId"] == "r1-1"
+
+
+def test_diagram_marker_ignored_without_diagram_mode(monkeypatch):
+    async def fake_stream(system, user, history=None, role="main"):
+        yield "原[[MG_DIAGRAM:relation]]文"
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    frames = asyncio.run(_collect_gen(chat._gen_llm("问题", None, [])))
+    assert _joined_frames(frames) == "原[[MG_DIAGRAM:relation]]文"
+
+
+def test_diagram_planner_failure_does_not_break_text(monkeypatch):
+    async def fake_stream(system, user, history=None, role="main"):
+        yield "解释[[MG_DIAGRAM:flow]]继续"
+
+    async def fake_plan(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat.research_diagrams, "plan_diagram", fake_plan)
+    frames = asyncio.run(_collect_gen(chat._gen_llm(
+        "q", None, [], diagram_mode=True, diagram_request_id="r2")))
+    assert _joined_frames(frames) == "解释继续"
+    assert not any("mg_event" in frame for frame in frames)
+
+
+def _joined_frames(frames: list[str]) -> str:
+    parts: list[str] = []
+    for frame in frames:
+        if not frame.startswith("data: "):
+            continue
+        payload = frame[6:].strip()
+        if payload == "[DONE]":
+            continue
+        try:
+            value = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, str):
+            parts.append(value)
+    return "".join(parts)
 
 
 def test_workspace_from_host():

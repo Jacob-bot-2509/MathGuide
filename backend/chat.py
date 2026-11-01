@@ -38,6 +38,7 @@ import config
 import rag
 import research_actions
 import research_corpus
+import research_diagrams
 import research_tables
 import usage
 from auth import require_auth
@@ -613,7 +614,10 @@ async def _verify_answer(question: str, answer: str, role: str) -> str | None:
 async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]],
                    history: list[dict] | None = None, role: str = "main", verify: bool = False,
                    summary: str = "", sid: int | None = None, uid: str = "",
-                   workspace: str = "learn", paper_mode: bool = False):
+                   workspace: str = "learn", paper_mode: bool = False,
+                   diagram_mode: bool = False, diagram_question: str = "",
+                   diagram_excerpts: list[dict] | None = None,
+                   diagram_request_id: str = ""):
     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
     verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过);
     summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)。
@@ -651,9 +655,72 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             )
         if summary:
             system += f"\n\n【更早对话摘要】\n{summary}"
-        async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
-            answer.append(delta)
-            yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+        if diagram_mode:
+            system += (
+                "\n\n【图解】当用户明确表达“怎么理解/几何直观/关系/区别/为什么/"
+                "步骤”等困惑,且文字解释中有一个关键关系值得具象化时,"
+                "在该段落后单独输出隐藏标记 [[MG_DIAGRAM:type]],"
+                "type 只能是 tree/relation/flow/geometry2d/plot2d/geometry3d/surface3d。"
+                "全篇最多 2 个;寒暄、简单事实、短答案不要标记;"
+                "标记必须独占一行,不要在标记前后解释它。"
+                if zh else
+                "\n\n[Diagram] When the user is clearly confused about how to "
+                "understand a concept, a relationship, a geometric intuition, or "
+                "a multi-step explanation, insert a hidden marker on its own line "
+                "after that paragraph: [[MG_DIAGRAM:type]], where type is one of "
+                "tree/relation/flow/geometry2d/plot2d/geometry3d/surface3d. "
+                "At most two markers; never for greetings, simple facts, or short answers."
+            )
+        markers = research_diagrams.MarkerStream(
+            diagram_request_id or secrets.token_hex(8)) if diagram_mode else None
+        diagram_tasks: list[tuple[research_diagrams.DiagramMarker, asyncio.Task]] = []
+        if markers is None:
+            async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
+                answer.append(delta)
+                yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+        else:
+            excerpt_items = diagram_excerpts
+            if excerpt_items is None:
+                excerpt_items = [
+                    {"section": chunk.section, "text": chunk.text}
+                    for chunk, _score in chunks
+                ]
+            async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
+                clean = markers.feed(delta)
+                if clean:
+                    answer.append(clean)
+                    yield f"data: {json.dumps(clean, ensure_ascii=False)}\n\n"
+                for marker in markers.drain():
+                    task = asyncio.create_task(research_diagrams.plan_diagram(
+                        diagram_question or prompt, "".join(answer),
+                        excerpt_items, marker.kind, "main"))
+                    diagram_tasks.append((marker, task))
+                for item in list(diagram_tasks):
+                    marker, task = item
+                    if not task.done():
+                        continue
+                    diagram_tasks.remove(item)
+                    try:
+                        diagram = task.result()
+                    except Exception:  # noqa: BLE001
+                        diagram = None
+                    if diagram:
+                        yield research_diagrams.diagram_event(
+                            diagram, markers.request_id,
+                            marker.anchor_id, marker.anchor_index)
+            tail = markers.finish()
+            if tail:
+                answer.append(tail)
+                yield f"data: {json.dumps(tail, ensure_ascii=False)}\n\n"
+            for marker, task in diagram_tasks:
+                try:
+                    diagram = await asyncio.wait_for(task, timeout=12)
+                except Exception:  # noqa: BLE001
+                    diagram = None
+                if diagram:
+                    yield research_diagrams.diagram_event(
+                        diagram, markers.request_id,
+                        marker.anchor_id, marker.anchor_index)
         if verify:
             # 解答者与复核者错开模型保证独立:deep 解答 → main 复核;main 解答 → deep 复核
             vrole = "main" if role == "deep" else rag.llm.pick("deep")
@@ -676,6 +743,9 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                                     get_summary(uid, sid, workspace=workspace),
                                     workspace=workspace))
     except Exception as exc:  # noqa: BLE001 模型侧错误不区分类型,统一降级
+        for _marker, task in diagram_tasks:
+            if not task.done():
+                task.cancel()
         print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
         if answer:
             note = ("\n\n⚠ 模型连接中断,以上回答可能不完整。"
@@ -717,7 +787,8 @@ async def _gen_paper_llm(question: str, cmd: str | None,
     answer = _gen_llm(
         question, cmd, chunks, history=history, role=_pick_role(question),
         verify=False, summary=summary, sid=sid, uid=uid, workspace=workspace,
-        paper_mode=True)
+        paper_mode=True, diagram_mode=True, diagram_question=question,
+        diagram_excerpts=excerpts, diagram_request_id=request_id)
     iterator = answer.__aiter__()
     planner = asyncio.create_task(research_actions.plan_actions(
         uid_for_actions, doc_id, question, excerpts, planner_history))
@@ -1307,8 +1378,15 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         sid = valid_session_id(body.get("sessionId"))
         verify = bool(chunks) or rag.is_math_question(question) or _is_formula_followup(history)
         summary = get_summary(uid, sid, workspace=workspace) if sid is not None else ""
-        return _sse(_gen_llm(question, cmd, chunks, history=history, role=role, verify=verify,
-                             summary=summary, sid=sid, uid=uid, workspace=workspace))
+        return _sse(_gen_llm(
+            question, cmd, chunks, history=history, role=role, verify=verify,
+            summary=summary, sid=sid, uid=uid, workspace=workspace,
+            diagram_mode=True, diagram_question=question,
+            diagram_excerpts=[
+                {"section": chunk.section, "text": chunk.text}
+                for chunk, _score in chunks
+            ],
+            diagram_request_id=secrets.token_hex(8)))
     # 直答模式:
     # ① 检索到相关知识 → 知识直答(专业问询专业回答);
     # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架;
