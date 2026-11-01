@@ -657,21 +657,41 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             system += f"\n\n【更早对话摘要】\n{summary}"
         if diagram_mode:
             system += (
-                "\n\n【图解】当用户明确表达“怎么理解/几何直观/关系/区别/为什么/"
-                "步骤”等困惑,且文字解释中有一个关键关系值得具象化时,"
-                "在该段落后单独输出隐藏标记 [[MG_DIAGRAM:relation]],"
-                "其中 relation 换成实际类型;type 只能是 "
-                "tree/relation/flow/geometry2d/plot2d/geometry3d/surface3d。"
-                "全篇最多 2 个;寒暄、简单事实、短答案不要标记;"
-                "标记必须独占一行,不要在标记前后解释它。"
+                "\n\n【图解·边讲边画】讲解到需要看图才能讲清的步骤时,"
+                "在该段结束、下一段开始之前,单独一行输出隐藏标记 "
+                "[[MG_DIAGRAM:<type>]],<type> 换成实际类型。"
+                "要求:"
+                "① 按讲课节奏一步一图,每张只图解刚讲完的这一小步,全篇最多 4 张,"
+                "不要把整篇回答塞进一张大图;"
+                "② 类型必须匹配这一步的内容:梯度/曲面/切平面→surface3d;"
+                "空间向量/立体几何→geometry3d;平面图形/几何直观→geometry2d;"
+                "函数曲线/坐标轴→plot2d;推导步骤/因果链→flow;"
+                "内容本身是概念关系网才用 relation;层级结构才用 tree;"
+                "③ 用户明确说“用三维图/画图/几何直观”等表示方式时,"
+                "直接按要求画,不要改画思维导图;"
+                "④ 抽象概念要化抽象为具体:先用一个具体类比物把它实体化"
+                "(如把梯度想成山坡最陡的上坡方向),再画出来,2D/3D 按哪种更能表现来选;"
+                "⑤ 标记前先用一两句话告诉用户这张图看什么,再继续讲解;"
+                "⑥ 寒暄、简单事实、短答案不标记;标记独占一行,不要解释标记。"
                 if zh else
-                "\n\n[Diagram] When the user is clearly confused about how to "
-                "understand a concept, a relationship, a geometric intuition, or "
-                "a multi-step explanation, insert a hidden marker on its own line "
-                "after that paragraph, for example [[MG_DIAGRAM:relation]] (replace "
-                "relation with the type; allowed: tree/relation/flow/geometry2d/"
-                "plot2d/geometry3d/surface3d). At most two markers; never for "
-                "greetings, simple facts, or short answers."
+                "\n\n[Diagram - draw while teaching] When a step needs a picture "
+                "to be understood, insert a hidden marker on its own line after "
+                "that paragraph, for example [[MG_DIAGRAM:surface3d]] (replace the "
+                "type; allowed: tree/relation/flow/geometry2d/plot2d/geometry3d/"
+                "surface3d). Requirements: (1) one diagram per teaching step, at "
+                "most four per answer, each covering only the step just explained; "
+                "(2) match the type to the content: gradient/surface/tangent "
+                "plane -> surface3d, spatial vectors/solid geometry -> geometry3d, "
+                "planar geometry -> geometry2d, function curves -> plot2d, "
+                "derivation/causal steps -> flow, a genuine concept network -> "
+                "relation, a hierarchy -> tree; (3) when the user explicitly asks "
+                "for a 3D drawing or a picture, draw exactly that instead of a mind "
+                "map; (4) make abstractions concrete through a visible analogy "
+                "(for example, gradient as the steepest uphill direction on a "
+                "hillside), choosing 2D or 3D by which shows it better; (5) say in "
+                "one or two sentences what to look at before the marker, then "
+                "continue teaching; (6) never for greetings, simple facts, or short "
+                "answers; the marker must be on its own line."
             )
         markers = research_diagrams.MarkerStream(
             diagram_request_id or secrets.token_hex(8)) if diagram_mode else None
@@ -694,7 +714,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                     answer.append(clean)
                     yield f"data: {json.dumps(clean, ensure_ascii=False)}\n\n"
                 for marker in markers.drain():
-                    if scheduled_diagrams >= 2:
+                    if scheduled_diagrams >= research_diagrams.MAX_DIAGRAMS:
                         continue
                     scheduled_diagrams += 1
                     task = asyncio.create_task(research_diagrams.plan_diagram(
@@ -720,7 +740,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 yield f"data: {json.dumps(tail, ensure_ascii=False)}\n\n"
             if diagram_tasks:
                 results = await asyncio.gather(*(
-                    asyncio.wait_for(task, timeout=12)
+                    asyncio.wait_for(task, timeout=20)
                     for _marker, task in diagram_tasks
                 ), return_exceptions=True)
                 for (marker, _task), diagram in zip(diagram_tasks, results):

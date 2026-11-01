@@ -1,8 +1,10 @@
 """图解标记流与结构化 schema:服务端只负责剥标记、校验、发事件。"""
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
+import math
 import re
 from dataclasses import dataclass
 
@@ -18,6 +20,9 @@ from rate_limit import SlidingWindowLimiter
 
 PREFIX = "[[MG_DIAGRAM:"
 _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]")
+MAX_DIAGRAMS = 4
+_MAX_SURFACE_GRID = 41
+_CURVE_SAMPLES = 80
 _TYPES = {"tree", "relation", "flow", "geometry2d", "plot2d",
           "geometry3d", "surface3d"}
 _SHAPES = {"point", "segment", "line", "vector", "circle", "polygon",
@@ -28,6 +33,44 @@ _MAX_EDGES = 80
 _MAX_SHAPES = 100
 _MAX_ANNOTATIONS = 40
 _MAX_COORD = 1e4
+
+# 用户明确说出的表示方式优先于模型自选类型:要三维就画三维,不要改画思维导图。
+_3D_SURFACE_RE = re.compile(
+    r"曲面|梯度|切平面|等高线|z\s*=\s*f\s*\(|surface|gradient", re.IGNORECASE)
+_3D_RE = re.compile(
+    r"三维|3d|3-d|立体|空间向量|空间曲面|three[- ]?dimensional", re.IGNORECASE)
+_2D_GEOMETRY_RE = re.compile(
+    r"二维几何|平面几何|平面图形|二维图", re.IGNORECASE)
+_PLOT_RE = re.compile(
+    r"函数图像|函数曲线|曲线图|plot|graph of", re.IGNORECASE)
+_FLOW_RE = re.compile(
+    r"流程|步骤图|推导链|因果链|流程图|flow ?chart", re.IGNORECASE)
+
+
+def explicit_types(question: str) -> list[str]:
+    """收集用户原话中明确要求的表示方式;出现多种即为分步混排。"""
+    text = question or ""
+    found: list[str] = []
+    if _3D_SURFACE_RE.search(text):
+        found.append("surface3d")
+    elif _3D_RE.search(text):
+        found.append("geometry3d")
+    if _2D_GEOMETRY_RE.search(text):
+        found.append("geometry2d")
+    if _PLOT_RE.search(text):
+        found.append("plot2d")
+    if _FLOW_RE.search(text):
+        found.append("flow")
+    return list(dict.fromkeys(found))
+
+
+def explicit_type(question: str) -> str | None:
+    """只有用户明确要求且只要求一种表示方式时才覆盖模型选型。
+    同时要求 2D/3D/流程时是在描述一整套分步图解,应保留每一步自己的类型。"""
+    found = explicit_types(question)
+    return found[0] if len(found) == 1 else None
+
+
 
 
 def _text(value: object, limit: int) -> str:
@@ -52,6 +95,244 @@ def _point(value: object) -> list[float] | None:
         item is not None for item in out) else None
 
 
+_EXPR_FUNCS = {
+    "sin": math.sin, "cos": math.cos, "tan": math.tan,
+    "asin": math.asin, "acos": math.acos, "atan": math.atan,
+    "atan2": math.atan2, "sinh": math.sinh, "cosh": math.cosh,
+    "tanh": math.tanh, "exp": math.exp, "log": math.log,
+    "sqrt": math.sqrt, "abs": abs, "pow": math.pow,
+}
+_EXPR_CONSTS = {"pi": math.pi, "e": math.e}
+
+
+def _eval_expr(node: ast.AST, env: dict[str, float]) -> float:
+    """只允许数值、x/y、四则运算和白名单函数,不执行任意代码。"""
+    if isinstance(node, ast.Expression):
+        return _eval_expr(node.body, env)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return float(node.value)
+    if isinstance(node, ast.Name):
+        if node.id in env:
+            return float(env[node.id])
+        if node.id in _EXPR_CONSTS:
+            return float(_EXPR_CONSTS[node.id])
+        raise ValueError(node.id)
+    if isinstance(node, ast.UnaryOp):
+        value = _eval_expr(node.operand, env)
+        if isinstance(node.op, ast.UAdd):
+            return value
+        if isinstance(node.op, ast.USub):
+            return -value
+        raise ValueError("op")
+    if isinstance(node, ast.BinOp):
+        left = _eval_expr(node.left, env)
+        right = _eval_expr(node.right, env)
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Div):
+            return left / right
+        if isinstance(node.op, ast.Pow):
+            if abs(right) > 8:
+                raise ValueError("pow")
+            return left ** right
+        if isinstance(node.op, ast.Mod):
+            return left % right
+        raise ValueError("op")
+    if isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name) or node.keywords:
+            raise ValueError("call")
+        func = _EXPR_FUNCS.get(node.func.id)
+        if func is None:
+            raise ValueError(node.func.id)
+        return float(func(*[_eval_expr(arg, env) for arg in node.args]))
+    raise ValueError("expr")
+
+
+def _compile_expr(expr: object, allow_y: bool = True):
+    if not isinstance(expr, str):
+        return None
+    source = expr.replace("π", "pi").replace("^", "**").strip()
+    if not source or len(source) > 200:
+        return None
+    try:
+        tree = ast.parse(source, mode="eval")
+    except SyntaxError:
+        return None
+    if sum(1 for _ in ast.walk(tree)) > 80:
+        return None
+    if not allow_y and any(
+            isinstance(node, ast.Name) and node.id == "y"
+            for node in ast.walk(tree)):
+        return None
+
+    def run(x: float, y: float = 0.0) -> float:
+        value = _eval_expr(tree, {"x": x, "y": y})
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError("non-finite")
+        return float(value)
+
+    return run
+
+
+def _int(value: object, default: int, low: int, high: int) -> int:
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, parsed))
+
+
+def _domain(shape: dict) -> tuple[float, float, float, float] | None:
+    raw = shape.get("domain")
+    if not isinstance(raw, (list, tuple)):
+        return None
+    parsed = [_num(item) for item in raw]
+    if any(item is None for item in parsed):
+        return None
+    values = [float(item) for item in parsed]
+    if len(values) == 2:
+        return values[0], values[1], values[0], values[1]
+    if len(values) == 4:
+        return values[0], values[1], values[2], values[3]
+    return None
+
+
+def _sample_shape(shape: dict) -> bool:
+    """服务端按表达式采样曲面/曲线,避免模型手写大量坐标出错。
+    返回 False 表示这个形状没有可画数据,应丢弃。"""
+    kind = shape.get("kind")
+    if kind not in ("surface", "curve"):
+        return True
+    points = shape.get("points")
+    if isinstance(points, (int, float)):
+        # 模型常把 "points" 写成采样数;把它当 samples,不要因此丢图。
+        shape["samples"] = int(points)
+        shape.pop("points", None)
+        points = None
+    if isinstance(points, list) and points:
+        return True
+    run = _compile_expr(shape.get("expr"), allow_y=(kind == "surface"))
+    domain = _domain(shape)
+    if run is None or domain is None:
+        return kind != "surface"
+    x0, x1, y0, y1 = domain
+    if not (x0 < x1 and y0 < y1):
+        return kind != "surface"
+    if kind == "surface":
+        rows = _int(shape.get("rows"), 25, 2, _MAX_SURFACE_GRID)
+        cols = _int(shape.get("cols"), 25, 2, _MAX_SURFACE_GRID)
+        sampled: list[list[float]] = []
+        try:
+            for i in range(rows):
+                x = x0 + (x1 - x0) * i / (rows - 1)
+                for j in range(cols):
+                    y = y0 + (y1 - y0) * j / (cols - 1)
+                    sampled.append([round(x, 6), round(y, 6), round(run(x, y), 6)])
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            return False
+        shape["points"] = sampled
+        shape["rows"] = rows
+        shape["cols"] = cols
+        return True
+    samples = _int(shape.get("samples"), _CURVE_SAMPLES, 8, 200)
+    sampled2d: list[list[float]] = []
+    try:
+        for i in range(samples):
+            x = x0 + (x1 - x0) * i / (samples - 1)
+            sampled2d.append([round(x, 6), round(run(x), 6)])
+    except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+        return False
+    shape["points"] = sampled2d
+    return True
+
+
+def _refine_gradient(shapes: list[dict]) -> None:
+    """曲面 + 关键点 + 梯度向量时,用表达式数值求梯度,避免模型手估方向。"""
+    surface = next((
+        shape for shape in shapes
+        if shape.get("kind") == "surface" and shape.get("expr")
+    ), None)
+    if surface is None:
+        return
+    run = _compile_expr(surface.get("expr"), allow_y=True)
+    if run is None:
+        return
+    vector = next((
+        shape for shape in shapes
+        if shape.get("kind") == "vector" and "from" in shape and "to" in shape
+        and re.search(r"梯度|∇|gradient|最陡|增长最快",
+                      str(shape.get("label") or ""), re.IGNORECASE)
+    ), None)
+    points = [
+        shape for shape in shapes
+        if shape.get("kind") == "point" and "x" in shape and "y" in shape
+    ]
+    start = vector.get("from") if vector else None
+    if not (isinstance(start, (list, tuple)) and len(start) >= 2):
+        start = [points[0]["x"], points[0]["y"]] if points else None
+    if not start:
+        return
+    try:
+        x0, y0 = float(start[0]), float(start[1])
+        h = 1e-4 * max(1.0, abs(x0), abs(y0))
+        gx = (run(x0 + h, y0) - run(x0 - h, y0)) / (2 * h)
+        gy = (run(x0, y0 + h) - run(x0, y0 - h)) / (2 * h)
+        z0 = run(x0, y0)
+    except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+        return
+    if not all(math.isfinite(value) for value in (gx, gy, z0)):
+        return
+    if points:
+        nearest = min(
+            points,
+            key=lambda item: (float(item["x"]) - x0) ** 2
+            + (float(item["y"]) - y0) ** 2,
+        )
+        nearest["z"] = round(z0, 6)
+    if vector is None:
+        return
+    domain = _domain(surface)
+    span = min(domain[1] - domain[0], domain[3] - domain[2]) if domain else 2.0
+    magnitude = math.hypot(gx, gy)
+    if magnitude < 1e-9:
+        return
+    step = max(0.05, min(0.6, span * 0.35)) / magnitude
+    dx, dy = gx * step, gy * step
+    vector["from"] = [round(x0, 6), round(y0, 6), round(z0, 6)]
+    vector["to"] = [
+        round(x0 + dx, 6), round(y0 + dy, 6),
+        round(z0 + gx * dx + gy * dy, 6),
+    ]
+    plane = next((
+        shape for shape in shapes
+        if shape.get("kind") == "plane"
+        and re.search(r"切平面|tangent", str(shape.get("label") or ""), re.IGNORECASE)
+    ), None)
+    if plane is not None:
+        plane["normal"] = [round(-gx, 6), round(-gy, 6), 1.0]
+
+
+def prepare_diagram(raw: object) -> dict | None:
+    """采样表达式形状后再做白名单校验。"""
+    if not isinstance(raw, dict):
+        return None
+    shapes = raw.get("shapes")
+    if isinstance(shapes, list) and len(shapes) <= _MAX_SHAPES:
+        kept: list[object] = []
+        for shape in shapes:
+            if isinstance(shape, dict) and not _sample_shape(shape):
+                continue
+            kept.append(shape)
+        raw = {**raw, "shapes": kept}
+        _refine_gradient([shape for shape in kept if isinstance(shape, dict)])
+    return validate_diagram(raw)
+
+
+
 def _shape(raw: object) -> dict | None:
     if not isinstance(raw, dict):
         return None
@@ -62,9 +343,13 @@ def _shape(raw: object) -> dict | None:
     for key in ("x", "y", "z", "r", "radius", "width", "height", "depth"):
         if key in raw:
             parsed = _num(raw[key])
-            if parsed is None:
-                return None
-            out[key] = parsed
+            if parsed is not None:
+                out[key] = parsed
+    for key in ("rows", "cols"):
+        if key in raw:
+            parsed = _num(raw[key])
+            if parsed is not None and parsed.is_integer():
+                out[key] = max(2, min(_MAX_SURFACE_GRID, int(parsed)))
     for key in ("label", "expr", "color"):
         if key in raw:
             value = _text(raw[key], 200)
@@ -72,28 +357,32 @@ def _shape(raw: object) -> dict | None:
                 out[key] = value
     if "domain" in raw:
         domain = raw["domain"]
-        if not isinstance(domain, (list, tuple)) or len(domain) != 2:
-            return None
-        parsed = [_num(item) for item in domain]
-        if any(item is None for item in parsed):
-            return None
-        out["domain"] = parsed
+        if isinstance(domain, (list, tuple)) and len(domain) in (2, 4):
+            parsed = [_num(item) for item in domain]
+            if all(item is not None for item in parsed):
+                out["domain"] = parsed
     if "points" in raw:
         points = raw["points"]
-        if not isinstance(points, list) or len(points) > 200:
-            return None
-        out["points"] = []
-        for item in points:
-            point = _point(item)
-            if point is None:
-                return None
-            out["points"].append(point)
-    for key in ("from", "to"):
+        if isinstance(points, list):
+            cleaned: list[list[float]] = []
+            for item in points[:2000]:
+                point = _point(item)
+                if point is not None:
+                    cleaned.append(point)
+            if cleaned:
+                out["points"] = cleaned
+    for key in ("from", "to", "normal"):
         if key in raw:
             point = _point(raw[key])
-            if point is None:
-                return None
-            out[key] = point
+            if point is not None:
+                out[key] = point
+    if kind in ("segment", "line", "vector", "axis"):
+        if "from" not in out or "to" not in out:
+            return None
+    if kind in ("point",) and ("x" not in out or "y" not in out):
+        return None
+    if kind in ("surface", "polygon") and not out.get("points"):
+        return None
     return out
 
 
@@ -157,11 +446,11 @@ def validate_diagram(raw: object) -> dict | None:
             return None
         for item in raw_shapes:
             shape = _shape(item)
-            if shape is None:
-                return None
-            shapes.append(shape)
+            if shape is not None:
+                shapes.append(shape)
 
     annotations: list[dict] = []
+    seen_notes: set[tuple[float, float, float]] = set()
     raw_notes = raw.get("annotations")
     if isinstance(raw_notes, list):
         if len(raw_notes) > _MAX_ANNOTATIONS:
@@ -173,9 +462,24 @@ def validate_diagram(raw: object) -> dict | None:
             text = _text(item.get("text"), 400)
             if x is None or y is None or not text:
                 continue
-            annotations.append({"x": x, "y": y, "text": text})
+            note = {"x": x, "y": y, "text": text}
+            z = _num(item.get("z"))
+            if z is not None:
+                note["z"] = z
+            key = (round(x, 3), round(y, 3), round(z or 0.0, 3))
+            if key in seen_notes:
+                continue
+            seen_notes.add(key)
+            annotations.append(note)
 
     if not nodes and not shapes and not annotations:
+        return None
+    # 类型与结构必须自洽:关系/流程/树必须有节点,几何/曲线/三维必须有形状。
+    # 否则会渲染成空白图或错误图,这是“默认关系图”这类问题的最后一道闸。
+    if kind in ("tree", "relation", "flow"):
+        if not nodes:
+            return None
+    elif not shapes:
         return None
     result: dict = {
         "type": kind, "nodes": nodes, "edges": edges,
@@ -287,11 +591,6 @@ class MarkerStream:
         self._buffer = ""
         return tail
 
-    def drain(self) -> list[DiagramMarker]:
-        out = self._markers
-        self._markers = []
-        return out
-
 
 def diagram_event(diagram: dict, request_id: str, anchor_id: str,
                   anchor_index: int) -> str:
@@ -305,21 +604,45 @@ def diagram_event(diagram: dict, request_id: str, anchor_id: str,
 
 
 _PLAN_SYSTEM = (
-    "你是 MathGuide 的图解规划器。用户刚在对话中提出了理解困惑,"
-    "你只负责把当前回答中的一个关键关系画成静态图解。\n"
+    "你是 MathGuide 的图解规划器。用户正在听讲解,你需要把【标记前最新一段】"
+    "所讲的内容画成一张静态图解,帮助学生看懂这一步。\n"
     "只输出一个 JSON 对象,不要解释,不要 Markdown 代码块。\n"
-    "格式:\n"
-    '{"type":"relation","title":"可选",'
-    '"nodes":[{"id":"a","label":"概念"}],'
-    '"edges":[{"from":"a","to":"b","label":"推出"}],'
-    '"shapes":[],"annotations":[]}\n'
+    "输出类型必须等于【请求图解类型】;若请求类型为“自选”,"
+    "按这一步的内容选择最能讲清楚的类型。各类型结构:\n"
+    '- flow/tree/relation:{"nodes":[{"id":"a","label":"概念"}],'
+    '"edges":[{"from":"a","to":"b","label":"推出"}]}\n'
+    '- geometry2d/plot2d:{"shapes":[{"kind":"point|segment|vector|circle|'
+    'polygon|curve|axis","x":0,"y":0,"from":[0,0],"to":[1,1],'
+    '"points":[[x,y]],"label":"A"}],"annotations":[{"x":0,"y":0,"text":"说明"}]}\n'
+    '- geometry3d:{"shapes":[{"kind":"point|segment|vector|plane|sphere|box|'
+    'cone|cylinder","x":0,"y":0,"z":0,"from":[0,0,0],"to":[1,1,1],'
+    '"normal":[0,0,1],"label":"A"}],"annotations":[{"x":0,"y":0,"z":0,'
+    '"text":"说明"}]}\n'
+    '- surface3d:用 {"kind":"surface","expr":"x^2+y^2","domain":[-3,3],'
+    '"rows":25,"cols":25} 表示曲面,服务端会按行优先采样;'
+    '用 {"kind":"vector","from":[x,y,z],"to":[x,y,z]} 表示方向;'
+    '用 {"kind":"point","x":x,"y":y,"z":z} 标出关键点。\n'
     "规则:\n"
-    "1. 只使用【用户问题】【当前回答】【资料】里出现的内容,不得虚构关系或数据。\n"
-    "2. 只画一张图,节点不超过 40,边不超过 80,形状不超过 100。\n"
-    "3. type 只能是 tree/relation/flow/geometry2d/plot2d/geometry3d/surface3d。\n"
-    "4. 优先表达概念之间的内在联系、因果、步骤或几何直观。\n"
-    "5. 不要输出 HTML、脚本、图片或任意 SVG 代码。\n"
-    "6. plot2d/geometry2d 的曲线必须给出 points 采样点,不要只给 expr。\n"
+    "1. 只图解最新一段的内容,不要把前文所有内容塞进同一张图。\n"
+    "2. 只使用【用户问题】【当前回答】【资料】里出现的内容,不得虚构关系或数据。\n"
+    "3. 用户明确要求三维/三维坐标系/画图/几何直观时,直接按该表示方式画;"
+    "relation 只在内容本身是概念关系网时使用,tree 只用于层级结构。\n"
+    "4. 抽象概念要化抽象为具体:先找一个人人能看见的类比物(如把梯度想成"
+    "山坡上最陡的上坡方向、把概率密度想成沙堆高度),再把它画成具体图形;"
+    "不要只把抽象名词连成关系网。2D 还是 3D 按哪种更能表现该意象来选。\n"
+    "5. 一张教学图只保留这一步的关键对象,关系图/流程图节点一般 3–8 个;"
+    "硬上限:节点 40、边 80、形状 100、曲面网格 41×41。\n"
+    "6. 坐标用可读的数学坐标;给出 title,关键对象给 label。\n"
+    "7. 不要输出 HTML、脚本、图片或任意 SVG 代码。\n"
+    "8. 曲线优先用 expr+domain 让服务端采样;确实需要时再手写 points。\n"
+    "9. 坐标轴只画线条并标 x/y/z 名称,不要画刻度数字;"
+    "图面只标关键对象符号(如 P、∇f、θ),不要把公式和数值堆进图里。\n"
+    "10. surface3d 的关键点、梯度向量要落在曲面上并从该点出发;"
+    "同一位置只放一条 annotation,避免标签重叠。\n"
+    "11. 几何图必须按真实比例和坐标画:长度、角度、位置要计算,不要随手估;"
+    "曲面/曲线用 expr+domain 交给服务端精确采样,标注点要落在真实位置上。\n"
+    "12. 文字说明放图形外围,同一区域不要叠放多条;箭头/曲线旁只留短标签"
+    "(如 ∂f/∂x),长句放外围 annotation。\n"
 )
 
 
@@ -340,13 +663,21 @@ def _load_json(text: str) -> dict | None:
 
 async def plan_diagram(question: str, before: str, excerpts: list[dict],
                        kind: str, role: str = "main") -> dict | None:
-    """根据用户问题与标记前的回答生成一张图解;失败返回 None。"""
-    if kind not in _TYPES or not llm.is_configured(role):
+    """根据用户问题与标记前的最新段落生成一张图解;失败返回 None。"""
+    requested = explicit_type(question)
+    if requested:
+        kind = requested
+    if kind and kind not in _TYPES:
         return None
+    if not llm.is_configured(role):
+        return None
+    # 图解只针对标记前的最新一步:取正文尾部,避免把整篇回答塞进一张图。
+    latest = re.sub(r"\s+", " ", before or "").strip()[-3500:]
     context: list[str] = [
-        f"请求图解类型:{kind}",
+        f"请求图解类型:{kind or '自选(按内容决定)'}",
+        f"用户明确要求的表示方式:{requested or '未指定'}",
         f"用户问题:{_text(question, 1000)}",
-        f"当前回答(标记前):{_text(before, 6000)}",
+        f"当前回答(标记前最新段落):{latest}",
         "资料:",
     ]
     for item in (excerpts or [])[:6]:
@@ -358,13 +689,21 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
     try:
         async for delta in llm.stream_chat(
                 _PLAN_SYSTEM, "\n".join(context), role=role,
-                fallback=True, max_tokens=1200, thinking=False):
+                fallback=True, max_tokens=1800, thinking=False):
             parts.append(delta)
-            if sum(len(part) for part in parts) >= 8000:
+            if sum(len(part) for part in parts) >= 12000:
                 break
     except Exception:  # noqa: BLE001 图解失败不能影响回答
         return None
-    return validate_diagram(_load_json("".join(parts)))
+    raw = _load_json("".join(parts))
+    if isinstance(raw, dict) and kind and not raw.get("type"):
+        # 规划器经常省略 type;请求类型是明确的,补上再校验。
+        raw["type"] = kind
+    diagram = prepare_diagram(raw)
+    # 用户要求或模型标记了类型时,输出类型必须一致;错类型宁可不画,也不能画成思维导图。
+    if diagram is not None and kind and diagram.get("type") != kind:
+        return None
+    return diagram
 
 
 _diagram_limiter = SlidingWindowLimiter(12, 60.0)
@@ -381,9 +720,13 @@ async def plan_endpoint(request: Request) -> JSONResponse:
     answer = _text(body.get("answer"), 12000)
     if not question:
         raise HTTPException(400, "缺少 question")
-    kind = _text(body.get("kind"), 40) or "relation"
-    if kind not in _TYPES:
-        kind = "relation"
+    kind = _text(body.get("kind"), 40)
+    requested = explicit_type(question)
+    if requested:
+        kind = requested
+    elif kind not in _TYPES:
+        # 手动图解没有指定类型时,让规划器按内容选,不默认画关系网。
+        kind = ""
     excerpts: list[dict] = []
     paper_id = _text(body.get("paperId"), 64)
     if paper_id:

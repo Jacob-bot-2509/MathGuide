@@ -436,9 +436,11 @@ def test_diagram_planner_failure_does_not_break_text(monkeypatch):
     assert not any("mg_event" in frame for frame in frames)
 
 
-def test_chat_caps_diagrams_at_two_per_message(monkeypatch):
+def test_chat_caps_diagrams_at_four_per_message(monkeypatch):
     async def fake_stream(system, user, history=None, role="main"):
-        yield "A[[MG_DIAGRAM:relation]]B[[MG_DIAGRAM:flow]]C[[MG_DIAGRAM:tree]]D"
+        yield ("A[[MG_DIAGRAM:relation]]B[[MG_DIAGRAM:flow]]"
+               "C[[MG_DIAGRAM:tree]]D[[MG_DIAGRAM:surface3d]]"
+               "E[[MG_DIAGRAM:geometry2d]]F")
 
     calls: list[str] = []
 
@@ -453,9 +455,9 @@ def test_chat_caps_diagrams_at_two_per_message(monkeypatch):
         "q", None, [], diagram_mode=True, diagram_request_id="r3")))
     events = [json.loads(frame[6:].strip()) for frame in frames
               if frame.startswith("data: ") and "mg_event" in frame]
-    assert len(calls) == 2
-    assert len(events) == 2
-    assert [event["anchorIndex"] for event in events] == [1, 2]
+    assert len(calls) == 4
+    assert len(events) == 4
+    assert [event["anchorIndex"] for event in events] == [1, 2, 3, 4]
 
 
 def _joined_frames(frames: list[str]) -> str:

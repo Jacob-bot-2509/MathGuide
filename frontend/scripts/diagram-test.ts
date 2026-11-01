@@ -74,8 +74,26 @@ const fourthEvent = {
   ...event!,
   id: 'd3',
 }
-const capped = appendDiagram(appendDiagram(secondAppend, thirdEvent), fourthEvent)
-check('单消息最多两张图', capped.length === 2)
+const fifthEvent = {
+  ...event!,
+  id: 'd4',
+}
+const capped = appendDiagram(
+  appendDiagram(appendDiagram(secondAppend, thirdEvent), fourthEvent),
+  fifthEvent,
+)
+check('单消息最多四张图', capped.length === 4)
+
+const threeD = parseDiagramSpec({
+  type: 'surface3d',
+  shapes: [{
+    kind: 'surface', expr: 'x^2+y^2', domain: [-1, 1], rows: 3, cols: 3,
+    points: [[0, 0, 0], [0, 1, 1]],
+  }],
+  annotations: [{ x: 1, y: 1, z: 2, text: '最陡上升' }],
+})
+check('三维标注保留 z', threeD?.annotations[0]?.z === 2)
+check('曲面网格保留行列', threeD?.shapes[0]?.rows === 3 && threeD?.shapes[0]?.cols === 3)
 
 const treeSpec: DiagramSpec = {
   type: 'tree',

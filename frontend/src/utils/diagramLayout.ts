@@ -49,10 +49,25 @@ function connect(nodes: PositionedNode[], spec: DiagramSpec): PositionedEdge[] {
     const from = byId.get(edge.from)
     const to = byId.get(edge.to)
     if (!from || !to) continue
+    let x1 = from.x + from.w / 2
+    let y1 = from.y + from.h / 2
+    let x2 = to.x + to.w / 2
+    let y2 = to.y + to.h / 2
+    const dx = x2 - x1
+    const dy = y2 - y1
+    const length = Math.hypot(dx, dy)
+    if (length > 1) {
+      // 线端收进节点边缘,箭头才不会被节点盖住。
+      const ux = dx / length
+      const uy = dy / length
+      x1 += ux * (from.h / 2)
+      y1 += uy * (from.h / 2)
+      x2 -= ux * (to.h / 2)
+      y2 -= uy * (to.h / 2)
+    }
     out.push({
       from: edge.from, to: edge.to,
-      x1: from.x + from.w / 2, y1: from.y + from.h / 2,
-      x2: to.x + to.w / 2, y2: to.y + to.h / 2,
+      x1, y1, x2, y2,
       label: edge.label,
     })
   }
@@ -160,18 +175,18 @@ export function layoutFlow(spec: DiagramSpec): LayoutResult {
   for (const node of nodes) {
     if (!order.includes(node.id)) order.push(node.id)
   }
-  let cursor = MARGIN
+  // 流程图纵向排布:聊天区宽度有限,横排会把长标签挤成一条线。
+  const ordered = order.map((id) => byId.get(id)).filter((node) => node !== undefined)
+  const maxWidth = Math.max(160, ...ordered.map((node) => nodeWidth(node.label)))
   const positioned: PositionedNode[] = []
-  for (const id of order) {
-    const node = byId.get(id)
-    if (!node) continue
+  ordered.forEach((node, index) => {
     const w = nodeWidth(node.label)
     positioned.push({
-      id, label: node.label, w, h: NODE_H,
-      x: cursor, y: MARGIN,
+      id: node.id, label: node.label, w, h: NODE_H,
+      x: MARGIN + (maxWidth - w) / 2,
+      y: MARGIN + index * (NODE_H + GAP_Y),
     })
-    cursor += w + 44
-  }
+  })
   return empty(positioned, connect(positioned, spec))
 }
 

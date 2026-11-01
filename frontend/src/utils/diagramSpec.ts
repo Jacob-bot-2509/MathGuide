@@ -31,6 +31,7 @@ export interface DiagramShape {
 export interface DiagramAnnotation {
   x: number
   y: number
+  z?: number
   text: string
 }
 
@@ -67,6 +68,8 @@ const MAX_NODES = 40
 const MAX_EDGES = 80
 const MAX_SHAPES = 100
 const MAX_ANNOTATIONS = 40
+const MAX_POINTS = 2000
+const MAX_DIAGRAMS = 4
 const MAX_COORD = 1e4
 
 function text(value: unknown, limit: number): string {
@@ -94,34 +97,49 @@ function sanitizeShape(raw: unknown): DiagramShape | null {
   if (!kind) return null
   const out: DiagramShape = { kind }
   for (const key of ['x', 'y', 'z', 'r', 'radius', 'width', 'height', 'depth', 'label',
-    'expr', 'domain', 'color', 'points']) {
+    'expr', 'domain', 'color', 'points', 'rows', 'cols']) {
     if (!(key in item)) continue
     const value = item[key]
     if (key === 'label' || key === 'expr' || key === 'color') {
       const cleaned = text(value, 200)
       if (cleaned) out[key] = cleaned
     } else if (key === 'points') {
-      if (Array.isArray(value) && value.length <= 200) {
-        const pts = value.map(point)
-        if (pts.every((p) => p !== null)) out.points = pts
+      if (Array.isArray(value)) {
+        const pts = value.slice(0, MAX_POINTS)
+          .map(point)
+          .filter((p): p is number[] => p !== null)
+        if (pts.length) out.points = pts
       }
     } else if (key === 'domain') {
-      if (Array.isArray(value) && value.length === 2) {
+      if (Array.isArray(value) && value.length >= 2 && value.length <= 4) {
         const parsed = value.map((n) => number(n))
         if (parsed.every((n) => n !== null)) out.domain = parsed
       }
+    } else if (key === 'rows' || key === 'cols') {
+      const parsed = number(value)
+      if (parsed !== null && Number.isInteger(parsed)) {
+        out[key] = Math.max(2, Math.min(41, parsed))
+      }
     } else {
       const parsed = number(value)
-      if (parsed === null) return null
-      out[key] = parsed
+      if (parsed !== null) out[key] = parsed
     }
   }
-  for (const key of ['from', 'to']) {
+  for (const key of ['from', 'to', 'normal']) {
     if (key in item) {
       const parsed = point(item[key])
-      if (!parsed) return null
-      out[key] = parsed
+      if (parsed) out[key] = parsed
     }
+  }
+  if (['segment', 'line', 'vector', 'axis'].includes(kind)
+    && (!Array.isArray(out.from) || !Array.isArray(out.to))) {
+    return null
+  }
+  if (kind === 'point' && (typeof out.x !== 'number' || typeof out.y !== 'number')) {
+    return null
+  }
+  if ((kind === 'surface' || kind === 'polygon') && !Array.isArray(out.points)) {
+    return null
   }
   return out
 }
@@ -178,9 +196,6 @@ export function parseDiagramSpec(raw: unknown): DiagramSpec | null {
       if (shape) shapes.push(shape)
     }
     if (shapes.length > MAX_SHAPES) return null
-    if (item.shapes.length > 0 && shapes.length !== Math.min(item.shapes.length, MAX_SHAPES)) {
-      return null
-    }
   }
 
   const annotations: DiagramAnnotation[] = []
@@ -192,12 +207,21 @@ export function parseDiagramSpec(raw: unknown): DiagramSpec | null {
       const y = number(note.y)
       const body = text(note.text, 400)
       if (x === null || y === null || !body) continue
-      annotations.push({ x, y, text: body })
+      const out: DiagramAnnotation = { x, y, text: body }
+      const z = number(note.z)
+      if (z !== null) out.z = z
+      annotations.push(out)
     }
     if (annotations.length > MAX_ANNOTATIONS) return null
   }
 
   if (!nodes.length && !shapes.length && !annotations.length) return null
+  // 类型与结构必须自洽,避免把关系图数据塞进三维画布渲染成空白。
+  if (type === 'tree' || type === 'relation' || type === 'flow') {
+    if (!nodes.length) return null
+  } else if (!shapes.length) {
+    return null
+  }
 
   const spec: DiagramSpec = { type, nodes, edges, shapes, annotations }
   const title = text(item.title, 200)
@@ -255,7 +279,7 @@ export function appendDiagram(
 ): DiagramBlock[] {
   const current = existing || []
   if (current.some((item) => item.id === incoming.id)) return current
-  if (current.length >= 2) return current
+  if (current.length >= MAX_DIAGRAMS) return current
   return [...current, incoming]
 }
 

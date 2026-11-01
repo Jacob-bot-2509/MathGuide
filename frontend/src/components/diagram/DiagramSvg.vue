@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 2D 图解渲染:结构化节点/形状,支持拖动、缩放、重置,不自动动画。 */
-import { computed, ref, watch } from 'vue'
+import { computed, ref, useId, watch } from 'vue'
 import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
 import { filterCollapsed } from '@/utils/diagramSpec'
 import { layoutForSpec } from '@/utils/diagramLayout'
@@ -8,6 +8,7 @@ import { layoutForSpec } from '@/utils/diagramLayout'
 const props = withDefaults(defineProps<{ spec: DiagramSpec; collapsible?: boolean }>(), {
   collapsible: false,
 })
+const arrowId = `mg-arrow-${useId()}`
 const collapsed = ref<Set<string>>(new Set())
 
 const svgEl = ref<SVGSVGElement | null>(null)
@@ -39,9 +40,17 @@ function labelLines(label: string, width: number): string[] {
   return [first, second]
 }
 
-function boundsOfShapes(shapes: DiagramShape[], annotations: DiagramSpec['annotations']) {
+function boundsOfShapes(
+  shapes: DiagramShape[],
+  annotations: DiagramSpec['annotations'],
+  includeOrigin = false,
+) {
   const xs: number[] = []
   const ys: number[] = []
+  if (includeOrigin) {
+    xs.push(0)
+    ys.push(0)
+  }
   for (const shape of shapes) {
     if (shape.kind === 'point') {
       xs.push(num(shape.x)); ys.push(num(shape.y))
@@ -49,7 +58,8 @@ function boundsOfShapes(shapes: DiagramShape[], annotations: DiagramSpec['annota
       const r = Math.abs(num(shape.r, num(shape.radius)))
       xs.push(num(shape.x) - r, num(shape.x) + r)
       ys.push(num(shape.y) - r, num(shape.y) + r)
-    } else if (shape.kind === 'segment' || shape.kind === 'line' || shape.kind === 'vector') {
+    } else if (shape.kind === 'segment' || shape.kind === 'line'
+      || shape.kind === 'vector' || shape.kind === 'axis') {
       const [x1, y1] = pair(shape.from)
       const [x2, y2] = pair(shape.to)
       xs.push(x1, x2); ys.push(y1, y2)
@@ -76,6 +86,64 @@ function boundsOfShapes(shapes: DiagramShape[], annotations: DiagramSpec['annota
 }
 
 const visibleSpec = computed(() => filterCollapsed(props.spec, collapsed.value))
+const isShapeType = computed(() => visibleSpec.value.type === 'geometry2d'
+  || visibleSpec.value.type === 'plot2d')
+
+/** 几何/曲线图用数学坐标;先映射到像素坐标,否则 11px 字号会被放大成整屏。 */
+const shapeGeometry = computed(() => {
+  if (!isShapeType.value) return null
+  const spec = visibleSpec.value
+  const b = boundsOfShapes(spec.shapes, spec.annotations, spec.type === 'plot2d')
+  const pad = 28
+  const spanX = Math.max(1e-6, b.maxX - b.minX)
+  const spanY = Math.max(1e-6, b.maxY - b.minY)
+  const scale = Math.min(620 / spanX, 360 / spanY, 120)
+  const width = Math.max(160, spanX * scale + pad * 2)
+  const height = Math.max(120, spanY * scale + pad * 2)
+  const tx = (x: number): number => pad + (x - b.minX) * scale
+  const ty = (y: number): number => height - pad - (y - b.minY) * scale
+  const point2 = (value: unknown): number[] | null => {
+    if (!Array.isArray(value) || value.length < 2) return null
+    return [tx(num(value[0])), ty(num(value[1]))]
+  }
+  const shapes = spec.shapes.map((shape) => {
+    const out: DiagramShape = { ...shape }
+    if (typeof shape.x === 'number') out.x = tx(shape.x)
+    if (typeof shape.y === 'number') out.y = ty(shape.y)
+    if (typeof shape.r === 'number') out.r = shape.r * scale
+    if (typeof shape.radius === 'number') out.radius = shape.radius * scale
+    for (const key of ['from', 'to']) {
+      const mapped = point2(shape[key])
+      if (mapped) out[key] = mapped
+    }
+    if (Array.isArray(shape.points)) {
+      out.points = shape.points
+        .map(point2)
+        .filter((item): item is number[] => item !== null)
+    }
+    return out
+  })
+  const placed: Array<{ x: number; y: number }> = []
+  const annotations = spec.annotations.map((note) => {
+    let x = tx(note.x)
+    let y = ty(note.y)
+    // 简单避让:同一区域的多条说明往下错开,避免叠成一团。
+    for (let guard = 0; guard < 8; guard += 1) {
+      const clash = placed.some((item) => Math.abs(item.x - x) < 48
+        && Math.abs(item.y - y) < 15)
+      if (!clash) break
+      y += 17
+    }
+    placed.push({ x, y })
+    return { ...note, x, y }
+  })
+  return { shapes, annotations, width, height, tx, ty, pad }
+})
+
+const displayShapes = computed(() => shapeGeometry.value?.shapes
+  || visibleSpec.value.shapes)
+const displayAnnotations = computed(() => shapeGeometry.value?.annotations
+  || visibleSpec.value.annotations)
 
 const layout = computed(() => {
   if (visibleSpec.value.type === 'tree'
@@ -83,14 +151,13 @@ const layout = computed(() => {
     || visibleSpec.value.type === 'flow') {
     return layoutForSpec(visibleSpec.value)
   }
-  const b = boundsOfShapes(visibleSpec.value.shapes, visibleSpec.value.annotations)
-  const pad = 30
+  const g = shapeGeometry.value
   return {
     nodes: [], edges: [],
-    width: Math.max(120, b.maxX - b.minX + pad * 2),
-    height: Math.max(90, b.maxY - b.minY + pad * 2),
-    minX: b.minX - pad,
-    minY: b.minY - pad,
+    width: g?.width ?? 400,
+    height: g?.height ?? 260,
+    minX: 0,
+    minY: 0,
   }
 })
 
@@ -101,16 +168,44 @@ const minY = computed(() => ('minY' in layout.value ? Number(layout.value.minY) 
 
 const plotAxes = computed(() => {
   if (visibleSpec.value.type !== 'plot2d') return []
-  const b = boundsOfShapes(visibleSpec.value.shapes, visibleSpec.value.annotations)
+  const g = shapeGeometry.value
+  if (!g) return []
+  const y0 = g.ty(0)
+  const x0 = g.tx(0)
   return [
-    { x1: b.minX, y1: 0, x2: b.maxX, y2: 0 },
-    { x1: 0, y1: b.minY, x2: 0, y2: b.maxY },
+    { x1: g.pad, y1: y0, x2: g.width - g.pad, y2: y0 },
+    { x1: x0, y1: g.pad, x2: x0, y2: g.height - g.pad },
   ]
 })
 const hasUnsampledCurve = computed(() =>
   visibleSpec.value.type === 'plot2d'
   && visibleSpec.value.shapes.some((shape) =>
     shape.kind === 'curve' && (!Array.isArray(shape.points) || !shape.points.length)))
+
+function labelAnchor(shape: DiagramShape): { x: number; y: number } {
+  const kind = shape.kind
+  if (kind === 'axis') {
+    const [x, y] = pair(shape.to)
+    return { x, y: y - 6 }
+  }
+  if (kind === 'vector') {
+    const [x1, y1] = pair(shape.from)
+    const [x2, y2] = pair(shape.to)
+    return {
+      x: x1 + (x2 - x1) * 0.72 + 4,
+      y: y1 + (y2 - y1) * 0.72 - 6,
+    }
+  }
+  if (kind === 'segment' || kind === 'line') {
+    const [x1, y1] = pair(shape.from)
+    const [x2, y2] = pair(shape.to)
+    return { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 6 }
+  }
+  return {
+    x: num(shape.x, pair(shape.from)[0]),
+    y: num(shape.y, pair(shape.from)[1]) - 6,
+  }
+}
 
 function resetView(): void {
   view.value = { x: minX.value, y: minY.value, w: worldWidth.value, h: worldHeight.value }
@@ -219,12 +314,22 @@ resetView()
       @pointerup="onPointerUp"
       @pointercancel="onPointerUp"
     >
+      <defs v-if="visibleSpec.type === 'flow'">
+        <marker
+          :id="arrowId"
+          markerWidth="8" markerHeight="8"
+          refX="7" refY="3" orient="auto"
+        >
+          <path d="M0,0 L7,3 L0,6 z" class="diagram-arrow-head" />
+        </marker>
+      </defs>
       <g v-if="layout.nodes.length">
         <line
           v-for="edge in layout.edges"
           :key="`${edge.from}-${edge.to}`"
           :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2"
           class="diagram-edge"
+          :marker-end="visibleSpec.type === 'flow' ? `url(#${arrowId})` : undefined"
         />
         <text
           v-for="edge in layout.edges.filter((e) => e.label)"
@@ -270,10 +375,10 @@ resetView()
           :x1="axis.x1" :y1="axis.y1" :x2="axis.x2" :y2="axis.y2"
           class="diagram-axis"
         />
-        <text v-if="hasUnsampledCurve" x="0" y="-12" class="diagram-warning">
+        <text v-if="hasUnsampledCurve" x="8" y="14" class="diagram-warning">
           曲线缺少采样点
         </text>
-        <g v-for="(shape, i) in spec.shapes" :key="`shape-${i}`">
+        <g v-for="(shape, i) in displayShapes" :key="`shape-${i}`">
           <circle
             v-if="shape.kind === 'point'"
             :cx="num(shape.x)" :cy="num(shape.y)" :r="num(shape.r, 4)"
@@ -303,13 +408,13 @@ resetView()
           />
           <text
             v-if="shape.label"
-            :x="num(shape.x, pair(shape.from)[0])"
-            :y="num(shape.y, pair(shape.from)[1]) - 6"
+            :x="labelAnchor(shape).x"
+            :y="labelAnchor(shape).y"
             class="diagram-shape-label"
           >{{ shape.label }}</text>
         </g>
         <text
-          v-for="(note, i) in spec.annotations"
+          v-for="(note, i) in displayAnnotations"
           :key="`note-${i}`"
           :x="note.x" :y="note.y"
           class="diagram-annotation"
@@ -381,6 +486,10 @@ resetView()
 .diagram-edge {
   stroke: var(--line-bright);
   stroke-width: 1.2;
+}
+
+.diagram-arrow-head {
+  fill: var(--cyan);
 }
 
 .diagram-edge-label {

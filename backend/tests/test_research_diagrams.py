@@ -89,6 +89,199 @@ def test_validate_relation_and_limits():
     }) is None
 
 
+def test_validate_annotation_keeps_z_for_3d():
+    spec = validate_diagram({
+        "type": "geometry3d",
+        "shapes": [{"kind": "point", "x": 1, "y": 2, "z": 3}],
+        "annotations": [{"x": 1, "y": 2, "z": 3, "text": "P"}],
+    })
+    assert spec and spec["annotations"][0]["z"] == 3
+
+
+def test_explicit_type_only_overrides_single_request():
+    assert rd.explicit_type("用三维图表示三者关系") == "geometry3d"
+    assert rd.explicit_type("请用三维坐标系画出曲面") == "surface3d"
+    assert rd.explicit_type("画个流程图总结") == "flow"
+    # 同时要求 2D/3D/流程,是在描述一整套分步图解,不能整题覆盖成一种类型。
+    assert rd.explicit_type(
+        "先用2D几何讲方向,再用三维曲面标出最陡方向,最后用流程图总结") is None
+    # “坐标轴不要标数字”是排除项,不能误判成要画函数曲线。
+    assert rd.explicit_types(
+        "请用三维图表示梯度与方向导数,坐标轴不要标数字,不要画思维导图") == [
+            "surface3d"]
+
+
+def test_plan_diagram_fills_missing_type_and_samples_curve(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({
+            "title": "方向导数",
+            "shapes": [
+                {"kind": "vector", "from": [0, 0], "to": [1, 1]},
+                {"kind": "curve", "expr": "sin(x)", "domain": [-3.14, 3.14],
+                 "points": 60},
+            ],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(plan_diagram("2D几何讲方向", "", [], "geometry2d"))
+    assert result and result["type"] == "geometry2d"
+    curve = [s for s in result["shapes"] if s["kind"] == "curve"][0]
+    assert len(curve["points"]) == 60
+
+
+def test_plan_diagram_drops_bad_optional_fields_not_whole_diagram(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({
+            "type": "geometry2d",
+            "shapes": [
+                {"kind": "point", "x": 1, "y": 2, "z": None, "r": "bad"},
+                {"kind": "circle", "x": 0, "y": 0, "r": None},
+            ],
+            "annotations": [{"x": 1, "y": 2, "text": "P"}],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(plan_diagram("画个图", "", [], "geometry2d"))
+    assert result
+    assert [s["kind"] for s in result["shapes"]] == ["point", "circle"]
+    assert result["shapes"][0]["x"] == 1
+
+
+def test_validate_rejects_type_structure_mismatch():
+    assert validate_diagram({
+        "type": "surface3d",
+        "nodes": [{"id": "a", "label": "A"}],
+    }) is None
+    assert validate_diagram({
+        "type": "flow",
+        "shapes": [{"kind": "point", "x": 1, "y": 2}],
+    }) is None
+
+
+def test_plan_diagram_rejects_wrong_requested_type(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({
+            "type": "relation",
+            "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+            "edges": [{"from": "a", "to": "b"}],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    # 明确要流程图,却返回关系图:宁可不出图,也不能画错类型。
+    assert asyncio.run(plan_diagram("画个流程图", "", [], "flow")) is None
+
+
+def test_surface_gradient_is_recomputed_from_expression(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({
+            "type": "surface3d",
+            "shapes": [
+                {"kind": "surface", "expr": "x^2+y^2", "domain": [-2, 2],
+                 "rows": 5, "cols": 5},
+                {"kind": "point", "x": 1, "y": 1, "z": 999},
+                {"kind": "vector", "from": [1, 1, 0], "to": [9, 9, 9],
+                 "label": "梯度方向 ∇f"},
+            ],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(plan_diagram("用三维曲面画梯度", "", [], "surface3d"))
+    assert result
+    point = [s for s in result["shapes"] if s["kind"] == "point"][0]
+    vector = [s for s in result["shapes"] if s["kind"] == "vector"][0]
+    assert point["z"] == 2
+    assert vector["from"] == [1, 1, 2]
+    dx = vector["to"][0] - 1
+    dy = vector["to"][1] - 1
+    assert dx > 0 and abs(dx - dy) < 1e-5
+    assert abs(vector["to"][2] - (2 + 2 * dx + 2 * dy)) < 1e-4
+
+
+def test_plan_diagram_explicit_3d_request_overrides_marker(monkeypatch):
+    seen: dict[str, str] = {}
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
+
+    async def fake_stream(system, user, **kwargs):
+        seen["user"] = user
+        yield json.dumps({
+            "type": "surface3d",
+            "title": "梯度方向",
+            "shapes": [
+                {"kind": "surface", "expr": "x^2+y^2", "domain": [-1, 1],
+                 "rows": 3, "cols": 3},
+                {"kind": "vector", "from": [1, 1, 2], "to": [2, 2, 4]},
+                {"kind": "point", "x": 1, "y": 1, "z": 2, "label": "P"},
+            ],
+            "annotations": [{"x": 1, "y": 1, "z": 2, "text": "最陡上升"}],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(plan_diagram(
+        "梯度方向为什么是函数增长最快的方向?请用三维图表示",
+        "先看曲面", [], "relation"))
+    assert result and result["type"] == "surface3d"
+    surface = result["shapes"][0]
+    assert surface["rows"] == 3 and surface["cols"] == 3
+    assert len(surface["points"]) == 9
+    assert surface["points"][0] == [-1.0, -1.0, 2.0]
+    assert result["annotations"][0]["z"] == 2
+    assert "请求图解类型:surface3d" in seen["user"]
+    assert "用户明确要求" in seen["user"]
+
+
+def test_plan_diagram_drops_unsafe_expression(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({
+            "type": "surface3d",
+            "shapes": [{"kind": "surface", "expr": "__import__('os').system('x')",
+                        "domain": [-1, 1]}],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    assert asyncio.run(plan_diagram("用三维图表示", "", [], "surface3d")) is None
+
+
+def test_plan_diagram_samples_curve_expression(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({
+            "type": "plot2d",
+            "shapes": [{"kind": "curve", "expr": "sin(x)", "domain": [-3.14, 3.14]}],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(plan_diagram("画出函数图像", "", [], "plot2d"))
+    assert result and result["type"] == "plot2d"
+    curve = result["shapes"][0]
+    assert len(curve["points"]) == 80
+    assert abs(curve["points"][0][1]) < 0.01
+
+
+def test_plan_diagram_uses_latest_paragraph(monkeypatch):
+    seen: dict[str, str] = {}
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
+
+    async def fake_stream(system, user, **kwargs):
+        seen["user"] = user
+        yield json.dumps({"type": "flow", "nodes": [{"id": "a", "label": "A"}]})
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    asyncio.run(plan_diagram("步骤", "旧内容" + "甲" * 6000 + "最新一步", [], "flow"))
+    assert "旧内容" not in seen["user"]
+    assert "最新一步" in seen["user"]
+
+
 def test_diagram_event_frame():
     spec = validate_diagram({
         "type": "flow",
