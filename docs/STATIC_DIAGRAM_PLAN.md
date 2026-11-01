@@ -1,7 +1,7 @@
 # MathGuide 静态图解实施方案
 
 日期：2026-11-01
-状态：方案版，未编码
+状态：已实现（P0–P4），见第 14 节进度
 关联设计：[静态图解设计](superpowers/specs/2026-11-01-static-diagrams-design.md)
 
 ## 1. 目标
@@ -92,7 +92,7 @@
 模型在正文关键位置输出轻量内部标记，例如：
 
 ```text
-[[MG_DIAGRAM:type=relation]]
+[[MG_DIAGRAM:relation]]
 ```
 
 用户不可见。后端：
@@ -280,3 +280,36 @@ frontend/package.json                 # Three.js(仅 P3)
 - 扫描件 OCR；
 - 图解导出为独立图片；
 - 论文工作台聊天持久化。
+
+## 14. 实现进度（worktree 执行中）
+
+已完成：
+
+- 共享 schema、2D 布局、SVG 渲染；
+- 论文脑图接入缓存 `PaperStructure`，不调用模型；
+- 后端隐藏标记流、图解 schema 校验、图解规划器；
+- SSE `diagram` 事件与正文并行；
+- 学习区/科研主聊天内联图解与 localStorage 会话保存；
+- 论文工作台图解不落库、关闭清空；
+- Three.js 3D 静态场景（懒加载、旋转/缩放、卸载释放、强制释放 WebGL context）；
+- 手动“图解此段”与理解型问题兜底；
+- 论文脑图节点级折叠/展开；
+- 标记锚点按同一段文本正确计数，未闭合标记不吞正文；
+- 单消息最多两张图，前端去重/上限。
+- 2D 双指缩放、长标签两行截断、plot2d 坐标轴与缺采样提示。
+
+验证：
+
+```text
+backend pytest       487 passed
+frontend npm test    全部通过
+vue-tsc              通过
+npm run build        通过
+浏览器冒烟           2D 图解、论文脑图、3D 场景、手动图解
+```
+
+已知未完成：
+
+- 3D 场景的首屏构图与复杂曲面采样仍需真实样本调优；
+- 图解事件晚到时锚点位置可能随正文增长轻微移动；
+- 3D 仍是“一图一 renderer”，消息很多时依赖 forceContextLoss 与卸载控制上下文。

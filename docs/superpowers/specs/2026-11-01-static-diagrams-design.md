@@ -118,7 +118,7 @@
 模型只在正文中输出短标记（用户不可见）：
 
 ```text
-[[MG_DIAGRAM:type=relation]]
+[[MG_DIAGRAM:relation]]
 ```
 
 后端职责：

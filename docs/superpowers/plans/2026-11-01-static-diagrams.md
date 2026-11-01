@@ -271,7 +271,7 @@ Expected: collection error / module missing.
 
 - [ ] **Step 3: Implement marker parser**
 
-Regex `\[\[MG_DIAGRAM:([a-z0-9_]+)\]\]`. Buffer incomplete suffix; never emit raw marker. `feed` returns visible text; `drain` returns complete markers. `finish` strips leftover buffer.
+Regex `\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]`；提示词给具体示例 `[[MG_DIAGRAM:relation]]`。Buffer incomplete suffix; never emit raw marker. `feed` returns visible text; `drain` returns complete markers. `finish` returns leftover visible text, stripping only the marker prefix.
 
 - [ ] **Step 4: Implement schema validation**
 
