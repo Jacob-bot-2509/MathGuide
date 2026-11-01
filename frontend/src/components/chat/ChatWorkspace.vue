@@ -311,6 +311,8 @@ const archivePanelRef = ref<InstanceType<typeof ResearchArchivePanel> | null>(nu
 const paperDocId = ref<string | null>(null)
 
 function openPaperWorkspace(doc: ResearchDoc): void {
+  // 论文工作台及其论文图解只属于科学研究;学习辅助没有论文图鉴。
+  if (!isResearch.value) return
   activePanel.value = null
   paperDocId.value = doc.id
 }
