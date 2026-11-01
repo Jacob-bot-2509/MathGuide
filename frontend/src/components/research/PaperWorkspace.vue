@@ -108,8 +108,8 @@ function previousQuestion(msg: Msg): string {
     .reverse().find((item) => item.role === 'user')?.content || ''
 }
 
-function hasManualDiagram(msg: Msg): boolean {
-  return !!msg.diagrams?.some((item) => item.id.startsWith(`manual-${msg.id}-`))
+function hasDiagram(msg: Msg): boolean {
+  return !!msg.diagrams?.length
 }
 
 async function requestDiagram(
@@ -117,8 +117,8 @@ async function requestDiagram(
 ): Promise<void> {
   const prompt = question || previousQuestion(msg)
   if (diagramBusy.value === msg.id || !msg.content.trim() || !prompt.trim()) return
-  // 同一消息已有手动图解:直接复用已存快照,不重复调模型。
-  if (msg.diagrams?.some((item) => item.id.startsWith(`manual-${msg.id}-`))) return
+  // 已有图解(自动或手动):直接复用已存快照,不再调模型加图。
+  if (hasDiagram(msg)) return
   diagramBusy.value = msg.id
   try {
     const spec = await planDiagram({
@@ -424,7 +424,7 @@ onBeforeUnmount(() => {
                 </template>
                 <button
                   v-if="m.content && !m.streaming && previousQuestion(m)
-                    && !hasManualDiagram(m)"
+                    && !hasDiagram(m)"
                   class="pw-diagram-btn"
                   type="button"
                   :disabled="diagramBusy === m.id"

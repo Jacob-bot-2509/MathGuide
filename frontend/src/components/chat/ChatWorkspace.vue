@@ -576,8 +576,8 @@ function previousQuestion(msg: ChatMsg): string {
   return ''
 }
 
-function hasManualDiagram(msg: ChatMsg): boolean {
-  return !!msg.diagrams?.some((item) => item.id.startsWith(`manual-${msg.id}-`))
+function hasDiagram(msg: ChatMsg): boolean {
+  return !!msg.diagrams?.length
 }
 
 async function requestDiagram(
@@ -585,8 +585,8 @@ async function requestDiagram(
 ): Promise<void> {
   const prompt = question || previousQuestion(msg)
   if (diagramBusy.value === msg.id || !msg.content.trim() || !prompt.trim()) return
-  // 同一消息已有手动图解:直接复用已存快照,不重复调模型。
-  if (msg.diagrams?.some((item) => item.id.startsWith(`manual-${msg.id}-`))) return
+  // 已有图解(自动或手动):直接复用已存快照,不再调模型加图。
+  if (hasDiagram(msg)) return
   diagramBusy.value = msg.id
   try {
     const paperId = currentPaper.value?.docId || stagedPaper.value?.docId
@@ -1910,7 +1910,7 @@ onBeforeUnmount(() => {
               </div>
               <button
                 v-if="m.content && !m.streaming && !m.paperImport
-                  && previousQuestion(m) && !hasManualDiagram(m)"
+                  && previousQuestion(m) && !hasDiagram(m)"
                 class="diagram-btn"
                 type="button"
                 :disabled="diagramBusy === m.id"
