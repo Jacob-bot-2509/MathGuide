@@ -1,7 +1,16 @@
 """图解标记流:跨 chunk 剥离、锚点、schema 白名单。"""
 from __future__ import annotations
 
-from research_diagrams import MarkerStream, diagram_event, validate_diagram
+import asyncio
+import json
+
+import research_diagrams as rd
+from research_diagrams import (
+    MarkerStream,
+    diagram_event,
+    plan_diagram,
+    validate_diagram,
+)
 
 
 def _marker(kind: str = "relation") -> str:
@@ -61,3 +70,41 @@ def test_diagram_event_frame():
     assert frame.startswith("data: ")
     assert '"mg_event": "diagram"' in frame
     assert '"anchorIndex": 3' in frame
+
+
+def test_plan_diagram_uses_answer_context(monkeypatch):
+    seen: dict[str, str] = {}
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
+
+    async def fake_stream(system, user, **kwargs):
+        seen["system"] = system
+        seen["user"] = user
+        yield "```json\n" + json.dumps({
+            "type": "relation",
+            "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+            "edges": [{"from": "a", "to": "b"}],
+        }) + "\n```"
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(plan_diagram(
+        "为什么 A 推出 B", "前面解释 A", [{"section": "S", "text": "资料"}],
+        "relation"))
+    assert result and result["type"] == "relation"
+    assert "为什么 A 推出 B" in seen["user"]
+    assert "前面解释 A" in seen["user"]
+    assert "资料" in seen["user"]
+
+
+def test_plan_diagram_rejects_bad_model_output(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
+
+    async def bad(system, user, **kwargs):
+        yield "不是 JSON"
+
+    monkeypatch.setattr(rd.llm, "stream_chat", bad)
+    assert asyncio.run(plan_diagram("q", "a", [], "flow")) is None
+
+
+def test_plan_diagram_without_llm(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": False)
+    assert asyncio.run(plan_diagram("q", "a", [], "tree")) is None

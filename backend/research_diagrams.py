@@ -5,6 +5,8 @@ import json
 import re
 from dataclasses import dataclass
 
+from rag import llm
+
 PREFIX = "[[MG_DIAGRAM:"
 _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:([a-z0-9_]+)\]\]")
 _TYPES = {"tree", "relation", "flow", "geometry2d", "plot2d",
@@ -264,3 +266,65 @@ def diagram_event(diagram: dict, request_id: str, anchor_id: str,
         "anchorIndex": anchor_index,
         "diagram": diagram,
     }, ensure_ascii=False) + "\n\n"
+
+
+_PLAN_SYSTEM = (
+    "你是 MathGuide 的图解规划器。用户刚在对话中提出了理解困惑,"
+    "你只负责把当前回答中的一个关键关系画成静态图解。\n"
+    "只输出一个 JSON 对象,不要解释,不要 Markdown 代码块。\n"
+    "格式:\n"
+    '{"type":"relation","title":"可选",'
+    '"nodes":[{"id":"a","label":"概念"}],'
+    '"edges":[{"from":"a","to":"b","label":"推出"}],'
+    '"shapes":[],"annotations":[]}\n'
+    "规则:\n"
+    "1. 只使用【用户问题】【当前回答】【资料】里出现的内容,不得虚构关系或数据。\n"
+    "2. 只画一张图,节点不超过 40,边不超过 80,形状不超过 100。\n"
+    "3. type 只能是 tree/relation/flow/geometry2d/plot2d/geometry3d/surface3d。\n"
+    "4. 优先表达概念之间的内在联系、因果、步骤或几何直观。\n"
+    "5. 不要输出 HTML、脚本、图片或任意 SVG 代码。\n"
+)
+
+
+def _load_json(text: str) -> dict | None:
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        value = json.loads(raw[start:end + 1])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+async def plan_diagram(question: str, before: str, excerpts: list[dict],
+                       kind: str, role: str = "main") -> dict | None:
+    """根据用户问题与标记前的回答生成一张图解;失败返回 None。"""
+    if kind not in _TYPES or not llm.is_configured(role):
+        return None
+    context: list[str] = [
+        f"用户问题:{_text(question, 1000)}",
+        f"当前回答(标记前):{_text(before, 6000)}",
+        "资料:",
+    ]
+    for item in (excerpts or [])[:6]:
+        section = _text(item.get("section"), 120)
+        body = _text(item.get("text") or item.get("snippet"), 900)
+        if body:
+            context.append(f"- {section}:{body}")
+    parts: list[str] = []
+    try:
+        async for delta in llm.stream_chat(
+                _PLAN_SYSTEM, "\n".join(context), role=role,
+                fallback=True, max_tokens=1200, thinking=False):
+            parts.append(delta)
+            if sum(len(part) for part in parts) >= 8000:
+                break
+    except Exception:  # noqa: BLE001 图解失败不能影响回答
+        return None
+    return validate_diagram(_load_json("".join(parts)))
+
