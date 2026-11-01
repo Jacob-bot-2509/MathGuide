@@ -73,7 +73,7 @@ function text(value: unknown, limit: number): string {
   return typeof value === 'string' ? value.trim().slice(0, limit) : ''
 }
 
-function number(value: unknown, fallback = 0): number | null {
+function number(value: unknown): number | null {
   const parsed = Number(value)
   if (!Number.isFinite(parsed) || parsed < -MAX_COORD || parsed > MAX_COORD) {
     return null
