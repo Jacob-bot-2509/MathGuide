@@ -576,11 +576,17 @@ function previousQuestion(msg: ChatMsg): string {
   return ''
 }
 
+function hasManualDiagram(msg: ChatMsg): boolean {
+  return !!msg.diagrams?.some((item) => item.id.startsWith(`manual-${msg.id}-`))
+}
+
 async function requestDiagram(
   msg: ChatMsg, question = '', silent = false,
 ): Promise<void> {
   const prompt = question || previousQuestion(msg)
   if (diagramBusy.value === msg.id || !msg.content.trim() || !prompt.trim()) return
+  // 同一消息已有手动图解:直接复用已存快照,不重复调模型。
+  if (msg.diagrams?.some((item) => item.id.startsWith(`manual-${msg.id}-`))) return
   diagramBusy.value = msg.id
   try {
     const paperId = currentPaper.value?.docId || stagedPaper.value?.docId
@@ -1903,7 +1909,8 @@ onBeforeUnmount(() => {
                 </template>
               </div>
               <button
-                v-if="m.content && !m.streaming && !m.paperImport && previousQuestion(m)"
+                v-if="m.content && !m.streaming && !m.paperImport
+                  && previousQuestion(m) && !hasManualDiagram(m)"
                 class="diagram-btn"
                 type="button"
                 :disabled="diagramBusy === m.id"
