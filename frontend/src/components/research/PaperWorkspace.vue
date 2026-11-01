@@ -403,6 +403,7 @@ onBeforeUnmount(() => {
         :structure="structure"
         :loading="insightsLoading"
         :error="insightsError"
+        :title="currentDoc?.title || currentDoc?.name || ''"
         @refresh="loadInsights(currentId, true)"
       />
     </div>

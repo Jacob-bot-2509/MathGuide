@@ -248,3 +248,73 @@ export function splitMessageBlocks(
   if (!blocks.length) blocks.push({ kind: 'text', text: content })
   return blocks
 }
+
+export interface PaperOutlineLike {
+  title: string
+  children?: PaperOutlineLike[]
+  pageStart?: number
+}
+
+export interface PaperStructureLike {
+  question: string
+  methods: string[]
+  conclusions: string[]
+  limitations: string[]
+  outline: PaperOutlineLike[]
+}
+
+/** 论文脑图只读缓存结构,不调用模型。 */
+export function buildPaperDiagram(
+  structure: PaperStructureLike,
+  title = '论文',
+): DiagramSpec {
+  const nodes: DiagramNode[] = []
+  const edges: DiagramEdge[] = []
+  let nextId = 0
+  const add = (label: string, kind: string, page?: number): string | null => {
+    if (nodes.length >= MAX_NODES) return null
+    const clean = label.trim().slice(0, 200)
+    if (!clean) return null
+    const id = `p${nextId++}`
+    const node: DiagramNode = { id, label: clean, kind }
+    if (page && page > 0) node.page = page
+    nodes.push(node)
+    return id
+  }
+  const link = (from: string | null, to: string | null): void => {
+    if (from && to && edges.length < MAX_EDGES) edges.push({ from, to })
+  }
+
+  const root = add(title, 'root')!
+  const question = structure.question.trim()
+  if (question) {
+    const section = add('研究问题', 'section')
+    link(root, section)
+    link(section, add(question, 'item'))
+  }
+  const groups: Array<[string, string[]]> = [
+    ['方法', structure.methods],
+    ['结论', structure.conclusions],
+    ['局限', structure.limitations],
+  ]
+  for (const [label, items] of groups) {
+    if (!items.length) continue
+    const section = add(label, 'section')
+    link(root, section)
+    for (const item of items.slice(0, 6)) link(section, add(item, 'item'))
+  }
+  if (structure.outline.length) {
+    const section = add('章节', 'section')
+    link(root, section)
+    const walk = (items: PaperOutlineLike[], parent: string | null, depth: number): void => {
+      if (depth > 4) return
+      for (const item of items) {
+        const id = add(item.title, 'outline', item.pageStart)
+        link(parent, id)
+        if (id && item.children?.length) walk(item.children, id, depth + 1)
+      }
+    }
+    walk(structure.outline, section, 0)
+  }
+  return { type: 'tree', nodes, edges, shapes: [], annotations: [] }
+}

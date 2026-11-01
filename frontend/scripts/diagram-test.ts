@@ -3,6 +3,7 @@
 declare const process: { exit(code: number): void }
 
 import {
+  buildPaperDiagram,
   parseDiagramEvent,
   parseDiagramSpec,
   splitMessageBlocks,
@@ -97,6 +98,18 @@ const flow = layoutFlow(flowSpec)
 check('流程图顺序', flow.nodes[0].x < flow.nodes[1].x
   || flow.nodes[0].y < flow.nodes[1].y)
 check('流程图边完整', flow.edges.length === 1)
+
+const paper = buildPaperDiagram({
+  question: '如何提高催化效率?',
+  methods: ['方法 A', '方法 B'],
+  conclusions: ['结论 A'],
+  limitations: ['样本有限'],
+  outline: [{ title: '第一章', children: [{ title: '1.1 背景', children: [] }] }],
+}, '测试论文')
+check('论文脑图根节点', paper.nodes[0]?.label === '测试论文')
+check('论文脑图分支', paper.nodes.some((n) => n.label === '研究问题')
+  && paper.nodes.some((n) => n.label === '方法'))
+check('论文脑图节点上限', paper.nodes.length <= 40 && paper.edges.length > 0)
 
 if (failed.length) {
   console.error('图解协议自测失败:')

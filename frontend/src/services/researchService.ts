@@ -132,6 +132,7 @@ export async function purgeResearchCaches(): Promise<void> {
 export interface OutlineNode {
   title: string
   children: OutlineNode[]
+  pageStart?: number
 }
 
 export interface PaperStructure {

@@ -5,12 +5,15 @@
  */
 import { computed } from 'vue'
 import { t } from '@/utils/i18n'
+import { buildPaperDiagram } from '@/utils/diagramSpec'
+import DiagramSvg from '@/components/diagram/DiagramSvg.vue'
 import type { OutlineNode, PaperStructure } from '@/services/researchService'
 
 const props = defineProps<{
   structure: PaperStructure | null
   loading: boolean
   error: string
+  title?: string
 }>()
 const emit = defineEmits<{ refresh: [] }>()
 
@@ -28,6 +31,9 @@ const outlineRows = computed(() => {
 })
 
 const question = computed(() => props.structure?.question || '')
+const paperDiagram = computed(() => props.structure
+  ? buildPaperDiagram(props.structure, props.title || t('workspace.paper'))
+  : null)
 </script>
 
 <template>
@@ -82,33 +88,7 @@ const question = computed(() => props.structure?.question || '')
 
       <section class="pi-section">
         <h4>{{ t('workspace.mindmap') }}</h4>
-        <div class="mm">
-          <div class="mm-root">{{ t('workspace.paper') }}</div>
-          <div class="mm-branches">
-            <div v-if="question" class="mm-branch">
-              <span class="mm-label">{{ t('workspace.question') }}</span>
-              <span class="mm-leaf">{{ question }}</span>
-            </div>
-            <div v-if="structure.methods.length" class="mm-branch">
-              <span class="mm-label">{{ t('workspace.methods') }}</span>
-              <span v-for="(item, i) in structure.methods" :key="`mm${i}`" class="mm-leaf">{{ item }}</span>
-            </div>
-            <div v-if="structure.conclusions.length" class="mm-branch">
-              <span class="mm-label">{{ t('workspace.conclusions') }}</span>
-              <span v-for="(item, i) in structure.conclusions" :key="`mc${i}`" class="mm-leaf">{{ item }}</span>
-            </div>
-            <div v-if="structure.limitations.length" class="mm-branch">
-              <span class="mm-label">{{ t('workspace.limitations') }}</span>
-              <span v-for="(item, i) in structure.limitations" :key="`ml${i}`" class="mm-leaf">{{ item }}</span>
-            </div>
-            <div v-if="outlineRows.length" class="mm-branch">
-              <span class="mm-label">{{ t('workspace.outline') }}</span>
-              <span v-for="(row, i) in outlineRows" :key="`mo${i}`" class="mm-leaf">
-                {{ row.title }}
-              </span>
-            </div>
-          </div>
-        </div>
+        <DiagramSvg v-if="paperDiagram" :spec="paperDiagram" />
       </section>
 
       <section v-if="outlineRows.length" class="pi-section">
@@ -247,58 +227,6 @@ const question = computed(() => props.structure?.question || '')
 .pi-muted {
   color: var(--text-dim);
   font-size: 12px;
-}
-
-.mm {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px;
-  background: var(--bg-card);
-}
-
-.mm-root {
-  display: inline-block;
-  padding: 4px 10px;
-  border: 1px solid var(--line-bright);
-  border-radius: 999px;
-  color: var(--cyan);
-  font-size: 11.5px;
-}
-
-.mm-branches {
-  margin: 8px 0 0 12px;
-  padding-left: 10px;
-  border-left: 1px solid var(--line-bright);
-}
-
-.mm-branch {
-  position: relative;
-  margin: 7px 0;
-  padding-left: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.mm-branch::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  width: 8px;
-  border-top: 1px solid var(--line-bright);
-}
-
-.mm-label {
-  color: var(--cyan);
-  font-size: 10.5px;
-  font-family: var(--font-tech);
-}
-
-.mm-leaf {
-  color: var(--text);
-  font-size: 11.5px;
-  line-height: 1.5;
 }
 
 .pi-outline {
