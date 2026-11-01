@@ -12,6 +12,7 @@ import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
 import DocumentViewer from '@/components/research/DocumentViewer.vue'
 import PaperInsights from '@/components/research/PaperInsights.vue'
 import { appendDiagram, parseDiagramEvent, splitMessageBlocks, type DiagramBlock } from '@/utils/diagramSpec'
+import { needsDiagram, planDiagram } from '@/services/diagramService'
 import { type ChatStreamHandle } from '@/services/chatService'
 import {
   generateResearchDocInsights,
@@ -96,6 +97,40 @@ function messageBlocks(msg: Msg): Array<{
     segment.kind === 'diagram'
       ? { key: `d-${index}-${segment.diagram.id}`, kind: 'diagram', diagram: segment.diagram }
       : { key: `t-${index}`, kind: 'text', text: segment.text })
+}
+
+const diagramBusy = ref<number | null>(null)
+
+function previousQuestion(msg: Msg): string {
+  const index = messages.value.findIndex((item) => item.id === msg.id)
+  if (index < 0) return ''
+  return [...messages.value.slice(0, index)]
+    .reverse().find((item) => item.role === 'user')?.content || ''
+}
+
+async function requestDiagram(msg: Msg, question = ''): Promise<void> {
+  if (diagramBusy.value === msg.id || !msg.content.trim()) return
+  diagramBusy.value = msg.id
+  try {
+    const spec = await planDiagram({
+      question: question || previousQuestion(msg),
+      answer: msg.content,
+      paperId: currentId.value,
+    })
+    if (!spec) {
+      showToast(t('diagram.fail'))
+      return
+    }
+    msg.diagrams = appendDiagram(msg.diagrams, {
+      id: `manual-${msg.id}-${Date.now()}`,
+      anchorIndex: msg.content.length,
+      spec,
+    })
+  } catch {
+    showToast(t('diagram.fail'))
+  } finally {
+    diagramBusy.value = null
+  }
 }
 
 function resetChat(): void {
@@ -279,6 +314,10 @@ function send(): void {
       streaming.value = false
       streamHandle = null
       scrollBottom()
+      if (!failed && complete && live.content && needsDiagram(prompt)
+        && !live.diagrams?.length) {
+        void requestDiagram(live, prompt)
+      }
     },
     onError: () => {
       failed = true
@@ -374,6 +413,13 @@ onBeforeUnmount(() => {
                   <MathText v-if="block.kind === 'text'" :text="block.text || ''" />
                   <DiagramBlockView v-else-if="block.diagram" :spec="block.diagram.spec" />
                 </template>
+                <button
+                  v-if="m.content && !m.streaming"
+                  class="pw-diagram-btn"
+                  type="button"
+                  :disabled="diagramBusy === m.id"
+                  @click.stop="requestDiagram(m)"
+                >{{ diagramBusy === m.id ? t('diagram.generating') : t('diagram.generate') }}</button>
                 <span v-if="m.streaming" class="pw-cursor">▍</span>
               </template>
               <template v-else>{{ m.content }}</template>
@@ -590,6 +636,27 @@ onBeforeUnmount(() => {
 .pw-thinking,
 .pw-cursor {
   color: var(--text-dim);
+}
+
+.pw-diagram-btn {
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 10px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.pw-diagram-btn:hover {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+}
+
+.pw-diagram-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .pw-note {

@@ -23,6 +23,7 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
 import { appendDiagram, parseDiagramEvent, splitMessageBlocks, type DiagramBlock } from '@/utils/diagramSpec'
+import { needsDiagram, planDiagram } from '@/services/diagramService'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
 import ResearchArchivePanel from '@/components/chat/ResearchArchivePanel.vue'
@@ -561,6 +562,45 @@ function messageBlocks(msg: ChatMsg): Array<{
   return out
 }
 
+const diagramBusy = ref<number | null>(null)
+
+function previousQuestion(msg: ChatMsg): string {
+  for (const session of sessions.value) {
+    const index = session.messages.findIndex((item) => item.id === msg.id)
+    if (index < 0) continue
+    return [...session.messages.slice(0, index)]
+      .reverse().find((item) => item.role === 'user')?.content || ''
+  }
+  return ''
+}
+
+async function requestDiagram(msg: ChatMsg, question = ''): Promise<void> {
+  if (diagramBusy.value === msg.id || !msg.content.trim()) return
+  diagramBusy.value = msg.id
+  try {
+    const paperId = currentPaper.value?.docId || stagedPaper.value?.docId
+    const spec = await planDiagram({
+      question: question || previousQuestion(msg),
+      answer: msg.content,
+      paperId,
+    })
+    if (!spec) {
+      showToast(t('diagram.fail'))
+      return
+    }
+    msg.diagrams = appendDiagram(msg.diagrams, {
+      id: `manual-${msg.id}-${Date.now()}`,
+      anchorIndex: msg.content.length,
+      spec,
+    })
+    persistSessions()
+  } catch {
+    showToast(t('diagram.fail'))
+  } finally {
+    diagramBusy.value = null
+  }
+}
+
 /** 让某会话的一条助手消息开始流式接收回复(输出在所属会话内进行,切换界面不中断) */
 function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?: ChatMeta) {
   // 增量节流:高频 chunk 先攒进 pending,约每 24ms 合并提交一次;
@@ -627,6 +667,10 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
       }
       streams.delete(reply.id)
       persistSessions()
+      if (!failed && complete && reply.content && needsDiagram(prompt)
+        && !reply.diagrams?.length) {
+        void requestDiagram(reply, prompt)
+      }
     },
     // 请求失败(典型:后端未启动 / 限流 429)时,若一字未出则显示对应提示,
     // 避免气泡永远停留在"思考中"且无任何反馈。
@@ -1853,6 +1897,13 @@ onBeforeUnmount(() => {
                   <DiagramBlockView v-else-if="block.diagram" :spec="block.diagram.spec" />
                 </template>
               </div>
+              <button
+                v-if="m.content && !m.streaming && !m.paperImport"
+                class="diagram-btn"
+                type="button"
+                :disabled="diagramBusy === m.id"
+                @click.stop="requestDiagram(m)"
+              >{{ diagramBusy === m.id ? t('diagram.generating') : t('diagram.generate') }}</button>
               <span v-if="m.streaming && !m.thinking" class="cursor">▍</span>
               <!-- 半截回答的标记:与完整回答同形,不点明用户看不出缺了一段 -->
               <span v-if="m.interrupted" class="cut-note">{{ t('learn.interrupted') }}</span>
@@ -2500,6 +2551,29 @@ onBeforeUnmount(() => {
 }
 
 .export-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.diagram-btn {
+  display: inline-block;
+  margin-top: 8px;
+  margin-left: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.diagram-btn:hover {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+}
+
+.diagram-btn:disabled {
   opacity: 0.55;
   cursor: wait;
 }

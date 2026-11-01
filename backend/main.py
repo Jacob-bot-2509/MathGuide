@@ -49,6 +49,7 @@ import profile
 import rag
 import recommendation
 import research_corpus
+import research_diagrams
 import research_compare
 import research_tables
 import research_lit
@@ -105,6 +106,7 @@ routes = [
     Route("/api/research/docs", research_corpus.clear_docs, methods=["DELETE"]),
     Route("/api/research/storage", research_corpus.storage_usage),
     Route("/api/research/cache/purge", research_corpus.purge_caches, methods=["POST"]),
+    Route("/api/research/diagrams/plan", research_diagrams.plan_endpoint, methods=["POST"]),
     Route("/api/research/docs/{doc_id}", research_corpus.get_doc, methods=["GET"]),
     Route("/api/research/docs/{doc_id}", research_corpus.delete_doc, methods=["DELETE"]),
     Route("/api/research/docs/{doc_id}/insights", research_corpus.get_insights),

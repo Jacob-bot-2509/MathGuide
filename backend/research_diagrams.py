@@ -1,11 +1,20 @@
 """图解标记流与结构化 schema:服务端只负责剥标记、校验、发事件。"""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
 
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+import research_corpus as rc
+from auth import require_auth
+from http_utils import read_json_object
 from rag import llm
+from rate_limit import SlidingWindowLimiter
 
 PREFIX = "[[MG_DIAGRAM:"
 _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:([a-z0-9_]+)\]\]")
@@ -327,4 +336,36 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
     except Exception:  # noqa: BLE001 图解失败不能影响回答
         return None
     return validate_diagram(_load_json("".join(parts)))
+
+
+_diagram_limiter = SlidingWindowLimiter(12, 60.0)
+
+
+async def plan_endpoint(request: Request) -> JSONResponse:
+    """手动“图解此段”:只依据当前回答/当前论文,不触发外部检索。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    if not _diagram_limiter.allow(uid):
+        raise HTTPException(429, "操作过于频繁,请稍后再试")
+    body = await read_json_object(request)
+    question = _text(body.get("question"), 4000)
+    answer = _text(body.get("answer"), 12000)
+    if not question:
+        raise HTTPException(400, "缺少 question")
+    kind = _text(body.get("kind"), 40) or "relation"
+    if kind not in _TYPES:
+        kind = "relation"
+    excerpts: list[dict] = []
+    paper_id = _text(body.get("paperId"), 64)
+    if paper_id:
+        try:
+            doc = await asyncio.to_thread(rc.get_live_doc, uid, paper_id)
+            if doc:
+                ctx = await asyncio.to_thread(
+                    rc.paper_context, uid, paper_id, question, 4, 6000)
+                excerpts = (ctx or {}).get("chunks") or []
+        except Exception:  # noqa: BLE001 论文不可用时只依据回答
+            excerpts = []
+    diagram = await plan_diagram(question, answer, excerpts, kind)
+    return JSONResponse({"diagram": diagram}, headers={"Cache-Control": "no-store"})
 

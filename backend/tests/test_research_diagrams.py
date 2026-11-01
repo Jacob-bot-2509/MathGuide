@@ -108,3 +108,39 @@ def test_plan_diagram_rejects_bad_model_output(monkeypatch):
 def test_plan_diagram_without_llm(monkeypatch):
     monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": False)
     assert asyncio.run(plan_diagram("q", "a", [], "tree")) is None
+
+
+def test_plan_endpoint_returns_diagram(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "u-dia"})
+    monkeypatch.setattr(rd, "_diagram_limiter", rd.SlidingWindowLimiter(20, 60))
+
+    async def fake_plan(question, before, excerpts, kind, role="main"):
+        return {"type": "flow", "nodes": [{"id": "a", "label": "A"}],
+                "edges": [], "shapes": [], "annotations": []}
+
+    monkeypatch.setattr(rd, "plan_diagram", fake_plan)
+    app = Starlette(routes=[Route("/api/research/diagrams/plan",
+                                  rd.plan_endpoint, methods=["POST"])])
+    client = TestClient(app)
+    res = client.post("/api/research/diagrams/plan",
+                      json={"question": "怎么理解", "answer": "解释"})
+    assert res.status_code == 200, res.text
+    assert res.json()["diagram"]["type"] == "flow"
+
+
+def test_plan_endpoint_requires_question(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "u-dia"})
+    monkeypatch.setattr(rd, "_diagram_limiter", rd.SlidingWindowLimiter(20, 60))
+    app = Starlette(routes=[Route("/api/research/diagrams/plan",
+                                  rd.plan_endpoint, methods=["POST"])])
+    client = TestClient(app)
+    res = client.post("/api/research/diagrams/plan", json={"answer": "解释"})
+    assert res.status_code == 400
