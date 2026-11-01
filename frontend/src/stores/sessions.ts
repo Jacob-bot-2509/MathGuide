@@ -6,6 +6,7 @@
  * 持久化于 localStorage(演示环境)。
  */
 import { reactive } from 'vue'
+import type { DiagramBlock } from '@/utils/diagramSpec'
 
 /** 工作区:学习辅助 / 科学研究。两个板块的数据完全隔离,只共享后端基础设施 */
 export type Workspace = 'learn' | 'research'
@@ -55,6 +56,8 @@ export interface ChatMsg {
   research?: boolean
   /** 跨板块知识点:先问用户想了解哪一方面,选择后再请求 */
   clarify?: ClarifyRequest
+  /** 图解(回答内联,随会话保存;论文工作台不落库) */
+  diagrams?: DiagramBlock[]
   /** 拖入论文后的导入询问:用户选择后更新状态,随会话保存 */
   paperImport?: {
     docId: string
@@ -93,6 +96,7 @@ interface PersistedMsg {
   research?: boolean
   stopped?: boolean
   clarify?: ClarifyRequest
+  diagrams?: DiagramBlock[]
   paperImport?: ChatMsg['paperImport']
 }
 
@@ -163,7 +167,8 @@ function createSessionStore(workspace: Workspace): SessionStore {
               attachment: m.attachment, chitchat: m.chitchat,
               nav: m.nav, navGuideFor: m.navGuideFor,
               interrupted: m.interrupted, research: m.research,
-              stopped: m.stopped, clarify: m.clarify, paperImport: m.paperImport,
+              stopped: m.stopped, clarify: m.clarify,
+              diagrams: m.diagrams, paperImport: m.paperImport,
             }))
             .slice(-120),
         })),

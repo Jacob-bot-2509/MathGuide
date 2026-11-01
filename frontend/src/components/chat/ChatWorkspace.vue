@@ -21,6 +21,8 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
+import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
+import { appendDiagram, parseDiagramEvent, splitMessageBlocks, type DiagramBlock } from '@/utils/diagramSpec'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
 import ResearchArchivePanel from '@/components/chat/ResearchArchivePanel.vue'
@@ -534,6 +536,31 @@ function blocksOf(text: string): string[] {
   return splitStableBlocks(text)
 }
 
+/** 消息正文按图解锚点切成文本/图块;文本仍走稳定块渲染。 */
+function messageBlocks(msg: ChatMsg): Array<{
+  key: string
+  kind: 'text' | 'diagram'
+  text?: string
+  diagram?: DiagramBlock
+}> {
+  const out: Array<{
+    key: string
+    kind: 'text' | 'diagram'
+    text?: string
+    diagram?: DiagramBlock
+  }> = []
+  splitMessageBlocks(msg.content, msg.diagrams).forEach((segment, si) => {
+    if (segment.kind === 'diagram') {
+      out.push({ key: `d-${si}-${segment.diagram.id}`, kind: 'diagram', diagram: segment.diagram })
+      return
+    }
+    blocksOf(segment.text).forEach((text, ti) => {
+      out.push({ key: `t-${si}-${ti}`, kind: 'text', text })
+    })
+  })
+  return out
+}
+
 /** 让某会话的一条助手消息开始流式接收回复(输出在所属会话内进行,切换界面不中断) */
 function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?: ChatMeta) {
   // 增量节流:高频 chunk 先攒进 pending,约每 24ms 合并提交一次;
@@ -564,6 +591,11 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
       }).mg_meta
       if (inner?.research) reply.research = true
       if (inner?.paperImported) markPaperImported(inner.paperImported)
+      const diagram = parseDiagramEvent(meta)
+      if (diagram) {
+        reply.diagrams = appendDiagram(reply.diagrams, diagram)
+        persistSessions()
+      }
     },
     onDelta: (t) => {
       reply.thinking = false
@@ -1816,7 +1848,10 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div v-if="m.content && !m.paperImport" class="mg-blocks">
-                <MathText v-for="(block, bi) in blocksOf(m.content)" :key="bi" :text="block" />
+                <template v-for="block in messageBlocks(m)" :key="block.key">
+                  <MathText v-if="block.kind === 'text'" :text="block.text || ''" />
+                  <DiagramBlockView v-else-if="block.diagram" :spec="block.diagram.spec" />
+                </template>
               </div>
               <span v-if="m.streaming && !m.thinking" class="cursor">▍</span>
               <!-- 半截回答的标记:与完整回答同形,不点明用户看不出缺了一段 -->

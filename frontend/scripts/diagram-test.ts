@@ -3,6 +3,7 @@
 declare const process: { exit(code: number): void }
 
 import {
+  appendDiagram,
   buildPaperDiagram,
   parseDiagramEvent,
   parseDiagramSpec,
@@ -61,6 +62,9 @@ const event = parseDiagramEvent({
 })
 check('图解事件', event?.id === 'd1' && event?.anchorIndex === 12)
 check('非法事件拒绝', parseDiagramEvent({ mg_event: 'diagram', diagram: { type: 'x' } }) === null)
+const firstAppend = appendDiagram(undefined, event!)
+const secondAppend = appendDiagram(firstAppend, event!)
+check('图解去重', firstAppend.length === 1 && secondAppend.length === 1)
 
 const treeSpec: DiagramSpec = {
   type: 'tree',

@@ -84,6 +84,12 @@ const CASES = [
     artifact: '.diagram-test.cjs',
   },
   {
+    name: '图解释放与恢复',
+    bundle: 'npx esbuild scripts/diagram-store-test.ts --bundle --format=cjs --platform=node --outfile=.diagram-store-test.cjs',
+    run: 'node .diagram-store-test.cjs',
+    artifact: '.diagram-store-test.cjs',
+  },
+  {
     name: '待办清单时间/状态',
     bundle: 'npx esbuild scripts/todo-test.ts --bundle --format=cjs --platform=node --outfile=.todo-test.cjs',
     run: 'node .todo-test.cjs',

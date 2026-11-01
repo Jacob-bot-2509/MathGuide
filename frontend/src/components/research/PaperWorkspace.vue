@@ -8,8 +8,10 @@ import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import { usePaperChat } from '@/composables/usePaperChat'
 import MathText from '@/components/chat/MathText.vue'
+import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
 import DocumentViewer from '@/components/research/DocumentViewer.vue'
 import PaperInsights from '@/components/research/PaperInsights.vue'
+import { appendDiagram, parseDiagramEvent, splitMessageBlocks, type DiagramBlock } from '@/utils/diagramSpec'
 import { type ChatStreamHandle } from '@/services/chatService'
 import {
   generateResearchDocInsights,
@@ -65,6 +67,7 @@ interface Msg {
   content: string
   streaming?: boolean
   thinking?: boolean
+  diagrams?: DiagramBlock[]
 }
 const messages = ref<Msg[]>([])
 const input = ref('')
@@ -81,6 +84,18 @@ function scrollBottom(): void {
     const el = listEl.value
     if (el) el.scrollTop = el.scrollHeight
   })
+}
+
+function messageBlocks(msg: Msg): Array<{
+  key: string
+  kind: 'text' | 'diagram'
+  text?: string
+  diagram?: DiagramBlock
+}> {
+  return splitMessageBlocks(msg.content, msg.diagrams).map((segment, index) =>
+    segment.kind === 'diagram'
+      ? { key: `d-${index}-${segment.diagram.id}`, kind: 'diagram', diagram: segment.diagram }
+      : { key: `t-${index}`, kind: 'text', text: segment.text })
 }
 
 function resetChat(): void {
@@ -247,6 +262,10 @@ function send(): void {
 
   let failed = false
   streamHandle = paperChat.stream(prompt, {
+    onMeta: (meta) => {
+      const diagram = parseDiagramEvent(meta)
+      if (diagram) live.diagrams = appendDiagram(live.diagrams, diagram)
+    },
     onDelta: (text) => {
       live.thinking = false
       live.content += text
@@ -351,7 +370,10 @@ onBeforeUnmount(() => {
             <div class="pw-bubble">
               <span v-if="m.thinking" class="pw-thinking">{{ t('workspace.thinking') }}</span>
               <template v-else-if="m.role === 'assistant'">
-                <MathText :text="m.content" />
+                <template v-for="block in messageBlocks(m)" :key="block.key">
+                  <MathText v-if="block.kind === 'text'" :text="block.text || ''" />
+                  <DiagramBlockView v-else-if="block.diagram" :spec="block.diagram.spec" />
+                </template>
                 <span v-if="m.streaming" class="pw-cursor">▍</span>
               </template>
               <template v-else>{{ m.content }}</template>

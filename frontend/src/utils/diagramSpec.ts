@@ -249,6 +249,16 @@ export function splitMessageBlocks(
   return blocks
 }
 
+export function appendDiagram(
+  existing: DiagramBlock[] | undefined,
+  incoming: DiagramBlock,
+): DiagramBlock[] {
+  if ((existing || []).some((item) => item.id === incoming.id)) {
+    return existing || []
+  }
+  return [...(existing || []), incoming]
+}
+
 export interface PaperOutlineLike {
   title: string
   children?: PaperOutlineLike[]
