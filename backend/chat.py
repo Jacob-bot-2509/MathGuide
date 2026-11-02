@@ -613,6 +613,23 @@ async def _verify_answer(question: str, answer: str, role: str) -> str | None:
     return text[:200] or None
 
 
+async def _diagram_verified(question: str, context: str, diagram: dict) -> bool:
+    """异源模型判断图是否对题;校验不可用时放行(不因质检故障丢图)。"""
+    if not research_diagrams.verify_enabled():
+        return True
+    try:
+        verdict = await asyncio.wait_for(
+            research_diagrams.verify_diagram(question, context, diagram), timeout=6.0)
+    except Exception:  # noqa: BLE001 校验失败不拦图
+        diagram_metrics.record("verify", False, "error")
+        return True
+    if verdict is None:
+        diagram_metrics.record("verify", False, "unknown")
+        return True
+    diagram_metrics.record("verify", verdict, "ok" if verdict else "mismatch")
+    return verdict
+
+
 async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, float]],
                    history: list[dict] | None = None, role: str = "main", verify: bool = False,
                    summary: str = "", sid: int | None = None, uid: str = "",
@@ -719,6 +736,9 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
         markers = research_diagrams.MarkerStream(
             diagram_request_id or secrets.token_hex(8)) if diagram_mode else None
         diagram_tasks: list[tuple[research_diagrams.DiagramMarker, asyncio.Task]] = []
+        auto_context: dict[str, str] = {}
+        pending_verify: list[tuple[research_diagrams.DiagramMarker, dict,
+                                    asyncio.Task]] = []
         scheduled_diagrams = 0
         kept_anchors: list[int] = []
         stepwise_hint = research_diagrams.is_step_text(diagram_question or prompt)
@@ -726,6 +746,24 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             diagram_question or prompt)
         total_points = 0
         total_bytes = 0
+
+        async def drain_verified(force: bool = False):
+            """语义校验在后台跑,不阻塞正文;完成且通过才发图。"""
+            for item in list(pending_verify):
+                marker, diagram, task = item
+                if not force and not task.done():
+                    continue
+                pending_verify.remove(item)
+                try:
+                    ok = await task
+                except Exception:  # noqa: BLE001 校验异常放行
+                    ok = True
+                if not ok:
+                    diagram_metrics.record("drop", False, "verify")
+                    continue
+                frame = diagram_frame(diagram, marker)
+                if frame:
+                    yield frame
 
         def diagram_frame(diagram: dict,
                           marker: research_diagrams.DiagramMarker) -> str:
@@ -775,6 +813,14 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                         continue
                     full_text = "".join(answer)
                     stepwise = stepwise_hint or research_diagrams.is_step_text(full_text)
+                    # 非步骤回答:标记前 400 字里没提到图,视为装饰性图,直接丢。
+                    # 步骤讲解按惯例一步一图,保留;用户明确要图也不拦。
+                    if not stepwise and not explicit_requested:
+                        mentioned = research_diagrams.slice_utf16(
+                            full_text, marker.anchor_index)
+                        if not research_diagrams.references_diagram(mentioned):
+                            diagram_metrics.record("drop", False, "unreferenced")
+                            continue
                     # 模型标记也要过重要度/独立性闸门:不重要的片段不画。
                     if (not explicit_requested
                             and not research_diagrams.wants_visual(
@@ -795,8 +841,8 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                                     segment, terms) < 1.8:
                                 diagram_metrics.record("drop", False, "importance")
                                 continue
-                    # 非步骤内容最多 3 张,且锚点间隔 >=400 字,避免同一主题连续堆图。
-                    if not stepwise and scheduled_diagrams >= 3:
+                    # 非步骤内容最多 2 张,且锚点间隔 >=400 字,避免同一主题连续堆图。
+                    if not stepwise and scheduled_diagrams >= 2:
                         diagram_metrics.record("drop", False, "density")
                         continue
                     if not stepwise and any(
@@ -823,9 +869,14 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                     except Exception:  # noqa: BLE001
                         diagram = None
                     if diagram:
-                        frame = diagram_frame(diagram, marker)
-                        if frame:
-                            yield frame
+                        pending_verify.append((marker, diagram, asyncio.create_task(
+                            _diagram_verified(
+                                diagram_question or prompt,
+                                "".join(answer)[-800:], diagram))))
+                async for frame in drain_verified():
+                    yield frame
+            async for frame in drain_verified(force=True):
+                yield frame
             tail = markers.finish()
             if tail:
                 answer.append(tail)
@@ -844,6 +895,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                         anchor_id=f"{markers.request_id}-auto-{index}",
                         kind=segment.kind,
                         anchor_index=segment.anchor_index)
+                    auto_context[marker.anchor_id] = segment.text
                     kept_anchors.append(marker.anchor_index)
                     task = asyncio.create_task(research_diagrams.plan_diagram(
                         diagram_question or prompt, segment.text,
@@ -856,6 +908,11 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 ), return_exceptions=True)
                 for (marker, _task), diagram in zip(diagram_tasks, results):
                     if isinstance(diagram, dict):
+                        if not await _diagram_verified(
+                                diagram_question or prompt,
+                                auto_context.get(marker.anchor_id, ""), diagram):
+                            diagram_metrics.record("drop", False, "verify")
+                            continue
                         frame = diagram_frame(diagram, marker)
                         if frame:
                             yield frame
@@ -884,9 +941,15 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
         for _marker, task in diagram_tasks:
             if not task.done():
                 task.cancel()
+        for _marker, _diagram, task in pending_verify:
+            if not task.done():
+                task.cancel()
         raise
     except Exception as exc:  # noqa: BLE001 模型侧错误不区分类型,统一降级
         for _marker, task in diagram_tasks:
+            if not task.done():
+                task.cancel()
+        for _marker, _diagram, task in pending_verify:
             if not task.done():
                 task.cancel()
         print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")

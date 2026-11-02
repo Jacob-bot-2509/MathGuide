@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GeoGebra spike v2</title>
+<style>
+  body { background:#0b1020; color:#dbe4f0; font:13px/1.5 system-ui, sans-serif; margin:0; padding:16px; }
+  h1 { font-size:16px; margin:0 0 12px; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; }
+  .pane { flex:1 1 420px; min-width:320px; }
+  .pane h2 { font-size:12px; color:#8aa0bd; font-weight:500; margin:0 0 6px; }
+  .applet { width:100%; height:360px; background:#fff; border-radius:8px; overflow:hidden; }
+  textarea { width:100%; height:96px; margin-top:8px; background:#111a2e; color:#dbe4f0;
+    border:1px solid #24304a; border-radius:6px; padding:8px; font:12px/1.5 ui-monospace, monospace; }
+  button { margin-top:6px; padding:6px 14px; border-radius:6px; border:1px solid #2c3b5a;
+    background:#16223a; color:#dbe4f0; cursor:pointer; }
+  pre { background:#0e1728; border:1px solid #1d2941; border-radius:6px; padding:8px;
+    max-height:150px; overflow:auto; font-size:12px; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<h1>GeoGebra spike v2 · Classic 2D + 3D</h1>
+<div class="row">
+  <div class="pane">
+    <h2>2D · classic(全命令集)</h2>
+    <div id="ggb2d" class="applet"></div>
+    <textarea id="cmds2d">f(x)=x^2
+A=(1,1)
+t=Tangent(A, f)
+c=Circle((0,0), 2)</textarea>
+    <button id="run2d">在 2D 执行</button>
+  </div>
+  <div class="pane">
+    <h2>3D · 3d</h2>
+    <div id="ggb3d" class="applet"></div>
+    <textarea id="cmds3d">f(x,y)=x^2+y^2
+s=Surface(u, v, f(u,v), u, -2, 2, v, -2, 2)
+P=(0,0,0)</textarea>
+    <button id="run3d">在 3D 执行</button>
+  </div>
+</div>
+<pre id="log">loading…</pre>
+
+<script src="https://www.geogebra.org/apps/deployggb.js"></script>
+<script>
+const logEl = document.getElementById('log')
+const lines = []
+function log(msg) { lines.push(msg); logEl.textContent = lines.join('\n') }
+
+const base = {
+  width: 420, height: 360,
+  showMenuBar: false, showToolBar: false, showAlgebraInput: false,
+  showAlgebraView: false, showInputBar: false,
+  showResetIcon: false, showZoomButtons: false,
+  enableLabelDrags: false, enableRightClick: false,
+  language: 'zh-CN', useBrowserForJS: false,
+}
+const t0 = performance.now()
+
+new GGBApplet({
+  ...base, appName: 'classic',
+  appletOnLoad(api) {
+    window.api2d = api
+    // 生产必须关:命令失败时不要弹模态框挡住图。
+    try { api.setErrorDialogsActive(false) } catch (e) {}
+    // G = 只留图形视图,隐藏代数面板
+    try { api.setPerspective('G') } catch (e) {}
+    // 统一走 JS API 上色,GeoGebra 的 SetColor 命令在 app 里不可用。
+    log('2D ready ' + Math.round(performance.now() - t0) + ' ms')
+  },
+}, true).inject('ggb2d')
+
+new GGBApplet({
+  ...base, appName: '3d',
+  appletOnLoad(api) {
+    window.api3d = api
+    try { api.setErrorDialogsActive(false) } catch (e) {}
+    // T = 只留 3D 视图,隐藏代数面板
+    try { api.setPerspective('T') } catch (e) {}
+    log('3D ready ' + Math.round(performance.now() - t0) + ' ms')
+  },
+}, true).inject('ggb3d')
+
+function run(api, text) {
+  if (!api) { log('applet not ready'); return }
+  const cmds = text.split('\n').map((s) => s.trim()).filter(Boolean)
+  let ok = 0
+  for (const cmd of cmds) {
+    let result = false
+    try { result = api.evalCommand(cmd) } catch (err) { log('throw: ' + cmd) }
+    log((result ? 'ok   ' : 'FAIL ') + cmd)
+    if (result) ok += 1
+  }
+  log(`done: ${ok}/${cmds.length}`)
+}
+
+document.getElementById('run2d').onclick = () => {
+  lines.length = 0
+  const api = window.api2d
+  run(api, document.getElementById('cmds2d').value)
+  if (api) {
+    try {
+      api.setColor('f', 80, 160, 220)
+      api.setColor('t', 240, 180, 80)
+      api.setColor('c', 120, 200, 140)
+    } catch (e) {}
+  }
+}
+document.getElementById('run3d').onclick = () => {
+  lines.length = 0
+  const api = window.api3d
+  run(api, document.getElementById('cmds3d').value)
+  if (api) {
+    try {
+      api.setColor('s', 80, 160, 220)
+      api.setFilling('s', 0.35)
+    } catch (e) {}
+  }
+}
+</script>
+</body>
+</html>

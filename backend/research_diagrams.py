@@ -5,6 +5,7 @@ import ast
 import asyncio
 import json
 import math
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ import diagram_taxonomy as taxonomy
 
 PREFIX = "[[MG_DIAGRAM:"
 _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]")
-MAX_DIAGRAMS = 6
+MAX_DIAGRAMS = 2  # 单条回答最多两张图:图解是论据,不是配图册
 _MAX_SURFACE_GRID = 41
 _CURVE_SAMPLES = 400
 _TYPES = {"tree", "relation", "flow", "geometry2d", "plot2d",
@@ -446,6 +447,19 @@ def slice_utf16(text: str, units: int) -> str:
         "utf-16-le", errors="ignore")
 
 
+# 正文对图的引用:中文任何一个"图"字(图像/切线图/如图)都算;
+# 英文只认 figure/diagram/plot/graph/chart/shown,避免 "photograph" 误伤。
+_DIAGRAM_REFERENCE_RE = re.compile(
+    r"图|figure|diagram|plot|graph|chart|shown|illustrat", re.IGNORECASE)
+
+
+def references_diagram(prefix: str, window: int = 400) -> bool:
+    """标记前这段文字是否提到了图。用于拦掉纯装饰性的图。"""
+    if not prefix:
+        return False
+    return bool(_DIAGRAM_REFERENCE_RE.search(prefix[-window:]))
+
+
 def select_segments(
     question: str,
     text: str,
@@ -591,8 +605,10 @@ def _point(value: object) -> list[float] | None:
 _EXPR_FUNCS = {
     "sin": math.sin, "cos": math.cos, "tan": math.tan,
     "asin": math.asin, "acos": math.acos, "atan": math.atan,
+    "arcsin": math.asin, "arccos": math.acos, "arctan": math.atan,
     "atan2": math.atan2, "sinh": math.sinh, "cosh": math.cosh,
     "tanh": math.tanh, "exp": math.exp, "log": math.log,
+    "ln": math.log, "lg": math.log10, "log10": math.log10,
     "sqrt": math.sqrt, "abs": abs, "pow": math.pow,
 }
 _EXPR_CONSTS = {"pi": math.pi, "e": math.e}
@@ -694,6 +710,73 @@ def _domain(shape: dict) -> tuple[float, float, float, float] | None:
     return None
 
 
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def _sample_curve(run, x0: float, x1: float, samples: int):
+    """逐点采样并切段,返回 (点, 段列表, 收缩后的定义域或 None)。
+
+    旧实现任一点出错就丢弃整条曲线:ln/sqrt 在定义域外会抛错,用户什么都看不到。
+    现在只丢坏点,有效点少于 2 个才放弃;定义域两端无效时自动收缩。
+    断点(1/x、tan)按相邻跳变切开,避免把渐近线画成实线。"""
+    raw: list[list[float] | None] = []
+    for i in range(samples):
+        x = x0 + (x1 - x0) * i / (samples - 1)
+        try:
+            y = run(x)
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            raw.append(None)
+            continue
+        raw.append([round(x, 6), round(y, 6)])
+    valid = [point for point in raw if point is not None]
+    if len(valid) < 2:
+        return [], [], None
+
+    first = next(i for i, point in enumerate(raw) if point is not None)
+    last = len(raw) - 1 - next(
+        i for i, point in enumerate(reversed(raw)) if point is not None)
+    contiguous = all(point is not None for point in raw[first:last + 1])
+    narrowed: list[float] | None = None
+    if contiguous and (first > 0 or last < len(raw) - 1):
+        # 无效点只在两端(ln/sqrt):把定义域收到有效区间,而不是整条丢弃
+        narrowed = [valid[0][0], valid[-1][0]]
+        valid = [point for point in valid
+                 if narrowed[0] <= point[0] <= narrowed[1]]
+
+    ys = [point[1] for point in valid]
+    span_y = max(ys) - min(ys)
+    diffs = [abs(valid[i + 1][1] - valid[i][1]) for i in range(len(valid) - 1)]
+    step_x = (x1 - x0) / max(1, samples - 1)
+    # 跳变阈值:正常相邻差分的中位数,再兜一个"整幅高度 20%"的绝对下限。
+    # tan/1/x 在极点附近的跳变远大于两者,会被切开;exp 这类陡但连续的不切。
+    threshold = max(_median(diffs) * 40, span_y * 0.2, 1e-9)
+
+    segments: list[list[list[float]]] = []
+    current: list[list[float]] = [valid[0]]
+    for prev, cur in zip(valid, valid[1:]):
+        gap = cur[0] - prev[0] > step_x * 1.5
+        jump = abs(cur[1] - prev[1]) > threshold
+        if gap or jump:
+            if len(current) >= 2:
+                segments.append(current)
+            current = [cur]
+        else:
+            current.append(cur)
+    if len(current) >= 2:
+        segments.append(current)
+    if not segments:
+        return [], [], narrowed
+    points = [point for segment in segments for point in segment]
+    return points, segments, narrowed
+
+
 def _sample_shape(shape: dict) -> bool:
     """服务端按表达式采样曲面/曲线,避免模型手写大量坐标出错。
     返回 False 表示这个形状没有可画数据,应丢弃。"""
@@ -734,14 +817,15 @@ def _sample_shape(shape: dict) -> bool:
         shape["cols"] = cols
         return True
     samples = _int(shape.get("samples"), _CURVE_SAMPLES, 8, 400)
-    sampled2d: list[list[float]] = []
-    try:
-        for i in range(samples):
-            x = x0 + (x1 - x0) * i / (samples - 1)
-            sampled2d.append([round(x, 6), round(run(x), 6)])
-    except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+    points, segments, narrowed = _sample_curve(run, x0, x1, samples)
+    if len(points) < 2:
         return False
-    shape["points"] = sampled2d
+    shape["points"] = points
+    if len(segments) > 1:
+        # 多段(1/x、tan):前端按段绘制,不能连成一条跨渐近线的实线。
+        shape["segments"] = segments
+    if narrowed:
+        shape["domain"] = narrowed
     return True
 
 
@@ -1046,6 +1130,97 @@ def _norm_label(value: object) -> str:
     return text.replace("²", "2").replace("³", "3")
 
 
+_LABEL_Y_RE = re.compile(r"y\s*=\s*([-+]?\d+(?:\.\d+)?)\s*(?=$|[\s，,。;；)）])")
+_LABEL_X_RE = re.compile(r"x\s*=\s*([-+]?\d+(?:\.\d+)?)\s*(?=$|[\s，,。;；)）])")
+
+
+def _align_axis_labels(note: dict) -> bool:
+    """把 “水平渐近线 y=0 / 垂直渐近线 x=0” 这类标注钉到对应坐标轴上。
+
+    模型给的标注坐标经常漂移;文字里已经写明 y=0 / x=0 时,以文字为准。
+    返回 True 表示已按文字定位,不再参与曲线吸附。"""
+    text = str(note.get("text") or "")
+    ym = _LABEL_Y_RE.search(text)
+    xm = _LABEL_X_RE.search(text)
+    if not ym and not xm:
+        return False
+    if ym and not xm:
+        note["y"] = float(ym.group(1))
+    elif xm and not ym:
+        note["x"] = float(xm.group(1))
+    else:
+        note["x"] = float(xm.group(1))
+        note["y"] = float(ym.group(1))
+    return True
+
+
+def _snap_annotations(shapes: list[dict], raw: dict) -> dict:
+    """plot2d 标注点吸附到曲线上。
+
+    模型给的标注坐标经常差一点或干脆指错位置。能算出曲线的图里,
+    近的把 y 校正到曲线值,远到离谱的直接丢弃(宁可不标,不可错标)。
+    多条曲线时分不清归属,只吸附不丢弃。"""
+    notes = raw.get("annotations")
+    if not isinstance(notes, list) or not notes:
+        return raw
+    curves = [
+        shape for shape in shapes
+        if shape.get("kind") == "curve" and shape.get("expr") and shape.get("points")
+    ]
+    if not curves:
+        return raw
+    runners = []
+    for curve in curves:
+        run = _compile_expr(curve.get("expr"), allow_y=False)
+        if run is None:
+            continue
+        xs = [float(item[0]) for item in curve["points"]]
+        ys = [float(item[1]) for item in curve["points"]]
+        if not xs:
+            continue
+        runners.append((run, min(xs), max(xs), max(ys) - min(ys)))
+    if not runners:
+        return raw
+    strict = len(runners) == 1
+    kept: list[dict] = []
+    for note in notes:
+        if not isinstance(note, dict):
+            kept.append(note)
+            continue
+        if _align_axis_labels(note):
+            kept.append(note)
+            continue
+        x, y = _num(note.get("x")), _num(note.get("y"))
+        if x is None or y is None or "z" in note:
+            kept.append(note)
+            continue
+        best: tuple[float, float] | None = None  # (距离, 曲线上的 y)
+        for run, x0, x1, span_y in runners:
+            if not (x0 - 1e-9 <= x <= x1 + 1e-9):
+                continue
+            try:
+                actual = float(run(x))
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+                continue
+            distance = abs(actual - y)
+            if best is None or distance < best[0]:
+                best = (distance, actual)
+        if best is None:
+            kept.append(note)
+            continue
+        distance, actual = best
+        span = max(1.0, runners[0][3])
+        tolerance = max(1e-6, span * 0.02)
+        if distance <= tolerance:
+            kept.append({**note, "y": round(actual, 6)})
+        elif strict and distance > max(tolerance * 3, span * 0.25):
+            # 远到不可能只是排版偏移(例如曲线值域 [-2,2] 却标到 y=50):丢弃。
+            continue
+        else:
+            kept.append(note)
+    return {**raw, "annotations": kept}
+
+
 def prepare_diagram(raw: object) -> dict | None:
     """采样表达式形状后再做白名单校验。"""
     if not isinstance(raw, dict):
@@ -1067,6 +1242,8 @@ def prepare_diagram(raw: object) -> dict | None:
         if raw.get("type") in ("plot2d", "geometry2d"):
             _refine_plot2d(dict_shapes, raw.get("type") == "plot2d")
             normalize_2d_axes(dict_shapes)
+            if raw.get("type") == "plot2d":
+                raw = _snap_annotations(dict_shapes, raw)
         if raw.get("type") in ("geometry3d", "surface3d"):
             dict_shapes = [shape for shape in dict_shapes
                            if not _axis_aligned_segment(shape)]
@@ -1136,6 +1313,25 @@ def _shape(raw: object) -> dict | None:
                     cleaned.append(point)
             if cleaned:
                 out["points"] = cleaned
+    if "segments" in raw:
+        # 多段曲线:每段至少 2 点,总点数与 points 共用同一预算。
+        raw_segments = raw["segments"]
+        if isinstance(raw_segments, list):
+            cleaned_segments: list[list[list[float]]] = []
+            budget = 0
+            for segment in raw_segments[:200]:
+                if not isinstance(segment, list) or budget >= 2000:
+                    continue
+                pts: list[list[float]] = []
+                for item in segment[:2000 - budget]:
+                    point = _point(item)
+                    if point is not None:
+                        pts.append(point)
+                if len(pts) >= 2:
+                    cleaned_segments.append(pts)
+                    budget += len(pts)
+            if cleaned_segments:
+                out["segments"] = cleaned_segments
     for key in ("from", "to", "normal"):
         if key in raw:
             point = _point(raw[key])
@@ -1578,6 +1774,82 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
         "plan", True, "ok", round((time.monotonic() - started) * 1000),
         points)
     return diagram
+
+
+_VERIFY_SYSTEM = (
+    "你是图解质检员。判断这张图是否与用户问题、以及这段讲解一致。"
+    "只输出一行 JSON:{\"ok\": true 或 false, \"reason\": \"一句话\"}。"
+    "图与讲解无关、画错对象、标错坐标、或会误导读者时 ok=false;拿不准也判 false。"
+)
+
+
+def verify_enabled() -> bool:
+    """语义一致性检查默认开启;MG_DIAGRAM_VERIFY=0 可关(省一次模型调用)。"""
+    return os.getenv("MG_DIAGRAM_VERIFY", "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def _diagram_summary(diagram: dict) -> str:
+    lines = [f"图类型:{diagram.get('type', '')}"]
+    if diagram.get("title"):
+        lines.append(f"标题:{_text(diagram.get('title'), 120)}")
+    labels = [
+        _text(item.get("label"), 60)
+        for item in (diagram.get("nodes") or []) + (diagram.get("shapes") or [])
+        if isinstance(item, dict) and item.get("label")
+    ][:8]
+    if labels:
+        lines.append("标注:" + "、".join(labels))
+    exprs = [
+        _text(item.get("expr"), 80)
+        for item in diagram.get("shapes") or []
+        if isinstance(item, dict) and item.get("expr")
+    ][:4]
+    if exprs:
+        lines.append("表达式:" + "、".join(exprs))
+    notes = [
+        _text(item.get("text"), 80)
+        for item in diagram.get("annotations") or []
+        if isinstance(item, dict) and item.get("text")
+    ][:5]
+    if notes:
+        lines.append("坐标标注:" + "、".join(notes))
+    return "\n".join(lines)
+
+
+async def verify_diagram(question: str, context: str, diagram: dict,
+                         role: str = "backup") -> bool | None:
+    """异源模型判断图是否对题。True=一致,False=不一致,None=无法判断。
+    只做语义一致性,不重画、不改图;调用失败由调用方决定是否放行。"""
+    if not llm.is_configured(role):
+        role = llm.pick("main")
+        if not llm.is_configured(role):
+            return None
+    prompt = (
+        f"用户问题:{_text(question, 800)}\n\n"
+        f"当前讲解段落:{_text(context, 800)}\n\n"
+        f"待检图:\n{_diagram_summary(diagram)}"
+    )
+    parts: list[str] = []
+    try:
+        async for delta in llm.stream_chat(
+                _VERIFY_SYSTEM, prompt, role=role, fallback=False,
+                max_tokens=120, thinking=False):
+            parts.append(delta)
+            if sum(len(part) for part in parts) >= 400:
+                break
+    except Exception:  # noqa: BLE001 校验失败不伪造结论
+        return None
+    raw = "".join(parts)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(raw[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    ok = data.get("ok")
+    return ok if isinstance(ok, bool) else None
 
 
 _diagram_limiter = SlidingWindowLimiter(12, 60.0)

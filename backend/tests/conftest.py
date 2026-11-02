@@ -24,8 +24,10 @@ import usage  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def clean_global_state():
+def clean_global_state(monkeypatch):
     """每个测试前后清空会话缓存与认证限流,避免测试互相污染。"""
+    # 图解语义校验会调真实模型;测试默认关闭,需要时在用例里显式开启。
+    monkeypatch.setenv("MG_DIAGRAM_VERIFY", "0")
     session_cache.reset()
     auth._auth_limiter.reset()
     research_diagrams.reset_planner_breaker()

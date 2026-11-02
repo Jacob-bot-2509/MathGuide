@@ -147,6 +147,29 @@ async function main() {
       katexCount(pieceHtml.join('')) === katexCount(whole),
       `${katexCount(pieceHtml.join(''))} vs ${katexCount(whole)}`)
 
+    // ⑪ 数字开头、跨行的行内公式必须渲染(模型实测输出)
+    html = await renderComp('当 $0$ 时')
+    check('数字开头公式渲染', html.includes('katex'), `输出: ${html.slice(0, 120)}`)
+
+    html = await renderComp('当 x\nx 从右侧逼近 $0$ 时')
+    check('句子里的数字公式渲染', html.includes('katex'), `输出: ${html.slice(0, 120)}`)
+
+    html = await renderComp('近于 $0，随着 x 增大趋向 +\\infty$ 的单支')
+    check('带数字与跨行的公式渲染', html.includes('katex'), `输出: ${html.slice(0, 120)}`)
+
+    // ⑫ 金额保护不能误伤公式,也不能放过真正的价格
+    html = await renderComp('价格是 $5 元')
+    check('货币单位仍挡金额', !html.includes('katex'), '')
+
+    html = await renderComp('$5 and $6')
+    check('并列金额仍不渲染', !html.includes('katex'), '')
+
+    html = await renderComp('价格 $5，展开式的关系数全是漂亮的')
+    check('落单 $ 不把中文正文当公式', !html.includes('katex'), `输出: ${html.slice(0, 120)}`)
+
+    html = await renderComp('$a' + 'x'.repeat(400) + '$b')
+    check('落单 $ 不吞长文', !html.includes('katex'), '')
+
     console.log(`\nMathText 公式渲染自测:${passed}/${passed + failed.length} 通过`)
     for (const f of failed) console.log(f)
     if (failed.length) process.exit(1)

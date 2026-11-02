@@ -466,7 +466,7 @@ def test_diagram_planner_failure_does_not_break_text(monkeypatch):
     assert not any("mg_event" in frame for frame in frames)
 
 
-def test_chat_caps_diagrams_at_six_per_message(monkeypatch):
+def test_chat_caps_diagrams_at_two_per_message(monkeypatch):
     async def fake_stream(system, user, history=None, role="main"):
         yield ("第一步:方向导数 D_u f = ∇f·u。[[MG_DIAGRAM:relation]]\n\n"
                "第二步:梯度 ∇f 指向增长最快方向。[[MG_DIAGRAM:flow]]\n\n"
@@ -490,8 +490,8 @@ def test_chat_caps_diagrams_at_six_per_message(monkeypatch):
         "q", None, [], diagram_mode=True, diagram_request_id="r3")))
     events = [json.loads(frame[6:].strip()) for frame in frames
               if frame.startswith("data: ") and "mg_event" in frame]
-    assert len(calls) == 6
-    assert len(events) == 6
+    assert len(calls) == 2
+    assert len(events) == 2
     anchors = [event["anchorIndex"] for event in events]
     assert anchors == sorted(anchors)
     assert all(anchor > 0 for anchor in anchors)
@@ -530,7 +530,7 @@ def test_chat_total_points_budget_skips_extra_diagrams(monkeypatch):
         calls.append(kind)
         return {
             "type": "surface3d",
-            "shapes": [{"kind": "surface", "points": [[0, 0, 0]] * 3000}],
+            "shapes": [{"kind": "surface", "points": [[0, 0, 0]] * 5000}],
             "annotations": [],
         }
 
@@ -540,8 +540,8 @@ def test_chat_total_points_budget_skips_extra_diagrams(monkeypatch):
         "曲面", None, [], diagram_mode=True, diagram_request_id="r-budget")))
     events = [json.loads(frame[6:].strip()) for frame in frames
               if frame.startswith("data: ") and "mg_event" in frame]
-    assert len(calls) == 3
-    assert len(events) == 2  # 3000 + 3000 <= 8000, 第三张超预算
+    assert len(calls) == 2
+    assert len(events) == 1  # 5000 已放行,第二张累计 10000 超预算
 
 
 def test_chat_backfills_by_weight_when_model_marks_nothing(monkeypatch):
@@ -696,3 +696,67 @@ def test_retrieval_query_keeps_standalone_question():
     question = "泰勒展开和幂级数有什么关系?"
     assert chat._retrieval_query(question, history) == question
     assert chat._retrieval_query(question, None) == question
+
+
+# ---------- 图解必须被正文引用(拦装饰性图) ----------
+
+def _plan_calls(monkeypatch, answer_text: str) -> tuple[list[str], list[dict]]:
+    async def fake_stream(system, user, history=None, role="main"):
+        yield answer_text
+
+    calls: list[str] = []
+
+    async def fake_plan(question, before, excerpts, kind, role="main", **kwargs):
+        calls.append(kind)
+        return {"type": kind, "nodes": [{"id": "a", "label": "A"}],
+                "edges": [], "shapes": [], "annotations": []}
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat.research_diagrams, "plan_diagram", fake_plan)
+    frames = asyncio.run(_collect_gen(chat._gen_llm(
+        "解释切线", None, [], diagram_mode=True,
+        diagram_question="画图说明切线斜率", diagram_request_id="r-ref")))
+    events = [json.loads(frame[6:].strip()) for frame in frames
+              if frame.startswith("data: ") and "mg_event" in frame]
+    return calls, events
+
+
+def test_chat_drops_unreferenced_diagram(monkeypatch):
+    calls, events = _plan_calls(
+        monkeypatch, "切线斜率是导数。[[MG_DIAGRAM:geometry2d]]")
+    assert calls == []
+    assert events == []
+
+
+def test_chat_keeps_referenced_diagram(monkeypatch):
+    calls, events = _plan_calls(
+        monkeypatch, "如图所示,切线斜率是导数。[[MG_DIAGRAM:geometry2d]]")
+    assert len(calls) == 1
+    assert len(events) == 1
+
+
+def test_chat_drops_diagram_rejected_by_semantic_check(monkeypatch):
+    monkeypatch.setenv("MG_DIAGRAM_VERIFY", "1")
+    async def fake_stream(system, user, history=None, role="main"):
+        yield "如图所示,切线斜率是导数。[[MG_DIAGRAM:geometry2d]]"
+
+    calls: list[str] = []
+
+    async def fake_plan(question, before, excerpts, kind, role="main", **kwargs):
+        calls.append(kind)
+        return {"type": kind, "nodes": [{"id": "a", "label": "A"}],
+                "edges": [], "shapes": [], "annotations": []}
+
+    async def fake_verify(question, context, diagram, role="backup"):
+        return False
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat.research_diagrams, "plan_diagram", fake_plan)
+    monkeypatch.setattr(chat.research_diagrams, "verify_diagram", fake_verify)
+    frames = asyncio.run(_collect_gen(chat._gen_llm(
+        "解释切线", None, [], diagram_mode=True,
+        diagram_question="画图说明切线斜率", diagram_request_id="r-verify")))
+    events = [json.loads(frame[6:].strip()) for frame in frames
+              if frame.startswith("data: ") and "mg_event" in frame]
+    assert len(calls) == 1
+    assert events == []

@@ -57,20 +57,24 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .diagram-block {
-  margin: 8px 0 12px;
+  max-width: 560px;
+  margin: 12px auto 16px;
 }
 
 .diagram-title {
-  margin-bottom: 5px;
-  color: var(--cyan);
-  font-family: var(--font-tech);
-  font-size: 10px;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .diagram-loading,
 .diagram-fallback {
-  min-height: 560px;
-  max-width: 480px;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  min-height: 220px;
+  max-width: 560px;
   margin: 0 auto;
   display: flex;
   align-items: center;
@@ -78,14 +82,17 @@ onBeforeUnmount(() => {
   border: 1px dashed var(--line);
   border-radius: 8px;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 @media (max-width: 680px) {
+  .diagram-block {
+    max-width: 100%;
+  }
+
   .diagram-loading,
   .diagram-fallback {
-    min-height: 340px;
-    max-width: 100%;
+    min-height: 180px;
   }
 }
 </style>

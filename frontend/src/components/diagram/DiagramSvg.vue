@@ -3,6 +3,7 @@
 import { computed, ref, useId, watch } from 'vue'
 import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
 import { filterCollapsed } from '@/utils/diagramSpec'
+import { t } from '@/utils/i18n'
 import {
   figureRectOfShapes,
   outwardSides,
@@ -18,6 +19,7 @@ const props = withDefaults(defineProps<{ spec: DiagramSpec; collapsible?: boolea
 })
 const arrowId = `mg-arrow-${useId()}`
 const axisArrowId = `mg-axis-arrow-${useId()}`
+const interacted = ref(false)
 const collapsed = ref<Set<string>>(new Set())
 
 const svgEl = ref<SVGSVGElement | null>(null)
@@ -95,9 +97,20 @@ function boundsOfShapes(
         xs.push(x); ys.push(y)
       }
     } else if (shape.kind === 'curve' && Array.isArray(shape.points)) {
-      for (const item of shape.points) {
-        const [x, y] = pair(item)
-        xs.push(x); ys.push(y)
+      const segments = Array.isArray(shape.segments) ? shape.segments : null
+      if (segments && segments.length > 1) {
+        // 间断曲线(1/x、tan):极端值只出现在渐近线附近,按 1%/99% 分位定范围,
+        // 否则整幅图会被几条竖直渐近线压扁。
+        const values = shape.points.map((item) => pair(item)[1]).sort((a, b) => a - b)
+        const lo = values[Math.floor(values.length * 0.01)]
+        const hi = values[Math.min(values.length - 1, Math.floor(values.length * 0.99))]
+        for (const item of shape.points) xs.push(pair(item)[0])
+        ys.push(lo, hi)
+      } else {
+        for (const item of shape.points) {
+          const [x, y] = pair(item)
+          xs.push(x); ys.push(y)
+        }
       }
     }
   }
@@ -162,6 +175,13 @@ const shapeGeometry = computed(() => {
         .map(point2)
         .filter((item): item is number[] => item !== null)
     }
+    if (Array.isArray(shape.segments)) {
+      out.segments = shape.segments
+        .map((segment: unknown) => Array.isArray(segment)
+          ? segment.map(point2).filter((item): item is number[] => item !== null)
+          : [])
+        .filter((segment: number[][]) => segment.length > 1)
+    }
     return out
   })
 
@@ -184,7 +204,7 @@ const shapeGeometry = computed(() => {
       anchorX,
       anchorY,
       role: 'annotation',
-      fontSize: 10,
+      fontSize: 12,
       maxWidth: 160,
       maxLines: 3,
       priority: 3,
@@ -204,7 +224,7 @@ const shapeGeometry = computed(() => {
       anchorX: anchor.x,
       anchorY: anchor.y,
       role: fixed ? 'axis' : 'shape',
-      fontSize: 11,
+      fontSize: 13,
       maxWidth: fixed ? 60 : 170,
       maxLines: fixed ? 1 : 2,
       priority: fixed ? 5 : 2,
@@ -217,6 +237,13 @@ const shapeGeometry = computed(() => {
   // 虚拟画布给外围标注留空间;放完再收紧,避免文字被 viewBox 裁掉。
   const placed = placeLabels(requests, obstacles, {
     x: -240, y: -180, w: width + 480, h: height + 360,
+  }).filter((label) => {
+    // 标注被避让挤得离锚点太远时,引线会横穿整张图、看着像另一条曲线。
+    // 宁可少一个标注(图本身仍正确),也不能让文字指错位置。
+    if (label.role !== 'annotation') return true
+    const dx = label.x + label.w / 2 - label.anchorX
+    const dy = label.y + label.h / 2 - label.anchorY
+    return Math.hypot(dx, dy) <= 160
   })
   let minLeft = 0
   let minTop = 0
@@ -372,6 +399,13 @@ function resetView(): void {
   zoom.value = 1
 }
 
+function curveSegments(shape: DiagramShape): number[][][] {
+  const segments = Array.isArray(shape.segments) ? shape.segments as number[][][] : null
+  if (segments && segments.length) return segments
+  const points = Array.isArray(shape.points) ? shape.points as number[][] : null
+  return points && points.length > 1 ? [points] : []
+}
+
 function hasChildren(id: string): boolean {
   return props.spec.edges.some((edge) => edge.from === id)
 }
@@ -391,6 +425,7 @@ function applyViewBox(): void {
 }
 
 function zoomAt(factor: number, clientX: number, clientY: number): void {
+  interacted.value = true
   const svg = svgEl.value
   if (!svg) return
   const rect = svg.getBoundingClientRect()
@@ -440,6 +475,7 @@ function onPointerMove(event: PointerEvent): void {
     return
   }
   if (!drag || drag.id !== event.pointerId) return
+  interacted.value = true
   const svg = svgEl.value
   if (!svg) return
   const rect = svg.getBoundingClientRect()
@@ -462,12 +498,13 @@ resetView()
 
 <template>
   <div class="diagram-svg-wrap">
-    <button class="diagram-reset" type="button" @click="applyViewBox">重置视图</button>
+    <button v-if="interacted" class="diagram-reset" type="button" @click="applyViewBox">重置视图</button>
     <svg
       ref="svgEl"
       class="diagram-svg"
       :viewBox="`${view.x} ${view.y} ${view.w} ${view.h}`"
       role="img"
+      :aria-label="props.spec.title || t('diagram.figure')"
       @wheel="onWheel"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
@@ -581,11 +618,14 @@ resetView()
             :points="shape.points.map((p) => pair(p).join(',')).join(' ')"
             class="diagram-shape-fill"
           />
-          <polyline
-            v-else-if="shape.kind === 'curve' && Array.isArray(shape.points)"
-            :points="shape.points.map((p) => pair(p).join(',')).join(' ')"
-            class="diagram-curve"
-          />
+          <g v-else-if="shape.kind === 'curve'">
+            <polyline
+              v-for="(segment, si) in curveSegments(shape)"
+              :key="si"
+              :points="segment.map((p) => pair(p).join(',')).join(' ')"
+              class="diagram-curve"
+            />
+          </g>
         </g>
         <g v-for="label in displayLabels" :key="label.id">
           <line
@@ -596,6 +636,7 @@ resetView()
           />
           <text
             :x="label.x" :y="label.y + label.fontSize"
+            :style="{ fontSize: `${label.fontSize}px` }"
             :class="label.role === 'annotation'
               ? 'diagram-annotation' : 'diagram-shape-label'"
           >

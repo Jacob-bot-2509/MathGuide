@@ -67,6 +67,28 @@ check('占位标签被丢弃', parseDiagramSpec({
   type: 'geometry2d',
   shapes: [{ kind: 'point', x: 1, y: 2, label: 'DJJ' }],
 })?.shapes[0]?.label === undefined)
+const splitCurve = parseDiagramSpec({
+  type: 'plot2d',
+  shapes: [{
+    kind: 'curve',
+    points: [[-2, -0.5], [-1, -1], [1, 1], [2, 0.5]],
+    segments: [[[-2, -0.5], [-1, -1]], [[1, 1], [2, 0.5]]],
+  }],
+})
+const splitSegments = splitCurve?.shapes[0]?.segments as number[][][] | undefined
+check('多段曲线保留分段', Array.isArray(splitSegments) && splitSegments.length === 2)
+check('单点分段被丢弃', (() => {
+  const parsed = parseDiagramSpec({
+    type: 'plot2d',
+    shapes: [{
+      kind: 'curve',
+      points: [[0, 0], [1, 1]],
+      segments: [[[0, 0]], [[0, 0], [1, 1]]],
+    }],
+  })
+  const segments = parsed?.shapes[0]?.segments as number[][][] | undefined
+  return Array.isArray(segments) && segments.length === 1
+})())
 
 const blocks = splitMessageBlocks('第一段\n\n第二段', [{
   id: 'd1',
@@ -96,18 +118,22 @@ let capped = secondAppend
 for (const id of ['d2', 'd3', 'd4', 'd5', 'd6', 'd7']) {
   capped = appendDiagram(capped, { ...event!, id })
 }
-check('单消息最多六张图', capped.length === 6)
+check('单消息最多两张图', capped.length === 2)
 
-const surfacePoints = Array.from({ length: 1681 }, (_, i) => [i % 41, i / 41, 0])
+// 两张图各 4500 点:第二张累计 9000 超过 8000 预算,必须拒绝。
+const manyShapes = Array.from({ length: 45 }, (_, si) => ({
+  kind: 'polygon',
+  points: Array.from({ length: 100 }, (_, i) => [si, i]),
+}))
 const bigSpec = parseDiagramSpec({
-  type: 'surface3d',
-  shapes: [{ kind: 'surface', points: surfacePoints }],
+  type: 'geometry2d',
+  shapes: manyShapes,
 })
 let totalBudget = appendDiagram(undefined, { id: 'p1', anchorIndex: 0, spec: bigSpec! })
-for (const id of ['p2', 'p3', 'p4', 'p5']) {
+for (const id of ['p2', 'p3']) {
   totalBudget = appendDiagram(totalBudget, { id, anchorIndex: 1, spec: bigSpec! })
 }
-check('单消息总点数上限', totalBudget.length === 4)
+check('单消息总点数上限', totalBudget.length === 1)
 
 const threeD = parseDiagramSpec({
   type: 'surface3d',
@@ -321,9 +347,27 @@ check('用三维图也算恢复画图', needsDiagram('用三维图讲讲梯度',
 check('不画思维导图但改画三维图不算停止', !diagramSuppressed('不要画思维导图，画三维图'))
 check('别画了也算停止', diagramSuppressed('别画了，用文字说'))
 
+// 图在文字上方时,正文里的“如下图”必须改成“如上图”;反之亦然。
+const afterFigure = splitMessageBlocks('前言\n\n如下图，曲线有两支。', [{
+  id: 'd3', anchorIndex: 3, spec: relation!,
+}])
+const afterFigureText = afterFigure[2]
+check('图在上方:下图改为上图',
+  afterFigureText.kind === 'text' && afterFigureText.text.includes('如上图'),
+  afterFigureText.kind === 'text' ? afterFigureText.text : '')
+
+const beforeFigure = splitMessageBlocks('如上图所示，曲线有两支。\n\n后文', [{
+  id: 'd4', anchorIndex: 12, spec: relation!,
+}])
+const beforeFigureText = beforeFigure[0]
+check('图在下方:上图改为下图',
+  beforeFigureText.kind === 'text' && beforeFigureText.text.includes('如下图'),
+  beforeFigureText.kind === 'text' ? beforeFigureText.text : '')
+
 if (failed.length) {
   console.error('图解协议自测失败:')
   for (const line of failed) console.error(' -', line)
   process.exit(1)
 }
 console.log(`图解协议自测:${passed}/${passed} 通过`)
+

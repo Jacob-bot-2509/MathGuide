@@ -18,7 +18,6 @@ interface LabelEntry {
   role: 'shape' | 'note' | 'axis'
   anchor: import('three').Vector3
   sprite: import('three').Sprite
-  leader?: import('three').Line
   fixed?: boolean
 }
 
@@ -36,7 +35,6 @@ let controls: {
 let observer: ResizeObserver | null = null
 let contextLostHandler: ((event: Event) => void) | null = null
 let disposed = false
-
 function num(value: unknown): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : 0
@@ -173,23 +171,6 @@ function sceneUnit(shapes: DiagramShape[]): number {
     }
   }
   return Math.max(0.08, span / 28)
-}
-
-/** 标注被排到外围时用一条细引线指回对象;引线不计入取景包围盒。 */
-function createLeaderLine(
-  THREE: typeof import('three'),
-  root: import('three').Object3D,
-): import('three').Line {
-  const geometry = new THREE.BufferGeometry()
-  geometry.setFromPoints([new THREE.Vector3(), new THREE.Vector3()])
-  const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
-    color: 0x94a3b8, transparent: true, opacity: 0.45, depthTest: false,
-  }))
-  line.renderOrder = 15
-  line.visible = false
-  line.userData.labelDecoration = true
-  root.add(line)
-  return line
 }
 
 function addAxes(
@@ -356,6 +337,8 @@ function addShape(
     roughness: 0.55,
     transparent: true,
     opacity: 0.78,
+    // 平面/多边形/盒体必须双面渲染:否则转到背面时整块面被剔除、直接消失。
+    side: THREE.DoubleSide,
   })
   const lineMaterial = new THREE.LineBasicMaterial({ color })
   const overlayLine = new THREE.LineBasicMaterial({
@@ -514,7 +497,6 @@ function addShape(
           role: 'shape',
           anchor,
           sprite,
-          leader: createLeaderLine(THREE, root),
         })
       }
     }
@@ -601,25 +583,25 @@ function layoutLabels(THREE: typeof import('three')): void {
   const byId = new Map(placements.map((item) => [item.id, item]))
   const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
   const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
+  let labelIndex = 0
   for (const entry of labelEntries) {
     const placement = byId.get(entry.id)
     const point = project(entry.anchor)
     if (!placement || !point) continue
-    const dx = (placement.centerX - point.x) / point.ppw
-    const dy = -(placement.centerY - point.y) / point.ppw
+    let centerX = placement.centerX
+    let centerY = placement.centerY
+    // 避让把标签甩得太远时,宁可贴着锚点(引线短),也不要横穿整张图。
+    if (Math.hypot(centerX - point.x, centerY - point.y) > 84) {
+      const side = labelIndex % 2 === 0 ? 1 : -1
+      centerX = point.x + side * 26
+      centerY = point.y - 22
+    }
+    labelIndex += 1
+    const dx = (centerX - point.x) / point.ppw
+    const dy = -(centerY - point.y) / point.ppw
     entry.sprite.position.copy(entry.anchor)
       .addScaledVector(right, dx)
       .addScaledVector(up, dy)
-    if (!entry.leader) continue
-    const distance = Math.hypot(
-      placement.centerX - point.x, placement.centerY - point.y,
-    )
-    entry.leader.visible = distance > (entry.role === 'note' ? 2 : 12)
-    if (entry.leader.visible) {
-      const geometry = entry.leader.geometry as import('three').BufferGeometry
-      geometry.setFromPoints([entry.anchor, entry.sprite.position])
-      geometry.computeBoundingSphere()
-    }
   }
 }
 
@@ -695,7 +677,6 @@ async function boot(): Promise<void> {
         role: 'note',
         anchor,
         sprite,
-        leader: createLeaderLine(THREE, root),
       })
     })
     figureBounds = shapeBounds.isEmpty() ? null : shapeBounds.clone()
@@ -710,7 +691,7 @@ async function boot(): Promise<void> {
       controls.update()
       controls.addEventListener('change', () => {
         camera?.updateMatrixWorld()
-        layoutLabels(THREE)
+        // 标签位置全程冻结:只在初次布局时排一次,旋转不再重算。
         renderer?.render(scene!, camera!)
       })
       camera.position.set(
@@ -724,7 +705,7 @@ async function boot(): Promise<void> {
       controls.update()
       controls.addEventListener('change', () => {
         camera?.updateMatrixWorld()
-        layoutLabels(THREE)
+        // 标签位置全程冻结:只在初次布局时排一次,旋转不再重算。
         renderer?.render(scene!, camera!)
       })
     }

@@ -70,7 +70,7 @@ const MAX_EDGES = 80
 const MAX_SHAPES = 100
 const MAX_ANNOTATIONS = 40
 const MAX_POINTS = 2000
-const MAX_DIAGRAMS = 6
+const MAX_DIAGRAMS = 2
 const MAX_TOTAL_POINTS = 8000
 const MAX_COORD = 1e4
 const DIAGRAM_SCHEMA_VERSION = 1
@@ -100,7 +100,7 @@ function sanitizeShape(raw: unknown): DiagramShape | null {
   if (!kind) return null
   const out: DiagramShape = { kind }
   for (const key of ['x', 'y', 'z', 'r', 'radius', 'width', 'height', 'depth', 'label',
-    'expr', 'domain', 'color', 'points', 'rows', 'cols']) {
+    'expr', 'domain', 'color', 'points', 'segments', 'rows', 'cols']) {
     if (!(key in item)) continue
     const value = item[key]
     if (key === 'label' || key === 'expr' || key === 'color') {
@@ -113,6 +113,24 @@ function sanitizeShape(raw: unknown): DiagramShape | null {
           .map(point)
           .filter((p): p is number[] => p !== null)
         if (pts.length) out.points = pts
+      }
+    } else if (key === 'segments') {
+      // 多段曲线(间断/渐近线):每段至少 2 点,总点数与 points 共用预算。
+      if (Array.isArray(value)) {
+        const segments: number[][][] = []
+        let budget = 0
+        for (const raw of value.slice(0, 200)) {
+          if (budget >= MAX_POINTS) break
+          if (!Array.isArray(raw)) continue
+          const pts = raw.slice(0, MAX_POINTS - budget)
+            .map(point)
+            .filter((p): p is number[] => p !== null)
+          if (pts.length >= 2) {
+            segments.push(pts)
+            budget += pts.length
+          }
+        }
+        if (segments.length) out.segments = segments
       }
     } else if (key === 'domain') {
       if (Array.isArray(value) && value.length >= 2 && value.length <= 4) {
@@ -272,6 +290,33 @@ export function parseDiagramEvent(payload: unknown): DiagramBlock | null {
   return { id, anchorIndex: anchor, spec }
 }
 
+// 图与正文的方位词校正:模型常写“如下图”,但图实际排在句子之前(或相反)。
+// 只改紧邻图的那一段前后 200 字,避免误伤远处的“下图”。
+const BELOW_TO_ABOVE: Array<[RegExp, string]> = [
+  [/如下图/g, '如上图'],
+  [/下图所示/g, '上图所示'],
+  [/如下图/g, '如上图'],
+  [/下图/g, '上图'],
+  [/下面的图/g, '上面的图'],
+  [/below/gi, 'above'],
+]
+const ABOVE_TO_BELOW: Array<[RegExp, string]> = [
+  [/如上图所示/g, '如下图所示'],
+  [/如上图/g, '如下图'],
+  [/上图所示/g, '下图所示'],
+  [/上图/g, '下图'],
+  [/上面的图/g, '下面的图'],
+  [/above/gi, 'below'],
+]
+
+function normalizeDirection(text: string, figureAbove: boolean): string {
+  let out = text
+  for (const [re, to] of (figureAbove ? BELOW_TO_ABOVE : ABOVE_TO_BELOW)) {
+    out = out.replace(re, to)
+  }
+  return out
+}
+
 export function splitMessageBlocks(
   content: string,
   diagrams: DiagramBlock[] | undefined,
@@ -293,6 +338,20 @@ export function splitMessageBlocks(
     blocks.push({ kind: 'text', text: content.slice(cursor) })
   }
   if (!blocks.length) blocks.push({ kind: 'text', text: content })
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]
+    if (block.kind !== 'text') continue
+    const prevDiagram = i > 0 && blocks[i - 1].kind === 'diagram'
+    const nextDiagram = i + 1 < blocks.length && blocks[i + 1].kind === 'diagram'
+    if (prevDiagram) {
+      block.text = normalizeDirection(block.text.slice(0, 200), true)
+        + block.text.slice(200)
+    } else if (nextDiagram) {
+      const start = Math.max(0, block.text.length - 200)
+      block.text = block.text.slice(0, start)
+        + normalizeDirection(block.text.slice(start), false)
+    }
+  }
   return blocks
 }
 

@@ -57,16 +57,47 @@ function parseBold(src: string): Seg[] {
   return segs
 }
 
+function looksLikeInlineMath(inner: string): boolean {
+  const s = inner.trim()
+  if (!s || s.length > 300) return false
+  // 含中文时:必须是「公式里夹了说明文字」而不是「落单的 $ 吞了整段正文」。
+  // 判据是出现 LaTeX 命令或数学运算符;纯汉字句子一律不渲染(否则 KaTeX
+  // 会把整段中文当数学排版,既慢又乱)。
+  if (/[㐀-鿿豈-﫿]/.test(s)) {
+    return s.length <= 160 && /\\[a-zA-Z]+|[=^_<>+\-*/]/.test(s)
+  }
+  return /[\\^_=<>+\-*/()[\]{}0-9a-zA-Z]/.test(s)
+}
+
+function isMoneyMath(inner: string, before: string, after: string): boolean {
+  // 金额保护:只挡真正的价格写法,不能因为 "$0$" 以数字开头就拒绝渲染。
+  const s = inner.trim()
+  if (!s) return false
+  // "$5 and $6" 这种两个金额并列
+  if (/\b(?:and|or)\b/i.test(s)) return true
+  if (!/^\d[\d,.]*$/.test(s)) return false
+  const next = after.trimStart().charAt(0)
+  if ('元块美圆¥￥'.includes(next)) return true
+  return /(价格|售价|花费|便宜|贵|折|￥|¥)\s*$/.test(before)
+}
+
 function parseInline(src: string): Seg[] {
   const segs: Seg[] = []
   // 四种公式写法:$$..$$ 与 \[..\] 块级、\(..\) 与 $..$ 行内(LLM 与知识库常用)。
-  // 行内 $ 只要求后一位不是数字 —— "$5 and $6" 金额仍被挡,
-  // 而 "$ x > 0 $" 这类带空格的数学公式(LLM 实测会输出)能正常渲染。
-  // 未闭合的公式不会匹配,留在纯文本里,闭合后自动渲染(流式友好)
-  const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$(?=[^0-9])([^$\n]+?)\$/g
+  // 行内 $ 允许数字开头("$0$" 很常见),金额由 isMoneyMath 结合上下文排除。
+  // 允许单个换行(模型常把一句公式折行),但禁止空行、限制 300 字,
+  // 避免一个落单的 $ 把后面大段正文吞进公式。
+  // 未闭合的公式不会匹配,留在纯文本里,闭合后自动渲染(流式友好)。
+  const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$(?!\$)((?:\n(?!\s*\n)|[^$\n]){1,300}?)\$/g
   let last = 0
   let m: RegExpExecArray | null
   while ((m = re.exec(src))) {
+    if (m[4] !== undefined
+        && (!looksLikeInlineMath(m[4])
+          || isMoneyMath(m[4], src.slice(Math.max(0, m.index - 8), m.index),
+            src.slice(m.index + m[0].length, m.index + m[0].length + 8)))) {
+      continue
+    }
     segs.push(...parseBold(src.slice(last, m.index)))
     if (m[1] !== undefined) segs.push({ type: 'mathd', value: m[1] })
     else if (m[2] !== undefined) segs.push({ type: 'mathd', value: m[2] })

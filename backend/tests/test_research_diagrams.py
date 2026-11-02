@@ -945,3 +945,120 @@ def test_plan_endpoint_requires_question(monkeypatch):
     client = TestClient(app)
     res = client.post("/api/research/diagrams/plan", json={"answer": "解释"})
     assert res.status_code == 400
+
+
+# ---------- 曲线采样与标注校正(数学硬伤防线) ----------
+
+def test_curve_sampling_splits_asymptotes():
+    """1/x、tan 不能在极点处连成一条实线。"""
+    shape = {"kind": "curve", "expr": "1/x", "domain": [-2, 2]}
+    assert rd._sample_shape(shape)
+    assert len(shape["segments"]) == 2
+
+    shape = {"kind": "curve", "expr": "tan(x)", "domain": [-2, 2]}
+    assert rd._sample_shape(shape)
+    assert len(shape["segments"]) >= 3
+
+
+def test_curve_domain_shrinks_instead_of_dropping():
+    """ln/sqrt 在定义域外不能把整条曲线丢掉。"""
+    for expr in ("ln(x)", "sqrt(x)"):
+        shape = {"kind": "curve", "expr": expr, "domain": [-2, 2]}
+        assert rd._sample_shape(shape), expr
+        assert shape["domain"][0] > 0
+        assert len(shape["points"]) >= 2
+
+
+def test_annotations_snap_to_curve_or_drop_far_ones():
+    raw = {
+        "type": "plot2d",
+        "shapes": [{"kind": "curve", "expr": "x^2", "domain": [-2, 2]}],
+        "annotations": [
+            {"x": 1, "y": 1.01, "text": "切点"},
+            {"x": 1, "y": 50, "text": "明显错位"},
+            {"x": 1, "y": 1.2, "text": "排版偏移"},
+        ],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    notes = diagram["annotations"]
+    assert len(notes) == 2
+    snapped = next(note for note in notes if note["text"] == "切点")
+    assert abs(snapped["y"] - 1.0) < 1e-6
+    assert all(note["text"] != "明显错位" for note in notes)
+
+
+def test_references_diagram_detection():
+    assert rd.references_diagram("如图所示,切线斜率为 2")
+    assert rd.references_diagram("The figure below shows the slope")
+    assert not rd.references_diagram("切线斜率为 2,它表示瞬时变化率")
+    assert not rd.references_diagram("")
+
+
+def test_tangent_slope_computed_from_expression():
+    """切线斜率必须由表达式算,不能用模型给的坐标。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 1, "y": 1},
+            {"kind": "line", "from": [0, 0], "to": [2, 2], "label": "切线"},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"] if shape["kind"] == "line")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 2.0) < 1e-3
+    # 切线必须过切点 (1, 1)
+    assert abs(y1 + (1 - x1) * 2 - 1) < 1e-3
+
+
+def test_verify_enabled_reads_env(monkeypatch):
+    monkeypatch.setenv("MG_DIAGRAM_VERIFY", "0")
+    assert rd.verify_enabled() is False
+    monkeypatch.setenv("MG_DIAGRAM_VERIFY", "1")
+    assert rd.verify_enabled() is True
+
+
+def test_verify_diagram_parses_verdict(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
+
+    async def fake_stream(system, user, role="main", **kwargs):
+        yield '{"ok": false, "reason": "图画的是导数,问题问的是积分"}'
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    verdict = asyncio.run(rd.verify_diagram(
+        "积分怎么理解", "定积分是面积", {"type": "plot2d", "shapes": []}))
+    assert verdict is False
+
+
+def test_verify_diagram_returns_none_on_bad_output(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
+
+    async def fake_stream(system, user, role="main", **kwargs):
+        yield "看起来还行"
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    assert asyncio.run(rd.verify_diagram("q", "ctx", {"type": "flow"})) is None
+
+
+def test_axis_labels_pinned_to_their_equations():
+    """“水平渐近线 y=0 / 垂直渐近线 x=0” 以文字为准,不跟随模型漂移的坐标。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [{"kind": "curve", "expr": "1/x", "domain": [-2, 2]}],
+        "annotations": [
+            {"x": 5, "y": 5.2, "text": "水平渐近线 y=0"},
+            {"x": 3, "y": 5.2, "text": "垂直渐近线 x=0"},
+            {"x": 2, "y": 5, "text": "y = 1/x 的图像"},
+        ],
+    }
+    diagram = rd.prepare_diagram(raw)
+    notes = {note["text"]: note for note in diagram["annotations"]}
+    assert notes["水平渐近线 y=0"]["y"] == 0.0
+    assert notes["垂直渐近线 x=0"]["x"] == 0.0
+    # "y = 1/x" 不能被当成 "y = 1"
+    assert notes["y = 1/x 的图像"]["y"] == 5.0
