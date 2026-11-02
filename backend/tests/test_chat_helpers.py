@@ -469,6 +469,27 @@ def test_chat_caps_diagrams_at_six_per_message(monkeypatch):
     assert all(anchor > 0 for anchor in anchors)
 
 
+def test_chat_diagram_timeout_does_not_break_text(monkeypatch):
+    prefix = "梯度方向是函数增长最快的方向"
+
+    async def fake_stream(system, user, history=None, role="main"):
+        yield prefix + "[[MG_DIAGRAM:relation]]后"
+
+    async def slow_plan(*args, **kwargs):
+        await asyncio.sleep(1)
+        return {"type": "relation", "nodes": [{"id": "a", "label": "A"}],
+                "edges": [], "shapes": [], "annotations": []}
+
+    monkeypatch.setattr(chat, "DIAGRAM_TIMEOUT", 0.01)
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat.research_diagrams, "plan_diagram", slow_plan)
+    frames = asyncio.run(_collect_gen(chat._gen_llm(
+        "怎么理解梯度", None, [], diagram_mode=True,
+        diagram_request_id="r-timeout")))
+    assert _joined_frames(frames) == prefix + "后"
+    assert not any("mg_event" in frame for frame in frames)
+
+
 def test_chat_total_points_budget_skips_extra_diagrams(monkeypatch):
     async def fake_stream(system, user, history=None, role="main"):
         yield ("第一步:曲面 z=x^2+y^2 的梯度。[[MG_DIAGRAM:surface3d]]\n\n"
