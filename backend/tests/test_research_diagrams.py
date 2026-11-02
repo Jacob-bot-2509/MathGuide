@@ -364,14 +364,14 @@ def test_prefer_visual_keeps_function_plot_over_flow():
     assert kind == "plot2d"
 
 
-def test_relation_question_forces_relation_not_axes(monkeypatch):
+def test_concept_relation_question_forces_mind_map(monkeypatch):
     seen: dict[str, str] = {}
     monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
 
     async def fake_stream(system, user, **kwargs):
         seen["user"] = user
         yield json.dumps({
-            "type": "relation",
+            "type": "tree",
             "nodes": [{"id": "a", "label": "可微"}, {"id": "b", "label": "连续"}],
             "edges": [{"from": "a", "to": "b"}],
         })
@@ -380,8 +380,8 @@ def test_relation_question_forces_relation_not_axes(monkeypatch):
     result = asyncio.run(rd.plan_diagram(
         "偏导数连续、可微、连续之间是什么关系", "解释", [], "surface3d",
         strict=False))
-    assert result and result["type"] == "relation"
-    assert "请求图解类型:relation" in seen["user"]
+    assert result and result["type"] == "tree"
+    assert "请求图解类型:tree" in seen["user"]
 
 
 def test_meta_question_never_gets_diagram():
@@ -667,10 +667,10 @@ def test_plan_diagram_uses_answer_context(monkeypatch):
 
     monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
     result = asyncio.run(plan_diagram(
-        "为什么 A 推出 B", "前面解释 A", [{"section": "S", "text": "资料"}],
+        "为什么 A 会变化", "前面解释 A", [{"section": "S", "text": "资料"}],
         "relation"))
     assert result and result["type"] == "relation"
-    assert "为什么 A 推出 B" in seen["user"]
+    assert "为什么 A 会变化" in seen["user"]
     assert "前面解释 A" in seen["user"]
     assert "资料" in seen["user"]
     assert "relation" in seen["user"]

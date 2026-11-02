@@ -753,6 +753,11 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                             diagram_question or prompt):
                         diagram_metrics.record("drop", False, "meta")
                         continue
+                    if (research_diagrams.is_relation_question(
+                            diagram_question or prompt)
+                            and scheduled_diagrams >= 1):
+                        diagram_metrics.record("drop", False, "relation_single")
+                        continue
                     full_text = "".join(answer)
                     stepwise = stepwise_hint or research_diagrams.is_step_text(full_text)
                     # 模型标记也要过重要度/独立性闸门:不重要的片段不画。
