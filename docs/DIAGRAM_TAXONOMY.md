@@ -58,7 +58,17 @@
 3. 在 `backend/tests/test_research_diagrams.py` 的 `test_taxonomy_covers_common_knowledge_points` 加一行期望。
 4. 运行后端测试；不需要改评分函数或提示词。
 
-## 5. 边界
+## 5. 可见性
+
+权重计算是**后台决策动作**，不进入用户可见层：
+
+- 不写进 SSE `diagram` 事件；
+- 不写进 `ChatMsg.diagrams` / localStorage；
+- 不写进图题、节点标签、标注或回答正文；
+- 前端只拿到结构化图解数据，不知道分数和选型依据；
+- 回答里只讲“看这张图”，不解释“为什么选 3D/权重多少”。
+
+## 6. 边界
 
 - 权重只给建议，用户显式要求仍然优先；
 - 规划器可结合上下文改选，避免“关键词命中就画”；

@@ -172,10 +172,12 @@ def select_segments(
     topic_terms = tuple(_topic_terms(question, text))
     paragraphs: list[tuple[str, int, int, bool]] = []
     for match in re.finditer(r"[^\n]+(?:\n(?!\n)[^\n]+)*", text):
-        body = match.group().strip()
+        raw = match.group()
+        body = raw.strip()
         if not body:
             continue
-        start = _utf16_len(text[:match.start()])
+        start = _utf16_len(text[:match.start()]) + _utf16_len(
+            raw[:len(raw) - len(raw.lstrip())])
         anchor = _utf16_len(text[:match.end()])
         paragraphs.append((body, start, anchor, bool(_STEP_RE.search(body))))
     has_steps = any(step for _body, _start, _anchor, step in paragraphs)
@@ -798,6 +800,8 @@ _PLAN_SYSTEM = (
     "曲面/曲线用 expr+domain 交给服务端精确采样,标注点要落在真实位置上。\n"
     "12. 文字说明放图形外围,同一区域不要叠放多条;箭头/曲线旁只留短标签"
     "(如 ∂f/∂x),长句放外围 annotation。\n"
+    "13. 不要在 title、label、annotation 或任何文字里解释你为什么选这种图、"
+    "提到了什么权重/评分/维度判断;只画内容本身,选型是后台动作。\n"
 )
 
 
@@ -836,17 +840,15 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
         return None
     # 图解只针对标记前的最新一步:取正文尾部,避免把整篇回答塞进一张图。
     latest = re.sub(r"\s+", " ", before or "").strip()[-3500:]
-    weight_note = taxonomy.top_scores(taxonomy.choose_visual(latest).scores)
     if not kind:
-        # 用户没指定维度时,先由权重给一个建议;规划器仍可按内容改选。
+        # 用户没指定维度时,由后台权重给一个建议;规划器仍可按内容改选。
+        # 权重分数只在后台使用,不写进上下文、回答、图题或标注。
         hint_source = latest
         if local_hint:
             parts = [part for part in re.split(r"\n\s*\n", before or "")
                      if part.strip()]
             if parts:
                 hint_source = re.sub(r"\s+", " ", parts[-1]).strip()
-        decision = taxonomy.choose_visual(hint_source)
-        weight_note = taxonomy.top_scores(decision.scores)
         hint, hint_score = score_segment(
             hint_source, tuple(_topic_terms(question, before or "")))
         if hint and hint_score >= 2.0:
@@ -854,7 +856,6 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
     context: list[str] = [
         f"请求图解类型:{kind or '自选(按内容决定)'}",
         f"类型要求:{'硬性,必须一致' if strict else '建议,可按内容改选更合适的类型'}",
-        f"形式权重参考:{weight_note}",
         f"用户明确要求的表示方式:{requested or '未指定'}",
         f"用户问题:{_text(question, 1000)}",
         f"当前回答(标记前最新段落):{latest}",

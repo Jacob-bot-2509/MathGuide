@@ -188,9 +188,3 @@ def terms_in_text(question: str, text: str) -> list[str]:
             if word and word in source and word not in terms:
                 terms.append(word)
     return terms[:40]
-
-
-def top_scores(scores: dict[str, float], limit: int = 3) -> str:
-    ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-    return ", ".join(f"{kind}={score:.1f}" for kind, score in ordered[:limit]
-                     if score > 0) or "无明显形式证据"

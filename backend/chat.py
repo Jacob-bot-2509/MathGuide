@@ -671,7 +671,8 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 "④ 抽象概念要化抽象为具体:先用一个具体类比物把它实体化"
                 "(如把梯度想成山坡最陡的上坡方向),再画出来;"
                 "⑤ 标记前先用一两句话告诉用户这张图看什么,再继续讲解;"
-                "⑥ 寒暄、简单事实、短答案不标记;标记独占一行,不要解释标记。"
+                "⑥ 寒暄、简单事实、短答案不标记;标记独占一行,不要解释标记;"
+                "⑦ 不要向用户解释图解类型、权重、评分或选型依据,直接画图并讲内容。"
                 if zh else
                 "\n\n[Diagram - draw while teaching] When a step needs a picture "
                 "to be understood, insert a hidden marker on its own line after "
@@ -690,7 +691,9 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 "abstractions concrete through a visible analogy; (5) say in one or "
                 "two sentences what to look at before the marker, then continue "
                 "teaching; (6) never for greetings, simple facts, or short answers; "
-                "the marker must be on its own line."
+                "the marker must be on its own line; (7) never explain the diagram "
+                "type, weights, scores or selection rationale to the user; just "
+                "draw the figure and teach the content."
             )
         markers = research_diagrams.MarkerStream(
             diagram_request_id or secrets.token_hex(8)) if diagram_mode else None

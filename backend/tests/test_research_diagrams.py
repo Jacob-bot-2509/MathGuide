@@ -180,6 +180,14 @@ def test_select_segments_splits_inline_steps():
     assert all(segment.kind for segment in segments)
 
 
+def test_select_segments_preserves_offsets_with_indentation_and_emoji():
+    text = "😀\n\n    首先画函数图像。然后画曲线图像。"
+    segments = rd.select_segments("一步步讲", text)
+    assert [segment.anchor_index for segment in segments] == [
+        rd._utf16_len(text[:text.index("然后")]), rd._utf16_len(text)
+    ]
+
+
 def test_select_segments_skips_greeting_and_covered_paragraph():
     assert rd.select_segments("你好", "你好,很高兴见到你。") == []
     text = "梯度方向是曲面最陡的上坡方向。\n\n这段是补充说明。"
@@ -251,6 +259,8 @@ def test_plan_diagram_uses_weight_hint_without_explicit_dimension(monkeypatch):
         "帮我把图做出来", "一元函数及其导数的图像。", [], "", strict=False))
     assert result and result["type"] == "plot2d"
     assert "请求图解类型:plot2d" in seen["user"]
+    # 权重只在后台参与决策,不把分数/选型依据写进规划上下文。
+    assert "形式权重参考" not in seen["user"]
 
 
 def test_validate_rejects_type_structure_mismatch():
