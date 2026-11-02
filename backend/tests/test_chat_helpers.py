@@ -384,8 +384,10 @@ async def _no_actions():
 
 def test_diagram_marker_stripped_and_event_emitted(monkeypatch):
     """模型标记从正文剥离,图解事件带锚点;正文在标记前后都保留。"""
+    prefix = "梯度方向是函数增长最快的方向"
+
     async def fake_stream(system, user, history=None, role="main"):
-        yield "前[[MG_DIA"
+        yield prefix + "[[MG_DIA"
         yield "GRAM:relation]]后"
 
     async def fake_plan(question, before, excerpts, kind, role="main", **kwargs):
@@ -400,15 +402,15 @@ def test_diagram_marker_stripped_and_event_emitted(monkeypatch):
     monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
     monkeypatch.setattr(chat.research_diagrams, "plan_diagram", fake_plan)
     frames = asyncio.run(_collect_gen(chat._gen_llm(
-        "怎么理解 A", None, [], diagram_mode=True,
-        diagram_question="怎么理解 A", diagram_request_id="r1")))
+        "怎么理解梯度", None, [], diagram_mode=True,
+        diagram_question="怎么理解梯度", diagram_request_id="r1")))
     text = _joined_frames(frames)
-    assert text == "前后"
+    assert text == prefix + "后"
     diagrams = [json.loads(frame[6:].strip()) for frame in frames
                 if frame.startswith("data: ") and "mg_event" in frame]
     assert len(diagrams) == 1
     assert diagrams[0]["mg_event"] == "diagram"
-    assert diagrams[0]["anchorIndex"] == 1
+    assert diagrams[0]["anchorIndex"] == chat.research_diagrams._utf16_len(prefix)
     assert diagrams[0]["anchorId"] == "r1-1"
 
 
@@ -438,14 +440,14 @@ def test_diagram_planner_failure_does_not_break_text(monkeypatch):
 
 def test_chat_caps_diagrams_at_six_per_message(monkeypatch):
     async def fake_stream(system, user, history=None, role="main"):
-        yield ("第一步:A[[MG_DIAGRAM:relation]]\n\n"
-               "第二步:B[[MG_DIAGRAM:flow]]\n\n"
-               "第三步:C[[MG_DIAGRAM:tree]]\n\n"
-               "第四步:D[[MG_DIAGRAM:surface3d]]\n\n"
-               "第五步:E[[MG_DIAGRAM:geometry2d]]\n\n"
-               "第六步:F[[MG_DIAGRAM:plot2d]]\n\n"
-               "第七步:G[[MG_DIAGRAM:flow]]\n\n"
-               "第八步:H")
+        yield ("第一步:方向导数 D_u f = ∇f·u。[[MG_DIAGRAM:relation]]\n\n"
+               "第二步:梯度 ∇f 指向增长最快方向。[[MG_DIAGRAM:flow]]\n\n"
+               "第三步:曲面 z=x^2+y^2 的等高线。[[MG_DIAGRAM:tree]]\n\n"
+               "第四步:切平面与法向量。[[MG_DIAGRAM:surface3d]]\n\n"
+               "第五步:函数图像上的切线斜率。[[MG_DIAGRAM:geometry2d]]\n\n"
+               "第六步:矩阵特征向量只伸缩。[[MG_DIAGRAM:plot2d]]\n\n"
+               "第七步:空间向量与平面方程。[[MG_DIAGRAM:flow]]\n\n"
+               "第八步:概率密度曲线。")
 
     calls: list[str] = []
 
@@ -470,7 +472,7 @@ def test_chat_caps_diagrams_at_six_per_message(monkeypatch):
 def test_chat_backfills_by_weight_when_model_marks_nothing(monkeypatch):
     async def fake_stream(system, user, history=None, role="main"):
         yield ("第一步:写出方向导数 D_u f = ∇f · u。\n\n"
-               "第二步:把 ∇f 与 u 的点乘展开。")
+               "第二步:画出函数图像上的切线。")
 
     calls: list[str] = []
 

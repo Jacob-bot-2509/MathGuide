@@ -662,6 +662,8 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 "[[MG_DIAGRAM:<type>]],<type> 换成实际类型。"
                 "要求:"
                 "① 按讲课节奏一步一图:有明确步骤就按步骤来,每张只图解刚讲完的这一小步;"
+                "步骤不要过细,把连续的代入/整理/化简合并,每步是一个完整的关键动作,"
+                "通常 2–5 步;只为关键步骤配图,不要机械地一步一图铺满;"
                 "没有明确步骤时,只在内容确实需要具象化的地方标记,不要每段都标,也不要为凑数;"
                 "② 自主选择 2D/3D:一元函数及其导数用 2D;多元函数、偏导数、曲面、梯度用 3D;"
                 "平面几何、函数曲线、二维关系用 2D;空间对象、立体结构用 3D;"
@@ -679,8 +681,11 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 "that paragraph, for example [[MG_DIAGRAM:surface3d]] (replace the "
                 "type; allowed: tree/relation/flow/geometry2d/plot2d/geometry3d/"
                 "surface3d). Requirements: (1) one diagram per teaching step; if the "
-                "answer has explicit steps, follow them; otherwise mark only where a "
-                "picture genuinely helps, not every paragraph; (2) choose 2D or 3D "
+                "answer has explicit steps, follow them; keep steps coarse — merge "
+                "consecutive substitution/simplification fragments, usually 2–5 key "
+                "steps, and diagram only the key steps rather than every step; "
+                "otherwise mark only where a picture genuinely helps, not every "
+                "paragraph; (2) choose 2D or 3D "
                 "yourself: one-variable functions and their derivatives -> 2D; "
                 "multivariable functions, partial derivatives, surfaces and "
                 "gradients -> 3D; planar geometry, curves and 2D relations -> 2D; "
@@ -724,6 +729,24 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                         continue
                     full_text = "".join(answer)
                     stepwise = stepwise_hint or research_diagrams.is_step_text(full_text)
+                    # 模型标记也要过重要度/独立性闸门:不重要的片段不画。
+                    if (not explicit_requested
+                            and not research_diagrams.wants_visual(
+                                diagram_question or prompt)):
+                        prefix = research_diagrams.slice_utf16(
+                            full_text, marker.anchor_index)
+                        parts = [part.strip() for part in re.split(
+                            r"\n\s*\n", prefix) if part.strip()]
+                        segment = " ".join(parts[-2:])
+                        if research_diagrams.is_step_text(segment):
+                            if research_diagrams.visual_cue_score(segment) < 1.2:
+                                continue
+                        else:
+                            terms = tuple(research_diagrams._topic_terms(
+                                diagram_question or prompt, full_text))
+                            if research_diagrams.importance_score(
+                                    segment, terms) < 1.8:
+                                continue
                     # 非步骤内容最多 3 张,且锚点间隔 >=400 字,避免同一主题连续堆图。
                     if not stepwise and scheduled_diagrams >= 3:
                         continue

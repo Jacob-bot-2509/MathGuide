@@ -78,6 +78,7 @@ class DiagramSegment:
     anchor_index: int
     kind: str
     score: float
+    importance: float = 0.0
 
 
 # 形式权重网在 diagram_taxonomy.py;这里只做段落级评分与阈值判断。
@@ -87,7 +88,20 @@ _STEP_RE = re.compile(
 )
 _STEP_INLINE_RE = re.compile(
     r"第[一二三四五六七八九十0-9]+步|首先|其次|然后|最后|接着|下一步")
+_STEP_LABEL_RE = re.compile(
+    r"^\s*(?:第[一二三四五六七八九十0-9]+步|[0-9]+[.、)]|首先|其次|然后|"
+    r"最后|接着|下一步)\s*[:：、.]?\s*")
 _GREETING_RE = re.compile(r"^(你好|您好|谢谢|感谢|再见|hi|hello|thanks)", re.I)
+_MATH_RE = re.compile(r"[∫∑∂∇√±≤≥≠≈∞πθλσμΔ_]|[=<>^]|\\frac")
+_CONTINUATION_RE = re.compile(
+    r"^\s*(?:它|他|她|这|该|其|此|上式|前式|由此|据此|代入|整理|化简|"
+    r"两边|进而|从而|于是|同样|同理|把(?:它|其|这|这个))")
+_ACTION_RE = re.compile(
+    r"定义|计算|求|令|设|画|比较|展开|代入|整理|化简|验证|判断|"
+    r"说明|得到|推出|证明|选取|构造|分析|估计|积分|求导|写出")
+_DEFINITION_RE = re.compile(r"定义|称为|是指|指的是|记作|表示为|就是")
+_CONCLUSION_RE = re.compile(
+    r"因此|所以|总之|综上|结论|本质|关键|核心|总结|规律|重要|意味着")
 
 
 def _step_slices(body: str) -> list[tuple[int, int]]:
@@ -159,6 +173,125 @@ def score_segment(text: str, topic_terms: tuple[str, ...] = ()) -> tuple[str, fl
     return (kind if total > 0 else ""), round(total, 2)
 
 
+def importance_score(
+    text: str, topic_terms: tuple[str, ...] = (),
+) -> float:
+    """段落对整篇回答的重要度,用于非步骤内容的选图排序。
+    步骤不走这个分数,步骤只看“是否独立可单画”,且保持原顺序。"""
+    clean = re.sub(r"\s+", " ", text or "").strip()
+    if not clean or _GREETING_RE.search(clean):
+        return 0.0
+    decision = taxonomy.choose_visual(clean)
+    rich = sum(sorted(decision.scores.values(), reverse=True)[:2])
+    score = min(5.0, rich * 0.55)
+    score += min(2.0, 0.25 * len(_MATH_RE.findall(clean)))
+    if _CONCLUSION_RE.search(clean):
+        score += 1.5
+    if _DEFINITION_RE.search(clean):
+        score += 1.2
+    score += min(2.0, 0.15 * sum(
+        1 for term in topic_terms if term and term in clean))
+    length = len(clean)
+    if length < 25:
+        score -= 2.0
+    elif length < 60:
+        score -= 0.8
+    if not re.search(r"[一-鿿A-Za-z]", clean):
+        score -= 5.0
+    return round(max(0.0, score), 2)
+
+
+def _step_body(text: str) -> str:
+    return _STEP_LABEL_RE.sub("", re.sub(r"\s+", " ", text or "").strip())
+
+
+def step_independence(text: str) -> float:
+    """判断一个步骤截断后能否独立成图。
+    不是给步骤排序:分数低表示它依赖上一步/只是片段,应并入相邻步骤。"""
+    clean = _step_body(text)
+    if not clean:
+        return 0.0
+    decision = taxonomy.choose_visual(clean)
+    top = sorted(decision.scores.values(), reverse=True)
+    score = 1.0
+    if _MATH_RE.search(clean):
+        score += 0.8
+    if top and top[0] >= 2.0:
+        score += 0.7
+    if _DEFINITION_RE.search(clean) or _CONCLUSION_RE.search(clean):
+        score += 0.5
+    if _ACTION_RE.search(clean) and len(clean) >= 14:
+        score += 0.5
+    if _CONTINUATION_RE.search(clean) and len(clean) < 40:
+        score -= 1.2
+    if len(clean) < 12:
+        score -= 1.5
+    elif len(clean) >= 35:
+        score += 0.3
+    return round(max(0.0, score), 2)
+
+
+def visual_cue_score(text: str) -> float:
+    """排除流程加分后的纯视觉证据:没有可画的几何/曲线/关系,就不要硬画。"""
+    decision = taxonomy.choose_visual(text)
+    return max((score for kind, score in decision.scores.items()
+                if kind != "flow"), default=0.0)
+
+
+def _key_tokens(text: str) -> set[str]:
+    tokens: set[str] = set()
+    for cues in taxonomy.VISUAL_CUES.values():
+        for word in cues:
+            if word and word in text:
+                tokens.add(word)
+    for match in re.finditer(r"[A-Za-z][A-Za-z0-9_]*", text or ""):
+        tokens.add(match.group().lower())
+    for match in re.finditer(r"\d+(?:\.\d+)?", text or ""):
+        tokens.add(match.group())
+    return tokens
+
+
+def step_relatedness(previous: str, current: str) -> float:
+    """相邻步骤的语义承接度:高 = 当前步骤主要是上一步的延续/代入/整理。
+    用来决定合并,而不是排序。"""
+    prev = _step_body(previous)
+    curr = _step_body(current)
+    if not prev or not curr:
+        return 0.0
+    prev_tokens = _key_tokens(prev)
+    curr_tokens = _key_tokens(curr)
+    shared = len(prev_tokens & curr_tokens) / max(1, len(curr_tokens))
+    score = shared
+    if _CONTINUATION_RE.search(curr):
+        score += 0.55
+    if re.match(r"^\s*(它|这|该|此|其)", curr):
+        score += 0.15
+    if len(curr) < 18 and re.match(r"^\s*(再|然后|接着)", curr):
+        score += 0.15
+    prev_type = taxonomy.choose_visual(prev).kind
+    curr_type = taxonomy.choose_visual(curr).kind
+    if prev_type and prev_type == curr_type and curr_type != "flow":
+        score += 0.12
+    if visual_cue_score(curr) >= 2.0 and not (curr_tokens & prev_tokens):
+        # 当前步骤引入了全新的关键视觉对象,即使很短也值得单独成图。
+        score -= 0.35
+    if len(curr) < 15 and not (curr_tokens - prev_tokens):
+        score += 0.1
+    return round(max(0.0, min(1.0, score)), 2)
+
+
+def wants_visual(question: str) -> bool:
+    return bool(re.search(r"画|图示|图解|可视化|图像|示意图", question or ""))
+
+
+def slice_utf16(text: str, units: int) -> str:
+    """按前端 UTF-16 锚点截取文本。"""
+    if units <= 0:
+        return ""
+    return (text or "").encode("utf-16-le")[:units * 2].decode(
+        "utf-16-le", errors="ignore")
+
+
 def select_segments(
     question: str,
     text: str,
@@ -187,34 +320,84 @@ def select_segments(
         if any(start - 80 <= existing <= anchor + 80
                for existing in existing_anchors):
             return
+        # 没有可画的几何/曲线/关系证据时不硬画;步骤标记本身不算视觉证据。
+        if visual_cue_score(body) < 1.2:
+            return
         kind, score = score_segment(body, topic_terms)
-        threshold = 2.0 if has_steps else 3.0
-        if kind and score >= threshold:
-            candidates.append(DiagramSegment(body, anchor, kind, score))
+        if not kind:
+            return
+        candidates.append(DiagramSegment(
+            body, anchor, kind, score,
+            importance_score(body, topic_terms)))
 
-    for body, start, anchor, is_step in paragraphs:
-        if has_steps and not is_step:
-            continue
-        if has_steps:
-            # 同一段里的“首先/然后/最后”也拆开,做到一步一图。
+    if has_steps:
+        # 步骤保持从头到尾的顺序;独立度只决定“并入上一步”还是“单独成图”。
+        steps: list[dict] = []
+        for body, start, anchor, is_step in paragraphs:
+            if not is_step:
+                continue
             for local_start, local_end in _step_slices(body):
                 part = body[local_start:local_end].strip()
                 if not part:
                     continue
-                consider(
-                    part,
-                    start + _utf16_len(body[:local_start]),
-                    start + _utf16_len(body[:local_end]),
-                )
-        else:
-            consider(body, start, anchor)
-    if has_steps:
-        return candidates[:limit]
-    # 非步骤内容:按分数取前几个,并保证彼此间隔,避免同一主题连续堆图。
-    candidates.sort(key=lambda item: item.score, reverse=True)
+                steps.append({
+                    "text": part,
+                    "start": start + _utf16_len(body[:local_start]),
+                    "anchor": start + _utf16_len(body[:local_end]),
+                    "indep": step_independence(part),
+                })
+        if not steps:
+            return []
+        # 开头就是“把它代入”这类依赖片段:并入下一步,而不是单独画。
+        while (len(steps) > 1
+               and visual_cue_score(steps[0]["text"]) < 1.2
+               and step_relatedness(steps[0]["text"],
+                                    steps[1]["text"]) >= 0.65):
+            first = steps.pop(0)
+            steps[0]["text"] = f"{first['text']} {steps[0]['text']}"
+            steps[0]["start"] = first["start"]
+        groups: list[dict] = []
+        for step in steps:
+            related = (groups and step_relatedness(
+                groups[-1]["text"], step["text"]) >= 0.65)
+            if related and groups:
+                previous = groups[-1]
+                previous["text"] = f"{previous['text']} {step['text']}"
+                previous["anchor"] = step["anchor"]
+            else:
+                groups.append(dict(step))
+        # 步骤不要过细:超过软上限时,优先把承接度最高的一对合并,保持顺序不变。
+        max_steps = min(limit, 5)
+        while len(groups) > max_steps:
+            index = max(
+                range(len(groups) - 1),
+                key=lambda item: (
+                    step_relatedness(groups[item]["text"],
+                                     groups[item + 1]["text"]),
+                    -groups[item]["indep"] - groups[item + 1]["indep"],
+                ),
+            )
+            groups[index]["text"] = (
+                f"{groups[index]['text']} {groups[index + 1]['text']}")
+            groups[index]["anchor"] = groups[index + 1]["anchor"]
+            groups.pop(index + 1)
+        for group in groups:
+            consider(group["text"], group["start"], group["anchor"])
+        return candidates
+
+    # 非步骤内容:按重要度排序,只取显著高于其他段落的点;不凑数。
+    for body, start, anchor, _is_step in paragraphs:
+        consider(body, start, anchor)
+    if not candidates:
+        return []
+    top = max(candidate.importance for candidate in candidates)
+    cut = max(2.0, top * 0.6)
+    ranked = [candidate for candidate in candidates
+              if candidate.importance >= cut]
+    ranked.sort(key=lambda item: item.importance, reverse=True)
     selected: list[DiagramSegment] = []
-    for candidate in candidates:
-        if len(selected) >= min(limit, 3):
+    for candidate in ranked:
+        if len(selected) >= min(limit, 4):
             break
         if all(abs(candidate.anchor_index - item.anchor_index) >= 400
                for item in selected):
@@ -802,6 +985,8 @@ _PLAN_SYSTEM = (
     "(如 ∂f/∂x),长句放外围 annotation。\n"
     "13. 不要在 title、label、annotation 或任何文字里解释你为什么选这种图、"
     "提到了什么权重/评分/维度判断;只画内容本身,选型是后台动作。\n"
+    "14. 先抓这一步最关键的对象或转折,不要平均用力;如果这段只是上一步的"
+    "代入/整理/化简,不要单独成图,应合并到上一步。\n"
 )
 
 

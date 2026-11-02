@@ -174,7 +174,7 @@ def test_select_segments_follows_numbered_steps():
 
 
 def test_select_segments_splits_inline_steps():
-    text = "首先写出方向导数,然后把它展开成点乘,最后令夹角为零。"
+    text = "首先画出函数图像,然后标出梯度向量,最后写出方向导数。"
     segments = rd.select_segments("一步步讲", text)
     assert len(segments) == 3
     assert all(segment.kind for segment in segments)
@@ -186,6 +186,19 @@ def test_select_segments_preserves_offsets_with_indentation_and_emoji():
     assert [segment.anchor_index for segment in segments] == [
         rd._utf16_len(text[:text.index("然后")]), rd._utf16_len(text)
     ]
+
+
+def test_select_segments_merges_semantically_continuous_steps():
+    text = (
+        "第一步:写出方向导数 D_u f = ∇f·u。\n\n"
+        "第二步:把它展开成点乘。\n\n"
+        "第三步:令夹角 θ=0,方向导数最大。"
+    )
+    segments = rd.select_segments("一步步讲", text)
+    assert len(segments) == 2
+    assert "把它展开" in segments[0].text
+    assert [s.anchor_index for s in segments] == sorted(
+        s.anchor_index for s in segments)
 
 
 def test_select_segments_skips_greeting_and_covered_paragraph():
