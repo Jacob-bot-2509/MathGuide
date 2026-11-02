@@ -2,6 +2,9 @@
 import { post } from '@/api/http'
 import { getToken } from '@/stores/user'
 import { parseDiagramSpec, type DiagramSpec } from '@/utils/diagramSpec'
+import { diagramSuppressed, needsDiagram } from '@/utils/diagramIntent'
+
+export { diagramSuppressed, needsDiagram }
 
 export interface PlanDiagramInput {
   question: string
@@ -27,10 +30,4 @@ export async function planDiagram(input: PlanDiagramInput): Promise<DiagramSpec 
     authHeaders(),
   )
   return parseDiagramSpec(res.diagram)
-}
-
-/** 用户明显在问“怎么理解/几何直观/关系/区别”,或明确要求画图时,允许回答结束后补一张图。 */
-export function needsDiagram(question: string): boolean {
-  return /怎么理解|如何理解|怎么直观|几何直观|直观理解|怎么想|有什么关系|什么关系|有什么区别|为什么会|推导|证明思路|三维|3d|立体|曲面|梯度|画(?:个|张|一)?图|图示|示意图|可视化|一步步|逐步|图解|how (?:can|do|to) .*understand|geometric intuition|intuition|relationship|difference|draw|diagram|3d|surface|gradient/i
-    .test(question || '')
 }

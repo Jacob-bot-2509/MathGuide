@@ -363,6 +363,64 @@ _RELATION_QUESTION_RE = re.compile(
     r"关系|之间|区别|联系|推出|蕴含|等价|条件|强弱|依赖|哪一个更", re.IGNORECASE)
 _ANALOGY_RE = re.compile(
     r"类比|比喻|实体化|画图|图示|几何直观|可视化|想象成", re.IGNORECASE)
+# 用户明确说“先不要画图”时,服务端不能再用模型漏标兜底或标记闸门把图补回来。
+_NO_DIAGRAM_RE = re.compile(
+    r"(?:先|暂时|这次|本轮|本次|今天)?\s*"
+    r"(?:不要|不用|不需要|不必|无需|别|不)\s*"
+    r"(?:再|先|急着|用)?\s*"
+    r"(?:画|生成|出|配|做|给|用|展示)?\s*"
+    r"(?:图|图解|图示|图像|示意图|思维导图|可视化)"
+    r"|(?:不要|不用|别|无需)\s*(?:再|先)?\s*(?:画|生成|配|做)"
+    r"(?:了|吧|啦)?(?=\s|$|[，。,.!?])"
+    r"|\b(?:do not|don't|dont|no need to|without|skip)\s+"
+    r"(?:draw|drawing|generate|show|include|using)?\s*"
+    r"(?:a\s+)?(?:diagram|figure|graph|chart|visuali[sz]ation)\b",
+    re.IGNORECASE,
+)
+_DRAW_AGAIN_RE = re.compile(
+    r"(?:可以|现在|继续|开始|还是|重新|恢复|请|帮我)?\s*"
+    r"(?:画|生成|出|做|配|给)\s*(?:一?张|个)?\s*"
+    r"(?:三维|3d|二维|2d|立体|函数|曲线|几何|流程|思维导图|关系)?\s*"
+    r"(?:图|图解|图示|图像|示意图)"
+    r"|\b(?:draw|show|generate|include)\s+(?:a\s+)?"
+    r"(?:diagram|figure|graph|chart)\b"
+    r"|(?:用|来)\s*(?:一?张|个)?\s*"
+    r"(?:三维|3d|二维|2d|立体|函数|曲线|几何|流程|思维导图|关系)?\s*"
+    r"(?:图|图解|图示|图像|示意图)",
+    re.IGNORECASE,
+)
+
+
+def _diagram_message_state(text: str) -> bool | None:
+    """单条消息的画图意图:True=明确不要,False=明确要,None=没提。
+    同一条消息里“不要画思维导图,画三维图”以后半句为准。"""
+    body = text or ""
+    negative = _NO_DIAGRAM_RE.search(body)
+    positive = _DRAW_AGAIN_RE.search(body)
+    if positive and (not negative or positive.start() > negative.end()):
+        return False
+    if negative:
+        return True
+    if positive:
+        return False
+    return None
+
+
+def diagram_suppressed(
+    question: str,
+    history: list[dict] | None = None,
+) -> bool:
+    """本轮是否被用户明确要求不画图;最近的明确指令优先,直到用户恢复。"""
+    state = _diagram_message_state(question)
+    if state is not None:
+        return state
+    for item in reversed(history or []):
+        if item.get("role") != "user":
+            continue
+        state = _diagram_message_state(str(item.get("content") or ""))
+        if state is not None:
+            return state
+    return False
 
 
 def is_meta_question(question: str) -> bool:
@@ -397,6 +455,8 @@ def select_segments(
     """扫描整篇回答:有步骤按步骤选,没步骤按权重选高分段落。
     只返回值得画图的段落;模型没标记时由这里兜底决定画不画、画哪种。"""
     if not text or limit <= 0 or is_meta_question(question):
+        return []
+    if diagram_suppressed(question):
         return []
     topic_terms = tuple(_topic_terms(question, text))
     paragraphs: list[tuple[str, int, int, bool]] = []
@@ -1378,7 +1438,8 @@ _PLAN_SYSTEM = (
     "9. 坐标轴只画线条并标 x/y/z 名称,不要画刻度数字;"
     "图面只标关键对象符号(如 P、∇f、θ),不要把公式和数值堆进图里。\n"
     "10. surface3d 的关键点、梯度向量要落在曲面上并从该点出发;"
-    "同一位置只放一条 annotation,避免标签重叠。\n"
+    "同一位置只放一条 annotation,避免标签重叠;说明文字分散在图形外围的"
+    "上/下/左/右不同方位,同一侧不要堆叠,更不要压在曲线或曲面上。\n"
     "11. 几何图必须按真实比例和坐标画:长度、角度、位置要计算,不要随手估;"
     "曲面/曲线用 expr+domain 交给服务端精确采样,标注点要落在真实位置上。\n"
     "12. 文字说明放图形外围,同一区域不要叠放多条;箭头/曲线旁只留短标签"

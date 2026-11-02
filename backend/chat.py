@@ -617,7 +617,8 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                    history: list[dict] | None = None, role: str = "main", verify: bool = False,
                    summary: str = "", sid: int | None = None, uid: str = "",
                    workspace: str = "learn", paper_mode: bool = False,
-                   diagram_mode: bool = False, diagram_question: str = "",
+                   diagram_mode: bool = False, diagram_allowed: bool = True,
+                   diagram_question: str = "",
                    diagram_excerpts: list[dict] | None = None,
                    diagram_request_id: str = ""):
     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
@@ -657,7 +658,18 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             )
         if summary:
             system += f"\n\n【更早对话摘要】\n{summary}"
-        if diagram_mode:
+        if diagram_mode and not diagram_allowed:
+            system += (
+                "\n\n【本轮不画图】用户已经明确要求当前阶段不要生成图解。"
+                "只输出文字讲解,不要输出任何 [[MG_DIAGRAM:...]] 标记,"
+                "也不要主动提到图解、配图、示意图或“需要看图”。"
+                if zh else
+                "\n\n[No diagram this turn] The user explicitly asked not to "
+                "generate a diagram for now. Answer in text only. Do not output "
+                "any [[MG_DIAGRAM:...]] marker and do not mention diagrams, "
+                "figures or visual aids."
+            )
+        elif diagram_mode:
             system += (
                 "\n\n【图解·边讲边画】讲解到需要看图才能讲清的步骤时,"
                 "在该段结束、下一段开始之前,单独一行输出隐藏标记 "
@@ -746,6 +758,9 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                     answer.append(clean)
                     yield f"data: {json.dumps(clean, ensure_ascii=False)}\n\n"
                 for marker in markers.drain():
+                    if not diagram_allowed:
+                        diagram_metrics.record("drop", False, "user_disabled")
+                        continue
                     if scheduled_diagrams >= research_diagrams.MAX_DIAGRAMS:
                         diagram_metrics.record("drop", False, "cap")
                         continue
@@ -819,7 +834,8 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             # 非步骤内容若模型已经标过图,不再追加,避免同一概念堆图。
             stepwise = stepwise_hint or research_diagrams.is_step_text("".join(answer))
             remaining = research_diagrams.MAX_DIAGRAMS - scheduled_diagrams
-            if remaining > 0 and (scheduled_diagrams == 0 or stepwise):
+            if remaining > 0 and diagram_allowed and (
+                    scheduled_diagrams == 0 or stepwise):
                 covered = list(kept_anchors)
                 segments = research_diagrams.select_segments(
                     diagram_question or prompt, "".join(answer), covered, remaining)
@@ -1505,10 +1521,13 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         sid = valid_session_id(body.get("sessionId"))
         verify = bool(chunks) or rag.is_math_question(question) or _is_formula_followup(history)
         summary = get_summary(uid, sid, workspace=workspace) if sid is not None else ""
+        diagram_allowed = not research_diagrams.diagram_suppressed(
+            question, history)
         return _sse(_gen_llm(
             question, cmd, chunks, history=history, role=role, verify=verify,
             summary=summary, sid=sid, uid=uid, workspace=workspace,
-            diagram_mode=True, diagram_question=question,
+            diagram_mode=True, diagram_allowed=diagram_allowed,
+            diagram_question=question,
             diagram_excerpts=[
                 {"section": chunk.section, "text": chunk.text}
                 for chunk, _score in chunks

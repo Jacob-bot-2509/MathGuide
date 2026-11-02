@@ -536,6 +536,33 @@ def test_meta_question_never_gets_diagram():
     assert rd.select_segments(question, text) == []
 
 
+def test_diagram_suppressed_by_explicit_no_draw_instruction():
+    assert rd.diagram_suppressed("先不要画图，只讲概念")
+    assert rd.diagram_suppressed("这轮不用配图")
+    assert rd.diagram_suppressed("别画了，用文字说")
+    # 同一条消息里明确改口要三维图,以后半句为准。
+    assert not rd.diagram_suppressed("不要画思维导图，画三维图")
+    assert not rd.diagram_suppressed("现在可以画图了")
+    assert not rd.diagram_suppressed("用三维图讲讲梯度")
+    assert rd.select_segments("先不要画图", "第一步画曲线，第二步标梯度。") == []
+
+
+def test_diagram_suppression_follows_history_until_user_resumes():
+    history = [
+        {"role": "user", "content": "先不要画图，等我讲完"},
+        {"role": "assistant", "content": "好的，我继续用文字讲。"},
+    ]
+    assert rd.diagram_suppressed("继续讲这个定理", history)
+    # 用户恢复画图后,后续追问不能一直停在图解模式。
+    assert not rd.diagram_suppressed("现在可以画图了", history)
+    assert not rd.diagram_suppressed("用三维图讲讲梯度", history)
+    resumed = history + [
+        {"role": "user", "content": "现在可以画图了"},
+        {"role": "assistant", "content": "好的。"},
+    ]
+    assert not rd.diagram_suppressed("继续", resumed)
+
+
 def test_validate_rejects_type_structure_mismatch():
     assert validate_diagram({
         "type": "surface3d",

@@ -1,5 +1,10 @@
 /** 图解布局:确定性坐标,不依赖 DOM,不做物理动画。 */
 import type { DiagramSpec } from './diagramSpec'
+import {
+  placeLabels,
+  type LabelRequest,
+  type Rect,
+} from './diagramLabels'
 
 export interface PositionedNode {
   id: string
@@ -18,6 +23,7 @@ export interface PositionedEdge {
   x2: number
   y2: number
   label?: string
+  labelLines?: string[]
   labelX?: number
   labelY?: number
 }
@@ -54,6 +60,11 @@ function empty(nodes: PositionedNode[], edges: PositionedEdge[]): LayoutResult {
   return { nodes, edges, width, height }
 }
 
+function finish(nodes: PositionedNode[], edges: PositionedEdge[]): LayoutResult {
+  const base = empty(nodes, edges)
+  return placeEdgeLabels(nodes, edges, base.width, base.height)
+}
+
 function connect(nodes: PositionedNode[], spec: DiagramSpec): PositionedEdge[] {
   const byId = new Map(nodes.map((node) => [node.id, node]))
   const out: PositionedEdge[] = []
@@ -81,11 +92,84 @@ function connect(nodes: PositionedNode[], spec: DiagramSpec): PositionedEdge[] {
       from: edge.from, to: edge.to,
       x1, y1, x2, y2,
       label: edge.label,
-      labelX: Math.abs(dy) > NODE_H ? to.x + to.w / 2 : (x1 + x2) / 2,
-      labelY: Math.abs(dy) > NODE_H ? to.y - 6 : (y1 + y2) / 2 - 4,
     })
   }
   return out
+}
+
+function edgeObstacles(edges: PositionedEdge[]): Rect[] {
+  const out: Rect[] = []
+  for (const edge of edges) {
+    const dx = edge.x2 - edge.x1
+    const dy = edge.y2 - edge.y1
+    const length = Math.hypot(dx, dy)
+    const count = Math.max(1, Math.ceil(length / 16))
+    for (let index = 0; index <= count; index += 1) {
+      const t = index / count
+      out.push({
+        x: edge.x1 + dx * t - 2,
+        y: edge.y1 + dy * t - 2,
+        w: 4,
+        h: 4,
+      })
+    }
+  }
+  return out
+}
+
+/** 节点图边标签:沿边分散,避开节点方框、其他边和已经放下的标签。 */
+function placeEdgeLabels(
+  nodes: PositionedNode[],
+  edges: PositionedEdge[],
+  width: number,
+  height: number,
+): LayoutResult {
+  if (!edges.some((edge) => edge.label)) {
+    return { nodes, edges, width, height }
+  }
+  const obstacles: Rect[] = nodes.map((node) => ({
+    x: node.x - 3,
+    y: node.y - 3,
+    w: node.w + 6,
+    h: node.h + 6,
+  }))
+  obstacles.push(...edgeObstacles(edges))
+  const requests: LabelRequest[] = []
+  edges.forEach((edge, index) => {
+    if (!edge.label) return
+    const horizontal = Math.abs(edge.x2 - edge.x1) >= Math.abs(edge.y2 - edge.y1)
+    requests.push({
+      id: `edge-${index}`,
+      text: edge.label,
+      anchorX: (edge.x1 + edge.x2) / 2,
+      anchorY: (edge.y1 + edge.y2) / 2,
+      role: 'edge',
+      fontSize: 9,
+      maxWidth: 110,
+      maxLines: 2,
+      priority: 1,
+      preferred: horizontal
+        ? ['top', 'bottom', 'left', 'right']
+        : ['left', 'right', 'top', 'bottom'],
+    })
+  })
+  const placed = placeLabels(requests, obstacles, { x: 0, y: 0, w: width, h: height })
+  const byId = new Map(placed.map((label) => [label.id, label]))
+  let finalWidth = width
+  let finalHeight = height
+  const nextEdges = edges.map((edge, index) => {
+    const label = byId.get(`edge-${index}`)
+    if (!label) return edge
+    finalWidth = Math.max(finalWidth, label.x + label.w + 8)
+    finalHeight = Math.max(finalHeight, label.y + label.h + 8)
+    return {
+      ...edge,
+      labelLines: label.lines,
+      labelX: label.x,
+      labelY: label.y + label.fontSize,
+    }
+  })
+  return { nodes, edges: nextEdges, width: finalWidth, height: finalHeight }
 }
 
 function childrenMap(spec: DiagramSpec): Map<string, string[]> {
@@ -145,7 +229,7 @@ export function layoutTree(spec: DiagramSpec): LayoutResult {
   const shift = MARGIN - minX
   for (const node of positioned) node.x += shift
   const sorted = [...positioned].sort((a, b) => a.y - b.y || a.x - b.x)
-  return empty(sorted, connect(sorted, spec))
+  return finish(sorted, connect(sorted, spec))
 }
 
 export function layoutRelation(spec: DiagramSpec): LayoutResult {
@@ -163,7 +247,7 @@ export function layoutRelation(spec: DiagramSpec): LayoutResult {
       y: center + Math.sin(angle) * radius - NODE_H / 2,
     }
   })
-  return empty(positioned, connect(positioned, spec))
+  return finish(positioned, connect(positioned, spec))
 }
 
 export function layoutFlow(spec: DiagramSpec): LayoutResult {
@@ -230,7 +314,7 @@ export function layoutFlow(spec: DiagramSpec): LayoutResult {
       cursor += w + GAP_X
     }
   })
-  return empty(positioned, connect(positioned, spec))
+  return finish(positioned, connect(positioned, spec))
 }
 
 export function layoutForSpec(spec: DiagramSpec): LayoutResult {

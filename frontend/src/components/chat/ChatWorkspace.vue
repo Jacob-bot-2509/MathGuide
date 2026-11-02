@@ -679,7 +679,8 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
       }
       streams.delete(reply.id)
       persistSessions()
-      if (!failed && complete && reply.content && needsDiagram(prompt)
+      if (!failed && complete && reply.content
+        && needsDiagram(prompt, buildHistory(session, reply.id))
         && !reply.diagrams?.length) {
         void requestDiagram(reply, prompt, true)
       }

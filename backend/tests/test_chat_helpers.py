@@ -423,6 +423,34 @@ def test_diagram_marker_ignored_without_diagram_mode(monkeypatch):
     assert _joined_frames(frames) == "原[[MG_DIAGRAM:relation]]文"
 
 
+def test_diagram_allowed_false_strips_marker_and_skips_backfill(monkeypatch):
+    seen_system: list[str] = []
+    calls: list[str] = []
+
+    async def fake_stream(system, user, history=None, role="main"):
+        seen_system.append(system)
+        yield "先讲文字。[[MG_DIAGRAM:surface3d]]第一步:写出梯度。第二步:标出方向。"
+
+    async def fake_plan(question, before, excerpts, kind, role="main", **kwargs):
+        calls.append(kind)
+        return {
+            "type": "surface3d",
+            "shapes": [{"kind": "surface", "points": [[0, 0, 0]]}],
+            "annotations": [],
+        }
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat.research_diagrams, "plan_diagram", fake_plan)
+    frames = asyncio.run(_collect_gen(chat._gen_llm(
+        "先不要画图,只讲梯度", None, [], diagram_mode=True,
+        diagram_allowed=False, diagram_question="先不要画图,只讲梯度",
+        diagram_request_id="r-suppressed")))
+    assert _joined_frames(frames) == "先讲文字。第一步:写出梯度。第二步:标出方向。"
+    assert not any("mg_event" in frame for frame in frames)
+    assert calls == []
+    assert seen_system and "本轮不画图" in seen_system[0]
+
+
 def test_diagram_planner_failure_does_not_break_text(monkeypatch):
     async def fake_stream(system, user, history=None, role="main"):
         yield "解释[[MG_DIAGRAM:flow]]继续"

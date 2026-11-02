@@ -3,6 +3,14 @@
 import { computed, ref, useId, watch } from 'vue'
 import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
 import { filterCollapsed } from '@/utils/diagramSpec'
+import {
+  figureRectOfShapes,
+  outwardSides,
+  placeLabels,
+  shapeObstacleRects,
+  type LabelRequest,
+  type PlacedLabel,
+} from '@/utils/diagramLabels'
 import { layoutForSpec } from '@/utils/diagramLayout'
 
 const props = withDefaults(defineProps<{ spec: DiagramSpec; collapsible?: boolean }>(), {
@@ -126,13 +134,13 @@ const shapeGeometry = computed(() => {
     }
     return shape
   })
-  const b = boundsOfShapes(normalized, spec.annotations, spec.type === 'plot2d')
-  const pad = 28
+  const b = boundsOfShapes(normalized, [], spec.type === 'plot2d')
+  const pad = 30
   const spanX = Math.max(1e-6, b.maxX - b.minX)
   const spanY = Math.max(1e-6, b.maxY - b.minY)
   const scale = Math.min(620 / spanX, 360 / spanY, 120)
-  const width = Math.max(160, spanX * scale + pad * 2)
-  const height = Math.max(120, spanY * scale + pad * 2)
+  const width = Math.max(180, spanX * scale + pad * 2)
+  const height = Math.max(140, spanY * scale + pad * 2)
   const tx = (x: number): number => pad + (x - b.minX) * scale
   const ty = (y: number): number => height - pad - (y - b.minY) * scale
   const point2 = (value: unknown): number[] | null => {
@@ -156,27 +164,114 @@ const shapeGeometry = computed(() => {
     }
     return out
   })
-  const placed: Array<{ x: number; y: number }> = []
-  const annotations = spec.annotations.map((note) => {
-    let x = tx(note.x)
-    let y = ty(note.y)
-    // 简单避让:同一区域的多条说明往下错开,避免叠成一团。
-    for (let guard = 0; guard < 4; guard += 1) {
-      const clash = placed.some((item) => Math.abs(item.x - x) < 30
-        && Math.abs(item.y - y) < 12)
-      if (!clash) break
-      y += 12
-    }
-    placed.push({ x, y })
-    return { ...note, x, y }
+
+  const figure = figureRectOfShapes(shapes)
+  const obstacles = shapeObstacleRects(shapes)
+  const requests: LabelRequest[] = []
+  spec.annotations.forEach((note, index) => {
+    // 模型偶尔给出远离图形的锚点;夹到主体附近,避免把 viewBox 撑成一张空图。
+    const rawX = tx(note.x)
+    const rawY = ty(note.y)
+    const anchorX = figure
+      ? Math.min(Math.max(rawX, figure.x - 60), figure.x + figure.w + 60)
+      : rawX
+    const anchorY = figure
+      ? Math.min(Math.max(rawY, figure.y - 60), figure.y + figure.h + 60)
+      : rawY
+    requests.push({
+      id: `annotation-${index}`,
+      text: note.text,
+      anchorX,
+      anchorY,
+      role: 'annotation',
+      fontSize: 10,
+      maxWidth: 160,
+      maxLines: 3,
+      priority: 3,
+      figure,
+      figureWeight: 2.5,
+      preferred: outwardSides({ x: anchorX, y: anchorY }, figure),
+    })
   })
-  return { shapes, annotations, width, height, tx, ty, pad }
+  shapes.forEach((shape, index) => {
+    const label = String(shape.label || '').trim()
+    if (!label) return
+    const anchor = labelAnchor(shape)
+    const fixed = shape.kind === 'axis' && /^[xyz]$/i.test(label)
+    requests.push({
+      id: `shape-${index}`,
+      text: label,
+      anchorX: anchor.x,
+      anchorY: anchor.y,
+      role: fixed ? 'axis' : 'shape',
+      fontSize: 11,
+      maxWidth: fixed ? 60 : 170,
+      maxLines: fixed ? 1 : 2,
+      priority: fixed ? 5 : 2,
+      figure: fixed ? null : figure,
+      figureWeight: 0,
+      preferred: fixed ? [] : outwardSides(anchor, figure),
+      fixed,
+    })
+  })
+  // 虚拟画布给外围标注留空间;放完再收紧,避免文字被 viewBox 裁掉。
+  const placed = placeLabels(requests, obstacles, {
+    x: -240, y: -180, w: width + 480, h: height + 360,
+  })
+  let minLeft = 0
+  let minTop = 0
+  let maxRight = width
+  let maxBottom = height
+  for (const label of placed) {
+    minLeft = Math.min(minLeft, label.x)
+    minTop = Math.min(minTop, label.y)
+    maxRight = Math.max(maxRight, label.x + label.w)
+    maxBottom = Math.max(maxBottom, label.y + label.h)
+  }
+  const shiftX = Math.max(0, 8 - minLeft)
+  const shiftY = Math.max(0, 8 - minTop)
+  const finalWidth = Math.max(width + shiftX, maxRight + shiftX + 8)
+  const finalHeight = Math.max(height + shiftY, maxBottom + shiftY + 8)
+  const shiftedShapes = shapes.map((shape) => {
+    const out: DiagramShape = { ...shape }
+    if (typeof out.x === 'number') out.x += shiftX
+    if (typeof out.y === 'number') out.y += shiftY
+    for (const key of ['from', 'to']) {
+      const value = out[key]
+      if (Array.isArray(value) && value.length >= 2) {
+        out[key] = [num(value[0]) + shiftX, num(value[1]) + shiftY]
+      }
+    }
+    if (Array.isArray(out.points)) {
+      out.points = out.points.map((point) => (
+        Array.isArray(point) && point.length >= 2
+          ? [num(point[0]) + shiftX, num(point[1]) + shiftY]
+          : point
+      ))
+    }
+    return out
+  })
+  const shiftedLabels = placed.map((label) => ({
+    ...label,
+    x: label.x + shiftX,
+    y: label.y + shiftY,
+    anchorX: label.anchorX + shiftX,
+    anchorY: label.anchorY + shiftY,
+  }))
+  return {
+    shapes: shiftedShapes,
+    labels: shiftedLabels,
+    width: finalWidth,
+    height: finalHeight,
+    tx: (x: number): number => tx(x) + shiftX,
+    ty: (y: number): number => ty(y) + shiftY,
+    dataBounds: b,
+  }
 })
 
 const displayShapes = computed(() => shapeGeometry.value?.shapes
   || visibleSpec.value.shapes)
-const displayAnnotations = computed(() => shapeGeometry.value?.annotations
-  || visibleSpec.value.annotations)
+const displayLabels = computed(() => shapeGeometry.value?.labels || [])
 
 const layout = computed(() => {
   if (visibleSpec.value.type === 'tree'
@@ -203,11 +298,17 @@ const plotAxes = computed(() => {
   if (visibleSpec.value.type !== 'plot2d') return []
   const g = shapeGeometry.value
   if (!g) return []
-  const y0 = g.ty(0)
   const x0 = g.tx(0)
+  const y0 = g.ty(0)
   return [
-    { x1: g.pad, y1: y0, x2: g.width - g.pad, y2: y0 },
-    { x1: x0, y1: g.height - g.pad, x2: x0, y2: g.pad },
+    {
+      x1: g.tx(g.dataBounds.minX), y1: y0,
+      x2: g.tx(g.dataBounds.maxX), y2: y0,
+    },
+    {
+      x1: x0, y1: g.ty(g.dataBounds.minY),
+      x2: x0, y2: g.ty(g.dataBounds.maxY),
+    },
   ]
 })
 const hasUnsampledCurve = computed(() =>
@@ -249,6 +350,21 @@ function labelAnchor(shape: DiagramShape): { x: number; y: number } {
     x: num(shape.x, pair(shape.from)[0]),
     y: num(shape.y, pair(shape.from)[1]) - 6,
   }
+}
+
+function leaderEnd(label: PlacedLabel): { x: number; y: number } {
+  return {
+    x: Math.min(Math.max(label.anchorX, label.x), label.x + label.w),
+    y: Math.min(Math.max(label.anchorY, label.y), label.y + label.h),
+  }
+}
+
+function showLeader(label: PlacedLabel): boolean {
+  if (!label.leader) return false
+  if (label.role === 'annotation') return true
+  const dx = Math.max(label.x - label.anchorX, 0, label.anchorX - (label.x + label.w))
+  const dy = Math.max(label.y - label.anchorY, 0, label.anchorY - (label.y + label.h))
+  return Math.hypot(dx, dy) > 12
 }
 
 function resetView(): void {
@@ -389,7 +505,14 @@ resetView()
           :x="edge.labelX ?? (edge.x1 + edge.x2) / 2"
           :y="edge.labelY ?? (edge.y1 + edge.y2) / 2 - 4"
           class="diagram-edge-label"
-        >{{ edge.label }}</text>
+        >
+          <tspan
+            v-for="(line, li) in (edge.labelLines || [edge.label])"
+            :key="li"
+            :x="edge.labelX ?? (edge.x1 + edge.x2) / 2"
+            :dy="li === 0 ? 0 : 11"
+          >{{ line }}</tspan>
+        </text>
         <g
           v-for="node in layout.nodes"
           :key="node.id"
@@ -463,19 +586,27 @@ resetView()
             :points="shape.points.map((p) => pair(p).join(',')).join(' ')"
             class="diagram-curve"
           />
-          <text
-            v-if="shape.label"
-            :x="labelAnchor(shape).x"
-            :y="labelAnchor(shape).y"
-            class="diagram-shape-label"
-          >{{ shape.label }}</text>
         </g>
-        <text
-          v-for="(note, i) in displayAnnotations"
-          :key="`note-${i}`"
-          :x="note.x" :y="note.y"
-          class="diagram-annotation"
-        >{{ note.text }}</text>
+        <g v-for="label in displayLabels" :key="label.id">
+          <line
+            v-if="showLeader(label)"
+            :x1="label.anchorX" :y1="label.anchorY"
+            :x2="leaderEnd(label).x" :y2="leaderEnd(label).y"
+            class="diagram-label-leader"
+          />
+          <text
+            :x="label.x" :y="label.y + label.fontSize"
+            :class="label.role === 'annotation'
+              ? 'diagram-annotation' : 'diagram-shape-label'"
+          >
+            <tspan
+              v-for="(line, li) in label.lines"
+              :key="li"
+              :x="label.x"
+              :dy="li === 0 ? 0 : label.lineHeight"
+            >{{ line }}</tspan>
+          </text>
+        </g>
       </g>
     </svg>
   </div>
@@ -545,6 +676,13 @@ resetView()
   stroke-width: 1.2;
 }
 
+.diagram-label-leader {
+  stroke: var(--text-dim);
+  stroke-width: 0.7;
+  stroke-dasharray: 2 3;
+  opacity: 0.65;
+}
+
 .diagram-arrow-head {
   fill: var(--cyan);
 }
@@ -556,7 +694,7 @@ resetView()
 .diagram-edge-label {
   fill: var(--text-dim);
   font-size: 9px;
-  text-anchor: middle;
+  text-anchor: start;
 }
 
 .diagram-point {

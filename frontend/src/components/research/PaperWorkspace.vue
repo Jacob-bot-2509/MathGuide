@@ -324,7 +324,8 @@ function send(): void {
       streaming.value = false
       streamHandle = null
       scrollBottom()
-      if (!failed && complete && live.content && needsDiagram(prompt)
+      if (!failed && complete && live.content
+        && needsDiagram(prompt, history)
         && !live.diagrams?.length) {
         void requestDiagram(live, prompt, true)
       }

@@ -3,10 +3,27 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
 import { t } from '@/utils/i18n'
+import {
+  placeScreenLabels,
+  type Rect,
+  type ScreenLabelRequest,
+} from '@/utils/diagramLabels'
 
 const props = defineProps<{ spec: DiagramSpec }>()
 const host = ref<HTMLDivElement | null>(null)
 const error = ref('')
+
+interface LabelEntry {
+  id: string
+  role: 'shape' | 'note' | 'axis'
+  anchor: import('three').Vector3
+  sprite: import('three').Sprite
+  leader?: import('three').Line
+  fixed?: boolean
+}
+
+let labelEntries: LabelEntry[] = []
+let figureBounds: import('three').Box3 | null = null
 
 let renderer: import('three').WebGLRenderer | null = null
 let scene: import('three').Scene | null = null
@@ -48,24 +65,35 @@ function labelSprite(
   color = '#f5fbff',
 ): import('three').Sprite | null {
   if (!text) return null
+  const measure = document.createElement('canvas').getContext('2d')
+  if (!measure) return null
+  measure.font = '36px sans-serif'
+  let body = text.slice(0, 40)
+  while (body.length > 1 && measure.measureText(body).width > 960) {
+    body = body.slice(0, -1)
+  }
+  const textWidth = Math.ceil(measure.measureText(body).width)
   const canvas = document.createElement('canvas')
+  // 画布按实际文字宽度裁切,标签占位不再固定成 512px 宽的大块。
+  canvas.width = Math.max(96, Math.min(1024, textWidth + 32))
+  canvas.height = 64
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
-  canvas.width = 512
-  canvas.height = 128
   // 不画底板:文字只出现在对象附近,避免大灰框破坏画面。
   ctx.font = '36px sans-serif'
   ctx.lineWidth = 7
   ctx.strokeStyle = 'rgba(5, 10, 18, 0.92)'
-  ctx.strokeText(text.slice(0, 40), 12, 74)
+  ctx.strokeText(body, 12, 46)
   ctx.fillStyle = color
-  ctx.fillText(text.slice(0, 40), 12, 74)
+  ctx.fillText(body, 12, 46)
   const texture = new THREE.CanvasTexture(canvas)
   const material = new THREE.SpriteMaterial({
     map: texture, transparent: true, depthTest: false,
   })
   const sprite = new THREE.Sprite(material)
-  sprite.scale.set(3.2 * scale, 0.8 * scale, 1)
+  // 标签是注记,不能压住主体;文字高度按场景尺度收小,宽度按实际字形比例。
+  const worldHeight = 0.5 * scale
+  sprite.scale.set(worldHeight * canvas.width / canvas.height, worldHeight, 1)
   sprite.renderOrder = 20
   return sprite
 }
@@ -78,17 +106,17 @@ function markerSprite(
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
-  canvas.width = 128
-  canvas.height = 128
+  canvas.width = 96
+  canvas.height = 96
   // 编号同样不加底板,只留描边数字。
-  ctx.font = 'bold 64px sans-serif'
+  ctx.font = 'bold 52px sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  ctx.lineWidth = 8
+  ctx.lineWidth = 7
   ctx.strokeStyle = 'rgba(5, 10, 18, 0.92)'
-  ctx.strokeText(text.slice(0, 3), 64, 68)
+  ctx.strokeText(text.slice(0, 3), 48, 50)
   ctx.fillStyle = '#8be9fd'
-  ctx.fillText(text.slice(0, 3), 64, 68)
+  ctx.fillText(text.slice(0, 3), 48, 50)
   const texture = new THREE.CanvasTexture(canvas)
   const material = new THREE.SpriteMaterial({
     map: texture, transparent: true, depthTest: false,
@@ -116,6 +144,14 @@ function colorHex(value: number): string {
   return `#${value.toString(16).padStart(6, '0')}`
 }
 
+/** 记录标签原始世界尺寸;相机动了以后按屏幕像素上限重新缩放。 */
+function rememberBaseScale(sprite: import('three').Sprite): void {
+  sprite.userData.baseLabelScale = {
+    x: sprite.scale.x,
+    y: sprite.scale.y,
+  }
+}
+
 /** 曲面跨度大时,点和箭头默认尺寸会小到看不见;按场景尺度放大。 */
 function sceneUnit(shapes: DiagramShape[]): number {
   let span = 0
@@ -139,12 +175,33 @@ function sceneUnit(shapes: DiagramShape[]): number {
   return Math.max(0.08, span / 28)
 }
 
+/** 标注被排到外围时用一条细引线指回对象;引线不计入取景包围盒。 */
+function createLeaderLine(
+  THREE: typeof import('three'),
+  root: import('three').Object3D,
+): import('three').Line {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setFromPoints([new THREE.Vector3(), new THREE.Vector3()])
+  const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
+    color: 0x94a3b8, transparent: true, opacity: 0.45, depthTest: false,
+  }))
+  line.renderOrder = 15
+  line.visible = false
+  line.userData.labelDecoration = true
+  root.add(line)
+  return line
+}
+
 function addAxes(
   THREE: typeof import('three'),
   root: import('three').Object3D,
   bounds: import('three').Box3,
   labelScale = 1,
-): void {
+): Array<{ sprite: import('three').Sprite; anchor: import('three').Vector3 }> {
+  const labels: Array<{
+    sprite: import('three').Sprite
+    anchor: import('three').Vector3
+  }> = []
   const extent = (a: number, b: number): number => Math.max(1, Math.abs(a), Math.abs(b))
   // bounds 已是 Three 坐标:y 是数学 z,x/z 是数学 x/y。
   const ex = extent(bounds.isEmpty() ? -3 : bounds.min.x, bounds.isEmpty() ? 3 : bounds.max.x)
@@ -184,11 +241,15 @@ function addAxes(
     const sprite = labelSprite(label, THREE, labelScale * 0.65)
     if (sprite) {
       const outward = end.clone().sub(start).normalize()
-      sprite.position.copy(end).addScaledVector(outward, labelScale * 0.22)
-      sprite.position.y -= labelScale * 0.08
+      const anchor = end.clone().addScaledVector(outward, labelScale * 0.22)
+      anchor.y -= labelScale * 0.08
+      sprite.position.copy(anchor)
       root.add(sprite)
+      rememberBaseScale(sprite)
+      labels.push({ sprite, anchor })
     }
   }
+  return labels
 }
 
 function addSurface(
@@ -275,6 +336,7 @@ function addShape(
   root: import('three').Object3D,
   unit = 0.08,
   labelScale = 1,
+  labels: LabelEntry[] = [],
 ): void {
   const x = num(shape.x)
   const y = num(shape.y)
@@ -446,7 +508,117 @@ function addShape(
         anchor.y += hasLine ? unit * 0.18 : unit * 0.25
         sprite.position.copy(anchor)
         root.add(sprite)
+        rememberBaseScale(sprite)
+        labels.push({
+          id: `shape-${labels.length}`,
+          role: 'shape',
+          anchor,
+          sprite,
+          leader: createLeaderLine(THREE, root),
+        })
       }
+    }
+  }
+}
+
+interface ScreenPoint {
+  x: number
+  y: number
+  depth: number
+  ppw: number
+}
+
+function layoutLabels(THREE: typeof import('three')): void {
+  if (!camera || !renderer || !labelEntries.length) return
+  const width = Math.max(1, renderer.domElement.clientWidth)
+  const height = Math.max(1, renderer.domElement.clientHeight)
+  if (!width || !height) return
+  camera.updateMatrixWorld()
+  const project = (anchor: import('three').Vector3): ScreenPoint | null => {
+    const camSpace = anchor.clone().applyMatrix4(camera!.matrixWorldInverse)
+    const depth = -camSpace.z
+    if (depth <= 0.05) return null
+    const ndc = anchor.clone().project(camera!)
+    return {
+      x: (ndc.x * 0.5 + 0.5) * width,
+      y: (-ndc.y * 0.5 + 0.5) * height,
+      depth,
+      ppw: height / (2 * depth * Math.tan((camera!.fov * Math.PI / 180) / 2)),
+    }
+  }
+  let figureRect: Rect | null = null
+  if (figureBounds) {
+    const corners: import('three').Vector3[] = []
+    for (const x of [figureBounds.min.x, figureBounds.max.x]) {
+      for (const y of [figureBounds.min.y, figureBounds.max.y]) {
+        for (const z of [figureBounds.min.z, figureBounds.max.z]) {
+          corners.push(new THREE.Vector3(x, y, z))
+        }
+      }
+    }
+    const projected = corners
+      .map(project)
+      .filter((item): item is ScreenPoint => item !== null)
+    // 相机贴近/穿过包围盒时会有角点落在身后;用仍可见的角点估算主体区域,
+    // 总比整块区域失效、标签重新压到曲面上好。
+    if (projected.length >= 3) {
+      const left = Math.min(...projected.map((item) => item.x))
+      const right = Math.max(...projected.map((item) => item.x))
+      const top = Math.min(...projected.map((item) => item.y))
+      const bottom = Math.max(...projected.map((item) => item.y))
+      figureRect = {
+        x: left - 4, y: top - 4,
+        w: right - left + 8, h: bottom - top + 8,
+      }
+    }
+  }
+  const requests: ScreenLabelRequest[] = []
+  for (const entry of labelEntries) {
+    const point = project(entry.anchor)
+    if (!point) continue
+    const base = entry.sprite.userData.baseLabelScale as
+      { x: number; y: number } | undefined
+    if (base) {
+      const maxPx = entry.role === 'note' ? 24 : entry.role === 'axis' ? 18 : 26
+      const screenHeight = base.y * point.ppw
+      const factor = screenHeight > maxPx ? maxPx / screenHeight : 1
+      entry.sprite.scale.set(base.x * factor, base.y * factor, 1)
+    }
+    requests.push({
+      id: entry.id,
+      anchorX: point.x,
+      anchorY: point.y,
+      // 用实际精灵尺寸投影,而不是固定 512px 画布,避免碰撞框虚胖。
+      width: Math.max(4, entry.sprite.scale.x * point.ppw),
+      height: Math.max(4, entry.sprite.scale.y * point.ppw),
+      priority: entry.role === 'note' ? 3 : entry.role === 'shape' ? 2 : 4,
+      fixed: entry.fixed,
+      avoidRect: entry.role === 'axis' ? null : figureRect,
+      avoidWeight: entry.role === 'note' ? 3 : 0.8,
+    })
+  }
+  const placements = placeScreenLabels(requests, { width, height })
+  const byId = new Map(placements.map((item) => [item.id, item]))
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
+  for (const entry of labelEntries) {
+    const placement = byId.get(entry.id)
+    const point = project(entry.anchor)
+    if (!placement || !point) continue
+    const dx = (placement.centerX - point.x) / point.ppw
+    const dy = -(placement.centerY - point.y) / point.ppw
+    entry.sprite.position.copy(entry.anchor)
+      .addScaledVector(right, dx)
+      .addScaledVector(up, dy)
+    if (!entry.leader) continue
+    const distance = Math.hypot(
+      placement.centerX - point.x, placement.centerY - point.y,
+    )
+    entry.leader.visible = distance > (entry.role === 'note' ? 2 : 12)
+    if (entry.leader.visible) {
+      const geometry = entry.leader.geometry as import('three').BufferGeometry
+      geometry.setFromPoints([entry.anchor, entry.sprite.position])
+      geometry.computeBoundingSphere()
     }
   }
 }
@@ -478,33 +650,55 @@ async function boot(): Promise<void> {
     const light = new THREE.DirectionalLight(0xffffff, 1.2)
     light.position.set(4, 8, 6)
     scene.add(light)
+    labelEntries = []
+    figureBounds = null
     const unit = sceneUnit(props.spec.shapes)
     const labelScale = Math.max(1.6, Math.min(3.2, unit * 5))
+    const shapeLabels: LabelEntry[] = []
     for (const shape of props.spec.shapes) {
-      addShape(shape, THREE, root, unit, labelScale)
+      addShape(shape, THREE, root, unit, labelScale, shapeLabels)
     }
+    labelEntries.push(...shapeLabels)
     const shapeBounds = new THREE.Box3()
     root.traverse((object) => {
-      // 标签精灵会把包围盒撑大,导致镜头退太远、主体变小;取景只算几何体。
-      if ((object as { isSprite?: boolean }).isSprite) return
+      // 标签精灵和引线会把包围盒撑大,导致镜头退太远、主体变小;取景只算几何体。
+      const item = object as {
+        isSprite?: boolean
+        userData?: { labelDecoration?: boolean }
+      }
+      if (item.isSprite || item.userData?.labelDecoration) return
       if ((object as { geometry?: unknown }).geometry) {
         shapeBounds.expandByObject(object)
       }
     })
     // 三维图解先给出坐标轴,曲面和方向才有空间参照。
-    addAxes(THREE, root, shapeBounds, labelScale)
-    const notePositions = new Map<string, number>()
+    const axisLabels = addAxes(THREE, root, shapeBounds, labelScale)
+    axisLabels.forEach((entry, index) => {
+      labelEntries.push({
+        id: `axis-${index}`,
+        role: 'axis',
+        anchor: entry.anchor,
+        sprite: entry.sprite,
+        fixed: true,
+      })
+    })
     props.spec.annotations.forEach((note, index) => {
       // 3D 里长文字直接贴图会叠在一起;用编号标记,正文放到画布下方图例。
-      const sprite = markerSprite(String(index + 1), THREE, Math.max(0.6, unit * 2.2))
+      const sprite = markerSprite(String(index + 1), THREE, Math.max(0.5, unit * 1.8))
       if (!sprite) return
-      const key = `${note.x}|${note.y}|${num(note.z)}`
-      const repeat = notePositions.get(key) || 0
-      notePositions.set(key, repeat + 1)
-      sprite.position.copy(vec3([note.x, note.y, num(note.z)], THREE))
-      sprite.position.y += repeat * unit * 0.75
+      const anchor = vec3([note.x, note.y, num(note.z)], THREE)
+      sprite.position.copy(anchor)
       root.add(sprite)
+      rememberBaseScale(sprite)
+      labelEntries.push({
+        id: `note-${index}`,
+        role: 'note',
+        anchor,
+        sprite,
+        leader: createLeaderLine(THREE, root),
+      })
     })
+    figureBounds = shapeBounds.isEmpty() ? null : shapeBounds.clone()
     const bounds = shapeBounds.isEmpty() ? null : shapeBounds
     if (bounds) {
       const sphere = bounds.getBoundingSphere(new THREE.Sphere())
@@ -514,7 +708,11 @@ async function boot(): Promise<void> {
       camera.updateProjectionMatrix()
       controls = new OrbitControls(camera, renderer.domElement)
       controls.update()
-      controls.addEventListener('change', () => renderer?.render(scene!, camera!))
+      controls.addEventListener('change', () => {
+        camera?.updateMatrixWorld()
+        layoutLabels(THREE)
+        renderer?.render(scene!, camera!)
+      })
       camera.position.set(
         center.x + radius * 1.8,
         center.y + radius * 1.25,
@@ -524,8 +722,14 @@ async function boot(): Promise<void> {
     } else {
       controls = new OrbitControls(camera, renderer.domElement)
       controls.update()
-      controls.addEventListener('change', () => renderer?.render(scene!, camera!))
+      controls.addEventListener('change', () => {
+        camera?.updateMatrixWorld()
+        layoutLabels(THREE)
+        renderer?.render(scene!, camera!)
+      })
     }
+    camera.updateMatrixWorld()
+    layoutLabels(THREE)
     renderer.render(scene, camera)
     observer = new ResizeObserver(() => {
       if (!el || !renderer || !camera) return
@@ -534,6 +738,8 @@ async function boot(): Promise<void> {
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
+      camera.updateMatrixWorld()
+      layoutLabels(THREE)
       renderer.render(scene!, camera)
     })
     observer.observe(el)
@@ -544,6 +750,8 @@ async function boot(): Promise<void> {
 
 function dispose(): void {
   disposed = true
+  labelEntries = []
+  figureBounds = null
   observer?.disconnect()
   observer = null
   controls?.dispose()

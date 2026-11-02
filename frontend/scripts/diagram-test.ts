@@ -13,6 +13,15 @@ import {
   type DiagramSpec,
 } from '../src/utils/diagramSpec'
 import { layoutFlow, layoutRelation, layoutTree } from '../src/utils/diagramLayout'
+import { diagramSuppressed, needsDiagram } from '../src/utils/diagramIntent'
+import {
+  measureLabel,
+  measureTextWidth,
+  overlapArea,
+  placeLabels,
+  placeScreenLabels,
+  shapeObstacleRects,
+} from '../src/utils/diagramLabels'
 
 let passed = 0
 const failed: string[] = []
@@ -197,6 +206,120 @@ check('论文脑图根节点', paper.nodes[0]?.label === '测试论文')
 check('论文脑图分支', paper.nodes.some((n) => n.label === '研究问题')
   && paper.nodes.some((n) => n.label === '方法'))
 check('论文脑图节点上限', paper.nodes.length <= 40 && paper.edges.length > 0)
+
+// 标注布局:同一锚点的多条说明必须分散到不同方位,且不能压住主体。
+const clusteredFigure = { x: 100, y: 100, w: 220, h: 180 }
+const clustered = placeLabels([
+  {
+    id: 'note-a', text: '梯度方向', anchorX: 210, anchorY: 190,
+    figure: clusteredFigure, figureWeight: 2.5, priority: 3,
+  },
+  {
+    id: 'note-b', text: '最陡上升方向', anchorX: 212, anchorY: 192,
+    figure: clusteredFigure, figureWeight: 2.5, priority: 3,
+  },
+  {
+    id: 'note-c', text: '等高线', anchorX: 208, anchorY: 188,
+    figure: clusteredFigure, figureWeight: 2.5, priority: 3,
+  },
+], [], { x: -300, y: -300, w: 900, h: 900 })
+check('标注互不重叠', clustered.every((label, index) => clustered.every(
+  (other, otherIndex) => index === otherIndex || overlapArea(label, other) === 0,
+)))
+check('标注分散到不同方位', new Set(clustered.map((label) => label.side)).size >= 2)
+check('标注避开主体包围盒', clustered.every(
+  (label) => overlapArea(label, clusteredFigure) === 0,
+))
+
+const curveObstacles = shapeObstacleRects([{
+  kind: 'curve', points: [[0, 0], [25, 35], [50, 45], [75, 30], [100, 0]],
+}])
+const curveNotes = placeLabels([{
+  id: 'curve-note', text: '切点', anchorX: 50, anchorY: 45,
+  figure: { x: 0, y: 0, w: 100, h: 45 }, figureWeight: 2.5,
+}], curveObstacles, { x: -100, y: -100, w: 300, h: 260 })
+check('标注避开曲线本身', curveNotes.every((label) => (
+  curveObstacles.every((obstacle) => overlapArea(label, obstacle) === 0)
+)))
+
+// 节点图边标签:不能压节点,也不能互相叠。
+const labeledFlowSpec: DiagramSpec = {
+  type: 'flow', nodes: [
+    { id: 'a', label: '可微' },
+    { id: 'b', label: '偏导数连续' },
+    { id: 'c', label: '方向导数存在' },
+    { id: 'd', label: '连续' },
+  ],
+  edges: [
+    { from: 'a', to: 'b', label: '推出' },
+    { from: 'a', to: 'c', label: '推出' },
+    { from: 'a', to: 'd', label: '推出' },
+    { from: 'b', to: 'd', label: '蕴含' },
+  ],
+  shapes: [], annotations: [],
+}
+const labeledFlow = layoutFlow(labeledFlowSpec)
+const nodeRects = labeledFlow.nodes.map((node) => ({
+  x: node.x, y: node.y, w: node.w, h: node.h,
+}))
+const edgeRects = labeledFlow.edges
+  .filter((edge) => edge.label && edge.labelX !== undefined && edge.labelY !== undefined)
+  .map((edge) => {
+    const measured = measureLabel({
+      id: `${edge.from}-${edge.to}`, text: edge.label!,
+      anchorX: 0, anchorY: 0, fontSize: 9, maxWidth: 110, maxLines: 2,
+    })
+    return {
+      x: edge.labelX!, y: edge.labelY! - measured.fontSize,
+      w: measured.w, h: measured.h,
+    }
+  })
+check('边标签数量完整', edgeRects.length === labeledFlow.edges.length)
+check('边标签不压节点', edgeRects.every((label) => (
+  nodeRects.every((node) => overlapArea(label, node) === 0)
+)))
+check('边标签互不重叠', edgeRects.every((label, index) => edgeRects.every(
+  (other, otherIndex) => index === otherIndex || overlapArea(label, other) === 0,
+)))
+
+// 3D 屏幕空间标注:围绕主体外围排布,互不重叠。
+const screenFigure = { x: 160, y: 110, w: 220, h: 180 }
+const screenPlaced = placeScreenLabels([
+  {
+    id: 's1', anchorX: 270, anchorY: 200, width: 72, height: 20,
+    priority: 3, avoidRect: screenFigure, avoidWeight: 3,
+  },
+  {
+    id: 's2', anchorX: 272, anchorY: 202, width: 60, height: 20,
+    priority: 3, avoidRect: screenFigure, avoidWeight: 3,
+  },
+  {
+    id: 's3', anchorX: 268, anchorY: 198, width: 48, height: 20,
+    priority: 3, avoidRect: screenFigure, avoidWeight: 3,
+  },
+], { width: 720, height: 520 })
+check('3D 标注互不重叠', screenPlaced.every((label, index) => screenPlaced.every(
+  (other, otherIndex) => index === otherIndex || overlapArea(label, other) === 0,
+)))
+check('3D 标注避开主体', screenPlaced.every(
+  (label) => overlapArea(label, screenFigure) === 0,
+))
+
+const wrapped = measureLabel({
+  id: 'wrap', text: '这是一个需要换行显示的较长标注说明文字',
+  anchorX: 0, anchorY: 0, fontSize: 10, maxWidth: 60, maxLines: 2,
+})
+check('标注按宽度换行', wrapped.lines.length <= 2
+  && wrapped.lines.every((line) => measureTextWidth(line, 10) <= 60))
+
+// 用户明确说“不要画图”时,前端不能在回答结束后自行补图。
+const noDrawHistory = [{ role: 'user', content: '先不要画图，等我讲完' }]
+check('本轮不画图时禁用自动补图', !needsDiagram('先不要画图，继续讲讲为什么切线斜率等于导数'))
+check('历史里的不画图指令持续生效', !needsDiagram('继续讲这个定理', noDrawHistory))
+check('恢复画图后允许补图', needsDiagram('现在画个三维图', noDrawHistory))
+check('用三维图也算恢复画图', needsDiagram('用三维图讲讲梯度', noDrawHistory))
+check('不画思维导图但改画三维图不算停止', !diagramSuppressed('不要画思维导图，画三维图'))
+check('别画了也算停止', diagramSuppressed('别画了，用文字说'))
 
 if (failed.length) {
   console.error('图解协议自测失败:')
