@@ -20,7 +20,7 @@ from rate_limit import SlidingWindowLimiter
 
 PREFIX = "[[MG_DIAGRAM:"
 _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]")
-MAX_DIAGRAMS = 4
+MAX_DIAGRAMS = 6
 _MAX_SURFACE_GRID = 41
 _CURVE_SAMPLES = 80
 _TYPES = {"tree", "relation", "flow", "geometry2d", "plot2d",
@@ -69,6 +69,208 @@ def explicit_type(question: str) -> str | None:
     同时要求 2D/3D/流程时是在描述一整套分步图解,应保留每一步自己的类型。"""
     found = explicit_types(question)
     return found[0] if len(found) == 1 else None
+
+
+@dataclass
+class DiagramSegment:
+    text: str
+    anchor_index: int
+    kind: str
+    score: float
+
+
+# 权重表:不是关键词命中就画,而是按“内容适合哪种表现形式”累计分数。
+_TYPE_KEYWORDS: dict[str, tuple[tuple[str, float], ...]] = {
+    "surface3d": (
+        ("曲面", 3.0), ("梯度", 3.0), ("切平面", 3.0),
+        ("等高线", 2.5), ("三维曲面", 3.0), ("z=", 1.5),
+    ),
+    "geometry3d": (
+        ("三维", 2.2), ("立体", 2.0), ("空间", 1.5),
+        ("空间向量", 2.5), ("圆锥", 1.5), ("圆柱", 1.5),
+        ("平面方程", 2.0), ("球体", 1.5),
+    ),
+    "geometry2d": (
+        ("平面", 1.2), ("几何", 1.5), ("圆", 1.0),
+        ("三角形", 1.5), ("夹角", 1.5), ("切线", 2.0),
+        ("面积", 1.0), ("向量", 1.2),
+    ),
+    "plot2d": (
+        ("函数图像", 2.5), ("曲线", 2.0), ("单调", 1.5),
+        ("极值", 1.5), ("坐标轴", 1.5),
+    ),
+    "flow": (
+        ("步骤", 2.0), ("首先", 1.2), ("其次", 1.2),
+        ("然后", 1.2), ("最后", 1.2), ("推导", 1.5),
+        ("因此", 0.8), ("所以", 0.8),
+    ),
+    "relation": (
+        ("关系", 1.5), ("区别", 1.5), ("联系", 1.5),
+        ("依赖", 1.2), ("组成", 1.2),
+    ),
+    "tree": (
+        ("层级", 1.5), ("分类", 1.2), ("包含", 0.8), ("结构", 0.8),
+    ),
+}
+_UNDERSTAND_RE = re.compile(r"怎么理解|如何理解|直观|本质|类比|想象|意义|为什么", re.I)
+_STEP_RE = re.compile(
+    r"^\s*(?:第[一二三四五六七八九十0-9]+步|[0-9]+[.、)]|首先|其次|然后|最后|接着|下一步)",
+    re.MULTILINE,
+)
+_STEP_INLINE_RE = re.compile(
+    r"第[一二三四五六七八九十0-9]+步|首先|其次|然后|最后|接着|下一步")
+_GREETING_RE = re.compile(r"^(你好|您好|谢谢|感谢|再见|hi|hello|thanks)", re.I)
+
+
+def _step_slices(body: str) -> list[tuple[int, int]]:
+    """把同一段里的“首先/然后/最后”拆成独立步骤;不足两个标记就整段返回。"""
+    marks = list(_STEP_INLINE_RE.finditer(body))
+    if len(marks) < 2:
+        return [(0, len(body))]
+    slices: list[tuple[int, int]] = []
+    for index, mark in enumerate(marks):
+        start = 0 if index == 0 else mark.start()
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(body)
+        if end > start:
+            slices.append((start, end))
+    return slices
+
+
+def is_step_text(text: str) -> bool:
+    return bool(_STEP_RE.search(text or "")
+                or re.search(r"一步一步|逐步|分步|按步骤", text or ""))
+
+
+def anchor_allowed(anchor: int, text: str, kept: list[int],
+                   min_gap: int = 400) -> bool:
+    """非步骤内容避免同主题连续堆图;步骤内容允许逐步紧挨。"""
+    if is_step_text(text):
+        return True
+    return all(abs(anchor - other) >= min_gap for other in kept)
+
+
+def _utf16_len(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _topic_terms(question: str, text: str) -> list[str]:
+    """全文关键词:问题里的主题词辐射到每个段落,而不是只看单段。"""
+    source = f"{question or ''} {(text or '')[:5000]}"
+    terms: list[str] = []
+    for words in _TYPE_KEYWORDS.values():
+        for word, _weight in words:
+            if word and word in source and word not in terms:
+                terms.append(word)
+    return terms[:24]
+
+
+def score_segment(text: str, topic_terms: tuple[str, ...] = ()) -> tuple[str, float]:
+    """给一段文本打分:返回最合适的图解类型与“是否值得画”的总分。"""
+    clean = re.sub(r"\s+", " ", text or "").strip()
+    if not clean:
+        return "", 0.0
+    scores = {kind: 0.0 for kind in _TYPE_KEYWORDS}
+    for kind, words in _TYPE_KEYWORDS.items():
+        for word, weight in words:
+            count = clean.lower().count(word.lower())
+            if count:
+                scores[kind] += weight * min(count, 3)
+    if _STEP_RE.search(clean):
+        scores["flow"] += 2.0
+        is_step = True
+    else:
+        is_step = False
+    if _UNDERSTAND_RE.search(clean):
+        # 理解型文本更容易需要具象化;几何/三维优先于关系网。
+        scores["geometry2d"] += 1.0
+        if scores["geometry3d"] > 0:
+            scores["geometry3d"] += 0.8
+        if scores["surface3d"] > 0:
+            scores["surface3d"] += 0.8
+    kind = max(scores, key=lambda item: scores[item])
+    total = scores[kind]
+    total += min(2.0, 0.15 * sum(
+        1 for term in topic_terms if term and term in clean))
+    length = len(clean)
+    # 步骤本身往往很短,不能因为短就判为“不值得画”;非步骤文本才用长度降权。
+    # 但强视觉关键词(梯度/曲面/函数图像等)本身就是画图理由,短也不降权。
+    strong_visual = scores[kind] >= 3.0
+    if is_step:
+        if length < 6:
+            total -= 2.0
+    elif not strong_visual:
+        if length < 25:
+            total -= 2.5
+        elif length < 60:
+            total -= 1.5
+    if _GREETING_RE.search(clean):
+        total -= 8.0
+    if not re.search(r"[一-鿿A-Za-z]", clean):
+        total -= 5.0
+    return (kind if total > 0 else ""), round(total, 2)
+
+
+def select_segments(
+    question: str,
+    text: str,
+    existing_anchors: tuple[int, ...] | list[int] = (),
+    limit: int = 6,
+) -> list[DiagramSegment]:
+    """扫描整篇回答:有步骤按步骤选,没步骤按权重选高分段落。
+    只返回值得画图的段落;模型没标记时由这里兜底决定画不画、画哪种。"""
+    if not text or limit <= 0:
+        return []
+    topic_terms = tuple(_topic_terms(question, text))
+    paragraphs: list[tuple[str, int, int, bool]] = []
+    for match in re.finditer(r"[^\n]+(?:\n(?!\n)[^\n]+)*", text):
+        body = match.group().strip()
+        if not body:
+            continue
+        start = _utf16_len(text[:match.start()])
+        anchor = _utf16_len(text[:match.end()])
+        paragraphs.append((body, start, anchor, bool(_STEP_RE.search(body))))
+    has_steps = any(step for _body, _start, _anchor, step in paragraphs)
+    candidates: list[DiagramSegment] = []
+
+    def consider(body: str, start: int, anchor: int) -> None:
+        if any(start - 80 <= existing <= anchor + 80
+               for existing in existing_anchors):
+            return
+        kind, score = score_segment(body, topic_terms)
+        threshold = 2.0 if has_steps else 3.0
+        if kind and score >= threshold:
+            candidates.append(DiagramSegment(body, anchor, kind, score))
+
+    for body, start, anchor, is_step in paragraphs:
+        if has_steps and not is_step:
+            continue
+        if has_steps:
+            # 同一段里的“首先/然后/最后”也拆开,做到一步一图。
+            for local_start, local_end in _step_slices(body):
+                part = body[local_start:local_end].strip()
+                if not part:
+                    continue
+                consider(
+                    part,
+                    start + _utf16_len(body[:local_start]),
+                    start + _utf16_len(body[:local_end]),
+                )
+        else:
+            consider(body, start, anchor)
+    if has_steps:
+        return candidates[:limit]
+    # 非步骤内容:按分数取前几个,并保证彼此间隔,避免同一主题连续堆图。
+    candidates.sort(key=lambda item: item.score, reverse=True)
+    selected: list[DiagramSegment] = []
+    for candidate in candidates:
+        if len(selected) >= min(limit, 3):
+            break
+        if all(abs(candidate.anchor_index - item.anchor_index) >= 400
+               for item in selected):
+            selected.append(candidate)
+    selected.sort(key=lambda item: item.anchor_index)
+    return selected
+
 
 
 
@@ -607,8 +809,10 @@ _PLAN_SYSTEM = (
     "你是 MathGuide 的图解规划器。用户正在听讲解,你需要把【标记前最新一段】"
     "所讲的内容画成一张静态图解,帮助学生看懂这一步。\n"
     "只输出一个 JSON 对象,不要解释,不要 Markdown 代码块。\n"
-    "输出类型必须等于【请求图解类型】;若请求类型为“自选”,"
-    "按这一步的内容选择最能讲清楚的类型。各类型结构:\n"
+    "类型要求为“硬性”时必须等于【请求图解类型】;为“建议”或“自选”时,"
+    "根据这一段内容自主选择最合适的类型,不要机械沿用建议。2D/3D 选择:"
+    "平面几何、函数曲线、二维关系用 2D;曲面、梯度、空间对象、立体结构用 3D;"
+    "能用 2D 讲清就不要硬上 3D。各类型结构:\n"
     '- flow/tree/relation:{"nodes":[{"id":"a","label":"概念"}],'
     '"edges":[{"from":"a","to":"b","label":"推出"}]}\n'
     '- geometry2d/plot2d:{"shapes":[{"kind":"point|segment|vector|circle|'
@@ -662,11 +866,18 @@ def _load_json(text: str) -> dict | None:
 
 
 async def plan_diagram(question: str, before: str, excerpts: list[dict],
-                       kind: str, role: str = "main") -> dict | None:
-    """根据用户问题与标记前的最新段落生成一张图解;失败返回 None。"""
+                       kind: str, role: str = "main",
+                       strict: bool | None = None) -> dict | None:
+    """根据用户问题与当前段落生成一张图解;失败返回 None。
+
+    strict=True:kind 是硬性要求(用户明确说了表示方式)。
+    strict=False:kind 只是建议,规划器可按内容自主改选 2D/3D/流程/关系。"""
     requested = explicit_type(question)
     if requested:
         kind = requested
+        strict = True
+    elif strict is None:
+        strict = False
     if kind and kind not in _TYPES:
         return None
     if not llm.is_configured(role):
@@ -675,6 +886,7 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
     latest = re.sub(r"\s+", " ", before or "").strip()[-3500:]
     context: list[str] = [
         f"请求图解类型:{kind or '自选(按内容决定)'}",
+        f"类型要求:{'硬性,必须一致' if strict else '建议,可按内容改选更合适的类型'}",
         f"用户明确要求的表示方式:{requested or '未指定'}",
         f"用户问题:{_text(question, 1000)}",
         f"当前回答(标记前最新段落):{latest}",
@@ -697,11 +909,11 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
         return None
     raw = _load_json("".join(parts))
     if isinstance(raw, dict) and kind and not raw.get("type"):
-        # 规划器经常省略 type;请求类型是明确的,补上再校验。
+        # 规划器经常省略 type;把请求类型补上再校验。
         raw["type"] = kind
     diagram = prepare_diagram(raw)
-    # 用户要求或模型标记了类型时,输出类型必须一致;错类型宁可不画,也不能画成思维导图。
-    if diagram is not None and kind and diagram.get("type") != kind:
+    # 硬性要求时类型必须一致;建议类型允许规划器按内容改选。
+    if diagram is not None and strict and kind and diagram.get("type") != kind:
         return None
     return diagram
 

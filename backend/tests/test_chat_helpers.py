@@ -388,7 +388,7 @@ def test_diagram_marker_stripped_and_event_emitted(monkeypatch):
         yield "前[[MG_DIA"
         yield "GRAM:relation]]后"
 
-    async def fake_plan(question, before, excerpts, kind, role="main"):
+    async def fake_plan(question, before, excerpts, kind, role="main", **kwargs):
         return {
             "type": "relation",
             "nodes": [{"id": "a", "label": "A"}],
@@ -436,15 +436,20 @@ def test_diagram_planner_failure_does_not_break_text(monkeypatch):
     assert not any("mg_event" in frame for frame in frames)
 
 
-def test_chat_caps_diagrams_at_four_per_message(monkeypatch):
+def test_chat_caps_diagrams_at_six_per_message(monkeypatch):
     async def fake_stream(system, user, history=None, role="main"):
-        yield ("A[[MG_DIAGRAM:relation]]B[[MG_DIAGRAM:flow]]"
-               "C[[MG_DIAGRAM:tree]]D[[MG_DIAGRAM:surface3d]]"
-               "E[[MG_DIAGRAM:geometry2d]]F")
+        yield ("第一步:A[[MG_DIAGRAM:relation]]\n\n"
+               "第二步:B[[MG_DIAGRAM:flow]]\n\n"
+               "第三步:C[[MG_DIAGRAM:tree]]\n\n"
+               "第四步:D[[MG_DIAGRAM:surface3d]]\n\n"
+               "第五步:E[[MG_DIAGRAM:geometry2d]]\n\n"
+               "第六步:F[[MG_DIAGRAM:plot2d]]\n\n"
+               "第七步:G[[MG_DIAGRAM:flow]]\n\n"
+               "第八步:H")
 
     calls: list[str] = []
 
-    async def fake_plan(question, before, excerpts, kind, role="main"):
+    async def fake_plan(question, before, excerpts, kind, role="main", strict=None):
         calls.append(kind)
         return {"type": kind, "nodes": [{"id": "a", "label": "A"}],
                 "edges": [], "shapes": [], "annotations": []}
@@ -455,9 +460,36 @@ def test_chat_caps_diagrams_at_four_per_message(monkeypatch):
         "q", None, [], diagram_mode=True, diagram_request_id="r3")))
     events = [json.loads(frame[6:].strip()) for frame in frames
               if frame.startswith("data: ") and "mg_event" in frame]
-    assert len(calls) == 4
-    assert len(events) == 4
-    assert [event["anchorIndex"] for event in events] == [1, 2, 3, 4]
+    assert len(calls) == 6
+    assert len(events) == 6
+    anchors = [event["anchorIndex"] for event in events]
+    assert anchors == sorted(anchors)
+    assert all(anchor > 0 for anchor in anchors)
+
+
+def test_chat_backfills_by_weight_when_model_marks_nothing(monkeypatch):
+    async def fake_stream(system, user, history=None, role="main"):
+        yield ("第一步:写出方向导数 D_u f = ∇f · u。\n\n"
+               "第二步:把 ∇f 与 u 的点乘展开。")
+
+    calls: list[str] = []
+
+    async def fake_plan(question, before, excerpts, kind, role="main", strict=None):
+        calls.append(kind)
+        return {"type": kind, "nodes": [{"id": "a", "label": "A"}],
+                "edges": [], "shapes": [], "annotations": []}
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat.research_diagrams, "plan_diagram", fake_plan)
+    frames = asyncio.run(_collect_gen(chat._gen_llm(
+        "请一步一步讲方向导数", None, [], diagram_mode=True,
+        diagram_request_id="r-auto")))
+    events = [json.loads(frame[6:].strip()) for frame in frames
+              if frame.startswith("data: ") and "mg_event" in frame]
+    assert calls == ["flow", "flow"]
+    assert len(events) == 2
+    assert [event["anchorIndex"] for event in events] == sorted(
+        event["anchorIndex"] for event in events)
 
 
 def _joined_frames(frames: list[str]) -> str:

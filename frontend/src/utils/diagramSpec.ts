@@ -69,7 +69,7 @@ const MAX_EDGES = 80
 const MAX_SHAPES = 100
 const MAX_ANNOTATIONS = 40
 const MAX_POINTS = 2000
-const MAX_DIAGRAMS = 4
+const MAX_DIAGRAMS = 6
 const MAX_COORD = 1e4
 
 function text(value: unknown, limit: number): string {

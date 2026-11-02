@@ -151,6 +151,50 @@ def test_plan_diagram_drops_bad_optional_fields_not_whole_diagram(monkeypatch):
     assert result["shapes"][0]["x"] == 1
 
 
+def test_score_segment_prefers_surface_for_gradient():
+    kind, score = rd.score_segment(
+        "在曲面上,梯度方向是函数增长最快的方向,它垂直于等高线。")
+    assert kind == "surface3d"
+    assert score >= 4
+
+
+def test_select_segments_follows_numbered_steps():
+    text = (
+        "第一步:写出方向导数。\n\n"
+        "第二步:把它写成梯度与单位方向向量的点乘。\n\n"
+        "第三步:当夹角为 0 时点乘最大。"
+    )
+    segments = rd.select_segments("请一步一步讲", text)
+    assert len(segments) == 3
+    anchors = [segment.anchor_index for segment in segments]
+    assert anchors == sorted(anchors)
+    assert all(segment.kind for segment in segments)
+
+
+def test_select_segments_splits_inline_steps():
+    text = "首先写出方向导数,然后把它展开成点乘,最后令夹角为零。"
+    segments = rd.select_segments("一步步讲", text)
+    assert len(segments) == 3
+    assert all(segment.kind for segment in segments)
+
+
+def test_select_segments_skips_greeting_and_covered_paragraph():
+    assert rd.select_segments("你好", "你好,很高兴见到你。") == []
+    text = "梯度方向是曲面最陡的上坡方向。\n\n这段是补充说明。"
+    covered = [rd._utf16_len(text.split("\n\n")[0])]
+    assert rd.select_segments("梯度", text, covered) == []
+
+
+def test_select_segments_scans_whole_text_without_steps():
+    text = (
+        "先给结论:梯度方向是函数在该点增长最快的方向。\n\n"
+        "从几何上看,它垂直于等高线,并且指向曲面最陡的上坡方向。"
+    )
+    segments = rd.select_segments("怎么理解梯度", text)
+    assert segments
+    assert segments[0].kind == "surface3d"
+
+
 def test_validate_rejects_type_structure_mismatch():
     assert validate_diagram({
         "type": "surface3d",
@@ -175,6 +219,21 @@ def test_plan_diagram_rejects_wrong_requested_type(monkeypatch):
     monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
     # 明确要流程图,却返回关系图:宁可不出图,也不能画错类型。
     assert asyncio.run(plan_diagram("画个流程图", "", [], "flow")) is None
+
+
+def test_plan_diagram_can_override_suggested_type(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({
+            "type": "geometry2d",
+            "shapes": [{"kind": "vector", "from": [0, 0], "to": [1, 1]}],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    # 标记建议 relation,但内容更适合二维几何;建议类型不是硬性要求,应允许改选。
+    result = asyncio.run(plan_diagram("怎么理解这个变换", "", [], "relation"))
+    assert result and result["type"] == "geometry2d"
 
 
 def test_surface_gradient_is_recomputed_from_expression(monkeypatch):

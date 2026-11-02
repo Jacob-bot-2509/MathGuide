@@ -661,16 +661,14 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 "在该段结束、下一段开始之前,单独一行输出隐藏标记 "
                 "[[MG_DIAGRAM:<type>]],<type> 换成实际类型。"
                 "要求:"
-                "① 按讲课节奏一步一图,每张只图解刚讲完的这一小步,全篇最多 4 张,"
-                "不要把整篇回答塞进一张大图;"
-                "② 类型必须匹配这一步的内容:梯度/曲面/切平面→surface3d;"
-                "空间向量/立体几何→geometry3d;平面图形/几何直观→geometry2d;"
-                "函数曲线/坐标轴→plot2d;推导步骤/因果链→flow;"
-                "内容本身是概念关系网才用 relation;层级结构才用 tree;"
+                "① 按讲课节奏一步一图:有明确步骤就按步骤来,每张只图解刚讲完的这一小步;"
+                "没有明确步骤时,只在内容确实需要具象化的地方标记,不要每段都标,也不要为凑数;"
+                "② 自主选择 2D/3D:平面几何、函数曲线、二维关系用 2D;"
+                "曲面、梯度、空间对象、立体结构用 3D;能用 2D 讲清就不要硬上 3D;"
                 "③ 用户明确说“用三维图/画图/几何直观”等表示方式时,"
                 "直接按要求画,不要改画思维导图;"
                 "④ 抽象概念要化抽象为具体:先用一个具体类比物把它实体化"
-                "(如把梯度想成山坡最陡的上坡方向),再画出来,2D/3D 按哪种更能表现来选;"
+                "(如把梯度想成山坡最陡的上坡方向),再画出来;"
                 "⑤ 标记前先用一两句话告诉用户这张图看什么,再继续讲解;"
                 "⑥ 寒暄、简单事实、短答案不标记;标记独占一行,不要解释标记。"
                 if zh else
@@ -678,25 +676,24 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 "to be understood, insert a hidden marker on its own line after "
                 "that paragraph, for example [[MG_DIAGRAM:surface3d]] (replace the "
                 "type; allowed: tree/relation/flow/geometry2d/plot2d/geometry3d/"
-                "surface3d). Requirements: (1) one diagram per teaching step, at "
-                "most four per answer, each covering only the step just explained; "
-                "(2) match the type to the content: gradient/surface/tangent "
-                "plane -> surface3d, spatial vectors/solid geometry -> geometry3d, "
-                "planar geometry -> geometry2d, function curves -> plot2d, "
-                "derivation/causal steps -> flow, a genuine concept network -> "
-                "relation, a hierarchy -> tree; (3) when the user explicitly asks "
-                "for a 3D drawing or a picture, draw exactly that instead of a mind "
-                "map; (4) make abstractions concrete through a visible analogy "
-                "(for example, gradient as the steepest uphill direction on a "
-                "hillside), choosing 2D or 3D by which shows it better; (5) say in "
-                "one or two sentences what to look at before the marker, then "
-                "continue teaching; (6) never for greetings, simple facts, or short "
-                "answers; the marker must be on its own line."
+                "surface3d). Requirements: (1) one diagram per teaching step; if the "
+                "answer has explicit steps, follow them; otherwise mark only where a "
+                "picture genuinely helps, not every paragraph; (2) choose 2D or 3D "
+                "yourself: planar geometry, curves and 2D relations -> 2D; surfaces, "
+                "gradients, spatial objects -> 3D; do not force 3D when 2D explains "
+                "it; (3) when the user explicitly asks for a 3D drawing or a picture, "
+                "draw exactly that instead of a mind map; (4) make abstractions "
+                "concrete through a visible analogy; (5) say in one or two sentences "
+                "what to look at before the marker, then continue teaching; "
+                "(6) never for greetings, simple facts, or short answers; the marker "
+                "must be on its own line."
             )
         markers = research_diagrams.MarkerStream(
             diagram_request_id or secrets.token_hex(8)) if diagram_mode else None
         diagram_tasks: list[tuple[research_diagrams.DiagramMarker, asyncio.Task]] = []
         scheduled_diagrams = 0
+        kept_anchors: list[int] = []
+        stepwise_hint = research_diagrams.is_step_text(diagram_question or prompt)
         if markers is None:
             async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
                 answer.append(delta)
@@ -716,10 +713,20 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 for marker in markers.drain():
                     if scheduled_diagrams >= research_diagrams.MAX_DIAGRAMS:
                         continue
+                    full_text = "".join(answer)
+                    stepwise = stepwise_hint or research_diagrams.is_step_text(full_text)
+                    # 非步骤内容最多 3 张,且锚点间隔 >=400 字,避免同一主题连续堆图。
+                    if not stepwise and scheduled_diagrams >= 3:
+                        continue
+                    if not stepwise and any(
+                            abs(marker.anchor_index - anchor) < 400
+                            for anchor in kept_anchors):
+                        continue
+                    kept_anchors.append(marker.anchor_index)
                     scheduled_diagrams += 1
                     task = asyncio.create_task(research_diagrams.plan_diagram(
                         diagram_question or prompt, "".join(answer),
-                        excerpt_items, marker.kind, "main"))
+                        excerpt_items, marker.kind, "main", strict=False))
                     diagram_tasks.append((marker, task))
                 for item in list(diagram_tasks):
                     marker, task = item
@@ -738,6 +745,23 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             if tail:
                 answer.append(tail)
                 yield f"data: {json.dumps(tail, ensure_ascii=False)}\n\n"
+            # 模型漏标时按内容兜底:有步骤按步骤,没步骤按关键词权重扫描全文。
+            # 非步骤内容若模型已经标过图,不再追加,避免同一概念堆图。
+            stepwise = stepwise_hint or research_diagrams.is_step_text("".join(answer))
+            remaining = research_diagrams.MAX_DIAGRAMS - scheduled_diagrams
+            if remaining > 0 and (scheduled_diagrams == 0 or stepwise):
+                covered = [marker.anchor_index for marker, _task in diagram_tasks]
+                segments = research_diagrams.select_segments(
+                    diagram_question or prompt, "".join(answer), covered, remaining)
+                for index, segment in enumerate(segments, start=1):
+                    marker = research_diagrams.DiagramMarker(
+                        anchor_id=f"{markers.request_id}-auto-{index}",
+                        kind=segment.kind,
+                        anchor_index=segment.anchor_index)
+                    task = asyncio.create_task(research_diagrams.plan_diagram(
+                        diagram_question or prompt, segment.text,
+                        excerpt_items, segment.kind, "main", strict=False))
+                    diagram_tasks.append((marker, task))
             if diagram_tasks:
                 results = await asyncio.gather(*(
                     asyncio.wait_for(task, timeout=20)

@@ -66,23 +66,11 @@ check('非法事件拒绝', parseDiagramEvent({ mg_event: 'diagram', diagram: { 
 const firstAppend = appendDiagram(undefined, event!)
 const secondAppend = appendDiagram(firstAppend, event!)
 check('图解去重', firstAppend.length === 1 && secondAppend.length === 1)
-const thirdEvent = {
-  ...event!,
-  id: 'd2',
+let capped = secondAppend
+for (const id of ['d2', 'd3', 'd4', 'd5', 'd6', 'd7']) {
+  capped = appendDiagram(capped, { ...event!, id })
 }
-const fourthEvent = {
-  ...event!,
-  id: 'd3',
-}
-const fifthEvent = {
-  ...event!,
-  id: 'd4',
-}
-const capped = appendDiagram(
-  appendDiagram(appendDiagram(secondAppend, thirdEvent), fourthEvent),
-  fifthEvent,
-)
-check('单消息最多四张图', capped.length === 4)
+check('单消息最多六张图', capped.length === 6)
 
 const threeD = parseDiagramSpec({
   type: 'surface3d',
