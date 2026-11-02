@@ -23,7 +23,7 @@
 | Schema 版本 | 图解带 `schemaVersion`；未来版本直接丢弃；旧数据缺版本按当前版本恢复 |
 | 运行指标 | `diagram_metrics` 记录 plan/emit/drop、耗时、点数、失败原因；不含正文或用户身份 |
 
-指标只记录阶段与原因，例如 `plan:ok`、`plan:fail:invalid`、`drop:fail:budget`；快照可通过 `diagram_metrics.snapshot()` 读取。
+指标只记录阶段与原因，例如 `plan:ok`、`plan:fail:invalid`、`drop:fail:budget`；快照可通过 `diagram_metrics.snapshot()` 读取，或经认证访问 `GET /api/research/diagrams/metrics`。返回值只有计数、耗时和点数，不含问题、回答或用户身份。
 
 ## 2. 前端
 
@@ -55,10 +55,17 @@
 - 恢复时丢弃类型/结构不符的旧图；
 - localStorage 配额失败时正文保留、图解丢弃；
 - 单消息 6 张上限、总点数上限；
+- 系统级故障演练：planner 崩溃、返回空、熔断打开，正文都必须完整且无图解事件；
 - 3D context lost、异步加载失败由边界兜底（手动/浏览器冒烟）。
 
-## 5. 已知缺口
+## 5. 监控入口
 
-- 指标只有进程内快照，尚未接监控/告警；
-- 失败注入以单测为主，未做系统级故障演练；
+- `GET /api/research/diagrams/metrics`：需登录，返回聚合快照。
+- 日志行：`[diagram] <阶段>:<ok|fail>:<原因> ms=<耗时> points=<点数>`。
+- 不记录问题、回答、用户 ID 或密钥。
+
+## 6. 已知缺口
+
+- 指标只有进程内快照，尚未接外部监控/告警；
+- 故障演练是测试级，不是生产环境注入；
 - 3D 语义必需失败时，文字化降级依赖图题/标注；没有标注时只显示通用提示。

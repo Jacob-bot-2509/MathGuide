@@ -107,6 +107,7 @@ routes = [
     Route("/api/research/storage", research_corpus.storage_usage),
     Route("/api/research/cache/purge", research_corpus.purge_caches, methods=["POST"]),
     Route("/api/research/diagrams/plan", research_diagrams.plan_endpoint, methods=["POST"]),
+    Route("/api/research/diagrams/metrics", research_diagrams.metrics_endpoint),
     Route("/api/research/docs/{doc_id}", research_corpus.get_doc, methods=["GET"]),
     Route("/api/research/docs/{doc_id}", research_corpus.delete_doc, methods=["DELETE"]),
     Route("/api/research/docs/{doc_id}/insights", research_corpus.get_insights),

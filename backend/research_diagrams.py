@@ -1171,6 +1171,13 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
 _diagram_limiter = SlidingWindowLimiter(12, 60.0)
 
 
+async def metrics_endpoint(request: Request) -> JSONResponse:
+    """图解运行指标:只返回聚合计数/耗时,不含问题、回答或用户身份。"""
+    require_auth(request)
+    return JSONResponse(
+        diagram_metrics.snapshot(), headers={"Cache-Control": "no-store"})
+
+
 async def plan_endpoint(request: Request) -> JSONResponse:
     """手动“图解此段”:只依据当前回答/当前论文,不触发外部检索。"""
     rec = require_auth(request)

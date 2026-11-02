@@ -558,6 +558,25 @@ def test_plan_diagram_without_llm(monkeypatch):
     assert asyncio.run(plan_diagram("q", "a", [], "tree")) is None
 
 
+def test_metrics_endpoint_returns_aggregates(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    import diagram_metrics
+
+    monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "u-m"})
+    diagram_metrics.record("plan", True, "ok", duration_ms=12, points=3)
+    app = Starlette(routes=[Route("/metrics", rd.metrics_endpoint)])
+    client = TestClient(app)
+    res = client.get("/metrics")
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["planCount"] == 1
+    assert data["totalPoints"] == 3
+    assert "u-m" not in json.dumps(data)
+
+
 def test_plan_endpoint_returns_diagram(monkeypatch):
     from starlette.applications import Starlette
     from starlette.routing import Route
