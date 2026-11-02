@@ -26,7 +26,7 @@ PREFIX = "[[MG_DIAGRAM:"
 _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]")
 MAX_DIAGRAMS = 6
 _MAX_SURFACE_GRID = 41
-_CURVE_SAMPLES = 80
+_CURVE_SAMPLES = 400
 _TYPES = {"tree", "relation", "flow", "geometry2d", "plot2d",
           "geometry3d", "surface3d"}
 DIAGRAM_SCHEMA_VERSION = 1
@@ -104,7 +104,7 @@ _3D_RE = re.compile(
 _2D_GEOMETRY_RE = re.compile(
     r"二维几何|平面几何|平面图形|二维图", re.IGNORECASE)
 _PLOT_RE = re.compile(
-    r"函数图像|函数曲线|曲线图|plot|graph of", re.IGNORECASE)
+    r"函数图像|函数曲线|曲线图|plot|graph of|y\s*=|f\s*\(", re.IGNORECASE)
 _FLOW_RE = re.compile(
     r"流程|步骤图|推导链|因果链|流程图|flow ?chart", re.IGNORECASE)
 
@@ -673,7 +673,7 @@ def _sample_shape(shape: dict) -> bool:
         shape["rows"] = rows
         shape["cols"] = cols
         return True
-    samples = _int(shape.get("samples"), _CURVE_SAMPLES, 8, 200)
+    samples = _int(shape.get("samples"), _CURVE_SAMPLES, 8, 400)
     sampled2d: list[list[float]] = []
     try:
         for i in range(samples):
@@ -754,8 +754,32 @@ def _refine_gradient(shapes: list[dict]) -> None:
     ]
 
 
-def _refine_plot2d(shapes: list[dict]) -> None:
-    """plot2d 的数学校正:不叠导函数曲线;切线斜率由采样点数值计算。"""
+def _is_straight_curve(shape: dict) -> bool:
+    points = shape.get("points")
+    if not isinstance(points, list) or len(points) < 3:
+        return False
+    try:
+        x0, y0 = float(points[0][0]), float(points[0][1])
+        x1, y1 = float(points[-1][0]), float(points[-1][1])
+        xm, ym = float(points[len(points) // 2][0]), float(points[len(points) // 2][1])
+    except (TypeError, ValueError, IndexError):
+        return False
+    dx, dy = x1 - x0, y1 - y0
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return False
+    return abs((xm - x0) * dy - (ym - y0) * dx) / length < 1e-4
+
+
+def _pretty_expr(expr: str) -> str:
+    return (str(expr).replace("**", "^").replace("^2", "²")
+            .replace("^3", "³").replace("*", "·"))
+
+
+def _refine_plot2d(shapes: list[dict], plot_type: bool = True) -> None:
+    """plot2d/几何图的数学校正:不叠导函数曲线;切线斜率由采样点数值计算。
+    plot_type=True 时把所有非 axis 的 segment/line 视为切线候选;
+    geometry2d 只处理明确标了“切线”的线。"""
     derivative_re = re.compile(r"导函数|导数|derivative|y'|f'", re.IGNORECASE)
     curves = [
         shape for shape in shapes
@@ -764,7 +788,13 @@ def _refine_plot2d(shapes: list[dict]) -> None:
     primary = next((
         shape for shape in curves
         if not derivative_re.search(str(shape.get("label") or ""))
-    ), curves[0] if curves else None)
+        and not _is_straight_curve(shape)
+    ), next((
+        shape for shape in curves
+        if not derivative_re.search(str(shape.get("label") or ""))
+    ), curves[0] if curves else None))
+    if primary is not None and not primary.get("label") and primary.get("expr"):
+        primary["label"] = f"y={_pretty_expr(primary['expr'])}"
     if len(curves) >= 2:
         # 原函数与导函数不叠在同一坐标系;导函数另起一张图。
         shapes[:] = [
@@ -777,25 +807,25 @@ def _refine_plot2d(shapes: list[dict]) -> None:
     tangents = [
         shape for shape in shapes
         if shape.get("kind") in ("segment", "line")
-        and re.search(r"切线|tangent", str(shape.get("label") or ""), re.IGNORECASE)
+        and (plot_type or re.search(
+            r"切线|tangent", str(shape.get("label") or ""), re.IGNORECASE))
     ]
-    if len(tangents) > 1:
-        def tangent_x(shape: dict) -> float:
-            try:
-                return abs(float(shape.get("from", [0, 0])[0]))
-            except (TypeError, ValueError, IndexError):
-                return float("inf")
-
-        # 一张图只保留一条切线,避免多条切线互相交叉、视觉误导。
-        keep = min(tangents, key=tangent_x)
-        shapes[:] = [shape for shape in shapes
-                     if shape not in tangents or shape is keep]
-        tangents = [keep]
+    # 模型有时把切线画成一条“直线型 curve”(如 y=x),也要校正。
+    # 只在一个非线性主曲线 + 关键点同时存在时这样做,避免误改普通直线几何图。
+    has_point = any(
+        shape.get("kind") == "point" and "x" in shape and "y" in shape
+        for shape in shapes
+    )
+    if primary is not None and not _is_straight_curve(primary) and has_point:
+        tangents.extend(shape for shape in curves
+                        if shape is not primary and shape not in tangents
+                        and not derivative_re.search(str(shape.get("label") or ""))
+                        and _is_straight_curve(shape))
     points = [
         shape for shape in shapes
         if shape.get("kind") == "point" and "x" in shape and "y" in shape
     ]
-    if primary is None or not tangents or not points:
+    if primary is None or not tangents:
         return
     values = sorted(
         ((float(item[0]), float(item[1])) for item in primary["points"]),
@@ -804,7 +834,7 @@ def _refine_plot2d(shapes: list[dict]) -> None:
     if not values:
         return
     span = values[-1][0] - values[0][0]
-    dx = max(0.3, span * 0.08)
+    dx = max(0.2, span * 0.04)
 
     def tangent_at(x0: float) -> tuple[float, float] | None:
         run = _compile_expr(primary.get("expr"), allow_y=False)
@@ -828,10 +858,12 @@ def _refine_plot2d(shapes: list[dict]) -> None:
     for tangent in tangents:
         start = tangent.get("from")
         if not (isinstance(start, (list, tuple)) and len(start) >= 2):
+            curve_points = tangent.get("points")
+            if isinstance(curve_points, list) and curve_points:
+                start = curve_points[0]
+        if not (isinstance(start, (list, tuple)) and len(start) >= 2):
             continue
         candidates = [point for point in points if id(point) not in used]
-        if not candidates:
-            break
 
         def distance(point: dict) -> float:
             try:
@@ -840,16 +872,58 @@ def _refine_plot2d(shapes: list[dict]) -> None:
             except (TypeError, ValueError):
                 return float("inf")
 
-        point = min(candidates, key=distance)
-        result = tangent_at(float(point["x"]))
+        point = min(candidates, key=distance) if candidates else None
+        point_x = float(point["x"]) if point is not None else None
+        # 有明确关键点时以关键点为准;没有点时用切线自身起点。
+        x0 = point_x if point_x is not None else float(start[0])
+        result = tangent_at(x0)
         if result is None:
             continue
         slope, y0 = result
-        x0 = float(point["x"])
-        point["y"] = round(y0, 6)
+        if point is not None:
+            point["y"] = round(y0, 6)
+            used.add(id(point))
         tangent["from"] = [round(x0 - dx, 6), round(y0 - slope * dx, 6)]
         tangent["to"] = [round(x0 + dx, 6), round(y0 + slope * dx, 6)]
-        used.add(id(point))
+        if tangent.get("kind") == "curve":
+            tangent["points"] = [tangent["from"], tangent["to"]]
+            if not re.search(r"切线|tangent",
+                             str(tangent.get("label") or ""), re.IGNORECASE):
+                tangent["label"] = "切线"
+
+
+def _axis_aligned_segment(shape: dict) -> bool:
+    """无标签或只标 x/y/z、穿过原点的轴向线段:自动坐标轴已经画了,不要重复。"""
+    if shape.get("kind") not in ("segment", "line"):
+        return False
+    label = str(shape.get("label") or "").strip().lower()
+    if label and label not in {"x", "y", "z"}:
+        return False
+    start = _point(shape.get("from"))
+    end = _point(shape.get("to"))
+    if start is None or end is None:
+        return False
+    while len(start) < 3:
+        start.append(0.0)
+    while len(end) < 3:
+        end.append(0.0)
+    pairs = [(1, 2), (0, 2), (0, 1)]
+    for pair in pairs:
+        if not (all(abs(value) < 1e-6 for index, value in enumerate(start)
+                    if index not in pair)
+                and all(abs(value) < 1e-6 for index, value in enumerate(end)
+                        if index not in pair)):
+            continue
+        varying = next(index for index in range(3) if index not in pair)
+        a, b = start[varying], end[varying]
+        if a == 0 or b == 0 or a * b < 0:
+            return True
+    return False
+
+
+def _norm_label(value: object) -> str:
+    text = re.sub(r"[\s=^]", "", str(value or "")).lower()
+    return text.replace("²", "2").replace("³", "3")
 
 
 def prepare_diagram(raw: object) -> dict | None:
@@ -866,9 +940,33 @@ def prepare_diagram(raw: object) -> dict | None:
             if clean is not None:
                 dict_shapes.append(clean)
         _refine_gradient(dict_shapes)
-        if raw.get("type") == "plot2d":
-            _refine_plot2d(dict_shapes)
+        for shape in dict_shapes:
+            if (shape.get("kind") == "surface" and shape.get("expr")
+                    and not shape.get("label")):
+                shape["label"] = f"z={_pretty_expr(shape['expr'])}"
+        if raw.get("type") in ("plot2d", "geometry2d"):
+            _refine_plot2d(dict_shapes, raw.get("type") == "plot2d")
+        if raw.get("type") in ("geometry3d", "surface3d"):
+            dict_shapes = [shape for shape in dict_shapes
+                           if not _axis_aligned_segment(shape)]
+            notes = raw.get("annotations")
+            if isinstance(notes, list):
+                raw = {**raw, "annotations": [
+                    note for note in notes
+                    if not (isinstance(note, dict)
+                            and _text(note.get("text"), 20).lower() in {"x", "y", "z"})
+                ]}
         raw = {**raw, "shapes": dict_shapes}
+        labels = {
+            _norm_label(shape.get("label"))
+            for shape in dict_shapes if shape.get("label")
+        }
+        if labels and isinstance(raw.get("annotations"), list):
+            raw = {**raw, "annotations": [
+                note for note in raw["annotations"]
+                if isinstance(note, dict)
+                and _norm_label(note.get("text")) not in labels
+            ]}
     return validate_diagram(raw)
 
 

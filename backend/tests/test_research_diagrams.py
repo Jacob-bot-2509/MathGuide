@@ -289,6 +289,100 @@ def test_plan_diagram_uses_weight_hint_without_explicit_dimension(monkeypatch):
     assert "形式权重参考" not in seen["user"]
 
 
+def test_3d_duplicate_model_axes_are_filtered():
+    spec = rd.prepare_diagram({
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "surface", "expr": "x^2+y^2", "domain": [-2, 2],
+             "rows": 5, "cols": 5},
+            {"kind": "segment", "from": [-2, 0, 0], "to": [2, 0, 0]},
+            {"kind": "segment", "from": [0, -2, 0], "to": [0, 2, 0]},
+        ],
+        "annotations": [
+            {"x": -2.2, "y": 0, "z": 0, "text": "x"},
+            {"x": 0, "y": 0, "z": 2.2, "text": "z"},
+        ],
+    })
+    assert spec
+    assert [shape["kind"] for shape in spec["shapes"]] == ["surface"]
+    assert spec["annotations"] == []
+
+
+def test_duplicate_expression_annotations_are_dropped():
+    spec = rd.prepare_diagram({
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 0.5, "y": 0.25, "label": "(1/2, 1/4)"},
+            {"kind": "segment", "label": "切线",
+             "from": [0.3, 0.05], "to": [0.7, 0.45]},
+        ],
+        "annotations": [
+            {"x": 1.3, "y": 1.9, "text": "y = x²"},
+            {"x": 0.62, "y": 0.25, "text": "(1/2, 1/4)"},
+        ],
+    })
+    assert spec and spec["annotations"] == []
+
+
+def test_plot2d_equation_labelled_line_is_also_corrected():
+    spec = rd.prepare_diagram({
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 0.5, "y": 0.25, "label": "P"},
+            {"kind": "segment", "label": "y=x-1/4",
+             "from": [-0.3, -0.1], "to": [1.3, 1.5]},
+        ],
+    })
+    assert spec
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("kind") == "segment")
+    assert abs(tangent["from"][1] - 0.05) < 1e-5
+    assert abs(tangent["to"][1] - 0.45) < 1e-5
+    curve = next(shape for shape in spec["shapes"]
+                 if shape.get("kind") == "curve")
+    assert curve["label"] == "y=x²"
+
+
+def test_geometry2d_straight_curve_is_corrected_as_tangent():
+    spec = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "curve", "label": "y=x²", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "curve", "label": "y=x", "expr": "x", "domain": [-2, 2]},
+            {"kind": "point", "x": 0.5, "y": 0.25, "label": "P"},
+        ],
+    })
+    assert spec
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    assert tangent["kind"] == "curve"
+    assert len(tangent["points"]) == 2
+    assert abs(tangent["from"][1] - 0.05) < 1e-5
+    assert abs(tangent["to"][1] - 0.45) < 1e-5
+
+
+def test_plot2d_tangent_uses_the_requested_key_point():
+    spec = rd.prepare_diagram({
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "label": "y=x²", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 0.5, "y": 0.25, "label": "P"},
+            {"kind": "segment", "label": "切线",
+             "from": [0.2, 0.1], "to": [0.8, 0.9]},
+        ],
+    })
+    assert spec
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    point = next(shape for shape in spec["shapes"]
+                 if shape.get("label") == "P")
+    assert point["y"] == 0.25
+    assert abs(tangent["from"][1] - (0.25 - 0.2)) < 1e-5
+    assert abs(tangent["to"][1] - (0.25 + 0.2)) < 1e-5
+
+
 def test_plot2d_drops_derivative_overlay_and_fixes_tangent():
     spec = rd.prepare_diagram({
         "type": "plot2d",
@@ -582,7 +676,7 @@ def test_plan_diagram_samples_curve_expression(monkeypatch):
     result = asyncio.run(plan_diagram("画出函数图像", "", [], "plot2d"))
     assert result and result["type"] == "plot2d"
     curve = result["shapes"][0]
-    assert len(curve["points"]) == 80
+    assert len(curve["points"]) == rd._CURVE_SAMPLES
     assert abs(curve["points"][0][1]) < 0.01
 
 

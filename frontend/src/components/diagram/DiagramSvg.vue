@@ -9,6 +9,7 @@ const props = withDefaults(defineProps<{ spec: DiagramSpec; collapsible?: boolea
   collapsible: false,
 })
 const arrowId = `mg-arrow-${useId()}`
+const axisArrowId = `mg-axis-arrow-${useId()}`
 const collapsed = ref<Set<string>>(new Set())
 
 const svgEl = ref<SVGSVGElement | null>(null)
@@ -110,7 +111,22 @@ const isShapeType = computed(() => visibleSpec.value.type === 'geometry2d'
 const shapeGeometry = computed(() => {
   if (!isShapeType.value) return null
   const spec = visibleSpec.value
-  const b = boundsOfShapes(spec.shapes, spec.annotations, spec.type === 'plot2d')
+  const dataBounds = boundsOfShapes(
+    spec.shapes.filter((shape) => shape.kind !== 'axis'),
+    [], true,
+  )
+  const normalized = spec.shapes.map((shape) => {
+    if (shape.kind !== 'axis') return shape
+    const label = String(shape.label || '').toLowerCase()
+    if (/^x\b|^x[ (]|横轴/.test(label)) {
+      return { ...shape, from: [dataBounds.minX, 0], to: [dataBounds.maxX, 0] }
+    }
+    if (/^y\b|^y[ (]|纵轴/.test(label)) {
+      return { ...shape, from: [0, dataBounds.minY], to: [0, dataBounds.maxY] }
+    }
+    return shape
+  })
+  const b = boundsOfShapes(normalized, spec.annotations, spec.type === 'plot2d')
   const pad = 28
   const spanX = Math.max(1e-6, b.maxX - b.minX)
   const spanY = Math.max(1e-6, b.maxY - b.minY)
@@ -123,7 +139,7 @@ const shapeGeometry = computed(() => {
     if (!Array.isArray(value) || value.length < 2) return null
     return [tx(num(value[0])), ty(num(value[1]))]
   }
-  const shapes = spec.shapes.map((shape) => {
+  const shapes = normalized.map((shape) => {
     const out: DiagramShape = { ...shape }
     if (typeof shape.x === 'number') out.x = tx(shape.x)
     if (typeof shape.y === 'number') out.y = ty(shape.y)
@@ -191,7 +207,7 @@ const plotAxes = computed(() => {
   const x0 = g.tx(0)
   return [
     { x1: g.pad, y1: y0, x2: g.width - g.pad, y2: y0 },
-    { x1: x0, y1: g.pad, x2: x0, y2: g.height - g.pad },
+    { x1: x0, y1: g.height - g.pad, x2: x0, y2: g.pad },
   ]
 })
 const hasUnsampledCurve = computed(() =>
@@ -201,6 +217,11 @@ const hasUnsampledCurve = computed(() =>
 
 function labelAnchor(shape: DiagramShape): { x: number; y: number } {
   const kind = shape.kind
+  if ((kind === 'curve' || kind === 'polygon')
+    && Array.isArray(shape.points) && shape.points.length) {
+    const [x, y] = pair(shape.points[Math.floor(shape.points.length * 0.62)])
+    return { x: x + 4, y: y - 6 }
+  }
   if (kind === 'axis') {
     const [x, y] = pair(shape.to)
     return { x, y: y - 6 }
@@ -217,6 +238,12 @@ function labelAnchor(shape: DiagramShape): { x: number; y: number } {
     const [x1, y1] = pair(shape.from)
     const [x2, y2] = pair(shape.to)
     return { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 6 }
+  }
+  if (kind === 'point') {
+    return {
+      x: num(shape.x, pair(shape.from)[0]) + 7,
+      y: num(shape.y, pair(shape.from)[1]) - 7,
+    }
   }
   return {
     x: num(shape.x, pair(shape.from)[0]),
@@ -331,8 +358,16 @@ resetView()
       @pointerup="onPointerUp"
       @pointercancel="onPointerUp"
     >
-      <defs v-if="visibleSpec.type === 'flow'">
+      <defs>
         <marker
+          :id="axisArrowId"
+          markerWidth="8" markerHeight="8"
+          refX="7" refY="3" orient="auto"
+        >
+          <path d="M0,0 L7,3 L0,6 z" class="diagram-axis-head" />
+        </marker>
+        <marker
+          v-if="visibleSpec.type === 'flow'"
           :id="arrowId"
           markerWidth="8" markerHeight="8"
           refX="7" refY="3" orient="auto"
@@ -391,6 +426,7 @@ resetView()
           :key="`axis-${ai}`"
           :x1="axis.x1" :y1="axis.y1" :x2="axis.x2" :y2="axis.y2"
           class="diagram-axis"
+          :marker-end="`url(#${axisArrowId})`"
         />
         <text v-if="hasUnsampledCurve" x="8" y="14" class="diagram-warning">
           曲线缺少采样点
@@ -398,14 +434,18 @@ resetView()
         <g v-for="(shape, i) in displayShapes" :key="`shape-${i}`">
           <circle
             v-if="shape.kind === 'point'"
-            :cx="num(shape.x)" :cy="num(shape.y)" :r="num(shape.r, 4)"
+            :cx="num(shape.x)" :cy="num(shape.y)"
+            :r="Math.min(num(shape.r, 2.6), 6)"
             class="diagram-point"
           />
           <line
             v-else-if="shape.kind === 'segment' || shape.kind === 'line' || shape.kind === 'vector' || shape.kind === 'axis'"
             :x1="pair(shape.from)[0]" :y1="pair(shape.from)[1]"
             :x2="pair(shape.to)[0]" :y2="pair(shape.to)[1]"
-            :class="shape.kind === 'axis' ? 'diagram-axis' : 'diagram-shape-line'"
+            :class="shape.kind === 'axis' ? 'diagram-axis'
+              : (shape.label && /切线|y\s*=/i.test(String(shape.label))
+                ? 'diagram-tangent' : 'diagram-shape-line')"
+            :marker-end="shape.kind === 'axis' ? `url(#${axisArrowId})` : undefined"
           />
           <circle
             v-else-if="shape.kind === 'circle'"
@@ -509,6 +549,10 @@ resetView()
   fill: var(--cyan);
 }
 
+.diagram-axis-head {
+  fill: var(--text-dim);
+}
+
 .diagram-edge-label {
   fill: var(--text-dim);
   font-size: 9px;
@@ -524,6 +568,12 @@ resetView()
   fill: none;
   stroke: var(--cyan);
   stroke-width: 1.5;
+}
+
+.diagram-tangent {
+  fill: none;
+  stroke: #ff9f43;
+  stroke-width: 1.3;
 }
 
 .diagram-axis {

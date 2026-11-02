@@ -30,10 +30,10 @@ function triple(value: unknown): [number, number, number] {
   return [num(value[0]), num(value[1]), num(value[2])]
 }
 
-/** 数学坐标 (x, y, z) → Three.js (x, z, y),让 z=f(x,y) 的 z 轴朝上。 */
+/** 数学坐标 (x, y, z) → Three.js (x, z, -y),z 轴朝上且保持右手系。 */
 function vec3(value: unknown, THREE: typeof import('three')): import('three').Vector3 {
   const [x, y, z] = triple(value)
-  return new THREE.Vector3(x, z, y)
+  return new THREE.Vector3(x, z, -y)
 }
 
 function points(value: unknown): Array<[number, number, number]> {
@@ -154,19 +154,38 @@ function addAxes(
   const material = new THREE.LineBasicMaterial({
     color: 0x64748b, depthTest: false, transparent: true, opacity: 0.6,
   })
+  const arrowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x94a3b8, depthTest: false, transparent: true, opacity: 0.85,
+  })
+  // 右手系:数学 x 向右,y 向屏幕里(-z),z 向上(+y)。
   const axes: Array<[[number, number, number], [number, number, number], string]> = [
     [[-ex, 0, 0], [ex, 0, 0], 'x'],
-    [[0, 0, -ey], [0, 0, ey], 'y'],
+    [[0, 0, ey], [0, 0, -ey], 'y'],
     [[0, z0, 0], [0, z1, 0], 'z'],
   ]
   for (const [from, to, label] of axes) {
-    const geometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(...from), new THREE.Vector3(...to),
-    ])
+    const start = new THREE.Vector3(...from)
+    const end = new THREE.Vector3(...to)
+    const geometry = new THREE.BufferGeometry().setFromPoints([start, end])
     root.add(new THREE.Line(geometry, material))
-    const sprite = labelSprite(label, THREE, labelScale)
+    const direction = end.clone().sub(start)
+    const length = direction.length()
+    if (length > 1e-6) {
+      const head = Math.max(0.1, Math.min(0.4, length * 0.03))
+      const cone = new THREE.Mesh(
+        new THREE.ConeGeometry(head * 0.35, head, 12), arrowMaterial,
+      )
+      cone.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0), direction.clone().normalize(),
+      )
+      cone.position.copy(end).addScaledVector(direction.normalize(), -head / 2)
+      root.add(cone)
+    }
+    const sprite = labelSprite(label, THREE, labelScale * 0.65)
     if (sprite) {
-      sprite.position.set(...to)
+      const outward = end.clone().sub(start).normalize()
+      sprite.position.copy(end).addScaledVector(outward, labelScale * 0.22)
+      sprite.position.y -= labelScale * 0.08
       root.add(sprite)
     }
   }
@@ -286,8 +305,9 @@ function addShape(
   if (kind === 'point') {
     material.depthTest = false
     // 点是注记,不是主体:半径只取场景尺度的一小部分,避免变成大球。
+    const rawRadius = Math.abs(num(shape.r))
     const radius = Math.max(
-      0.015, Math.min(num(shape.r) || unit * 0.28, unit * 0.42),
+      0.015, Math.min(rawRadius || unit * 0.28, unit * 0.42),
     )
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(radius, 16, 12), material,
@@ -359,9 +379,22 @@ function addShape(
     }
     root.add(mesh)
   } else if (kind === 'circle') {
-    const mesh = new THREE.Mesh(new THREE.CircleGeometry(num(shape.r) || 1, 32), material)
-    mesh.position.copy(vec3([x, y, z], THREE))
-    root.add(mesh)
+    // 圆在 3D 里是轮廓注记,不画实心圆盘,避免原点出现“盘子”。
+    const radius = Math.abs(num(shape.r) || num(shape.radius) || 1)
+    const ring: import('three').Vector3[] = []
+    for (let i = 0; i < 64; i += 1) {
+      const angle = (Math.PI * 2 * i) / 64
+      ring.push(vec3([
+        x + radius * Math.cos(angle),
+        y + radius * Math.sin(angle),
+        z,
+      ], THREE))
+    }
+    const circle = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(ring), overlayLine,
+    )
+    circle.renderOrder = 5
+    root.add(circle)
   } else if (kind === 'polygon') {
     const pts = points(shape.points)
     if (pts.length) {
@@ -395,9 +428,21 @@ function addShape(
       if (sprite) {
         const to = triple(shape.to)
         const hasLine = ['segment', 'line', 'vector', 'axis'].includes(kind)
+        const surfacePoint = kind === 'surface' && Array.isArray(shape.points)
+          && shape.points.length
+          ? shape.points[Math.floor(shape.points.length * 0.5)]
+          : null
+        const curvePoint = kind === 'curve' && Array.isArray(shape.points)
+          && shape.points.length
+          ? shape.points[Math.floor(shape.points.length * 0.5)]
+          : null
         const anchor = hasLine
           ? vec3(to, THREE)
-          : vec3([x, y, z], THREE)
+          : surfacePoint
+            ? vec3(surfacePoint, THREE)
+            : curvePoint
+              ? vec3(curvePoint, THREE)
+              : vec3([x, y, z], THREE)
         anchor.y += hasLine ? unit * 0.18 : unit * 0.25
         sprite.position.copy(anchor)
         root.add(sprite)

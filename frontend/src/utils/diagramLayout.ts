@@ -209,6 +209,9 @@ export function layoutFlow(spec: DiagramSpec): LayoutResult {
     if (!levels[level]) levels[level] = []
     levels[level].push(node)
   }
+  for (let i = 0; i < levels.length; i += 1) {
+    if (!levels[i]) levels[i] = []
+  }
   const levelWidths = levels.map((level) => (
     level.reduce((sum, node) => sum + nodeWidth(node.label), 0)
     + Math.max(0, level.length - 1) * GAP_X
