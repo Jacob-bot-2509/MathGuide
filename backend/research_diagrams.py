@@ -499,7 +499,7 @@ def _text(value: object, limit: int) -> str:
 def _num(value: object) -> float | None:
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if parsed != parsed or parsed in (float("inf"), float("-inf")):
         return None
@@ -600,7 +600,7 @@ def _compile_expr(expr: object, allow_y: bool = True):
 def _int(value: object, default: int, low: int, high: int) -> int:
     try:
         parsed = int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return max(low, min(high, parsed))
 
@@ -629,7 +629,9 @@ def _sample_shape(shape: dict) -> bool:
     points = shape.get("points")
     if isinstance(points, (int, float)):
         # 模型常把 "points" 写成采样数;把它当 samples,不要因此丢图。
-        shape["samples"] = int(points)
+        count = _num(points)
+        if count is not None:
+            shape["samples"] = int(count)
         shape.pop("points", None)
         points = None
     if isinstance(points, list) and points:
@@ -711,13 +713,23 @@ def _refine_gradient(shapes: list[dict]) -> None:
             key=lambda item: (float(item["x"]) - x0) ** 2
             + (float(item["y"]) - y0) ** 2,
         )
-        nearest["z"] = round(z0, 6)
+        if (abs(float(nearest["x"]) - x0) <= 1e-6
+                and abs(float(nearest["y"]) - y0) <= 1e-6):
+            nearest["z"] = round(z0, 6)
     if vector is None:
         return
     domain = _domain(surface)
     span = min(domain[1] - domain[0], domain[3] - domain[2]) if domain else 2.0
     magnitude = math.hypot(gx, gy)
+    plane = next((
+        shape for shape in shapes
+        if shape.get("kind") == "plane"
+        and re.search(r"切平面|tangent", str(shape.get("label") or ""), re.IGNORECASE)
+    ), None)
+    if plane is not None:
+        plane["normal"] = [round(-gx, 6), round(-gy, 6), 1.0]
     if magnitude < 1e-9:
+        shapes.remove(vector)
         return
     step = max(0.05, min(0.6, span * 0.35)) / magnitude
     dx, dy = gx * step, gy * step
@@ -726,13 +738,6 @@ def _refine_gradient(shapes: list[dict]) -> None:
         round(x0 + dx, 6), round(y0 + dy, 6),
         round(z0 + gx * dx + gy * dy, 6),
     ]
-    plane = next((
-        shape for shape in shapes
-        if shape.get("kind") == "plane"
-        and re.search(r"切平面|tangent", str(shape.get("label") or ""), re.IGNORECASE)
-    ), None)
-    if plane is not None:
-        plane["normal"] = [round(-gx, 6), round(-gy, 6), 1.0]
 
 
 def _refine_plot2d(shapes: list[dict]) -> None:
@@ -839,13 +844,13 @@ def prepare_diagram(raw: object) -> dict | None:
         return None
     shapes = raw.get("shapes")
     if isinstance(shapes, list) and len(shapes) <= _MAX_SHAPES:
-        kept: list[object] = []
+        dict_shapes: list[dict] = []
         for shape in shapes:
-            if isinstance(shape, dict) and not _sample_shape(shape):
+            if not isinstance(shape, dict) or not _sample_shape(shape):
                 continue
-            kept.append(shape)
-        raw = {**raw, "shapes": kept}
-        dict_shapes = [shape for shape in kept if isinstance(shape, dict)]
+            clean = _shape(shape)
+            if clean is not None:
+                dict_shapes.append(clean)
         _refine_gradient(dict_shapes)
         if raw.get("type") == "plot2d":
             _refine_plot2d(dict_shapes)
@@ -1078,9 +1083,13 @@ class MarkerStream:
         self._visible_len += len(text.encode("utf-16-le")) // 2
 
     def _malformed_tail(self, text: str) -> str:
-        """未闭合标记只剥掉前缀和类型名,后面的正文必须还给用户。"""
+        """未闭合/畸形标记整段剥掉;标记后真正跟的正文要保留。
+        类型名可能被模型写成大写或被截断,不能只按小写字母清理,
+        否则会残留 D]] / DJJ 之类碎片。"""
         tail = text[len(PREFIX):] if text.startswith(PREFIX) else text
-        return re.sub(r"^[a-z0-9_]*", "", tail)
+        return re.sub(
+            r"^(?:type=)?[A-Za-z0-9_:=.\-]*\]*", "", tail,
+            flags=re.IGNORECASE)
 
     def feed(self, text: str) -> str:
         self._buffer += text or ""

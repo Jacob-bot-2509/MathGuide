@@ -104,6 +104,24 @@ async function main() {
     check('非章节 cmd 链接返回 null', chapterNameFromCmd('cmd://back') === null, '')
 
     // ⑭ 稳定块切分:不切代码围栏/块级公式,拼回原文不丢字
+    // ⑭ Markdown 表格:数学里的 | 不能被当作列分隔
+    html = await renderComp(
+      '| x | 切线斜率 $|\\cos x|$ | 直观感受 |\n'
+      + '|---|---|---|\n'
+      + '| $0$ | $1$ | 最陡的上坡 |\n'
+      + '| $\\pi/3$ | $1/2$ | 缓缓上坡 |')
+    check('表格被渲染为 <table>', html.includes('<table') && html.includes('<th'))
+    check('表格三列不被数学竖线拆开',
+      (html.match(/<th\b/g) || []).length === 3, `th 数量: ${(html.match(/<th\b/g) || []).length}`)
+    check('表格单元格公式被渲染', html.includes('katex'))
+
+    html = await renderComp('x | y\n--- | ---\n1 | 2')
+    check('无外框表格也能识别', html.includes('<table') && html.includes('<td'))
+
+    // ⑮ 代码/转义里的 | 不拆列
+    html = await renderComp('| a | b |\n|---|---|\n| `x|y` | 2 |')
+    check('代码内竖线不拆列', (html.match(/<td/g) || []).length === 2)
+
     const blocksMod = await server.ssrLoadModule('/src/utils/mathBlocks.ts')
     const { splitStableBlocks } = blocksMod as { splitStableBlocks: (text: string) => string[] }
     const stable = 'a\n\n```\nx\n\ny\n```\n\n$$\nu\n\nv\n$$\n\nb'

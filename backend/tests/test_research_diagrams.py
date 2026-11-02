@@ -39,6 +39,18 @@ def test_anchor_counts_text_before_markers_in_same_feed():
     assert [m.anchor_index for m in markers] == [3, 6]
 
 
+def test_incomplete_marker_does_not_leak_uppercase_fragment():
+    stream = MarkerStream("r-tail")
+    assert stream.feed("前[[MG_DIAGRAM:plot2dD") == "前"
+    assert stream.finish() == ""
+    assert stream.drain() == []
+
+
+def test_malformed_marker_with_closing_does_not_leak_fragment():
+    stream = MarkerStream("r-malformed")
+    assert stream.feed("前[[MG_DIAGRAM:plot2dD]]后") == "前后"
+
+
 def test_unclosed_marker_preserves_visible_tail():
     stream = MarkerStream("r1c")
     assert stream.feed("前[[MG_DIAGRAM:relation 后文") == "前"
@@ -398,6 +410,54 @@ def test_plan_diagram_can_override_suggested_type(monkeypatch):
     # 标记建议 relation,但内容更适合二维几何;建议类型不是硬性要求,应允许改选。
     result = asyncio.run(plan_diagram("怎么理解这个变换", "", [], "relation"))
     assert result and result["type"] == "geometry2d"
+
+
+def test_gradient_does_not_move_unrelated_point_or_invent_zero_vector():
+    result = rd.prepare_diagram({
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "surface", "expr": "x^2+y^2", "domain": [-4, 4],
+             "rows": 3, "cols": 3},
+            {"kind": "point", "x": 3, "y": 3, "z": 18},
+            {"kind": "vector", "label": "gradient", "from": [0, 0, 0], "to": [1, 0, 1]},
+            {"kind": "plane", "label": "tangent", "normal": [1, 0, 1]},
+        ],
+    })
+    assert result
+    assert next(s for s in result["shapes"] if s["kind"] == "point")["z"] == 18
+    assert not any(s["kind"] == "vector" for s in result["shapes"])
+    assert next(s for s in result["shapes"] if s["kind"] == "plane")["normal"] == [0, 0, 1]
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_sampling_counts_do_not_crash(invalid):
+    result = rd.prepare_diagram({
+        "type": "plot2d",
+        "shapes": [{"kind": "curve", "expr": "x", "domain": [-1, 1],
+                    "points": invalid, "samples": invalid}],
+    })
+    assert result and len(result["shapes"][0]["points"]) >= 8
+
+
+def test_invalid_coordinates_are_filtered_before_math_refinement():
+    plot = rd.prepare_diagram({
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "points": [["bad", 1], [0, 0], [1, 1]]},
+            {"kind": "point", "x": 0, "y": 0},
+            {"kind": "line", "label": "tangent", "from": [0, 0], "to": [1, 1]},
+        ],
+    })
+    assert plot and next(s for s in plot["shapes"] if s["kind"] == "curve")["points"] == [[0, 0], [1, 1]]
+    surface = rd.prepare_diagram({
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "surface", "expr": "x+y", "domain": [-1, 1]},
+            {"kind": "point", "x": "bad", "y": 0},
+            {"kind": "vector", "label": "gradient", "from": [0, 0], "to": [1, 1]},
+        ],
+    })
+    assert surface and not any(s["kind"] == "point" for s in surface["shapes"])
 
 
 def test_surface_gradient_is_recomputed_from_expression(monkeypatch):

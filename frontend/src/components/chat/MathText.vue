@@ -8,9 +8,12 @@ import { defineComponent, h, type VNode } from 'vue'
 import katex from 'katex'
 
 interface Seg {
-  type: 'text' | 'bold' | 'math' | 'mathd' | 'code' | 'link' | 'hr' | 'quote'
+  type: 'text' | 'bold' | 'math' | 'mathd' | 'code' | 'link' | 'hr' | 'quote' | 'table'
   value: string
   href?: string
+  header?: string[]
+  rows?: string[][]
+  aligns?: Array<'left' | 'center' | 'right'>
 }
 
 // 已闭合公式的渲染缓存:流式期间每帧只有最后一段在变化,
@@ -122,7 +125,98 @@ function parse(src: string): Seg[] {
   return segs
 }
 
-/** 行级解析:连续 > 开头的行为引用块(引用区小字样式),其余走常规解析 */
+/** 表格行拆分:数学公式/代码里的 | 不能当列分隔。 */
+function splitTableRow(line: string): string[] {
+  const cells: string[] = []
+  let current = ''
+  let math = ''
+  let code = false
+  let escaped = false
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i]
+    if (escaped) {
+      current += ch
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      current += ch
+      escaped = true
+      continue
+    }
+    if (ch === '`') {
+      code = !code
+      current += ch
+      continue
+    }
+    if (!code) {
+      if (math) {
+        if (math === '$' && ch === '$') {
+          math = ''
+          current += ch
+          continue
+        }
+        if (math === '$$' && ch === '$' && line[i + 1] === '$') {
+          math = ''
+          current += '$$'
+          i += 1
+          continue
+        }
+        if (math === '\\(' && ch === '\\' && line[i + 1] === ')') {
+          math = ''
+          current += '\\)'
+          i += 1
+          continue
+        }
+        if (math === '\\[' && ch === '\\' && line[i + 1] === ']') {
+          math = ''
+          current += '\\]'
+          i += 1
+          continue
+        }
+        current += ch
+        continue
+      }
+      if (ch === '$') {
+        math = line[i + 1] === '$' ? '$$' : '$'
+        current += math
+        if (math === '$$') i += 1
+        continue
+      }
+      if (ch === '\\' && (line[i + 1] === '(' || line[i + 1] === '[')) {
+        math = line[i + 1] === '(' ? '\\(' : '\\['
+        current += line.slice(i, i + 2)
+        i += 1
+        continue
+      }
+      if (ch === '|') {
+        cells.push(current.trim())
+        current = ''
+        continue
+      }
+    }
+    current += ch
+  }
+  cells.push(current.trim())
+  if (cells.length && cells[0] === '') cells.shift()
+  if (cells.length && cells[cells.length - 1] === '') cells.pop()
+  return cells
+}
+
+function isTableSeparator(line: string): boolean {
+  const cells = splitTableRow(line)
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+}
+
+function tableAligns(line: string): Array<'left' | 'center' | 'right'> {
+  return splitTableRow(line).map((cell) => {
+    if (cell.startsWith(':') && cell.endsWith(':')) return 'center'
+    if (cell.endsWith(':')) return 'right'
+    return 'left'
+  })
+}
+
+/** 行级解析:表格优先,其次连续 > 引用块,其余走常规解析 */
 function parseBlock(src: string): Seg[] {
   const segs: Seg[] = []
   let normal = ''
@@ -135,7 +229,25 @@ function parseBlock(src: string): Seg[] {
     if (quote.trim()) segs.push({ type: 'quote', value: quote.trim() })
     quote = ''
   }
-  for (const line of src.split('\n')) {
+  const lines = src.split('\n')
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    if (line.includes('|') && i + 1 < lines.length
+      && isTableSeparator(lines[i + 1])) {
+      flushNormal()
+      flushQuote()
+      const header = splitTableRow(line)
+      const aligns = tableAligns(lines[i + 1])
+      const rows: string[][] = []
+      let j = i + 2
+      while (j < lines.length && lines[j].trim() && lines[j].includes('|')) {
+        rows.push(splitTableRow(lines[j]))
+        j += 1
+      }
+      segs.push({ type: 'table', value: '', header, rows, aligns })
+      i = j - 1
+      continue
+    }
     if (line.startsWith('>')) {
       flushNormal()
       quote += `${line.slice(1).trim()}\n`
@@ -163,6 +275,21 @@ function renderLink(key: number | string, value: string, href: string | undefine
   return h('a', { key, class: 'seg-link', href, target: '_blank', rel: 'noopener' }, value)
 }
 
+function inlineNodes(value: string, keyPrefix: string): VNode[] {
+  return parseInline(value).map((seg, index) => {
+    const key = `${keyPrefix}-${index}`
+    if (seg.type === 'math') {
+      return h('span', { key, class: 'seg-math', innerHTML: renderKatex(seg.value, false) })
+    }
+    if (seg.type === 'mathd') {
+      return h('span', { key, class: 'seg-mathd', innerHTML: renderKatex(seg.value, true) })
+    }
+    if (seg.type === 'bold') return h('strong', { key }, seg.value)
+    if (seg.type === 'link') return renderLink(key, seg.value, seg.href)
+    return h('span', { key }, seg.value)
+  })
+}
+
 function buildNodes(text: string): VNode[] {
   return parse(text).map((s, i) => {
     switch (s.type) {
@@ -185,6 +312,30 @@ function buildNodes(text: string): VNode[] {
           x.type === 'link'
             ? renderLink(j, x.value, x.href)
             : h('span', { key: j }, x.value)))
+      case 'table': {
+        const header = s.header || []
+        const rows = s.rows || []
+        const aligns = s.aligns || []
+        const align = (index: number): 'left' | 'center' | 'right' =>
+          aligns[index] || 'left'
+        return h('div', { key: i, class: 'seg-table-wrap' }, [
+          h('table', { class: 'seg-table' }, [
+            h('thead', null, [
+              h('tr', null, header.map((cell, j) => h(
+                'th', { key: j, style: { textAlign: align(j) } },
+                inlineNodes(cell, `${i}-h-${j}`),
+              ))),
+            ]),
+            h('tbody', null, rows.map((row, r) => h(
+              'tr', { key: r },
+              header.map((_cell, j) => h(
+                'td', { key: j, style: { textAlign: align(j) } },
+                inlineNodes(row[j] || '', `${i}-${r}-${j}`),
+              )),
+            ))),
+          ]),
+        ])
+      }
     }
   })
 }
@@ -288,6 +439,42 @@ export default defineComponent({
   border: none;
   border-top: 1px solid var(--line);
   margin: 12px 0;
+}
+
+.seg-table-wrap {
+  margin: 10px 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.seg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.seg-table th,
+.seg-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.seg-table th {
+  color: var(--cyan);
+  font-weight: 600;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--cyan) 6%, transparent);
+}
+
+.seg-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.seg-table .seg-math {
+  white-space: nowrap;
 }
 
 /* 引用区:小字、醒目、可跳转(回答末尾的来源列表) */
