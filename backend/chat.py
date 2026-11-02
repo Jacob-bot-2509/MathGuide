@@ -38,6 +38,7 @@ import config
 import rag
 import research_actions
 import research_corpus
+import diagram_metrics
 import research_diagrams
 import research_tables
 import usage
@@ -717,9 +718,11 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             points, size = research_diagrams.diagram_cost(diagram)
             if (total_points + points > research_diagrams.MAX_TOTAL_POINTS
                     or total_bytes + size > research_diagrams.MAX_TOTAL_BYTES):
+                diagram_metrics.record("drop", False, "budget", points=points)
                 return ""
             total_points += points
             total_bytes += size
+            diagram_metrics.record("emit", True, "ok", points=points)
             return research_diagrams.diagram_event(
                 diagram, markers.request_id,
                 marker.anchor_id, marker.anchor_index)
@@ -741,6 +744,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                     yield f"data: {json.dumps(clean, ensure_ascii=False)}\n\n"
                 for marker in markers.drain():
                     if scheduled_diagrams >= research_diagrams.MAX_DIAGRAMS:
+                        diagram_metrics.record("drop", False, "cap")
                         continue
                     full_text = "".join(answer)
                     stepwise = stepwise_hint or research_diagrams.is_step_text(full_text)
@@ -755,19 +759,23 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                         segment = " ".join(parts[-2:])
                         if research_diagrams.is_step_text(segment):
                             if research_diagrams.visual_cue_score(segment) < 1.2:
+                                diagram_metrics.record("drop", False, "visual")
                                 continue
                         else:
                             terms = tuple(research_diagrams._topic_terms(
                                 diagram_question or prompt, full_text))
                             if research_diagrams.importance_score(
                                     segment, terms) < 1.8:
+                                diagram_metrics.record("drop", False, "importance")
                                 continue
                     # 非步骤内容最多 3 张,且锚点间隔 >=400 字,避免同一主题连续堆图。
                     if not stepwise and scheduled_diagrams >= 3:
+                        diagram_metrics.record("drop", False, "density")
                         continue
                     if not stepwise and any(
                             abs(marker.anchor_index - anchor) < 400
                             for anchor in kept_anchors):
+                        diagram_metrics.record("drop", False, "spacing")
                         continue
                     kept_anchors.append(marker.anchor_index)
                     scheduled_diagrams += 1

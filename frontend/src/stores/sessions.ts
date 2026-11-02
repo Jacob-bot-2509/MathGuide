@@ -137,10 +137,12 @@ function load(key: string): Persisted {
             .filter((s) => s && Array.isArray(s.messages))
             .map((s) => ({
               ...s,
-              messages: s.messages.map((m) => ({
-                ...m,
-                diagrams: sanitizeDiagrams(m.diagrams),
-              })),
+              messages: s.messages
+                .filter((m) => m && typeof m === 'object')
+                .map((m) => ({
+                  ...m,
+                  diagrams: sanitizeDiagrams(m.diagrams),
+                })),
             })) as Persisted['sessions'],
           activeId: typeof p.activeId === 'number' ? p.activeId : 0,
           msgId: typeof p.msgId === 'number' ? p.msgId : 0,
@@ -188,6 +190,7 @@ function trimForStorage(data: Persisted): Persisted {
   const newestFirst = [...data.sessions].sort((a, b) => b.id - a.id)
   for (const session of newestFirst) {
     for (const message of [...session.messages].reverse()) {
+      if (!message || typeof message !== 'object') continue
       if (!message.diagrams?.length) continue
       const key = `${session.id}:${message.id}`
       const kept: DiagramBlock[] = []
@@ -208,6 +211,7 @@ function trimForStorage(data: Persisted): Persisted {
     sessions: data.sessions.map((session) => ({
       ...session,
       messages: session.messages.map((message) => {
+        if (!message || typeof message !== 'object') return message
         if (!message.diagrams?.length) return message
         const kept = keptByKey.get(`${session.id}:${message.id}`) || []
         return kept.length
@@ -247,6 +251,7 @@ function createSessionStore(workspace: Workspace): SessionStore {
           id: s.id,
           cat: s.cat,
           messages: s.messages
+            .filter((m) => m && typeof m === 'object')
             .map((m) => ({
               id: m.id, role: m.role, content: m.content, cmd: m.cmd,
               attachment: m.attachment, chitchat: m.chitchat,

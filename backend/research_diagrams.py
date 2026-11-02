@@ -18,6 +18,7 @@ from auth import require_auth
 from http_utils import read_json_object
 from rag import llm
 from rate_limit import SlidingWindowLimiter
+import diagram_metrics
 import diagram_taxonomy as taxonomy
 
 PREFIX = "[[MG_DIAGRAM:"
@@ -27,6 +28,7 @@ _MAX_SURFACE_GRID = 41
 _CURVE_SAMPLES = 80
 _TYPES = {"tree", "relation", "flow", "geometry2d", "plot2d",
           "geometry3d", "surface3d"}
+DIAGRAM_SCHEMA_VERSION = 1
 _SHAPES = {"point", "segment", "line", "vector", "circle", "polygon",
            "curve", "axis", "plane", "sphere", "box", "cone", "cylinder",
            "surface"}
@@ -782,6 +784,14 @@ def _shape(raw: object) -> dict | None:
 def validate_diagram(raw: object) -> dict | None:
     if not isinstance(raw, dict):
         return None
+    version = raw.get("schemaVersion")
+    if version is not None:
+        try:
+            parsed_version = int(version)
+        except (TypeError, ValueError):
+            return None
+        if parsed_version > DIAGRAM_SCHEMA_VERSION:
+            return None
     kind = _text(raw.get("type"), 40)
     if kind not in _TYPES:
         return None
@@ -875,6 +885,7 @@ def validate_diagram(raw: object) -> dict | None:
     elif not shapes:
         return None
     result: dict = {
+        "schemaVersion": DIAGRAM_SCHEMA_VERSION,
         "type": kind, "nodes": nodes, "edges": edges,
         "shapes": shapes, "annotations": annotations,
     }
@@ -1085,7 +1096,9 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
     if not llm.is_configured(role):
         return None
     if _breaker_open():
+        diagram_metrics.record("plan", False, "breaker")
         return None
+    started = time.monotonic()
     # 图解只针对标记前的最新一步:取正文尾部,避免把整篇回答塞进一张图。
     latest = re.sub(r"\s+", " ", before or "").strip()[-3500:]
     if not kind:
@@ -1130,15 +1143,28 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
             # 表达式采样是 CPU 活,放线程里,避免卡住 SSE 事件循环。
             diagram = await asyncio.to_thread(prepare_diagram, raw)
     except asyncio.CancelledError:
+        diagram_metrics.record(
+            "plan", False, "cancelled",
+            round((time.monotonic() - started) * 1000))
         raise
     except Exception:  # noqa: BLE001 图解失败不能影响回答
         _breaker_failure()
+        diagram_metrics.record(
+            "plan", False, "exception",
+            round((time.monotonic() - started) * 1000))
         return None
     # 硬性要求时类型必须一致;建议类型允许规划器按内容改选。
     if diagram is None or (strict and kind and diagram.get("type") != kind):
         _breaker_failure()
+        diagram_metrics.record(
+            "plan", False, "invalid",
+            round((time.monotonic() - started) * 1000))
         return None
     _breaker_success()
+    points, _size = diagram_cost(diagram)
+    diagram_metrics.record(
+        "plan", True, "ok", round((time.monotonic() - started) * 1000),
+        points)
     return diagram
 
 

@@ -42,6 +42,7 @@ export interface DiagramView {
 }
 
 export interface DiagramSpec {
+  schemaVersion?: number
   type: DiagramType
   title?: string
   nodes: DiagramNode[]
@@ -72,6 +73,7 @@ const MAX_POINTS = 2000
 const MAX_DIAGRAMS = 6
 const MAX_TOTAL_POINTS = 8000
 const MAX_COORD = 1e4
+const DIAGRAM_SCHEMA_VERSION = 1
 
 function text(value: unknown, limit: number): string {
   return typeof value === 'string' ? value.trim().slice(0, limit) : ''
@@ -150,6 +152,8 @@ export function parseDiagramSpec(raw: unknown): DiagramSpec | null {
   const item = raw as Record<string, unknown>
   const type = text(item.type, 40) as DiagramType
   if (!TYPES.has(type)) return null
+  const version = Number(item.schemaVersion)
+  if (Number.isFinite(version) && version > DIAGRAM_SCHEMA_VERSION) return null
 
   const nodes: DiagramNode[] = []
   const nodeIds = new Set<string>()
@@ -224,7 +228,10 @@ export function parseDiagramSpec(raw: unknown): DiagramSpec | null {
     return null
   }
 
-  const spec: DiagramSpec = { type, nodes, edges, shapes, annotations }
+  const spec: DiagramSpec = {
+    schemaVersion: DIAGRAM_SCHEMA_VERSION,
+    type, nodes, edges, shapes, annotations,
+  }
   const title = text(item.title, 200)
   if (title) spec.title = title
   if (item.view && typeof item.view === 'object') {

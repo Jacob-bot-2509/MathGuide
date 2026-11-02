@@ -38,13 +38,16 @@ async function main() {
               edges: [], shapes: [], annotations: [] },
           },
         ],
-      }],
+      }, null],
     }],
     activeId: 9, msgId: 1, sessionId: 9,
   }))
 
   const { sessionStore } = await import('../src/stores/sessions')
   const learn = sessionStore('learn')
+  if (learn.state.sessions[0]?.messages.length !== 1) {
+    throw new Error('invalid message prevented recovery of valid session')
+  }
   const restored = learn.state.sessions[0]?.messages[0]?.diagrams
   if (restored?.length !== 1 || restored[0].id !== 'ok') {
     throw new Error(`bad diagram was not rejected: ${JSON.stringify(restored)}`)

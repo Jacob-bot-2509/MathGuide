@@ -277,6 +277,35 @@ def test_plan_diagram_uses_weight_hint_without_explicit_dimension(monkeypatch):
     assert "形式权重参考" not in seen["user"]
 
 
+def test_validate_rejects_future_schema_version():
+    assert validate_diagram({
+        "schemaVersion": rd.DIAGRAM_SCHEMA_VERSION + 1,
+        "type": "flow",
+        "nodes": [{"id": "a", "label": "A"}],
+    }) is None
+    current = validate_diagram({
+        "type": "flow",
+        "nodes": [{"id": "a", "label": "A"}],
+    })
+    assert current and current["schemaVersion"] == rd.DIAGRAM_SCHEMA_VERSION
+
+
+def test_plan_metrics_do_not_include_content(monkeypatch):
+    import diagram_metrics
+
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({"type": "flow", "nodes": [{"id": "a", "label": "A"}]})
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    assert asyncio.run(rd.plan_diagram("机密问题", "机密回答", [], "flow"))
+    snap = diagram_metrics.snapshot()
+    assert snap["planCount"] == 1
+    assert snap["planFailures"] == 0
+    assert "机密" not in json.dumps(snap, ensure_ascii=False)
+
+
 def test_validate_rejects_type_structure_mismatch():
     assert validate_diagram({
         "type": "surface3d",

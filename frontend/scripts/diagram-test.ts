@@ -27,6 +27,12 @@ const relation = parseDiagramSpec({
   edges: [{ from: 'a', to: 'b', label: '推出' }],
 })
 check('合法 relation', relation?.nodes?.length === 2)
+check('schema 版本写入', relation?.schemaVersion === 1)
+check('未来 schema 拒绝', parseDiagramSpec({
+  schemaVersion: 2,
+  type: 'relation',
+  nodes: [{ id: 'a', label: 'A' }],
+}) === null)
 check('非法类型拒绝', parseDiagramSpec({ type: 'script' }) === null)
 check('超限节点拒绝', parseDiagramSpec({
   type: 'relation',

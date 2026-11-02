@@ -20,6 +20,10 @@
 | 严格 JSON | `json.dumps(allow_nan=False)`；NaN/Infinity 直接丢弃该事件 |
 | 类型/结构校验 | 请求类型必须一致；节点型必须有 nodes，几何型必须有 shapes；错类型不画 |
 | 手动接口限流 | `SlidingWindowLimiter(12, 60s)` |
+| Schema 版本 | 图解带 `schemaVersion`；未来版本直接丢弃；旧数据缺版本按当前版本恢复 |
+| 运行指标 | `diagram_metrics` 记录 plan/emit/drop、耗时、点数、失败原因；不含正文或用户身份 |
+
+指标只记录阶段与原因，例如 `plan:ok`、`plan:fail:invalid`、`drop:fail:budget`；快照可通过 `diagram_metrics.snapshot()` 读取。
 
 ## 2. 前端
 
@@ -55,7 +59,6 @@
 
 ## 5. 已知缺口
 
-- 结构化日志与指标（阶段、耗时、失败/丢弃原因）尚未接入；
-- schema 版本号与迁移尚未加；
-- 失败注入目前以单测为主，未做系统级故障演练；
+- 指标只有进程内快照，尚未接监控/告警；
+- 失败注入以单测为主，未做系统级故障演练；
 - 3D 语义必需失败时，文字化降级依赖图题/标注；没有标注时只显示通用提示。
