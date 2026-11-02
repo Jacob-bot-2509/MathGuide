@@ -18,10 +18,11 @@
  * 回复由后端 LLM 流式生成(services/chatService,SSE 契约);
  * 问题分类由前端关键词预判,后端路由做最终裁决。
  */
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
+import { computed, defineAsyncComponent, markRaw, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
+import DiagramBoundary from '@/components/diagram/DiagramBoundary.vue'
 import { appendDiagram, parseDiagramEvent, splitMessageBlocks, type DiagramBlock } from '@/utils/diagramSpec'
 import { needsDiagram, planDiagram } from '@/services/diagramService'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
@@ -599,11 +600,11 @@ async function requestDiagram(
       if (!silent) showToast(t('diagram.fail'))
       return
     }
-    msg.diagrams = appendDiagram(msg.diagrams, {
+    msg.diagrams = markRaw(appendDiagram(msg.diagrams, {
       id: `manual-${msg.id}-${Date.now()}`,
       anchorIndex: msg.content.length,
       spec,
-    })
+    }))
     persistSessions()
   } catch {
     if (!silent) showToast(t('diagram.fail'))
@@ -644,7 +645,7 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
       if (inner?.paperImported) markPaperImported(inner.paperImported)
       const diagram = parseDiagramEvent(meta)
       if (diagram) {
-        reply.diagrams = appendDiagram(reply.diagrams, diagram)
+        reply.diagrams = markRaw(appendDiagram(reply.diagrams, diagram))
         persistSessions()
       }
     },
@@ -1905,7 +1906,13 @@ onBeforeUnmount(() => {
               <div v-if="m.content && !m.paperImport" class="mg-blocks">
                 <template v-for="block in messageBlocks(m)" :key="block.key">
                   <MathText v-if="block.kind === 'text'" :text="block.text || ''" />
-                  <DiagramBlockView v-else-if="block.diagram" :spec="block.diagram.spec" />
+                  <DiagramBoundary
+                    v-else-if="block.diagram"
+                    :title="block.diagram.spec.title"
+                    :notes="block.diagram.spec.annotations.map((note) => note.text)"
+                  >
+                    <DiagramBlockView :spec="block.diagram.spec" />
+                  </DiagramBoundary>
                 </template>
               </div>
               <button

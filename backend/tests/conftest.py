@@ -15,6 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import auth  # noqa: E402
+import research_diagrams  # noqa: E402
 import session_cache  # noqa: E402
 import store  # noqa: E402
 import usage  # noqa: E402
@@ -25,9 +26,11 @@ def clean_global_state():
     """每个测试前后清空会话缓存与认证限流,避免测试互相污染。"""
     session_cache.reset()
     auth._auth_limiter.reset()
+    research_diagrams.reset_planner_breaker()
     yield
     session_cache.reset()
     auth._auth_limiter.reset()
+    research_diagrams.reset_planner_breaker()
 
 
 @pytest.fixture()

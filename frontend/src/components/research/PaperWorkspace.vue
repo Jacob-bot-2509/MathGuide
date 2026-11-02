@@ -3,12 +3,13 @@
  * 论文工作台:左对话、右阅读器,第三栏按需展开论文结构与思维导图。
  * 对话只在本篇论文内检索;关闭后聊天记录丢弃,页码与批注保留。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import { usePaperChat } from '@/composables/usePaperChat'
 import MathText from '@/components/chat/MathText.vue'
 import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
+import DiagramBoundary from '@/components/diagram/DiagramBoundary.vue'
 import DocumentViewer from '@/components/research/DocumentViewer.vue'
 import PaperInsights from '@/components/research/PaperInsights.vue'
 import { appendDiagram, parseDiagramEvent, splitMessageBlocks, type DiagramBlock } from '@/utils/diagramSpec'
@@ -130,11 +131,11 @@ async function requestDiagram(
       if (!silent) showToast(t('diagram.fail'))
       return
     }
-    msg.diagrams = appendDiagram(msg.diagrams, {
+    msg.diagrams = markRaw(appendDiagram(msg.diagrams, {
       id: `manual-${msg.id}-${Date.now()}`,
       anchorIndex: msg.content.length,
       spec,
-    })
+    }))
   } catch {
     if (!silent) showToast(t('diagram.fail'))
   } finally {
@@ -308,7 +309,7 @@ function send(): void {
   streamHandle = paperChat.stream(prompt, {
     onMeta: (meta) => {
       const diagram = parseDiagramEvent(meta)
-      if (diagram) live.diagrams = appendDiagram(live.diagrams, diagram)
+      if (diagram) live.diagrams = markRaw(appendDiagram(live.diagrams, diagram))
     },
     onDelta: (text) => {
       live.thinking = false
@@ -420,7 +421,13 @@ onBeforeUnmount(() => {
               <template v-else-if="m.role === 'assistant'">
                 <template v-for="block in messageBlocks(m)" :key="block.key">
                   <MathText v-if="block.kind === 'text'" :text="block.text || ''" />
-                  <DiagramBlockView v-else-if="block.diagram" :spec="block.diagram.spec" />
+                  <DiagramBoundary
+                    v-else-if="block.diagram"
+                    :title="block.diagram.spec.title"
+                    :notes="block.diagram.spec.annotations.map((note) => note.text)"
+                  >
+                    <DiagramBlockView :spec="block.diagram.spec" />
+                  </DiagramBoundary>
                 </template>
                 <button
                   v-if="m.content && !m.streaming && previousQuestion(m)

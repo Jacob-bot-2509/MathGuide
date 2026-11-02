@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 
 import pytest
 
@@ -420,6 +421,62 @@ def test_plan_diagram_uses_latest_paragraph(monkeypatch):
     asyncio.run(plan_diagram("步骤", "旧内容" + "甲" * 6000 + "最新一步", [], "flow"))
     assert "旧内容" not in seen["user"]
     assert "最新一步" in seen["user"]
+
+
+def test_diagram_event_rejects_nan():
+    frame = diagram_event({
+        "type": "geometry2d",
+        "shapes": [{"kind": "point", "x": float("nan"), "y": 0}],
+    }, "r", "r-1", 0)
+    assert frame == ""
+
+
+def test_diagram_cost_counts_points_and_bytes():
+    points, size = rd.diagram_cost({
+        "type": "surface3d",
+        "shapes": [{"kind": "surface", "points": [[0, 0, 0]] * 12}],
+    })
+    assert points == 12
+    assert size > 0
+
+
+def test_planner_breaker_opens_and_resets(monkeypatch):
+    calls = 0
+
+    async def broken(system, user, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("provider down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+    monkeypatch.setattr(rd.llm, "stream_chat", broken)
+    for _ in range(rd._PLANNER_BREAKER_THRESHOLD):
+        assert asyncio.run(rd.plan_diagram("q", "a", [], "flow")) is None
+    before = calls
+    # 熔断打开后不再调用模型。
+    assert asyncio.run(rd.plan_diagram("q", "a", [], "flow")) is None
+    assert calls == before
+    rd.reset_planner_breaker()
+
+
+def test_plan_diagram_samples_in_worker_thread(monkeypatch):
+    main_thread = threading.get_ident()
+    seen: dict[str, int] = {}
+
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({"type": "flow", "nodes": [{"id": "a", "label": "A"}]})
+
+    def fake_prepare(raw):
+        seen["thread"] = threading.get_ident()
+        return raw
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(rd, "prepare_diagram", fake_prepare)
+    assert asyncio.run(rd.plan_diagram("q", "a", [], "flow"))
+    assert seen["thread"] != main_thread
 
 
 def test_diagram_event_frame():

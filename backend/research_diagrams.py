@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import re
+import time
 from dataclasses import dataclass
 
 from starlette.exceptions import HTTPException
@@ -34,6 +35,62 @@ _MAX_EDGES = 80
 _MAX_SHAPES = 100
 _MAX_ANNOTATIONS = 40
 _MAX_COORD = 1e4
+MAX_TOTAL_POINTS = 8000
+MAX_TOTAL_BYTES = 200_000
+_PLANNER_CONCURRENCY = 3
+_PLANNER_BREAKER_THRESHOLD = 5
+_PLANNER_BREAKER_COOLDOWN = 30.0
+
+_planner_semaphore: asyncio.Semaphore | None = None
+_planner_failures = 0
+_planner_open_until = 0.0
+
+
+def _planner_gate() -> asyncio.Semaphore:
+    global _planner_semaphore
+    if _planner_semaphore is None:
+        _planner_semaphore = asyncio.Semaphore(_PLANNER_CONCURRENCY)
+    return _planner_semaphore
+
+
+def _breaker_open() -> bool:
+    return time.monotonic() < _planner_open_until
+
+
+def _breaker_success() -> None:
+    global _planner_failures, _planner_open_until
+    _planner_failures = 0
+    _planner_open_until = 0.0
+
+
+def _breaker_failure() -> None:
+    global _planner_failures, _planner_open_until
+    _planner_failures += 1
+    if _planner_failures >= _PLANNER_BREAKER_THRESHOLD:
+        _planner_failures = 0
+        _planner_open_until = time.monotonic() + _PLANNER_BREAKER_COOLDOWN
+
+
+def reset_planner_breaker() -> None:
+    """测试与进程内重置用;正常请求不调用。"""
+    global _planner_semaphore, _planner_failures, _planner_open_until
+    _planner_semaphore = None
+    _planner_failures = 0
+    _planner_open_until = 0.0
+
+
+def diagram_cost(diagram: dict) -> tuple[int, int]:
+    """返回 (总点数, 序列化字节数),用于单条回答的总预算。"""
+    points = 0
+    for shape in diagram.get("shapes") or []:
+        if isinstance(shape, dict) and isinstance(shape.get("points"), list):
+            points += len(shape["points"])
+    try:
+        size = len(json.dumps(
+            diagram, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+    except (TypeError, ValueError):
+        size = MAX_TOTAL_BYTES + 1
+    return points, size
 
 # 用户明确说出的表示方式优先于模型自选类型:要三维就画三维,不要改画思维导图。
 _3D_SURFACE_RE = re.compile(
@@ -930,13 +987,17 @@ class MarkerStream:
 
 def diagram_event(diagram: dict, request_id: str, anchor_id: str,
                   anchor_index: int) -> str:
-    return "data: " + json.dumps({
-        "mg_event": "diagram",
-        "requestId": request_id,
-        "anchorId": anchor_id,
-        "anchorIndex": anchor_index,
-        "diagram": diagram,
-    }, ensure_ascii=False) + "\n\n"
+    try:
+        payload = json.dumps({
+            "mg_event": "diagram",
+            "requestId": request_id,
+            "anchorId": anchor_id,
+            "anchorIndex": anchor_index,
+            "diagram": diagram,
+        }, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError):
+        return ""
+    return "data: " + payload + "\n\n"
 
 
 _PLAN_SYSTEM = (
@@ -1023,6 +1084,8 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
         return None
     if not llm.is_configured(role):
         return None
+    if _breaker_open():
+        return None
     # 图解只针对标记前的最新一步:取正文尾部,避免把整篇回答塞进一张图。
     latest = re.sub(r"\s+", " ", before or "").strip()[-3500:]
     if not kind:
@@ -1051,24 +1114,31 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
         body = _text(item.get("text") or item.get("snippet"), 900)
         if body:
             context.append(f"- {section}:{body}")
-    parts: list[str] = []
     try:
-        async for delta in llm.stream_chat(
-                _PLAN_SYSTEM, "\n".join(context), role=role,
-                fallback=True, max_tokens=1800, thinking=False):
-            parts.append(delta)
-            if sum(len(part) for part in parts) >= 12000:
-                break
+        async with _planner_gate():
+            parts: list[str] = []
+            async for delta in llm.stream_chat(
+                    _PLAN_SYSTEM, "\n".join(context), role=role,
+                    fallback=True, max_tokens=1800, thinking=False):
+                parts.append(delta)
+                if sum(len(part) for part in parts) >= 12000:
+                    break
+            raw = _load_json("".join(parts))
+            if isinstance(raw, dict) and kind and not raw.get("type"):
+                # 规划器经常省略 type;把请求类型补上再校验。
+                raw["type"] = kind
+            # 表达式采样是 CPU 活,放线程里,避免卡住 SSE 事件循环。
+            diagram = await asyncio.to_thread(prepare_diagram, raw)
+    except asyncio.CancelledError:
+        raise
     except Exception:  # noqa: BLE001 图解失败不能影响回答
+        _breaker_failure()
         return None
-    raw = _load_json("".join(parts))
-    if isinstance(raw, dict) and kind and not raw.get("type"):
-        # 规划器经常省略 type;把请求类型补上再校验。
-        raw["type"] = kind
-    diagram = prepare_diagram(raw)
     # 硬性要求时类型必须一致;建议类型允许规划器按内容改选。
-    if diagram is not None and strict and kind and diagram.get("type") != kind:
+    if diagram is None or (strict and kind and diagram.get("type") != kind):
+        _breaker_failure()
         return None
+    _breaker_success()
     return diagram
 
 

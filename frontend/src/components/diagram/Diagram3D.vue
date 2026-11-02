@@ -2,6 +2,7 @@
 /** 3D 静态图解:Three.js 场景,可旋转/缩放,不自动播放动画。 */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
+import { t } from '@/utils/i18n'
 
 const props = defineProps<{ spec: DiagramSpec }>()
 const host = ref<HTMLDivElement | null>(null)
@@ -16,6 +17,7 @@ let controls: {
   addEventListener(type: string, fn: () => void): void
 } | null = null
 let observer: ResizeObserver | null = null
+let contextLostHandler: ((event: Event) => void) | null = null
 let disposed = false
 
 function num(value: unknown): number {
@@ -400,6 +402,12 @@ async function boot(): Promise<void> {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     renderer.setSize(el.clientWidth, Math.max(340, el.clientHeight))
     el.appendChild(renderer.domElement)
+    contextLostHandler = (event: Event) => {
+      // 阻止默认行为后浏览器仍可尝试恢复;恢复不了就只显示文字提示。
+      event.preventDefault()
+      error.value = t('diagram.renderFail')
+    }
+    renderer.domElement.addEventListener('webglcontextlost', contextLostHandler)
     const root = new THREE.Group()
     scene.add(root)
     scene.add(new THREE.AmbientLight(0xffffff, 0.9))
@@ -469,6 +477,10 @@ function dispose(): void {
   observer = null
   controls?.dispose()
   controls = null
+  if (renderer && contextLostHandler) {
+    renderer.domElement.removeEventListener('webglcontextlost', contextLostHandler)
+  }
+  contextLostHandler = null
   if (scene) {
     scene.traverse((obj) => {
       const item = obj as import('three').Mesh

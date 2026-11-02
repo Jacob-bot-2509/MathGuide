@@ -469,6 +469,32 @@ def test_chat_caps_diagrams_at_six_per_message(monkeypatch):
     assert all(anchor > 0 for anchor in anchors)
 
 
+def test_chat_total_points_budget_skips_extra_diagrams(monkeypatch):
+    async def fake_stream(system, user, history=None, role="main"):
+        yield ("第一步:曲面 z=x^2+y^2 的梯度。[[MG_DIAGRAM:surface3d]]\n\n"
+               "第二步:曲面的等高线。[[MG_DIAGRAM:surface3d]]\n\n"
+               "第三步:曲面的法向量。[[MG_DIAGRAM:surface3d]]")
+
+    calls: list[str] = []
+
+    async def fake_plan(question, before, excerpts, kind, role="main", **kwargs):
+        calls.append(kind)
+        return {
+            "type": "surface3d",
+            "shapes": [{"kind": "surface", "points": [[0, 0, 0]] * 3000}],
+            "annotations": [],
+        }
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat.research_diagrams, "plan_diagram", fake_plan)
+    frames = asyncio.run(_collect_gen(chat._gen_llm(
+        "曲面", None, [], diagram_mode=True, diagram_request_id="r-budget")))
+    events = [json.loads(frame[6:].strip()) for frame in frames
+              if frame.startswith("data: ") and "mg_event" in frame]
+    assert len(calls) == 3
+    assert len(events) == 2  # 3000 + 3000 <= 8000, 第三张超预算
+
+
 def test_chat_backfills_by_weight_when_model_marks_nothing(monkeypatch):
     async def fake_stream(system, user, history=None, role="main"):
         yield ("第一步:写出方向导数 D_u f = ∇f · u。\n\n"

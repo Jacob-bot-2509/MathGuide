@@ -72,6 +72,17 @@ for (const id of ['d2', 'd3', 'd4', 'd5', 'd6', 'd7']) {
 }
 check('单消息最多六张图', capped.length === 6)
 
+const surfacePoints = Array.from({ length: 1681 }, (_, i) => [i % 41, i / 41, 0])
+const bigSpec = parseDiagramSpec({
+  type: 'surface3d',
+  shapes: [{ kind: 'surface', points: surfacePoints }],
+})
+let totalBudget = appendDiagram(undefined, { id: 'p1', anchorIndex: 0, spec: bigSpec! })
+for (const id of ['p2', 'p3', 'p4', 'p5']) {
+  totalBudget = appendDiagram(totalBudget, { id, anchorIndex: 1, spec: bigSpec! })
+}
+check('单消息总点数上限', totalBudget.length === 4)
+
 const threeD = parseDiagramSpec({
   type: 'surface3d',
   shapes: [{

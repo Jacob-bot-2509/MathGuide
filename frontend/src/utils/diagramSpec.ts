@@ -70,6 +70,7 @@ const MAX_SHAPES = 100
 const MAX_ANNOTATIONS = 40
 const MAX_POINTS = 2000
 const MAX_DIAGRAMS = 6
+const MAX_TOTAL_POINTS = 8000
 const MAX_COORD = 1e4
 
 function text(value: unknown, limit: number): string {
@@ -273,6 +274,12 @@ export function splitMessageBlocks(
   return blocks
 }
 
+function specPoints(spec: DiagramSpec): number {
+  return spec.shapes.reduce((sum, shape) => (
+    sum + (Array.isArray(shape.points) ? shape.points.length : 0)
+  ), 0)
+}
+
 export function appendDiagram(
   existing: DiagramBlock[] | undefined,
   incoming: DiagramBlock,
@@ -280,6 +287,8 @@ export function appendDiagram(
   const current = existing || []
   if (current.some((item) => item.id === incoming.id)) return current
   if (current.length >= MAX_DIAGRAMS) return current
+  const points = current.reduce((sum, item) => sum + specPoints(item.spec), 0)
+  if (points + specPoints(incoming.spec) > MAX_TOTAL_POINTS) return current
   return [...current, incoming]
 }
 

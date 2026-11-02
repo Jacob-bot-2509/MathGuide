@@ -708,6 +708,21 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
         stepwise_hint = research_diagrams.is_step_text(diagram_question or prompt)
         explicit_requested = research_diagrams.explicit_type(
             diagram_question or prompt)
+        total_points = 0
+        total_bytes = 0
+
+        def diagram_frame(diagram: dict,
+                          marker: research_diagrams.DiagramMarker) -> str:
+            nonlocal total_points, total_bytes
+            points, size = research_diagrams.diagram_cost(diagram)
+            if (total_points + points > research_diagrams.MAX_TOTAL_POINTS
+                    or total_bytes + size > research_diagrams.MAX_TOTAL_BYTES):
+                return ""
+            total_points += points
+            total_bytes += size
+            return research_diagrams.diagram_event(
+                diagram, markers.request_id,
+                marker.anchor_id, marker.anchor_index)
         if markers is None:
             async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
                 answer.append(delta)
@@ -773,9 +788,9 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                     except Exception:  # noqa: BLE001
                         diagram = None
                     if diagram:
-                        yield research_diagrams.diagram_event(
-                            diagram, markers.request_id,
-                            marker.anchor_id, marker.anchor_index)
+                        frame = diagram_frame(diagram, marker)
+                        if frame:
+                            yield frame
             tail = markers.finish()
             if tail:
                 answer.append(tail)
@@ -785,7 +800,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             stepwise = stepwise_hint or research_diagrams.is_step_text("".join(answer))
             remaining = research_diagrams.MAX_DIAGRAMS - scheduled_diagrams
             if remaining > 0 and (scheduled_diagrams == 0 or stepwise):
-                covered = [marker.anchor_index for marker, _task in diagram_tasks]
+                covered = list(kept_anchors)
                 segments = research_diagrams.select_segments(
                     diagram_question or prompt, "".join(answer), covered, remaining)
                 for index, segment in enumerate(segments, start=1):
@@ -793,20 +808,21 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                         anchor_id=f"{markers.request_id}-auto-{index}",
                         kind=segment.kind,
                         anchor_index=segment.anchor_index)
+                    kept_anchors.append(marker.anchor_index)
                     task = asyncio.create_task(research_diagrams.plan_diagram(
                         diagram_question or prompt, segment.text,
                         excerpt_items, segment.kind, "main", strict=False))
                     diagram_tasks.append((marker, task))
             if diagram_tasks:
                 results = await asyncio.gather(*(
-                    asyncio.wait_for(task, timeout=20)
+                    asyncio.wait_for(task, timeout=30)
                     for _marker, task in diagram_tasks
                 ), return_exceptions=True)
                 for (marker, _task), diagram in zip(diagram_tasks, results):
                     if isinstance(diagram, dict):
-                        yield research_diagrams.diagram_event(
-                            diagram, markers.request_id,
-                            marker.anchor_id, marker.anchor_index)
+                        frame = diagram_frame(diagram, marker)
+                        if frame:
+                            yield frame
         if verify:
             # 解答者与复核者错开模型保证独立:deep 解答 → main 复核;main 解答 → deep 复核
             vrole = "main" if role == "deep" else rag.llm.pick("deep")

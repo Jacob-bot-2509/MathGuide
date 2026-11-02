@@ -5,8 +5,8 @@
  * - 回收站恢复按记录的 workspace 写回对应工作区。
  * 持久化于 localStorage(演示环境)。
  */
-import { reactive } from 'vue'
-import type { DiagramBlock } from '@/utils/diagramSpec'
+import { markRaw, reactive } from 'vue'
+import { parseDiagramSpec, type DiagramBlock } from '@/utils/diagramSpec'
 
 /** 工作区:学习辅助 / 科学研究。两个板块的数据完全隔离,只共享后端基础设施 */
 export type Workspace = 'learn' | 'research'
@@ -133,7 +133,15 @@ function load(key: string): Persisted {
       // 形状校验:字段缺失/被写坏(手改、旧版本、异常写入)时回退空档案,避免 /learn 挂掉
       if (p && Array.isArray(p.sessions)) {
         return {
-          sessions: p.sessions.filter((s) => s && Array.isArray(s.messages)) as Persisted['sessions'],
+          sessions: p.sessions
+            .filter((s) => s && Array.isArray(s.messages))
+            .map((s) => ({
+              ...s,
+              messages: s.messages.map((m) => ({
+                ...m,
+                diagrams: sanitizeDiagrams(m.diagrams),
+              })),
+            })) as Persisted['sessions'],
           activeId: typeof p.activeId === 'number' ? p.activeId : 0,
           msgId: typeof p.msgId === 'number' ? p.msgId : 0,
           sessionId: typeof p.sessionId === 'number' ? p.sessionId : 0,
@@ -144,6 +152,83 @@ function load(key: string): Persisted {
     /* 数据损坏时重置 */
   }
   return { sessions: [], activeId: 0, msgId: 0, sessionId: 0 }
+}
+
+const MAX_STORED_DIAGRAMS = 24
+const MAX_STORED_POINTS = 12000
+
+function diagramPoints(spec: DiagramBlock['spec']): number {
+  return (spec.shapes || []).reduce((sum, shape) => (
+    sum + (Array.isArray(shape.points) ? shape.points.length : 0)
+  ), 0)
+}
+
+/** 恢复时重新校验:旧版本/手改/半截图解不能直接进渲染器。 */
+function sanitizeDiagrams(raw: unknown): DiagramBlock[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: DiagramBlock[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const block = item as { id?: unknown; anchorIndex?: unknown; spec?: unknown }
+    const id = typeof block.id === 'string' ? block.id.trim().slice(0, 80) : ''
+    const anchor = Number(block.anchorIndex)
+    if (!id || !Number.isInteger(anchor) || anchor < 0) continue
+    const spec = parseDiagramSpec(block.spec)
+    if (!spec) continue
+    out.push(markRaw({ id, anchorIndex: anchor, spec }))
+  }
+  return out.length ? markRaw(out) : undefined
+}
+
+/** 落盘前裁剪图解:优先保留最新会话/最新消息的图,超预算的旧图不写,正文不受影响。 */
+function trimForStorage(data: Persisted): Persisted {
+  let diagrams = 0
+  let points = 0
+  const keptByKey = new Map<string, DiagramBlock[]>()
+  const newestFirst = [...data.sessions].sort((a, b) => b.id - a.id)
+  for (const session of newestFirst) {
+    for (const message of [...session.messages].reverse()) {
+      if (!message.diagrams?.length) continue
+      const key = `${session.id}:${message.id}`
+      const kept: DiagramBlock[] = []
+      for (const block of message.diagrams) {
+        const cost = diagramPoints(block.spec)
+        if (diagrams >= MAX_STORED_DIAGRAMS || points + cost > MAX_STORED_POINTS) {
+          continue
+        }
+        diagrams += 1
+        points += cost
+        kept.push(block)
+      }
+      keptByKey.set(key, kept)
+    }
+  }
+  return {
+    ...data,
+    sessions: data.sessions.map((session) => ({
+      ...session,
+      messages: session.messages.map((message) => {
+        if (!message.diagrams?.length) return message
+        const kept = keptByKey.get(`${session.id}:${message.id}`) || []
+        return kept.length
+          ? { ...message, diagrams: kept }
+          : { ...message, diagrams: undefined }
+      }),
+    })),
+  }
+}
+
+function stripAllDiagrams(data: Persisted): Persisted {
+  return {
+    ...data,
+    sessions: data.sessions.map((session) => ({
+      ...session,
+      messages: session.messages.map((message) => ({
+        ...message,
+        diagrams: undefined,
+      })),
+    })),
+  }
 }
 
 function createSessionStore(workspace: Workspace): SessionStore {
@@ -157,7 +242,7 @@ function createSessionStore(workspace: Workspace): SessionStore {
   /** 一次完整的序列化 + 写盘;成功/配额失败都更新 lastPersistOk */
   function writeSessionsNow(): boolean {
     try {
-      const data: Persisted = {
+      const data = trimForStorage({
         sessions: state.sessions.map((s) => ({
           id: s.id,
           cat: s.cat,
@@ -175,10 +260,17 @@ function createSessionStore(workspace: Workspace): SessionStore {
         activeId: state.activeId,
         msgId: state.msgId,
         sessionId: state.sessionId,
+      })
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(data))
+        lastPersistOk = true
+        return true
+      } catch {
+        // 配额不够时先丢掉所有图解,保住会话正文;不要让图解拖垮整份档案。
+        localStorage.setItem(storageKey, JSON.stringify(stripAllDiagrams(data)))
+        lastPersistOk = false
+        return false
       }
-      localStorage.setItem(storageKey, JSON.stringify(data))
-      lastPersistOk = true
-      return true
     } catch {
       /* 存储超限(通常是图片附件)时返回 false,由调用方决定是否提示用户 */
       lastPersistOk = false

@@ -5,6 +5,7 @@
 关联设计：[静态图解设计](superpowers/specs/2026-11-01-static-diagrams-design.md)
 相关原则：[表示形式契约](REPRESENTATION_CONTRACT.md)
 权重网：[图解形式权重网](DIAGRAM_TAXONOMY.md)
+防崩溃：[图解防崩溃机制](DIAGRAM_RESILIENCE.md)
 
 ## 1. 目标
 
@@ -184,7 +185,7 @@
 - 文本转义，禁止 HTML/JS；
 - 坐标、采样点、节点数量上限；
 - 3D 不加载外部模型/贴图；
-- 规划超时（20s）放弃该图；
+- 规划超时（30s）放弃该图；
 - 渲染失败只显示文字；
 - 图解事件只作用于当前消息，跨消息/跨论文不串用；
 - 图解规划失败不触发外部文献检索。
