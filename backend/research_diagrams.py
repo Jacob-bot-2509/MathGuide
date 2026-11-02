@@ -1259,7 +1259,7 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
     if requested:
         kind = requested
         strict = True
-    elif not kind and is_relation_question(question):
+    elif is_relation_question(question):
         # “A、B、C 之间是什么关系”不是几何作图题;禁止规划器拿坐标轴当装饰。
         # 有推出/充分必要/条件强弱时用纵向流程,避免关系图里的交叉线。
         source = f"{question} {(before or '')[:1200]}"

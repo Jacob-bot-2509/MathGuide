@@ -378,7 +378,8 @@ def test_relation_question_forces_relation_not_axes(monkeypatch):
 
     monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
     result = asyncio.run(rd.plan_diagram(
-        "偏导数连续、可微、连续之间是什么关系", "解释", [], "", strict=False))
+        "偏导数连续、可微、连续之间是什么关系", "解释", [], "surface3d",
+        strict=False))
     assert result and result["type"] == "relation"
     assert "请求图解类型:relation" in seen["user"]
 
