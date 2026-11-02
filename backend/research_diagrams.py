@@ -361,6 +361,8 @@ _META_RE = re.compile(
     r"你是谁|怎么使用|使用说明|help|what can you do", re.IGNORECASE)
 _RELATION_QUESTION_RE = re.compile(
     r"关系|之间|区别|联系|推出|蕴含|等价|条件|强弱|依赖|哪一个更", re.IGNORECASE)
+_ANALOGY_RE = re.compile(
+    r"类比|比喻|实体化|画图|图示|几何直观|可视化|想象成", re.IGNORECASE)
 
 
 def is_meta_question(question: str) -> bool:
@@ -371,6 +373,11 @@ def is_meta_question(question: str) -> bool:
 def is_relation_question(question: str) -> bool:
     """概念关系/推出关系题:应走 relation/flow,不要拿坐标轴当装饰。"""
     return bool(_RELATION_QUESTION_RE.search(question or ""))
+
+
+def wants_analogy(question: str) -> bool:
+    """用户明确要类比/实体化/画图时,允许从思维导图改为具体 2D/3D。"""
+    return bool(_ANALOGY_RE.search(question or ""))
 
 
 def slice_utf16(text: str, units: int) -> str:
@@ -1226,9 +1233,10 @@ _PLAN_SYSTEM = (
     "17. 系统介绍、功能列表、寒暄、使用说明不画图。\n"
     "18. 3D 图选平缓、可读的函数和适中的定义域,让曲面主体占住画面;"
     "梯度/方向/曲面用明显不同的颜色,关键量就近标文字即可,不要加大底板或色块。\n"
-    "19. 概念辨析、条件关系、A/B/C 之间的关系用 tree(思维导图);"
+    "19. 概念辨析、条件关系、A/B/C 之间的关系默认用 tree(思维导图);"
+    "只有用户明确要类比/实体化/画图且你能给出准确具体的图像时,才改用 2D/3D;"
     "明确步骤/推导/因果链才用 flow;真正的关系网才用 relation。"
-    "这些图都不要加坐标轴;坐标轴只属于几何图、函数图或空间图。\n"
+    "这些图都不要加装饰性坐标轴;坐标轴只属于几何图、函数图或空间图。\n"
 )
 
 
@@ -1259,9 +1267,9 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
     if requested:
         kind = requested
         strict = True
-    elif is_relation_question(question):
-        # 概念辨析/条件关系直接做思维导图;明确“步骤/推导”才用流程。
-        # 不再允许规划器拿坐标轴当装饰。
+    elif is_relation_question(question) and not wants_analogy(question):
+        # 概念辨析默认思维导图;用户明确要类比/画图时留给规划器选具体图。
+        # 默认图不再允许拿坐标轴当装饰。
         kind = "flow" if is_step_text(question) else "tree"
         strict = True
     elif strict is None:

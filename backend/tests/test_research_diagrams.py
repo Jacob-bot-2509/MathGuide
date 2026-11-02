@@ -384,6 +384,21 @@ def test_concept_relation_question_forces_mind_map(monkeypatch):
     assert "请求图解类型:tree" in seen["user"]
 
 
+def test_relation_question_with_analogy_can_use_concrete_image(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({
+            "type": "geometry2d",
+            "shapes": [{"kind": "vector", "from": [0, 0], "to": [1, 1]}],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(rd.plan_diagram(
+        "用类比讲讲偏导数与连续的关系", "解释", [], "", strict=False))
+    assert result and result["type"] == "geometry2d"
+
+
 def test_meta_question_never_gets_diagram():
     question = "你好，今天先介绍一下这个系统能做什么"
     assert rd.is_meta_question(question)
