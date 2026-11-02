@@ -39,6 +39,42 @@ def test_anchor_counts_text_before_markers_in_same_feed():
     assert [m.anchor_index for m in markers] == [3, 6]
 
 
+def test_node_diagrams_prune_geometry_decorations():
+    spec = rd.prepare_diagram({
+        "type": "relation",
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"from": "a", "to": "b"}],
+        "shapes": [{"kind": "axis", "from": [-1, 0], "to": [1, 0]}],
+        "annotations": [{"x": 0, "y": 0, "text": "装饰"}],
+    })
+    assert spec
+    assert spec["shapes"] == [] and spec["annotations"] == []
+
+
+def test_2d_axes_are_normalized_orthogonal():
+    spec = rd.prepare_diagram({
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "axis", "label": "x", "from": [-1, 1], "to": [1, 2]},
+            {"kind": "axis", "label": "y", "from": [0, 0], "to": [1, 1]},
+            {"kind": "curve", "expr": "x^2", "domain": [-1, 1]},
+        ],
+    })
+    assert spec
+    x_axis = next(shape for shape in spec["shapes"]
+                  if shape.get("label") == "x")
+    y_axis = next(shape for shape in spec["shapes"]
+                  if shape.get("label") == "y")
+    assert x_axis["from"][1] == 0 and x_axis["to"][1] == 0
+    assert y_axis["from"][0] == 0 and y_axis["to"][0] == 0
+
+
+def test_uppercase_marker_is_hidden_not_leaked():
+    stream = MarkerStream("r-upper")
+    assert stream.feed("前[[MG_DIAGRAM:RELATION]]后") == "前后"
+    assert stream.drain() == []
+
+
 def test_incomplete_marker_does_not_leak_uppercase_fragment():
     stream = MarkerStream("r-tail")
     assert stream.feed("前[[MG_DIAGRAM:plot2dD") == "前"

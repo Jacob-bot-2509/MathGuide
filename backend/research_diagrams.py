@@ -921,6 +921,66 @@ def _axis_aligned_segment(shape: dict) -> bool:
     return False
 
 
+def _axis_kind(shape: dict) -> str | None:
+    label = str(shape.get("label") or "").strip().lower()
+    if re.match(r"^x\b|^x[ (]|横", label):
+        return "x"
+    if re.match(r"^y\b|^y[ (]|纵", label):
+        return "y"
+    return None
+
+
+def normalize_2d_axes(shapes: list[dict]) -> None:
+    """所有 2D 坐标图的 x/y 轴统一为正交轴,长度由实际数据决定。"""
+    axes = [shape for shape in shapes if shape.get("kind") == "axis"]
+    if not axes:
+        return
+    xs: list[float] = [0.0]
+    ys: list[float] = [0.0]
+    for shape in shapes:
+        if shape.get("kind") == "axis":
+            continue
+        kind = shape.get("kind")
+        try:
+            if kind in ("point", "circle"):
+                xs.append(float(shape.get("x", 0)))
+                ys.append(float(shape.get("y", 0)))
+                radius = abs(float(shape.get("r", shape.get("radius", 0)) or 0))
+                xs.extend((xs[-1] - radius, xs[-1] + radius))
+                ys.extend((ys[-1] - radius, ys[-1] + radius))
+            elif kind in ("segment", "line", "vector"):
+                for key in ("from", "to"):
+                    point = _point(shape.get(key))
+                    if point:
+                        xs.append(float(point[0]))
+                        ys.append(float(point[1]))
+            elif kind in ("curve", "polygon", "surface"):
+                for item in shape.get("points") or []:
+                    point = _point(item)
+                    if point:
+                        xs.append(float(point[0]))
+                        ys.append(float(point[1]))
+        except (TypeError, ValueError):
+            continue
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    for axis in axes:
+        kind = _axis_kind(axis)
+        if kind == "x":
+            axis["from"] = [min_x, 0.0]
+            axis["to"] = [max_x, 0.0]
+        elif kind == "y":
+            axis["from"] = [0.0, min_y]
+            axis["to"] = [0.0, max_y]
+
+
+def prune_node_decorations(diagram: dict) -> None:
+    """节点型图(tree/relation/flow)只能有节点和边;坐标轴/几何形状/散落注释一律清掉。"""
+    if diagram.get("type") in ("tree", "relation", "flow"):
+        diagram["shapes"] = []
+        diagram["annotations"] = []
+
+
 def _norm_label(value: object) -> str:
     text = re.sub(r"[\s=^]", "", str(value or "")).lower()
     return text.replace("²", "2").replace("³", "3")
@@ -946,6 +1006,7 @@ def prepare_diagram(raw: object) -> dict | None:
                 shape["label"] = f"z={_pretty_expr(shape['expr'])}"
         if raw.get("type") in ("plot2d", "geometry2d"):
             _refine_plot2d(dict_shapes, raw.get("type") == "plot2d")
+            normalize_2d_axes(dict_shapes)
         if raw.get("type") in ("geometry3d", "surface3d"):
             dict_shapes = [shape for shape in dict_shapes
                            if not _axis_aligned_segment(shape)]
@@ -967,7 +1028,10 @@ def prepare_diagram(raw: object) -> dict | None:
                 if isinstance(note, dict)
                 and _norm_label(note.get("text")) not in labels
             ]}
-    return validate_diagram(raw)
+    diagram = validate_diagram(raw)
+    if diagram is not None:
+        prune_node_decorations(diagram)
+    return diagram
 
 
 
