@@ -173,6 +173,19 @@ check('流程图顺序', flow.nodes[0].x < flow.nodes[1].x
   || flow.nodes[0].y < flow.nodes[1].y)
 check('流程图边完整', flow.edges.length === 1)
 
+const branchSpec: DiagramSpec = {
+  type: 'flow', nodes: [
+    { id: 'a', label: '可微' },
+    { id: 'b', label: '连续' },
+    { id: 'c', label: '偏导数存在' },
+  ], edges: [{ from: 'a', to: 'b' }, { from: 'a', to: 'c' }],
+  shapes: [], annotations: [],
+}
+const branch = layoutFlow(branchSpec)
+const nodeB = branch.nodes.find((n) => n.id === 'b')!
+const nodeC = branch.nodes.find((n) => n.id === 'c')!
+check('分支流程同层并排', nodeB.y === nodeC.y && nodeB.x !== nodeC.x)
+
 const paper = buildPaperDiagram({
   question: '如何提高催化效率?',
   methods: ['方法 A', '方法 B'],

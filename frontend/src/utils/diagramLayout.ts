@@ -190,17 +190,38 @@ export function layoutFlow(spec: DiagramSpec): LayoutResult {
   for (const node of nodes) {
     if (!order.includes(node.id)) order.push(node.id)
   }
-  // 流程图纵向排布:聊天区宽度有限,横排会把长标签挤成一条线。
+  // 流程图按层布局:同一层并排,下一层居中。单列堆叠会让分支边穿过中间节点。
   const ordered = order.map((id) => byId.get(id)).filter((node) => node !== undefined)
-  const maxWidth = Math.max(160, ...ordered.map((node) => nodeWidth(node.label)))
+  const depth = new Map<string, number>(ordered.map((node) => [node.id, 0]))
+  for (const id of order) {
+    const nextDepth = (depth.get(id) || 0) + 1
+    for (const next of outgoing.get(id) || []) {
+      depth.set(next, Math.max(depth.get(next) || 0, nextDepth))
+    }
+  }
+  const levels: Array<typeof ordered> = []
+  for (const node of ordered) {
+    const level = depth.get(node.id) || 0
+    if (!levels[level]) levels[level] = []
+    levels[level].push(node)
+  }
+  const levelWidths = levels.map((level) => (
+    level.reduce((sum, node) => sum + nodeWidth(node.label), 0)
+    + Math.max(0, level.length - 1) * GAP_X
+  ))
+  const maxWidth = Math.max(160, ...levelWidths)
   const positioned: PositionedNode[] = []
-  ordered.forEach((node, index) => {
-    const w = nodeWidth(node.label)
-    positioned.push({
-      id: node.id, label: node.label, w, h: NODE_H,
-      x: MARGIN + (maxWidth - w) / 2,
-      y: MARGIN + index * (NODE_H + GAP_Y),
-    })
+  levels.forEach((level, levelIndex) => {
+    let cursor = MARGIN + (maxWidth - (levelWidths[levelIndex] || 0)) / 2
+    for (const node of level) {
+      const w = nodeWidth(node.label)
+      positioned.push({
+        id: node.id, label: node.label, w, h: NODE_H,
+        x: cursor,
+        y: MARGIN + levelIndex * (NODE_H + GAP_Y),
+      })
+      cursor += w + GAP_X
+    }
   })
   return empty(positioned, connect(positioned, spec))
 }
