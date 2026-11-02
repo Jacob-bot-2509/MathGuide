@@ -351,8 +351,8 @@ resetView()
         <text
           v-for="edge in layout.edges.filter((e) => e.label)"
           :key="`label-${edge.from}-${edge.to}`"
-          :x="(edge.x1 + edge.x2) / 2"
-          :y="(edge.y1 + edge.y2) / 2 - 4"
+          :x="edge.labelX ?? (edge.x1 + edge.x2) / 2"
+          :y="edge.labelY ?? (edge.y1 + edge.y2) / 2 - 4"
           class="diagram-edge-label"
         >{{ edge.label }}</text>
         <g

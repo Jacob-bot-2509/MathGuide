@@ -18,6 +18,8 @@ export interface PositionedEdge {
   x2: number
   y2: number
   label?: string
+  labelX?: number
+  labelY?: number
 }
 
 export interface LayoutResult {
@@ -79,6 +81,8 @@ function connect(nodes: PositionedNode[], spec: DiagramSpec): PositionedEdge[] {
       from: edge.from, to: edge.to,
       x1, y1, x2, y2,
       label: edge.label,
+      labelX: Math.abs(dy) > NODE_H ? to.x + to.w / 2 : (x1 + x2) / 2,
+      labelY: Math.abs(dy) > NODE_H ? to.y - 6 : (y1 + y2) / 2 - 4,
     })
   }
   return out
