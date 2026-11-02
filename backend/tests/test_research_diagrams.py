@@ -364,6 +364,25 @@ def test_prefer_visual_keeps_function_plot_over_flow():
     assert kind == "plot2d"
 
 
+def test_relation_question_forces_relation_not_axes(monkeypatch):
+    seen: dict[str, str] = {}
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+
+    async def fake_stream(system, user, **kwargs):
+        seen["user"] = user
+        yield json.dumps({
+            "type": "relation",
+            "nodes": [{"id": "a", "label": "可微"}, {"id": "b", "label": "连续"}],
+            "edges": [{"from": "a", "to": "b"}],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(rd.plan_diagram(
+        "偏导数连续、可微、连续之间是什么关系", "解释", [], "", strict=False))
+    assert result and result["type"] == "relation"
+    assert "请求图解类型:relation" in seen["user"]
+
+
 def test_meta_question_never_gets_diagram():
     question = "你好，今天先介绍一下这个系统能做什么"
     assert rd.is_meta_question(question)

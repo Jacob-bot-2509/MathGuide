@@ -126,6 +126,19 @@ check('树布局节点完整', tree.nodes.length === 3)
 check('树布局父子顺序', tree.nodes[0].y < tree.nodes[1].y)
 check('树布局尺寸有效', tree.width > 0 && tree.height > 0)
 check('树布局边完整', tree.edges.length === 2)
+const sharedTree: DiagramSpec = { type: 'tree', nodes: [], edges: [], shapes: [], annotations: [] }
+for (let level = 0; level < 20; level++) {
+  for (let column = 0; column < 2; column++) {
+    const id = `${level}-${column}`
+    sharedTree.nodes.push({ id, label: id })
+    if (level > 0) for (let parent = 0; parent < 2; parent++) {
+      sharedTree.edges.push({ from: `${level - 1}-${parent}`, to: id })
+    }
+  }
+}
+const sharedLayout = layoutTree(sharedTree)
+check('共享子节点布局不重复', sharedLayout.nodes.length === 40
+  && new Set(sharedLayout.nodes.map((node) => node.id)).size === 40)
 const collapsedRoot = filterCollapsed(treeSpec, new Set(['root']))
 check('折叠根节点只留根', collapsedRoot.nodes.length === 1
   && collapsedRoot.edges.length === 0)

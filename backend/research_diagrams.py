@@ -359,11 +359,19 @@ def wants_visual(question: str) -> bool:
 _META_RE = re.compile(
     r"系统能做什么|能做什么|有什么功能|功能介绍|介绍一下.*系统|系统介绍|"
     r"你是谁|怎么使用|使用说明|help|what can you do", re.IGNORECASE)
+_RELATION_QUESTION_RE = re.compile(
+    r"关系|之间|区别|联系|推出|蕴含|等价|条件|强弱|依赖|哪一个更", re.IGNORECASE)
+_IMPLICATION_RE = re.compile(r"推出|蕴含|充分|必要|条件|强弱|等效", re.IGNORECASE)
 
 
 def is_meta_question(question: str) -> bool:
     """寒暄/系统介绍/功能列表不是知识点,不配图。"""
     return bool(_META_RE.search(question or ""))
+
+
+def is_relation_question(question: str) -> bool:
+    """概念关系/推出关系题:应走 relation/flow,不要拿坐标轴当装饰。"""
+    return bool(_RELATION_QUESTION_RE.search(question or ""))
 
 
 def slice_utf16(text: str, units: int) -> str:
@@ -1219,6 +1227,8 @@ _PLAN_SYSTEM = (
     "17. 系统介绍、功能列表、寒暄、使用说明不画图。\n"
     "18. 3D 图选平缓、可读的函数和适中的定义域,让曲面主体占住画面;"
     "梯度/方向/曲面用明显不同的颜色,关键量就近标文字即可,不要加大底板或色块。\n"
+    "19. 概念关系/推出关系/条件强弱用 relation 或 flow,不要加坐标轴;"
+    "坐标轴只属于真正的几何图、函数图或空间图。\n"
 )
 
 
@@ -1248,6 +1258,13 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
     requested = explicit_type(question)
     if requested:
         kind = requested
+        strict = True
+    elif not kind and is_relation_question(question):
+        # “A、B、C 之间是什么关系”不是几何作图题;禁止规划器拿坐标轴当装饰。
+        # 有推出/充分必要/条件强弱时用纵向流程,避免关系图里的交叉线。
+        source = f"{question} {(before or '')[:1200]}"
+        kind = "flow" if (_IMPLICATION_RE.search(source)
+                          or is_step_text(question)) else "relation"
         strict = True
     elif strict is None:
         strict = False

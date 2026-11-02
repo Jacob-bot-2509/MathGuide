@@ -102,12 +102,15 @@ export function layoutTree(spec: DiagramSpec): LayoutResult {
   const rootIds = (roots.length ? roots : [spec.nodes[0]]).map((node) => node.id)
   const labels = new Map(spec.nodes.map((node) => [node.id, node]))
   const positioned: PositionedNode[] = []
+  const placed = new Map<string, number>()
   let cursor = 0
   let maxDepth = 0
 
   function place(id: string, depth: number, seen: Set<string>): number {
     const node = labels.get(id)
     if (!node || seen.has(id)) return cursor
+    const existing = placed.get(id)
+    if (existing !== undefined) return existing
     seen.add(id)
     maxDepth = Math.max(maxDepth, depth)
     const kids = children.get(id) || []
@@ -126,6 +129,7 @@ export function layoutTree(spec: DiagramSpec): LayoutResult {
       id, label: node.label, w, h: NODE_H,
       x: center - w / 2, y: MARGIN + depth * (NODE_H + GAP_Y),
     })
+    placed.set(id, center)
     return center
   }
 
