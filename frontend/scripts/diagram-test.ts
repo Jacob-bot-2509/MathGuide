@@ -138,6 +138,12 @@ const relationSpec: DiagramSpec = {
     { id: 'x', label: '概念 X' }, { id: 'y', label: '概念 Y' },
   ], edges: [{ from: 'x', to: 'y' }], shapes: [], annotations: [],
 }
+const cyclicRelation: DiagramSpec = { ...relationSpec, edges: [
+  { from: 'x', to: 'y' }, { from: 'y', to: 'x' },
+] }
+const collapsedCycle = filterCollapsed(cyclicRelation, new Set(['x']))
+check('折叠环形关系保留所选节点', collapsedCycle.nodes.length === 1
+  && collapsedCycle.nodes[0].id === 'x')
 const relationLayout = layoutRelation(relationSpec)
 check('关系图节点有限坐标', relationLayout.nodes.every((n) =>
   Number.isFinite(n.x) && Number.isFinite(n.y)))

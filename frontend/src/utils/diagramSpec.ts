@@ -328,14 +328,15 @@ export function filterCollapsed(
     children.get(edge.from)?.push(edge.to)
   }
   const hidden = new Set<string>()
-  const hide = (id: string): void => {
+  const hide = (id: string, visited: Set<string>): void => {
     for (const child of children.get(id) || []) {
-      if (hidden.has(child)) continue
+      if (visited.has(child)) continue
+      visited.add(child)
       hidden.add(child)
-      hide(child)
+      hide(child, visited)
     }
   }
-  for (const id of collapsed) hide(id)
+  for (const id of collapsed) hide(id, new Set([id]))
   return {
     ...spec,
     nodes: spec.nodes.filter((node) => !hidden.has(node.id)),
