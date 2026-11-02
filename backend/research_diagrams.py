@@ -11,13 +11,14 @@ from dataclasses import dataclass
 
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 
 import research_corpus as rc
 from auth import require_auth
 from http_utils import read_json_object
 from rag import llm
 from rate_limit import SlidingWindowLimiter
+import diagram_alerts
 import diagram_metrics
 import diagram_taxonomy as taxonomy
 
@@ -71,6 +72,7 @@ def _breaker_failure() -> None:
     if _planner_failures >= _PLANNER_BREAKER_THRESHOLD:
         _planner_failures = 0
         _planner_open_until = time.monotonic() + _PLANNER_BREAKER_COOLDOWN
+        diagram_alerts.schedule("breaker_open")
 
 
 def reset_planner_breaker() -> None:
@@ -1171,9 +1173,13 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
 _diagram_limiter = SlidingWindowLimiter(12, 60.0)
 
 
-async def metrics_endpoint(request: Request) -> JSONResponse:
+async def metrics_endpoint(request: Request):
     """图解运行指标:只返回聚合计数/耗时,不含问题、回答或用户身份。"""
     require_auth(request)
+    if request.query_params.get("format") == "prometheus":
+        return PlainTextResponse(
+            diagram_metrics.prometheus(),
+            headers={"Cache-Control": "no-store"})
     return JSONResponse(
         diagram_metrics.snapshot(), headers={"Cache-Control": "no-store"})
 

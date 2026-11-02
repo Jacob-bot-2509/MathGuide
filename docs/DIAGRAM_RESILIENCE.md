@@ -35,8 +35,8 @@
 | WebGL 丢失 | 监听 `webglcontextlost`，阻止默认行为并显示文字提示；卸载继续释放 context |
 | 恢复时重新校验 | localStorage 恢复的图解重跑 `parseDiagramSpec`；旧版本/手改/半截数据直接丢弃 |
 | 深响应式隔离 | 图解 spec 与图解数组 `markRaw`，避免大量曲面点变成响应式代理卡死主线程 |
-| 存储预算 | 落盘前最多保留 24 张/12000 点，优先保留最新会话/消息；旧图不写，正文不受影响 |
-| 配额降级 | 写盘失败时先去掉所有图解重写，保住会话正文；返回 false 供上层提示 |
+| 会话存储 | 保存完整图解，不按数量或点数裁剪已有图解 |
+| 配额不足 | 写盘失败时保留上一次完整存档，提示新内容尚未保存；返回 false，可在腾出空间后重试 |
 | SSE 解析 | 单帧解析失败返回 null，不影响其他帧 |
 
 ## 3. 3D 失败策略
@@ -53,19 +53,21 @@
 - NaN 事件被丢弃；
 - 总点数预算跳过多余图；
 - 恢复时丢弃类型/结构不符的旧图；
-- localStorage 配额失败时正文保留、图解丢弃；
+- localStorage 配额失败时保留上一次存档，提示未保存并支持重试；
 - 单消息 6 张上限、总点数上限；
 - 系统级故障演练：planner 崩溃、返回空、熔断打开，正文都必须完整且无图解事件；
 - 3D context lost、异步加载失败由边界兜底（手动/浏览器冒烟）。
 
 ## 5. 监控入口
 
-- `GET /api/research/diagrams/metrics`：需登录，返回聚合快照。
+- `GET /api/research/diagrams/metrics`：需登录，返回聚合 JSON。
+- `GET /api/research/diagrams/metrics?format=prometheus`：Prometheus 文本格式，交给外部抓取。
+- 可选 webhook：`MG_DIAGRAM_ALERT_WEBHOOK`；熔断打开时 POST 聚合快照与原因，`MG_DIAGRAM_ALERT_COOLDOWN` 控制同类告警间隔（默认 300s）。
+- 告警载荷只有 `service/event/reason/snapshot/ts`，不含问题、回答、用户 ID 或密钥。
 - 日志行：`[diagram] <阶段>:<ok|fail>:<原因> ms=<耗时> points=<点数>`。
-- 不记录问题、回答、用户 ID 或密钥。
 
 ## 6. 已知缺口
 
-- 指标只有进程内快照，尚未接外部监控/告警；
+- Prometheus 抓取与 webhook 接收端需运维配置，应用内没有 dashboard；
 - 故障演练是测试级，不是生产环境注入；
 - 3D 语义必需失败时，文字化降级依赖图题/标注；没有标注时只显示通用提示。

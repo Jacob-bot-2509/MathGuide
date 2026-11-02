@@ -577,6 +577,35 @@ def test_metrics_endpoint_returns_aggregates(monkeypatch):
     assert "u-m" not in json.dumps(data)
 
 
+def test_metrics_endpoint_prometheus_format(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    import diagram_metrics
+
+    monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "u-p"})
+    diagram_metrics.record("plan", True, "ok", duration_ms=8, points=2)
+    app = Starlette(routes=[Route("/metrics", rd.metrics_endpoint)])
+    client = TestClient(app)
+    res = client.get("/metrics?format=prometheus")
+    assert res.status_code == 200
+    assert "mg_diagram_events_total" in res.text
+    assert "reason=\"ok\"" in res.text
+
+
+def test_diagram_alert_payload_has_no_content(monkeypatch):
+    import diagram_alerts
+
+    monkeypatch.delenv("MG_DIAGRAM_ALERT_WEBHOOK", raising=False)
+    payload = diagram_alerts.build_payload("breaker_open")
+    text = json.dumps(payload, ensure_ascii=False)
+    assert payload["event"] == "diagram_alert"
+    assert payload["reason"] == "breaker_open"
+    assert "snapshot" in payload
+    assert "机密" not in text
+
+
 def test_plan_endpoint_returns_diagram(monkeypatch):
     from starlette.applications import Starlette
     from starlette.routing import Route

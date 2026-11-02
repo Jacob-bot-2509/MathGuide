@@ -48,6 +48,7 @@ export function updateSettings(patch: Partial<AppSettings>) {
 
 /** 把设置作用到界面:主题写入根节点 data-theme,全站 CSS 变量随之切换 */
 export function applySettings() {
+  if (typeof document === 'undefined') return
   document.documentElement.dataset.theme = settingsState.theme
 }
 

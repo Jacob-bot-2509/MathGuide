@@ -78,17 +78,30 @@ async function main() {
     throw new Error(`diagram not persisted: ${raw}`)
   }
 
-  // 配额不足时:丢掉图解,但正文必须保住。
+  const first = store.state.sessions[0].messages[0]
+  for (let i = 0; i < 25; i++) {
+    store.state.sessions[0].messages.push({
+      id: i + 2, role: 'assistant', content: '图解', diagrams: first.diagrams,
+    })
+  }
+  if (!store.flushSessions(true)) throw new Error('many diagrams failed to save')
+  const saved = memory.get('mg-research-sessions') || ''
+  const savedMessages = JSON.parse(saved).sessions[0].messages
+  if (savedMessages.filter((m: { diagrams?: unknown[] }) => m.diagrams?.length).length !== 26) {
+    throw new Error('saved diagrams were silently discarded')
+  }
+
+  // 配额失败不能覆盖上一次完整存档;恢复后可重试保存新内容。
+  first.content = '新的回答'
   failDiagramWrites = true
-  if (store.flushSessions(true)) throw new Error('quota fallback should report false')
-  const lean = JSON.parse(memory.get('mg-research-sessions') || '{}') as {
-    sessions?: Array<{ messages?: Array<{ content?: string; diagrams?: unknown }> }>
+  if (store.flushSessions(true)) throw new Error('quota failure should report false')
+  if (memory.get('mg-research-sessions') !== saved) throw new Error('quota failure overwrote archive')
+  failDiagramWrites = false
+  if (!store.flushSessions(true)) throw new Error('retry failed')
+  if (JSON.parse(memory.get('mg-research-sessions') || '{}').sessions[0].messages[0].content !== '新的回答') {
+    throw new Error('retry lost new content')
   }
-  const message = lean.sessions?.[0]?.messages?.[0]
-  if (message?.content !== '前文后文' || message?.diagrams) {
-    throw new Error(`quota fallback lost text: ${JSON.stringify(lean)}`)
-  }
-  console.log('图解释放/恢复自测:2/2 通过')
+  console.log('图解释放/恢复自测通过')
 }
 
 main().catch((err) => {

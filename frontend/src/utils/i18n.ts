@@ -279,7 +279,7 @@ const ZH: Dict = {
   'learn.voiceInput': '语音输入',
   'learn.stopListening': '点击停止聆听',
   'learn.voiceHint': '大模型语音交流(待开发):开启后模型边交流边文本输出',
-  'learn.toastStorage': '本地存储空间不足,图片较多的历史记录可能无法完整保存',
+  'learn.toastStorage': '本地存储失败，新内容尚未保存；已有记录未被覆盖',
 
   /* 念法速查贴士 */
   'tips.title': '念法速查',
@@ -1165,7 +1165,7 @@ const EN: Dict = {
   'learn.voiceInput': 'Voice input',
   'learn.stopListening': 'Stop listening',
   'learn.voiceHint': 'MG voice replies (in development): text replies are still used',
-  'learn.toastStorage': 'Local storage is full; history with many images may not be saved completely',
+  'learn.toastStorage': 'Local save failed; new changes are unsaved and existing records were not overwritten',
 
   'tips.title': 'Pronunciation Guide',
   'tips.hint': 'Read it aloud like this: tap the mic to start dictating, tap again to finish.',

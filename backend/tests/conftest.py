@@ -15,6 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import auth  # noqa: E402
+import diagram_alerts  # noqa: E402
 import diagram_metrics  # noqa: E402
 import research_diagrams  # noqa: E402
 import session_cache  # noqa: E402
@@ -29,11 +30,13 @@ def clean_global_state():
     auth._auth_limiter.reset()
     research_diagrams.reset_planner_breaker()
     diagram_metrics.reset()
+    diagram_alerts.reset_for_tests()
     yield
     session_cache.reset()
     auth._auth_limiter.reset()
     research_diagrams.reset_planner_breaker()
     diagram_metrics.reset()
+    diagram_alerts.reset_for_tests()
 
 
 @pytest.fixture()
