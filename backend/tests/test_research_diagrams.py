@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 import research_diagrams as rd
 from research_diagrams import (
     MarkerStream,
@@ -193,6 +195,62 @@ def test_select_segments_scans_whole_text_without_steps():
     segments = rd.select_segments("怎么理解梯度", text)
     assert segments
     assert segments[0].kind == "surface3d"
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("一元函数的单调性与极值", "plot2d"),
+    ("定积分表示曲线下的面积", "plot2d"),
+    ("傅里叶级数把周期函数分解为正弦波", "plot2d"),
+    ("多元函数 z=f(x,y) 的偏导数", "surface3d"),
+    ("方向导数与梯度,沿等高线法向变化最快", "surface3d"),
+    ("二元函数的切平面与法向量", "surface3d"),
+    ("二重积分的几何意义是曲顶柱体体积", "surface3d"),
+    ("三重积分与空间区域", "geometry3d"),
+    ("空间向量与平面方程", "geometry3d"),
+    ("矩阵特征值与特征向量,只拉伸不偏转", "geometry2d"),
+    ("行列式的几何意义是面积/体积缩放", "geometry2d"),
+    ("概率密度函数与正态分布", "plot2d"),
+    ("二维联合分布与边缘分布", "surface3d"),
+    ("假设检验的步骤", "flow"),
+    ("梯度下降算法迭代求最小值", "flow"),
+    ("线性规划的可行域与约束", "geometry2d"),
+    ("圆锥曲线的极坐标方程", "geometry2d"),
+    ("函数的凹凸性与拐点", "plot2d"),
+    ("微分方程的斜率场与相轨迹", "plot2d"),
+])
+def test_taxonomy_covers_common_knowledge_points(text: str, expected: str):
+    kind, score = rd.score_segment(text)
+    assert kind == expected, f"{text}: got {kind} ({score})"
+    assert score >= 1.0
+
+
+def test_score_segment_chooses_dimension_by_content():
+    kind, score = rd.score_segment(
+        "一元函数及其导数的图像,导数为正时函数单调递增。")
+    assert kind == "plot2d"
+    assert score >= 3
+    kind, score = rd.score_segment(
+        "多元函数 z=f(x,y) 的偏导数,在曲面上沿不同方向的变化率。")
+    assert kind == "surface3d"
+    assert score >= 3
+
+
+def test_plan_diagram_uses_weight_hint_without_explicit_dimension(monkeypatch):
+    seen: dict[str, str] = {}
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+
+    async def fake_stream(system, user, **kwargs):
+        seen["user"] = user
+        yield json.dumps({
+            "type": "plot2d",
+            "shapes": [{"kind": "curve", "expr": "x^2", "domain": [-2, 2]}],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(plan_diagram(
+        "帮我把图做出来", "一元函数及其导数的图像。", [], "", strict=False))
+    assert result and result["type"] == "plot2d"
+    assert "请求图解类型:plot2d" in seen["user"]
 
 
 def test_validate_rejects_type_structure_mismatch():

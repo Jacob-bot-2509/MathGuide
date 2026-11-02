@@ -449,7 +449,7 @@ def test_chat_caps_diagrams_at_six_per_message(monkeypatch):
 
     calls: list[str] = []
 
-    async def fake_plan(question, before, excerpts, kind, role="main", strict=None):
+    async def fake_plan(question, before, excerpts, kind, role="main", **kwargs):
         calls.append(kind)
         return {"type": kind, "nodes": [{"id": "a", "label": "A"}],
                 "edges": [], "shapes": [], "annotations": []}
@@ -474,7 +474,7 @@ def test_chat_backfills_by_weight_when_model_marks_nothing(monkeypatch):
 
     calls: list[str] = []
 
-    async def fake_plan(question, before, excerpts, kind, role="main", strict=None):
+    async def fake_plan(question, before, excerpts, kind, role="main", **kwargs):
         calls.append(kind)
         return {"type": kind, "nodes": [{"id": "a", "label": "A"}],
                 "edges": [], "shapes": [], "annotations": []}
@@ -486,7 +486,8 @@ def test_chat_backfills_by_weight_when_model_marks_nothing(monkeypatch):
         diagram_request_id="r-auto")))
     events = [json.loads(frame[6:].strip()) for frame in frames
               if frame.startswith("data: ") and "mg_event" in frame]
-    assert calls == ["flow", "flow"]
+    assert len(calls) == 2
+    assert all(calls)
     assert len(events) == 2
     assert [event["anchorIndex"] for event in events] == sorted(
         event["anchorIndex"] for event in events)

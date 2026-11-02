@@ -1,0 +1,196 @@
+"""图解形式的知识点权重网。
+
+目标:不是给某个例子打补丁,而是把“知识点现象 -> 合适的图形形式”
+做成一张可扩展的表。新增知识点时只加词条,不改选型逻辑。
+
+维度判断和类型判断分开:
+- 维度分:一元/平面/二维 vs 多元/空间/三维;
+- 类型分:plot2d / geometry2d / surface3d / geometry3d / flow / relation / tree。
+两者相加后由 `choose_visual` 给出建议;规划器仍可按内容改选。
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+
+# 每个词条 = (关键词, 权重)。权重不是“命中就画”,而是“这段内容适合该形式”的证据。
+VISUAL_CUES: dict[str, dict[str, float]] = {
+    "plot2d": {
+        # 一元函数与微分
+        "一元函数": 3.0, "函数图像": 2.5, "导函数": 3.0, "导数": 1.5,
+        "单调": 1.5, "极值": 1.5, "凹凸": 1.5, "拐点": 1.5, "渐近线": 1.5,
+        "泰勒展开": 2.5, "泰勒级数": 2.5, "麦克劳林": 2.0, "洛必达": 1.5,
+        # 一元积分
+        "定积分": 2.0, "不定积分": 1.5, "积分上限": 1.5, "面积": 1.0,
+        "旋转体": 1.5, "弧长": 1.5,
+        # 数列与级数
+        "数列": 1.5, "收敛": 1.5, "发散": 1.2, "傅里叶": 2.0,
+        "幂级数": 1.8, "收敛半径": 1.8,
+        # 概率统计的一维图形
+        "概率密度": 2.0, "分布函数": 2.0, "正态分布": 2.0, "二项分布": 1.5,
+        "泊松分布": 1.5, "散点图": 2.0, "回归": 1.5, "残差": 1.5,
+        # 微分方程/动力系统
+        "方向场": 2.0, "斜率场": 2.5, "相图": 1.5, "相轨迹": 1.5,
+        # 一般曲线
+        "曲线": 2.0, "坐标轴": 1.5, "函数": 1.0, "变化率": 1.0,
+        "频率": 1.0, "振幅": 1.0, "波形": 1.5,
+    },
+    "geometry2d": {
+        # 平面几何与三角
+        "平面": 1.2, "平面几何": 2.0, "几何": 1.5, "圆": 1.0,
+        "单位圆": 2.0, "三角形": 1.5, "夹角": 1.5, "切线": 1.8,
+        "面积": 1.0, "椭圆": 1.5, "双曲线": 1.5, "抛物线": 1.2,
+        "圆锥曲线": 2.0, "极坐标": 1.5, "参数方程": 1.2,
+        # 向量与线性代数
+        "向量": 1.2, "矩阵": 1.0, "线性变换": 1.5, "线性映射": 1.5,
+        "特征值": 2.5, "特征向量": 2.5, "特征空间": 1.2, "行列式": 1.5,
+        "迹": 0.8, "投影": 1.5, "正交": 1.2, "基变换": 1.5,
+        "线性方程组": 1.5, "解空间": 1.5, "子空间": 1.2,
+        "奇异值分解": 2.0, "二次型": 1.5, "正定性": 1.2,
+        # 复平面
+        "复平面": 2.0, "复变函数": 1.5, "共形映射": 2.0, "留数": 1.2,
+        # 优化/可行域
+        "可行域": 2.0, "线性规划": 1.5, "约束": 1.2, "等高线": 1.5,
+        "条件极值": 1.5, "拉格朗日": 1.5,
+    },
+    "surface3d": {
+        # 多元函数与曲面
+        "曲面": 3.0, "曲面图": 3.0, "三维曲面": 3.0, "z=": 1.5,
+        "多元函数": 3.0, "二元函数": 3.0, "三元函数": 2.2,
+        "两个变量": 2.2, "两个自变量": 2.2, "多个变量": 2.0,
+        "偏导数": 2.5, "偏导": 2.0, "方向导数": 2.0, "全微分": 1.8,
+        # 梯度与切平面
+        "梯度": 3.0, "切平面": 3.0, "法向量": 2.5, "法线": 1.8,
+        "等高线": 2.0, "等值线": 2.0, "等值面": 2.5, "鞍点": 2.0,
+        # 重积分与分布
+        "二重积分": 2.5, "联合分布": 2.5, "二元分布": 2.5,
+        "联合概率密度": 2.5, "边缘分布": 1.5, "条件分布": 1.5,
+        "曲顶柱体": 3.0, "曲顶": 2.0, "柱体": 1.5,
+        # 二次型/优化曲面
+        "二次型": 2.5, "凸函数": 1.5, "凹函数": 1.2, "鞍面": 2.0,
+        "目标函数": 1.5, "损失函数": 2.0,
+    },
+    "geometry3d": {
+        # 空间几何
+        "三维": 2.2, "三维坐标系": 2.5, "立体": 2.0, "空间": 1.5,
+        "空间向量": 2.5, "三维向量": 2.5, "空间曲线": 2.0,
+        "空间曲面": 2.5, "空间区域": 2.0, "空间几何": 2.0,
+        "球体": 1.5, "球面": 2.0, "圆锥": 1.5, "圆柱": 1.5,
+        "立方体": 1.5, "旋转体": 2.5, "三重积分": 2.5, "体积": 1.5,
+        "平面方程": 2.0, "法平面": 1.5, "柱面": 1.5, "锥面": 1.5,
+    },
+    "flow": {
+        "步骤": 2.0, "首先": 1.2, "其次": 1.2, "然后": 1.2,
+        "最后": 1.2, "接着": 1.0, "下一步": 1.2, "流程": 2.0,
+        "推导": 1.5, "证明": 1.5, "算法": 2.0, "计算过程": 1.5,
+        "迭代": 2.0, "梯度下降": 2.0, "牛顿法": 1.5, "假设检验": 2.0,
+        "求解": 1.5, "因果": 1.5, "因此": 0.8, "所以": 0.8,
+        "更新": 1.2, "循环": 1.2, "收敛过程": 1.5,
+    },
+    "relation": {
+        "关系": 1.5, "区别": 1.5, "联系": 1.5, "依赖": 1.2,
+        "组成": 1.2, "对比": 1.2, "等价": 1.2, "蕴含": 1.2,
+        "分类": 1.2, "映射": 0.8, "对应": 0.8, "图论": 1.5,
+        "网络": 1.0, "节点": 0.8, "边": 0.6,
+    },
+    "tree": {
+        "层级": 1.5, "分类": 1.2, "包含": 0.8, "结构": 0.8,
+        "体系": 1.2, "谱系": 1.2, "知识树": 2.0, "树状": 1.5,
+        "目录": 1.0, "分支": 0.8,
+    },
+}
+
+# 维度证据:决定“该用 2D 还是 3D”,独立于具体类型。
+DIMENSION_CUES: dict[str, dict[str, float]] = {
+    "2d": {
+        "一元": 3.0, "平面": 2.0, "二维": 2.5, "曲线": 1.5,
+        "函数图像": 2.0, "导数": 1.0, "积分": 1.0,
+        "x轴": 1.0, "y轴": 1.0, "f(x)": 2.5,
+    },
+    "3d": {
+        "多元": 3.0, "二元": 3.0, "三元": 2.5, "偏导": 2.5,
+        "曲面": 2.5, "空间": 2.0, "三维": 2.5, "立体": 2.0,
+        "z轴": 2.0, "f(x,y)": 3.0, "f(x, y)": 3.0,
+        "梯度": 2.0, "法向量": 2.0, "二重积分": 2.0, "三重积分": 2.5,
+        "两个变量": 2.5, "多个变量": 2.5,
+    },
+}
+
+# 意图证据:同一知识点,问法不同,合适的图形也不同。
+INTENT_CUES: tuple[tuple[str, dict[str, float]], ...] = (
+    (r"怎么理解|如何理解|直观|本质|类比|想象", {
+        "geometry2d": 0.8, "surface3d": 0.6, "plot2d": 0.5,
+    }),
+    (r"区别|联系|对比|关系", {"relation": 1.0}),
+    (r"推导|证明|步骤|算法|流程", {"flow": 1.0}),
+    (r"画|图示|图解|可视化|图像", {
+        "geometry2d": 0.4, "plot2d": 0.4, "surface3d": 0.4,
+        "geometry3d": 0.4,
+    }),
+)
+
+_2D_TYPES = ("plot2d", "geometry2d")
+_3D_TYPES = ("surface3d", "geometry3d")
+
+
+@dataclass
+class VisualDecision:
+    kind: str
+    score: float
+    scores: dict[str, float]
+    dimension: str
+
+
+def _hits(text: str, word: str) -> int:
+    return text.lower().count(word.lower())
+
+
+def choose_visual(text: str) -> VisualDecision:
+    """按知识点词表 + 维度证据 + 意图证据给出建议类型。"""
+    clean = re.sub(r"\s+", " ", text or "").strip()
+    scores = {kind: 0.0 for kind in VISUAL_CUES}
+    for kind, cues in VISUAL_CUES.items():
+        for word, weight in cues.items():
+            count = _hits(clean, word)
+            if count:
+                scores[kind] += weight * min(count, 3)
+    dim2 = sum(weight * min(_hits(clean, word), 3)
+               for word, weight in DIMENSION_CUES["2d"].items())
+    dim3 = sum(weight * min(_hits(clean, word), 3)
+               for word, weight in DIMENSION_CUES["3d"].items())
+    # 维度证据只做“同族加权”,不凭空造出一个没有内容支撑的类型。
+    if dim3 > dim2 * 1.25 and dim3 >= 2.0:
+        boost = (dim3 - dim2) * 0.4
+        for kind in _3D_TYPES:
+            scores[kind] += boost
+    elif dim2 > dim3 * 1.25 and dim2 >= 2.0:
+        boost = (dim2 - dim3) * 0.4
+        for kind in _2D_TYPES:
+            scores[kind] += boost
+    for pattern, boosts in INTENT_CUES:
+        if re.search(pattern, clean, re.IGNORECASE):
+            for kind, weight in boosts.items():
+                scores[kind] += weight
+    kind = max(scores, key=lambda item: scores[item])
+    if scores[kind] <= 0:
+        kind = ""
+    dimension = "3d" if dim3 > dim2 else "2d" if dim2 > dim3 else ""
+    return VisualDecision(kind, round(scores.get(kind, 0.0), 2), scores, dimension)
+
+
+def terms_in_text(question: str, text: str) -> list[str]:
+    """全文主题词:给段落打分时做“关键词辐射”。"""
+    source = f"{question or ''} {(text or '')[:6000]}"
+    terms: list[str] = []
+    for cues in VISUAL_CUES.values():
+        for word in cues:
+            if word and word in source and word not in terms:
+                terms.append(word)
+    return terms[:40]
+
+
+def top_scores(scores: dict[str, float], limit: int = 3) -> str:
+    ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    return ", ".join(f"{kind}={score:.1f}" for kind, score in ordered[:limit]
+                     if score > 0) or "无明显形式证据"

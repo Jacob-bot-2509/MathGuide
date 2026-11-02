@@ -17,6 +17,7 @@ from auth import require_auth
 from http_utils import read_json_object
 from rag import llm
 from rate_limit import SlidingWindowLimiter
+import diagram_taxonomy as taxonomy
 
 PREFIX = "[[MG_DIAGRAM:"
 _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]")
@@ -79,40 +80,7 @@ class DiagramSegment:
     score: float
 
 
-# 权重表:不是关键词命中就画,而是按“内容适合哪种表现形式”累计分数。
-_TYPE_KEYWORDS: dict[str, tuple[tuple[str, float], ...]] = {
-    "surface3d": (
-        ("曲面", 3.0), ("梯度", 3.0), ("切平面", 3.0),
-        ("等高线", 2.5), ("三维曲面", 3.0), ("z=", 1.5),
-    ),
-    "geometry3d": (
-        ("三维", 2.2), ("立体", 2.0), ("空间", 1.5),
-        ("空间向量", 2.5), ("圆锥", 1.5), ("圆柱", 1.5),
-        ("平面方程", 2.0), ("球体", 1.5),
-    ),
-    "geometry2d": (
-        ("平面", 1.2), ("几何", 1.5), ("圆", 1.0),
-        ("三角形", 1.5), ("夹角", 1.5), ("切线", 2.0),
-        ("面积", 1.0), ("向量", 1.2),
-    ),
-    "plot2d": (
-        ("函数图像", 2.5), ("曲线", 2.0), ("单调", 1.5),
-        ("极值", 1.5), ("坐标轴", 1.5),
-    ),
-    "flow": (
-        ("步骤", 2.0), ("首先", 1.2), ("其次", 1.2),
-        ("然后", 1.2), ("最后", 1.2), ("推导", 1.5),
-        ("因此", 0.8), ("所以", 0.8),
-    ),
-    "relation": (
-        ("关系", 1.5), ("区别", 1.5), ("联系", 1.5),
-        ("依赖", 1.2), ("组成", 1.2),
-    ),
-    "tree": (
-        ("层级", 1.5), ("分类", 1.2), ("包含", 0.8), ("结构", 0.8),
-    ),
-}
-_UNDERSTAND_RE = re.compile(r"怎么理解|如何理解|直观|本质|类比|想象|意义|为什么", re.I)
+# 形式权重网在 diagram_taxonomy.py;这里只做段落级评分与阈值判断。
 _STEP_RE = re.compile(
     r"^\s*(?:第[一二三四五六七八九十0-9]+步|[0-9]+[.、)]|首先|其次|然后|最后|接着|下一步)",
     re.MULTILINE,
@@ -155,13 +123,7 @@ def _utf16_len(value: str) -> int:
 
 def _topic_terms(question: str, text: str) -> list[str]:
     """全文关键词:问题里的主题词辐射到每个段落,而不是只看单段。"""
-    source = f"{question or ''} {(text or '')[:5000]}"
-    terms: list[str] = []
-    for words in _TYPE_KEYWORDS.values():
-        for word, _weight in words:
-            if word and word in source and word not in terms:
-                terms.append(word)
-    return terms[:24]
+    return taxonomy.terms_in_text(question, text)
 
 
 def score_segment(text: str, topic_terms: tuple[str, ...] = ()) -> tuple[str, float]:
@@ -169,24 +131,11 @@ def score_segment(text: str, topic_terms: tuple[str, ...] = ()) -> tuple[str, fl
     clean = re.sub(r"\s+", " ", text or "").strip()
     if not clean:
         return "", 0.0
-    scores = {kind: 0.0 for kind in _TYPE_KEYWORDS}
-    for kind, words in _TYPE_KEYWORDS.items():
-        for word, weight in words:
-            count = clean.lower().count(word.lower())
-            if count:
-                scores[kind] += weight * min(count, 3)
-    if _STEP_RE.search(clean):
+    decision = taxonomy.choose_visual(clean)
+    scores = decision.scores
+    is_step = bool(_STEP_RE.search(clean))
+    if is_step:
         scores["flow"] += 2.0
-        is_step = True
-    else:
-        is_step = False
-    if _UNDERSTAND_RE.search(clean):
-        # 理解型文本更容易需要具象化;几何/三维优先于关系网。
-        scores["geometry2d"] += 1.0
-        if scores["geometry3d"] > 0:
-            scores["geometry3d"] += 0.8
-        if scores["surface3d"] > 0:
-            scores["surface3d"] += 0.8
     kind = max(scores, key=lambda item: scores[item])
     total = scores[kind]
     total += min(2.0, 0.15 * sum(
@@ -811,8 +760,10 @@ _PLAN_SYSTEM = (
     "只输出一个 JSON 对象,不要解释,不要 Markdown 代码块。\n"
     "类型要求为“硬性”时必须等于【请求图解类型】;为“建议”或“自选”时,"
     "根据这一段内容自主选择最合适的类型,不要机械沿用建议。2D/3D 选择:"
-    "平面几何、函数曲线、二维关系用 2D;曲面、梯度、空间对象、立体结构用 3D;"
-    "能用 2D 讲清就不要硬上 3D。各类型结构:\n"
+    "一元函数及其导数用 2D;多元函数、偏导数、曲面、梯度用 3D;"
+    "平面几何、函数曲线、二维关系用 2D;空间对象、立体结构用 3D;"
+    "用户没指定维度时按内容权重判断,不要默认 2D;能用 2D 讲清就不要硬上 3D。"
+    "各类型结构:\n"
     '- flow/tree/relation:{"nodes":[{"id":"a","label":"概念"}],'
     '"edges":[{"from":"a","to":"b","label":"推出"}]}\n'
     '- geometry2d/plot2d:{"shapes":[{"kind":"point|segment|vector|circle|'
@@ -867,7 +818,8 @@ def _load_json(text: str) -> dict | None:
 
 async def plan_diagram(question: str, before: str, excerpts: list[dict],
                        kind: str, role: str = "main",
-                       strict: bool | None = None) -> dict | None:
+                       strict: bool | None = None,
+                       local_hint: bool = False) -> dict | None:
     """根据用户问题与当前段落生成一张图解;失败返回 None。
 
     strict=True:kind 是硬性要求(用户明确说了表示方式)。
@@ -884,9 +836,25 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
         return None
     # 图解只针对标记前的最新一步:取正文尾部,避免把整篇回答塞进一张图。
     latest = re.sub(r"\s+", " ", before or "").strip()[-3500:]
+    weight_note = taxonomy.top_scores(taxonomy.choose_visual(latest).scores)
+    if not kind:
+        # 用户没指定维度时,先由权重给一个建议;规划器仍可按内容改选。
+        hint_source = latest
+        if local_hint:
+            parts = [part for part in re.split(r"\n\s*\n", before or "")
+                     if part.strip()]
+            if parts:
+                hint_source = re.sub(r"\s+", " ", parts[-1]).strip()
+        decision = taxonomy.choose_visual(hint_source)
+        weight_note = taxonomy.top_scores(decision.scores)
+        hint, hint_score = score_segment(
+            hint_source, tuple(_topic_terms(question, before or "")))
+        if hint and hint_score >= 2.0:
+            kind = hint
     context: list[str] = [
         f"请求图解类型:{kind or '自选(按内容决定)'}",
         f"类型要求:{'硬性,必须一致' if strict else '建议,可按内容改选更合适的类型'}",
+        f"形式权重参考:{weight_note}",
         f"用户明确要求的表示方式:{requested or '未指定'}",
         f"用户问题:{_text(question, 1000)}",
         f"当前回答(标记前最新段落):{latest}",

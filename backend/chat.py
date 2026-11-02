@@ -663,8 +663,9 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 "要求:"
                 "① 按讲课节奏一步一图:有明确步骤就按步骤来,每张只图解刚讲完的这一小步;"
                 "没有明确步骤时,只在内容确实需要具象化的地方标记,不要每段都标,也不要为凑数;"
-                "② 自主选择 2D/3D:平面几何、函数曲线、二维关系用 2D;"
-                "曲面、梯度、空间对象、立体结构用 3D;能用 2D 讲清就不要硬上 3D;"
+                "② 自主选择 2D/3D:一元函数及其导数用 2D;多元函数、偏导数、曲面、梯度用 3D;"
+                "平面几何、函数曲线、二维关系用 2D;空间对象、立体结构用 3D;"
+                "用户没指定维度时按内容权重判断,不要默认 2D;能用 2D 讲清就不要硬上 3D;"
                 "③ 用户明确说“用三维图/画图/几何直观”等表示方式时,"
                 "直接按要求画,不要改画思维导图;"
                 "④ 抽象概念要化抽象为具体:先用一个具体类比物把它实体化"
@@ -679,14 +680,17 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 "surface3d). Requirements: (1) one diagram per teaching step; if the "
                 "answer has explicit steps, follow them; otherwise mark only where a "
                 "picture genuinely helps, not every paragraph; (2) choose 2D or 3D "
-                "yourself: planar geometry, curves and 2D relations -> 2D; surfaces, "
-                "gradients, spatial objects -> 3D; do not force 3D when 2D explains "
-                "it; (3) when the user explicitly asks for a 3D drawing or a picture, "
-                "draw exactly that instead of a mind map; (4) make abstractions "
-                "concrete through a visible analogy; (5) say in one or two sentences "
-                "what to look at before the marker, then continue teaching; "
-                "(6) never for greetings, simple facts, or short answers; the marker "
-                "must be on its own line."
+                "yourself: one-variable functions and their derivatives -> 2D; "
+                "multivariable functions, partial derivatives, surfaces and "
+                "gradients -> 3D; planar geometry, curves and 2D relations -> 2D; "
+                "spatial objects -> 3D; if the user gives no dimension, judge by "
+                "the content weights and never default to 2D; do not force 3D when "
+                "2D explains it; (3) when the user explicitly asks for a 3D drawing "
+                "or a picture, draw exactly that instead of a mind map; (4) make "
+                "abstractions concrete through a visible analogy; (5) say in one or "
+                "two sentences what to look at before the marker, then continue "
+                "teaching; (6) never for greetings, simple facts, or short answers; "
+                "the marker must be on its own line."
             )
         markers = research_diagrams.MarkerStream(
             diagram_request_id or secrets.token_hex(8)) if diagram_mode else None
@@ -694,6 +698,8 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
         scheduled_diagrams = 0
         kept_anchors: list[int] = []
         stepwise_hint = research_diagrams.is_step_text(diagram_question or prompt)
+        explicit_requested = research_diagrams.explicit_type(
+            diagram_question or prompt)
         if markers is None:
             async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
                 answer.append(delta)
@@ -724,9 +730,12 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                         continue
                     kept_anchors.append(marker.anchor_index)
                     scheduled_diagrams += 1
+                    # 用户没指定类型时不让标记类型绑架选型:交给权重 + 规划器判断 2D/3D。
+                    planned_kind = explicit_requested or ""
                     task = asyncio.create_task(research_diagrams.plan_diagram(
                         diagram_question or prompt, "".join(answer),
-                        excerpt_items, marker.kind, "main", strict=False))
+                        excerpt_items, planned_kind, "main", strict=False,
+                        local_hint=True))
                     diagram_tasks.append((marker, task))
                 for item in list(diagram_tasks):
                     marker, task = item
