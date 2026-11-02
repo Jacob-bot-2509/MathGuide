@@ -201,7 +201,10 @@ def _topic_terms(question: str, text: str) -> list[str]:
     return taxonomy.terms_in_text(question, text)
 
 
-def score_segment(text: str, topic_terms: tuple[str, ...] = ()) -> tuple[str, float]:
+def score_segment(
+    text: str, topic_terms: tuple[str, ...] = (),
+    prefer_visual: bool = False,
+) -> tuple[str, float]:
     """给一段文本打分:返回最合适的图解类型与“是否值得画”的总分。"""
     clean = re.sub(r"\s+", " ", text or "").strip()
     if not clean:
@@ -212,6 +215,14 @@ def score_segment(text: str, topic_terms: tuple[str, ...] = ()) -> tuple[str, fl
     if is_step:
         scores["flow"] += 2.0
     kind = max(scores, key=lambda item: scores[item])
+    if prefer_visual and kind in ("flow", "relation", "tree"):
+        visual = max(
+            ((name, scores[name]) for name in
+             ("plot2d", "geometry2d", "surface3d", "geometry3d")),
+            key=lambda item: item[1],
+        )
+        if visual[1] >= 2.0:
+            kind = visual[0]
     total = scores[kind]
     total += min(2.0, 0.15 * sum(
         1 for term in topic_terms if term and term in clean))
@@ -345,6 +356,16 @@ def wants_visual(question: str) -> bool:
     return bool(re.search(r"画|图示|图解|可视化|图像|示意图", question or ""))
 
 
+_META_RE = re.compile(
+    r"系统能做什么|能做什么|有什么功能|功能介绍|介绍一下.*系统|系统介绍|"
+    r"你是谁|怎么使用|使用说明|help|what can you do", re.IGNORECASE)
+
+
+def is_meta_question(question: str) -> bool:
+    """寒暄/系统介绍/功能列表不是知识点,不配图。"""
+    return bool(_META_RE.search(question or ""))
+
+
 def slice_utf16(text: str, units: int) -> str:
     """按前端 UTF-16 锚点截取文本。"""
     if units <= 0:
@@ -361,7 +382,7 @@ def select_segments(
 ) -> list[DiagramSegment]:
     """扫描整篇回答:有步骤按步骤选,没步骤按权重选高分段落。
     只返回值得画图的段落;模型没标记时由这里兜底决定画不画、画哪种。"""
-    if not text or limit <= 0:
+    if not text or limit <= 0 or is_meta_question(question):
         return []
     topic_terms = tuple(_topic_terms(question, text))
     paragraphs: list[tuple[str, int, int, bool]] = []
@@ -384,7 +405,8 @@ def select_segments(
         # 没有可画的几何/曲线/关系证据时不硬画;步骤标记本身不算视觉证据。
         if visual_cue_score(body) < 1.2:
             return
-        kind, score = score_segment(body, topic_terms)
+        kind, score = score_segment(
+            body, topic_terms, prefer_visual=wants_visual(question))
         if not kind:
             return
         candidates.append(DiagramSegment(
@@ -713,6 +735,104 @@ def _refine_gradient(shapes: list[dict]) -> None:
         plane["normal"] = [round(-gx, 6), round(-gy, 6), 1.0]
 
 
+def _refine_plot2d(shapes: list[dict]) -> None:
+    """plot2d 的数学校正:不叠导函数曲线;切线斜率由采样点数值计算。"""
+    derivative_re = re.compile(r"导函数|导数|derivative|y'|f'", re.IGNORECASE)
+    curves = [
+        shape for shape in shapes
+        if shape.get("kind") == "curve" and shape.get("points")
+    ]
+    primary = next((
+        shape for shape in curves
+        if not derivative_re.search(str(shape.get("label") or ""))
+    ), curves[0] if curves else None)
+    if len(curves) >= 2:
+        # 原函数与导函数不叠在同一坐标系;导函数另起一张图。
+        shapes[:] = [
+            shape for shape in shapes
+            if shape is not None and not (
+                shape in curves and shape is not primary
+                and derivative_re.search(str(shape.get("label") or ""))
+            )
+        ]
+    tangents = [
+        shape for shape in shapes
+        if shape.get("kind") in ("segment", "line")
+        and re.search(r"切线|tangent", str(shape.get("label") or ""), re.IGNORECASE)
+    ]
+    if len(tangents) > 1:
+        def tangent_x(shape: dict) -> float:
+            try:
+                return abs(float(shape.get("from", [0, 0])[0]))
+            except (TypeError, ValueError, IndexError):
+                return float("inf")
+
+        # 一张图只保留一条切线,避免多条切线互相交叉、视觉误导。
+        keep = min(tangents, key=tangent_x)
+        shapes[:] = [shape for shape in shapes
+                     if shape not in tangents or shape is keep]
+        tangents = [keep]
+    points = [
+        shape for shape in shapes
+        if shape.get("kind") == "point" and "x" in shape and "y" in shape
+    ]
+    if primary is None or not tangents or not points:
+        return
+    values = sorted(
+        ((float(item[0]), float(item[1])) for item in primary["points"]),
+        key=lambda item: item[0],
+    )
+    if not values:
+        return
+    span = values[-1][0] - values[0][0]
+    dx = max(0.3, span * 0.08)
+
+    def tangent_at(x0: float) -> tuple[float, float] | None:
+        run = _compile_expr(primary.get("expr"), allow_y=False)
+        try:
+            if run is not None:
+                h = 1e-4 * max(1.0, abs(x0))
+                return ((run(x0 + h) - run(x0 - h)) / (2 * h),
+                        float(run(x0)))
+            left = max((item for item in values if item[0] <= x0),
+                       key=lambda item: item[0], default=values[0])
+            right = min((item for item in values if item[0] >= x0),
+                        key=lambda item: item[0], default=values[-1])
+            if right[0] <= left[0]:
+                return None
+            slope = (right[1] - left[1]) / (right[0] - left[0])
+            return slope, left[1] + slope * (x0 - left[0])
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+
+    used: set[int] = set()
+    for tangent in tangents:
+        start = tangent.get("from")
+        if not (isinstance(start, (list, tuple)) and len(start) >= 2):
+            continue
+        candidates = [point for point in points if id(point) not in used]
+        if not candidates:
+            break
+
+        def distance(point: dict) -> float:
+            try:
+                return ((float(point["x"]) - float(start[0])) ** 2
+                        + (float(point["y"]) - float(start[1])) ** 2)
+            except (TypeError, ValueError):
+                return float("inf")
+
+        point = min(candidates, key=distance)
+        result = tangent_at(float(point["x"]))
+        if result is None:
+            continue
+        slope, y0 = result
+        x0 = float(point["x"])
+        point["y"] = round(y0, 6)
+        tangent["from"] = [round(x0 - dx, 6), round(y0 - slope * dx, 6)]
+        tangent["to"] = [round(x0 + dx, 6), round(y0 + slope * dx, 6)]
+        used.add(id(point))
+
+
 def prepare_diagram(raw: object) -> dict | None:
     """采样表达式形状后再做白名单校验。"""
     if not isinstance(raw, dict):
@@ -725,7 +845,11 @@ def prepare_diagram(raw: object) -> dict | None:
                 continue
             kept.append(shape)
         raw = {**raw, "shapes": kept}
-        _refine_gradient([shape for shape in kept if isinstance(shape, dict)])
+        dict_shapes = [shape for shape in kept if isinstance(shape, dict)]
+        _refine_gradient(dict_shapes)
+        if raw.get("type") == "plot2d":
+            _refine_plot2d(dict_shapes)
+        raw = {**raw, "shapes": dict_shapes}
     return validate_diagram(raw)
 
 
@@ -750,6 +874,9 @@ def _shape(raw: object) -> dict | None:
     for key in ("label", "expr", "color"):
         if key in raw:
             value = _text(raw[key], 200)
+            if key == "label" and value.lower() in {"djj"}:
+                # 模型偶发的无意义占位标签,不进图。
+                value = ""
             if value:
                 out[key] = value
     if "domain" in raw:
@@ -781,6 +908,20 @@ def _shape(raw: object) -> dict | None:
     if kind in ("surface", "polygon") and not out.get("points"):
         return None
     return out
+
+
+def _renderable_shape(shape: dict) -> bool:
+    """没有实际可画几何的旧图解(例如只有 expr 没有采样点)不能进渲染器。"""
+    kind = shape.get("kind")
+    if kind == "axis":
+        return False
+    if kind in ("curve", "polygon", "surface"):
+        return bool(shape.get("points"))
+    if kind in ("point", "circle"):
+        return "x" in shape and "y" in shape
+    if kind in ("segment", "line", "vector"):
+        return "from" in shape and "to" in shape
+    return True
 
 
 def validate_diagram(raw: object) -> dict | None:
@@ -884,7 +1025,7 @@ def validate_diagram(raw: object) -> dict | None:
     if kind in ("tree", "relation", "flow"):
         if not nodes:
             return None
-    elif not shapes:
+    elif not shapes or not any(_renderable_shape(shape) for shape in shapes):
         return None
     result: dict = {
         "schemaVersion": DIAGRAM_SCHEMA_VERSION,
@@ -1061,6 +1202,14 @@ _PLAN_SYSTEM = (
     "提到了什么权重/评分/维度判断;只画内容本身,选型是后台动作。\n"
     "14. 先抓这一步最关键的对象或转折,不要平均用力;如果这段只是上一步的"
     "代入/整理/化简,不要单独成图,应合并到上一步。\n"
+    "15. 画切线时只画切点附近的一条短切线,一张图最多一条切线,切线不能再次穿过"
+    "曲线;不要把导函数曲线和原函数曲线叠在同一坐标系里冒充切线,导函数应另起"
+    "一张图或用符号/箭头标注。\n"
+    "16. label 必须是有意义的数学符号或短词(如 P、∇f、u、切点);"
+    "不要输出 DJJ、ABC 之类占位符,也不要用无意义字母凑标签。\n"
+    "17. 系统介绍、功能列表、寒暄、使用说明不画图。\n"
+    "18. 3D 图选平缓、可读的函数和适中的定义域,让曲面主体占住画面;"
+    "梯度/方向/曲面用明显不同的颜色,关键量就近标文字即可,不要加大底板或色块。\n"
 )
 
 
@@ -1113,9 +1262,15 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
             if parts:
                 hint_source = re.sub(r"\s+", " ", parts[-1]).strip()
         hint, hint_score = score_segment(
-            hint_source, tuple(_topic_terms(question, before or "")))
+            hint_source, tuple(_topic_terms(question, before or "")),
+            prefer_visual=wants_visual(question))
         if hint and hint_score >= 2.0:
             kind = hint
+            # 用户明确要“画图”,且内容有强视觉证据时,不允许规划器退回流程图。
+            if (wants_visual(question) and hint in (
+                    "plot2d", "geometry2d", "surface3d", "geometry3d")
+                    and hint_score >= 3.0):
+                strict = True
     context: list[str] = [
         f"请求图解类型:{kind or '自选(按内容决定)'}",
         f"类型要求:{'硬性,必须一致' if strict else '建议,可按内容改选更合适的类型'}",

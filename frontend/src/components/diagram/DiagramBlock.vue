@@ -16,7 +16,8 @@ const Diagram3D = defineAsyncComponent({
   delay: 200,
   timeout: 15000,
   loadingComponent: {
-    render: () => h('div', { class: 'diagram-loading' }, t('diagram.loading')),
+    // 图片没出来就不显示占位文字,避免用符号/加载文案干扰阅读。
+    render: () => h('div', { class: 'diagram-loading' }),
   },
   errorComponent: {
     render: () => h('div', { class: 'diagram-fallback' }, t('diagram.renderFail')),
@@ -30,7 +31,11 @@ onMounted(() => {
     return
   }
   observer = new IntersectionObserver((entries) => {
-    visible.value = entries.some((entry) => entry.isIntersecting)
+    if (!entries.some((entry) => entry.isIntersecting)) return
+    // 首次进入视口后保持挂载:滚出视口不能把已生成的图变回“加载中”。
+    visible.value = true
+    observer?.disconnect()
+    observer = null
   }, { rootMargin: '240px' })
   observer.observe(host.value)
 })
@@ -45,7 +50,7 @@ onBeforeUnmount(() => {
   <figure ref="host" class="diagram-block">
     <figcaption v-if="spec.title" class="diagram-title">{{ spec.title }}</figcaption>
     <Diagram3D v-if="is3d && visible" :spec="spec" />
-    <div v-else-if="is3d" class="diagram-loading">{{ t('diagram.loading') }}</div>
+    <div v-else-if="is3d" class="diagram-loading" />
     <DiagramSvg v-else :spec="spec" />
   </figure>
 </template>

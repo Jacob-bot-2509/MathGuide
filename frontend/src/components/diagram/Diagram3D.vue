@@ -45,6 +45,7 @@ function labelSprite(
   text: string,
   THREE: typeof import('three'),
   scale = 1,
+  color = '#f5fbff',
 ): import('three').Sprite | null {
   if (!text) return null
   const canvas = document.createElement('canvas')
@@ -52,10 +53,12 @@ function labelSprite(
   if (!ctx) return null
   canvas.width = 512
   canvas.height = 128
-  ctx.fillStyle = 'rgba(10, 18, 30, 0.78)'
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
-  ctx.fillStyle = '#d9f5ff'
+  // 不画底板:文字只出现在对象附近,避免大灰框破坏画面。
   ctx.font = '36px sans-serif'
+  ctx.lineWidth = 7
+  ctx.strokeStyle = 'rgba(5, 10, 18, 0.92)'
+  ctx.strokeText(text.slice(0, 40), 12, 74)
+  ctx.fillStyle = color
   ctx.fillText(text.slice(0, 40), 12, 74)
   const texture = new THREE.CanvasTexture(canvas)
   const material = new THREE.SpriteMaterial({
@@ -77,17 +80,14 @@ function markerSprite(
   if (!ctx) return null
   canvas.width = 128
   canvas.height = 128
-  ctx.fillStyle = 'rgba(10, 18, 30, 0.88)'
-  ctx.beginPath()
-  ctx.arc(64, 64, 58, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.strokeStyle = '#4cc9f0'
-  ctx.lineWidth = 6
-  ctx.stroke()
-  ctx.fillStyle = '#d9f5ff'
+  // 编号同样不加底板,只留描边数字。
   ctx.font = 'bold 64px sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
+  ctx.lineWidth = 8
+  ctx.strokeStyle = 'rgba(5, 10, 18, 0.92)'
+  ctx.strokeText(text.slice(0, 3), 64, 68)
+  ctx.fillStyle = '#8be9fd'
   ctx.fillText(text.slice(0, 3), 64, 68)
   const texture = new THREE.CanvasTexture(canvas)
   const material = new THREE.SpriteMaterial({
@@ -97,6 +97,23 @@ function markerSprite(
   sprite.scale.set(scale, scale, 1)
   sprite.renderOrder = 20
   return sprite
+}
+
+/** 语义配色:曲面、梯度、方向、关键点尽量拉开色相,不靠相近青色区分。 */
+function shapeColor(shape: DiagramShape, kind: string): number {
+  const label = String(shape.label || '')
+  if (/梯度|∇|gradient/i.test(label)) return 0xff8a3d
+  if (/方向|direction|^e|^u|l\b/i.test(label)) return 0x67e8a5
+  if (/路径|path|轨迹/i.test(label)) return 0xffd166
+  if (kind === 'surface') return 0x3aa8d8
+  if (kind === 'point') return 0xffd166
+  if (kind === 'axis') return 0x94a3b8
+  if (kind === 'plane') return 0xa78bfa
+  return 0x4cc9f0
+}
+
+function colorHex(value: number): string {
+  return `#${value.toString(16).padStart(6, '0')}`
 }
 
 /** 曲面跨度大时,点和箭头默认尺寸会小到看不见;按场景尺度放大。 */
@@ -187,13 +204,13 @@ function addSurface(
     geometry.setIndex(indices)
     geometry.computeVertexNormals()
     const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-      color, side: THREE.DoubleSide, transparent: true, opacity: 0.78,
+      color, side: THREE.DoubleSide, transparent: true, opacity: 0.55,
       roughness: 0.6, metalness: 0.04,
     }))
     root.add(mesh)
     const wire = new THREE.LineSegments(
       new THREE.WireframeGeometry(geometry),
-      new THREE.LineBasicMaterial({ color: 0x8be9fd, transparent: true, opacity: 0.24 }),
+      new THREE.LineBasicMaterial({ color: 0x9bd8f0, transparent: true, opacity: 0.35 }),
     )
     root.add(wire)
     return true
@@ -243,7 +260,8 @@ function addShape(
   const x = num(shape.x)
   const y = num(shape.y)
   const z = num(shape.z)
-  let color = new THREE.Color(0x4cc9f0)
+  const kind = shape.kind
+  let color = new THREE.Color(shapeColor(shape, kind))
   if (typeof shape.color === 'string' && shape.color) {
     try {
       color = new THREE.Color(shape.color)
@@ -265,7 +283,6 @@ function addShape(
   const axisMaterial = new THREE.LineBasicMaterial({
     color: 0x8be9fd, depthTest: false, transparent: true, opacity: 0.45,
   })
-  const kind = shape.kind
   if (kind === 'point') {
     material.depthTest = false
     const mesh = new THREE.Mesh(
@@ -367,19 +384,17 @@ function addShape(
     const auxiliaryVector = kind === 'vector' && vectorLabels > 2
       && !/梯度|∇|gradient/i.test(String(shape.label))
     if (!auxiliaryVector) {
-      const sprite = labelSprite(String(shape.label), THREE, labelScale)
+      const sprite = labelSprite(
+        String(shape.label), THREE, labelScale,
+        colorHex(shapeColor(shape, kind)),
+      )
       if (sprite) {
-        const from = triple(shape.from)
         const to = triple(shape.to)
         const hasLine = ['segment', 'line', 'vector', 'axis'].includes(kind)
         const anchor = hasLine
-          ? vec3([
-            (from[0] + to[0]) / 2,
-            (from[1] + to[1]) / 2,
-            (from[2] + to[2]) / 2,
-          ], THREE)
+          ? vec3(to, THREE)
           : vec3([x, y, z], THREE)
-        if (!hasLine) anchor.y += 0.22
+        anchor.y += hasLine ? unit * 0.6 : 0.22
         sprite.position.copy(anchor)
         root.add(sprite)
       }
@@ -415,7 +430,7 @@ async function boot(): Promise<void> {
     light.position.set(4, 8, 6)
     scene.add(light)
     const unit = sceneUnit(props.spec.shapes)
-    const labelScale = Math.max(1, Math.min(2.4, unit * 3))
+    const labelScale = Math.max(1.6, Math.min(3.2, unit * 5))
     for (const shape of props.spec.shapes) {
       addShape(shape, THREE, root, unit, labelScale)
     }
@@ -425,7 +440,7 @@ async function boot(): Promise<void> {
     const notePositions = new Map<string, number>()
     props.spec.annotations.forEach((note, index) => {
       // 3D 里长文字直接贴图会叠在一起;用编号标记,正文放到画布下方图例。
-      const sprite = markerSprite(String(index + 1), THREE, Math.max(0.35, unit * 1.5))
+      const sprite = markerSprite(String(index + 1), THREE, Math.max(0.6, unit * 2.2))
       if (!sprite) return
       const key = `${note.x}|${note.y}|${num(note.z)}`
       const repeat = notePositions.get(key) || 0

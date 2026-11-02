@@ -47,6 +47,17 @@ check('非法坐标拒绝', parseDiagramSpec({
   type: 'geometry2d',
   shapes: [{ kind: 'point', x: Number.NaN, y: 0 }],
 }) === null)
+check('无采样曲线不出空图', parseDiagramSpec({
+  type: 'plot2d',
+  shapes: [
+    { kind: 'axis', from: [-1, 0], to: [1, 0] },
+    { kind: 'curve', expr: 'x^2', domain: [-1, 1] },
+  ],
+}) === null)
+check('占位标签被丢弃', parseDiagramSpec({
+  type: 'geometry2d',
+  shapes: [{ kind: 'point', x: 1, y: 2, label: 'DJJ' }],
+})?.shapes[0]?.label === undefined)
 
 const blocks = splitMessageBlocks('第一段\n\n第二段', [{
   id: 'd1',

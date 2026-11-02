@@ -105,6 +105,7 @@ function sanitizeShape(raw: unknown): DiagramShape | null {
     const value = item[key]
     if (key === 'label' || key === 'expr' || key === 'color') {
       const cleaned = text(value, 200)
+      if (key === 'label' && cleaned.toLowerCase() === 'djj') continue
       if (cleaned) out[key] = cleaned
     } else if (key === 'points') {
       if (Array.isArray(value)) {
@@ -145,6 +146,20 @@ function sanitizeShape(raw: unknown): DiagramShape | null {
     return null
   }
   return out
+}
+
+function renderableShape(shape: DiagramShape): boolean {
+  if (shape.kind === 'axis') return false
+  if (['curve', 'polygon', 'surface'].includes(shape.kind)) {
+    return Array.isArray(shape.points) && shape.points.length > 0
+  }
+  if (shape.kind === 'point' || shape.kind === 'circle') {
+    return typeof shape.x === 'number' && typeof shape.y === 'number'
+  }
+  if (['segment', 'line', 'vector'].includes(shape.kind)) {
+    return Array.isArray(shape.from) && Array.isArray(shape.to)
+  }
+  return true
 }
 
 export function parseDiagramSpec(raw: unknown): DiagramSpec | null {
@@ -224,7 +239,7 @@ export function parseDiagramSpec(raw: unknown): DiagramSpec | null {
   // 类型与结构必须自洽,避免把关系图数据塞进三维画布渲染成空白。
   if (type === 'tree' || type === 'relation' || type === 'flow') {
     if (!nodes.length) return null
-  } else if (!shapes.length) {
+  } else if (!shapes.length || !shapes.some(renderableShape)) {
     return null
   }
 

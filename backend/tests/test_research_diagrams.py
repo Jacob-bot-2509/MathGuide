@@ -277,6 +277,36 @@ def test_plan_diagram_uses_weight_hint_without_explicit_dimension(monkeypatch):
     assert "形式权重参考" not in seen["user"]
 
 
+def test_plot2d_drops_derivative_overlay_and_fixes_tangent():
+    spec = rd.prepare_diagram({
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "label": "y=x²", "expr": "x^2", "domain": [-3, 3]},
+            {"kind": "curve", "label": "y'=2x", "expr": "2*x", "domain": [-3, 3]},
+            {"kind": "point", "x": 0, "y": 0, "label": "O"},
+            {"kind": "segment", "label": "水平切线",
+             "from": [-1, 1], "to": [1, -1]},
+        ],
+    })
+    assert spec
+    labels = [shape.get("label") for shape in spec["shapes"]]
+    assert "y'=2x" not in labels
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "水平切线")
+    assert tangent["from"][1] == 0
+    assert tangent["to"][1] == 0
+
+
+def test_validate_rejects_unsampled_curve_only_plots():
+    assert validate_diagram({
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "axis", "from": [-3, 0], "to": [3, 0]},
+            {"kind": "curve", "expr": "x^2", "domain": [-3, 3]},
+        ],
+    }) is None
+
+
 def test_validate_rejects_future_schema_version():
     assert validate_diagram({
         "schemaVersion": rd.DIAGRAM_SCHEMA_VERSION + 1,
@@ -304,6 +334,29 @@ def test_plan_metrics_do_not_include_content(monkeypatch):
     assert snap["planCount"] == 1
     assert snap["planFailures"] == 0
     assert "机密" not in json.dumps(snap, ensure_ascii=False)
+
+
+def test_placeholder_label_is_dropped():
+    spec = validate_diagram({
+        "type": "geometry2d",
+        "shapes": [{"kind": "point", "x": 1, "y": 2, "label": "DJJ"}],
+    })
+    assert spec and "label" not in spec["shapes"][0]
+
+
+def test_prefer_visual_keeps_function_plot_over_flow():
+    kind, _score = rd.score_segment(
+        "一元函数 y=x² 的导数是 2x,导数大于 0 时单调递增。",
+        prefer_visual=True,
+    )
+    assert kind == "plot2d"
+
+
+def test_meta_question_never_gets_diagram():
+    question = "你好，今天先介绍一下这个系统能做什么"
+    assert rd.is_meta_question(question)
+    text = "系统可以做概念动画、章节知识导航、问题记录、公式查询和待办清单。"
+    assert rd.select_segments(question, text) == []
 
 
 def test_validate_rejects_type_structure_mismatch():

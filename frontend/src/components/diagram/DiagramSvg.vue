@@ -28,16 +28,33 @@ function pair(value: unknown): [number, number] {
   return [num(value[0]), num(value[1])]
 }
 
+function glyphWidth(ch: string): number {
+  return /[　-鿿＀-￯]/.test(ch) ? 11 : 6.5
+}
+
 function labelLines(label: string, width: number): string[] {
-  const max = Math.max(7, Math.floor((width - 14) / 6.2))
+  const maxWidth = Math.max(40, width - 18)
   const chars = Array.from(label)
-  if (chars.length <= max) return [label]
-  const first = chars.slice(0, max).join('')
-  const rest = chars.slice(max)
-  const second = rest.length > max
-    ? `${rest.slice(0, Math.max(1, max - 1)).join('')}…`
-    : rest.join('')
-  return [first, second]
+  const lines: string[] = []
+  let current = ''
+  let currentWidth = 0
+  for (const ch of chars) {
+    const w = glyphWidth(ch)
+    if (current && currentWidth + w > maxWidth) {
+      lines.push(current)
+      current = ''
+      currentWidth = 0
+      if (lines.length === 2) break
+    }
+    current += ch
+    currentWidth += w
+  }
+  if (current && lines.length < 2) lines.push(current)
+  if (!lines.length) return [label]
+  if (lines.length === 2 && chars.length > lines.join('').length) {
+    lines[1] = `${lines[1].slice(0, -1)}…`
+  }
+  return lines
 }
 
 function boundsOfShapes(

@@ -32,8 +32,18 @@ const GAP_X = 22
 const GAP_Y = 26
 const MARGIN = 24
 
+function charWidth(ch: string): number {
+  return /[　-鿿＀-￯]/.test(ch) ? 11 : 6.5
+}
+
+function measuredWidth(label: string): number {
+  let width = 0
+  for (const ch of Array.from(label)) width += charWidth(ch)
+  return width
+}
+
 function nodeWidth(label: string): number {
-  return Math.min(240, Math.max(84, label.length * 7 + 24))
+  return Math.min(280, Math.max(96, measuredWidth(label) + 28))
 }
 
 function empty(nodes: PositionedNode[], edges: PositionedEdge[]): LayoutResult {
@@ -133,7 +143,8 @@ export function layoutTree(spec: DiagramSpec): LayoutResult {
 export function layoutRelation(spec: DiagramSpec): LayoutResult {
   const count = spec.nodes.length
   if (!count) return empty([], [])
-  const radius = Math.max(110, count * 30)
+  const maxWidth = Math.max(...spec.nodes.map((node) => nodeWidth(node.label)))
+  const radius = Math.max(150, count * 46, maxWidth * 1.25)
   const center = radius + 80
   const positioned = spec.nodes.map((node, index) => {
     const angle = (Math.PI * 2 * index) / count - Math.PI / 2
