@@ -145,11 +145,11 @@ const shapeGeometry = computed(() => {
     let x = tx(note.x)
     let y = ty(note.y)
     // 简单避让:同一区域的多条说明往下错开,避免叠成一团。
-    for (let guard = 0; guard < 8; guard += 1) {
-      const clash = placed.some((item) => Math.abs(item.x - x) < 48
-        && Math.abs(item.y - y) < 15)
+    for (let guard = 0; guard < 4; guard += 1) {
+      const clash = placed.some((item) => Math.abs(item.x - x) < 30
+        && Math.abs(item.y - y) < 12)
       if (!clash) break
-      y += 17
+      y += 12
     }
     placed.push({ x, y })
     return { ...note, x, y }

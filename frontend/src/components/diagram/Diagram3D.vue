@@ -237,9 +237,9 @@ function addArrow(
   const direction = end.clone().sub(start)
   const length = direction.length()
   if (length < 1e-6) return
-  const headLength = Math.min(length * 0.35, Math.max(unit * 1.8, length * 0.2))
+  const headLength = Math.min(length * 0.22, Math.max(unit * 0.7, length * 0.12))
   const cone = new THREE.Mesh(
-    new THREE.ConeGeometry(Math.max(unit * 0.35, headLength * 0.32), headLength, 12),
+    new THREE.ConeGeometry(Math.max(unit * 0.16, headLength * 0.28), headLength, 12),
     material,
   )
   cone.quaternion.setFromUnitVectors(
@@ -285,8 +285,12 @@ function addShape(
   })
   if (kind === 'point') {
     material.depthTest = false
+    // 点是注记,不是主体:半径只取场景尺度的一小部分,避免变成大球。
+    const radius = Math.max(
+      0.015, Math.min(num(shape.r) || unit * 0.28, unit * 0.42),
+    )
     const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(num(shape.r) || unit, 16, 12), material,
+      new THREE.SphereGeometry(radius, 16, 12), material,
     )
     mesh.position.copy(vec3([x, y, z], THREE))
     mesh.renderOrder = 10
@@ -312,7 +316,7 @@ function addShape(
         const tube = new THREE.Mesh(
           new THREE.TubeGeometry(
             new THREE.LineCurve3(start, end), 1,
-            Math.max(unit * 0.12, 0.012), 6, false,
+            Math.max(unit * 0.045, 0.006), 6, false,
           ),
           material,
         )
@@ -394,7 +398,7 @@ function addShape(
         const anchor = hasLine
           ? vec3(to, THREE)
           : vec3([x, y, z], THREE)
-        anchor.y += hasLine ? unit * 0.6 : 0.22
+        anchor.y += hasLine ? unit * 0.18 : unit * 0.25
         sprite.position.copy(anchor)
         root.add(sprite)
       }
@@ -434,7 +438,14 @@ async function boot(): Promise<void> {
     for (const shape of props.spec.shapes) {
       addShape(shape, THREE, root, unit, labelScale)
     }
-    const shapeBounds = new THREE.Box3().setFromObject(root)
+    const shapeBounds = new THREE.Box3()
+    root.traverse((object) => {
+      // 标签精灵会把包围盒撑大,导致镜头退太远、主体变小;取景只算几何体。
+      if ((object as { isSprite?: boolean }).isSprite) return
+      if ((object as { geometry?: unknown }).geometry) {
+        shapeBounds.expandByObject(object)
+      }
+    })
     // 三维图解先给出坐标轴,曲面和方向才有空间参照。
     addAxes(THREE, root, shapeBounds, labelScale)
     const notePositions = new Map<string, number>()
@@ -536,6 +547,8 @@ onBeforeUnmount(dispose)
 
 <style scoped>
 .diagram-3d-wrap {
+  max-width: 480px;
+  margin: 4px auto 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
@@ -544,9 +557,20 @@ onBeforeUnmount(dispose)
 
 .diagram-3d {
   position: relative;
+  height: 560px;
   min-height: 340px;
   overflow: hidden;
   touch-action: none;
+}
+
+@media (max-width: 680px) {
+  .diagram-3d-wrap {
+    max-width: 100%;
+  }
+
+  .diagram-3d {
+    height: 340px;
+  }
 }
 
 .diagram-3d-error {

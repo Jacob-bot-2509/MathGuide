@@ -69,7 +69,9 @@ onBeforeUnmount(() => {
 
 .diagram-loading,
 .diagram-fallback {
-  min-height: 340px;
+  min-height: 560px;
+  max-width: 480px;
+  margin: 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -77,5 +79,13 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   color: var(--text-dim);
   font-size: 11px;
+}
+
+@media (max-width: 680px) {
+  .diagram-loading,
+  .diagram-fallback {
+    min-height: 340px;
+    max-width: 100%;
+  }
 }
 </style>
