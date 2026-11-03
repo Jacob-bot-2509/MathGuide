@@ -22,6 +22,7 @@ from rate_limit import SlidingWindowLimiter
 import diagram_alerts
 import diagram_metrics
 import diagram_taxonomy as taxonomy
+import linear_algebra
 
 PREFIX = "[[MG_DIAGRAM:"
 _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]")
@@ -1302,6 +1303,11 @@ def prepare_diagram(raw: object) -> dict | None:
     """采样表达式形状后再做白名单校验。"""
     if not isinstance(raw, dict):
         return None
+    if isinstance(raw.get("linear"), dict):
+        built = linear_algebra.build_linear_diagram(raw)
+        if built is None:
+            return None
+        raw = built
     shapes = raw.get("shapes")
     if isinstance(shapes, list) and len(shapes) <= _MAX_SHAPES:
         dict_shapes: list[dict] = []
@@ -1321,7 +1327,8 @@ def prepare_diagram(raw: object) -> dict | None:
             normalize_2d_axes(dict_shapes)
             if raw.get("type") == "plot2d":
                 raw = _snap_annotations(dict_shapes, raw)
-        if raw.get("type") in ("geometry3d", "surface3d"):
+        if (raw.get("type") in ("geometry3d", "surface3d")
+                and not isinstance(raw.get("linear"), dict)):
             dict_shapes = [shape for shape in dict_shapes
                            if not _axis_aligned_segment(shape)]
             notes = raw.get("annotations")
@@ -1546,6 +1553,9 @@ def validate_diagram(raw: object) -> dict | None:
         "type": kind, "nodes": nodes, "edges": edges,
         "shapes": shapes, "annotations": annotations,
     }
+    linear = linear_algebra.sanitize_linear(raw.get("linear"))
+    if linear is not None:
+        result["linear"] = linear
     title = _text(raw.get("title"), 200)
     if title:
         result["title"] = title
@@ -2011,7 +2021,14 @@ async def plan_geogebra(question: str, before: str, role: str = "main") -> dict 
 
 async def plan_diagram_auto(question: str, before: str, excerpts: list[dict],
                             kind: str, role: str = "main", **kwargs) -> dict | None:
-    """按 MG_DIAGRAM_ENGINE 选择引擎；GeoGebra 失败自动回退旧规划器。"""
+    """按内容领域与 MG_DIAGRAM_ENGINE 选择引擎;失败自动回退旧规划器。"""
+    if (linear_algebra.looks_linear(question)
+            and (wants_visual(question) or not is_relation_question(question))):
+        diagram = await linear_algebra.plan_linear(question, before, role=role)
+        if diagram is not None:
+            diagram_metrics.record("plan_linear", True, "ok")
+            return diagram
+        diagram_metrics.record("plan_linear", False, "fallback")
     if (geogebra_enabled()
             and kind not in ("tree", "relation", "flow")
             and not is_relation_question(question)):
