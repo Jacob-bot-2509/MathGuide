@@ -1,0 +1,4980 @@
+diff --git a/NEWRELEASE.md b/NEWRELEASE.md
+index e014554..adfbef0 100644
+--- a/NEWRELEASE.md
++++ b/NEWRELEASE.md
+@@ -1,111 +1,96 @@
+-# MathGuide v1.17.0 — GeoGebra 2D 隐藏内核、图解不变量与表格加固
++# MathGuide v1.18.0 — 高等代数几何表示、GeoGebra 3D 隐藏内核与图解修复
+ 
+ 发布日期：2026-11-03
+-发布类型：功能版本（图解精度 + 表示形式 + 按需直观解释）
+-代码快照：`224c5b2`（源码包由该提交生成；标签 `v1.17.0` 指向包含发布说明与附件的发布提交）
+-基线版本：`v1.16.0`（`2f30aa8`）
+-
+-本版本继续把“图解”当成教学动作，而不是装饰：
+-
+-- 2D 几何可以用 GeoGebra 内核计算，但页面仍由 MathGuide 自己的 SVG 渲染；
+-- 关系图的箭头方向、充分/必要标签、节点与文字不再互相遮挡；
+-- 3D 注记直接贴在对象附近，不再用编号和下方图例把文字甩远；
+-- 表格解析器补上单横线对齐、公式竖线、跨行公式和转义竖线；
+-- 默认回答更精简，生活化类比改为按需生成。
+-
+-## 一、GeoGebra 2D 隐藏内核
+-
+-- 新增 `frontend/src/services/geogebraKernel.ts`：离屏 GeoGebra Applet 单例，串行执行命令。
+-- 新增 `frontend/src/utils/geogebraSpec.ts`：读取 `getXML()`，转成 `DiagramSpec`。
+-- 新增 `frontend/src/components/diagram/GeoGebraKernelBlock.vue`：转换后交给 `DiagramSvg` 绘制。
+-- GeoGebra 画布不进入页面；页面只显示我们自己的 SVG、标注避让、引线和缩放。
+-- 支持点、线段、直线、射线、向量、圆、多边形、函数、切线和交点。
+-- 函数表达式由安全求值器采样，不使用 `eval`；切线转成切点附近的短线段。
+-- 多边形辅助边去重；交点、圆心、切点标签保留。
+-- 内核失败自动清理实例并重试一次；仍失败时回退旧规划器，最终仍由 SVG 渲染。
+-- 双端命令白名单；禁止 `Execute`、JavaScript、Text、Image、URL、导出等命令。
+-- 3D 暂不接内核：`plan_geogebra()` 遇到三维问题直接回退旧规划器 + Three.js，避免页面出现 GeoGebra 3D 画布。
+-- 启用方式：`backend/.env.local` 设置 `MG_DIAGRAM_ENGINE=geogebra`。
+-- GeoGebra 仅非商业使用免费；商业使用需按官方许可确认。
+-
+-## 二、图解不变量与排版
+-
+-- 2D x/y 轴统一水平/垂直，轴名自动补 x/y，并进入同一套标注占位器。
+-- 切线按曲线表达式/采样点重算，短切线不再穿回曲线；导函数曲线不叠在同一坐标系。
+-- 2D 标注先量文字、再换行，围绕主体上/下/左/右及四角逐位；压图或压其他标注时用引线或隐藏。
+-- 节点图边标签避开节点、边和其他标签；节点框盖住文字时直接丢弃该标签。
+-- 多根、共享子节点、环状概念图增加节点重叠消解，节点不再互相压框。
+-- `tree`、`relation`、`flow` 的边统一加箭头；箭头方向严格按 `from → to`。
+-- 规划提示要求条件关系写明“充分/必要”，A 能推出 B 时边从 A 指向 B。
+-- 纯 `⇒/→/推出/蕴含` 符号标签不再重复显示，方向交给箭头。
+-- 3D 注记取消编号与下方图例，直接显示短文字；排到外围时用细引线指回对象。
+-- 3D 注记和形状标签改为中性简明字，不再用黄/橙/紫高亮；压曲面或其他标签时隐藏。
+-- 3D 标签按屏幕投影尺寸参与碰撞，设置像素上限；相机后退给外围文字留空间。
+-- 3D 异步 chunk 加载失败短暂等待后重试一次，超时从 15 秒提高到 30 秒。
+-- 图解规划超时从 30 秒提高到 45 秒，3D 采样不再过早取消。
+-
+-## 三、用户意图闸门
+-
+-- 用户明确说“先不要画图 / 不用配图”时，后端关闭标记调度和漏标兜底。
+-- 前端关闭回答结束后的自动补图，不再把句子里的“画图”误判成正面请求。
+-- 历史中的停止指令持续生效，直到用户说“可以画图 / 用三维图”等恢复指令。
+-- 手动“图解此段”仍可用，属于用户明确操作。
+-
+-## 四、表格渲染加固
+-
+-- 对齐行支持 `|:-:|`、`|---|`、`| --- |`，不再因为不足三个横线导致整表失效。
+-- 公式里的 `|` 不拆列：`$|x|$`、`\(\left|x\right|\)`、`$$...$$`、`\[...\]`。
+-- 代码里的 `|` 不拆列；转义 `\|` 不拆列并还原成普通竖线。
+-- 表格单元格里的 `$$...$$` 按行内公式排版，不再撑成多行。
+-- 公式跨物理行时，先按闭合位置拼回逻辑行，再拆列。
+-- 无外框表格 `a | b` 继续支持。
+-
+-## 五、按需直观解释与回答规范
+-
+-- 新增 `POST /api/chat/intuition`：按需生成直观解释，默认命中服务端缓存。
+-- `refresh=true` 用于“换个说法”，强制重写。
+-- 回答默认先给推导与结论，不再主动写生活化类比；只有用户明确要求通俗、直观、举例或表示“听不懂”时才使用类比。
+-- 前端回答下方新增“换个直观说法 / 再换个说法”，结果随会话保存。
+-- 回答规范改为精简输出，不再寒暄、不复述题干。
+-
+-## 六、验证
+-
+-- 后端：`585 passed`。
+-- 前端：全量自测通过；图解协议 `66/66`；MathText `41/41`。
++发布类型：功能版本（高等代数几何表示 + 图解精度 + 3D 内核）
++代码快照：`0f0d9b7`（源码包由该提交生成；标签 `v1.18.0` 指向包含发布说明与附件的发布提交）
++基线版本：`v1.17.0`（`8070ed6`）
++
++本版本把高等代数中可几何化的内容接入语义层，并继续收紧图解的表示边界：
++
++- 模型只输出代数语义，子空间、线性映射、二次型等图形由确定性构造器生成；
++- 2D 继续支持 GeoGebra 隐藏内核，3D 新增隐藏内核处理可精确构造的点、线、面、球和多边形；
++- 标注贴近对象、小字号、不加省略号；3D 坐标轴只画一套；
++- 3D 平面/圆缺坐标时不再默默落到原点，错图宁可不画。
++
++## 一、高等代数几何表示
++
++新增 `backend/linear_algebra.py`，按语义块确定性生成 DiagramSpec：
++
++- Phase 1：实子空间（0–3 维、线性/仿射）、线性映射的核与像、行列式、线性方程组、实对称特征方向。
++- Phase 2：内积空间的正交投影、正交补、Gram-Schmidt、二次型与二次曲面、双线性型。
++- Phase 3：复空间与酉变换（C、C² 投影）、辛空间与辛变换（R²、R⁴ 投影）、酉/辛矩阵校验。
++- Phase 4：仿射变换与仿射子空间、射影变换/无穷远线/交比、SVD/极分解/条件数。
++- Phase 5：隐藏 GeoGebra 3D 内核，点、线、段、向量、平面、球、多边形由离屏内核构造，页面仍由 Three.js 渲染。
++
++语义层只接受可几何化内容；纯符号代数（商空间、张量、PID 模等）不进入图解。
++
++## 二、GeoGebra 3D 隐藏内核
++
++- 新增 `frontend/src/services/geogebra3dKernel.ts`：离屏 `appName:'3d'` Applet，单例、串行、失败清理重试。
++- 新增 `frontend/src/utils/geogebra3dSpec.ts`：读取 `getXML()`，转换 `point3d`、`line3d`、`segment3d`、`vector3d`、`plane3d`、球面 `quadric`、`polygon3d`。
++- 新增 `frontend/src/components/diagram/GeoGebra3DKernelBlock.vue`：转换结果交给 `Diagram3D`。
++- `surfacecartesian3d` 不直接给网格，参数曲面/梯度继续走表达式采样 + Three.js；`Surface` 命令主动拒绝并回退。
++- GeoGebra 画布不进入页面；页面只显示 MathGuide 自己的 Three.js 场景。
++
++## 三、2D/3D 图解修复
++
++- 标注优先贴近表示对象，不再把整幅主体包围盒当成必须绕开的外框。
++- 实心多边形登记内部包围框，标签沿多边形边缘就近摆放，不落进填充。
++- 2D 标注字号 10px、形状标签 11px；3D 标签上限进一步收小。
++- 注释超长直接截断，不再显示 `…`；`plainLabel` 同时清掉文本里已有的 `…` 和 `...`。
++- SVG/Three 标签把常见 LaTeX 片段还原成可读符号，例如 `U^\dagger U=I` 显示为 `U† U=I`。
++- 3D 坐标轴由渲染器统一生成；模型自带的 `axis` 形状与 `x/y/z`、`x轴` 注释不再重复显示。
++- 3D 平面/圆必须给出中心坐标；缺坐标直接丢弃，不再默认画到原点。
++- `surface3d` 必须有曲面主体；模型漏掉曲面后只剩平面/点时整图丢弃。
++- 题面明确写 `z=f(x,y)` 与水平平面 `z=c` 时，按题面补回缺失的曲面与高度；多个不同高度不猜。
++
++## 四、高等代数路由与防错图
++
++- `酉矩阵`、`辛矩阵`、`unitary`、`symplectic` 进入线性代数语义路由。
++- 高等代数语义计划失败时不再退回自由作图；错图比没图更糟。
++- 2×2 酉矩阵问“复平面/单位圆/特征值/谱”时，直接从题面矩阵计算特征值，画在单位圆上并各自标注。
++- 2×2 酉矩阵图明确注明“C² 保范:单位圆→单位圆”“单平面只画谱”，避免把谱图误当成完整 C² 映射。
++- 仿射图按题面画三角形/正方形/平行四边形；三角形图注明“仿射不保方向,只保平行”。
++- 射影图注明“射影不保平行;原图平行边交于无穷远”。
++
++## 五、验证
++
++- 后端：`633 passed`。
++- 前端图解协议：`76/76`。
++- MathText：`43/43`。
+ - `vue-tsc --noEmit` 通过。
+ - Vite 生产构建通过。
+ - 发布前检查：`git diff --check`、源码包清单校验。
+ 
+-## 七、升级说明
++## 六、升级说明
+ 
+-- 前端版本号 `1.17.0`；无数据库迁移。
+-- GeoGebra 2D 内核默认关闭；设置 `MG_DIAGRAM_ENGINE=geogebra` 后启用。
+-- 3D 图解仍走旧规划器 + Three.js，不受 GeoGebra 开关影响。
++- 前端版本号 `1.18.0`；无数据库迁移。
++- GeoGebra 内核默认关闭；设置 `MG_DIAGRAM_ENGINE=geogebra` 后启用 2D/3D 隐藏内核。
++- 3D 内核只接点、线、段、向量、平面、球、多边形；参数曲面仍由旧采样器处理。
+ - 如 CDN 不可达，可设置 `VITE_GEOGEBRA_BASE` 指向自托管的 `deployggb.js`。
+-- 内核转换失败会回退旧规划器；不会显示 GeoGebra 画布。
+ 
+-## 八、附件
++## 七、附件
+ 
+-本目录 `releases/v1.17.0/` 提供：
++本目录 `releases/v1.18.0/` 提供：
+ 
+-- `MathGuide-v1.17.0-source.tar.gz`：完整源码快照（由 `git archive` 从代码提交 `224c5b2` 生成，不含 `.git`、`.env.local`、`backend/data`、`.venv`、`node_modules`、`releases/`）；
+-- `v1.17.0.patch`：相对 `v1.16.0` 的完整二进制补丁；
++- `MathGuide-v1.18.0-source.tar.gz`：完整源码快照（由 `git archive` 从代码提交 `0f0d9b7` 生成，不含 `.git`、`.env.local`、`backend/data`、`.venv`、`node_modules`、`releases/`）；
++- `v1.18.0.patch`：相对 `v1.17.0` 的完整二进制补丁；
+ - `MANIFEST.sha256`：源码快照内逐文件 SHA-256；
+ - `SHA256SUMS`：本目录附件的 SHA-256；
+ - `verify_manifest.py`：跨平台清单校验脚本。
+ 
+-## 九、校验
++## 八、校验
+ 
+ ```bash
+-cd releases/v1.17.0
++cd releases/v1.18.0
+ sha256sum -c SHA256SUMS
+-tar -xzf MathGuide-v1.17.0-source.tar.gz
+-python verify_manifest.py MathGuide-v1.17.0
++tar -xzf MathGuide-v1.18.0-source.tar.gz
++python verify_manifest.py MathGuide-v1.18.0
+ # 期望：checked=<清单文件数> failures=0
+ ```
+ 
+ 注意：`MANIFEST.sha256` 按源码包内的真实字节生成。Windows 工作树可能被
+ `core.autocrlf` 转成 CRLF，不能直接拿工作树与归档清单比对；请以解压后的目录为准。
+ 
+-`MANIFEST.sha256` 对应代码提交 `224c5b2`。
+-标签 `v1.17.0` 指向包含发布说明与附件的发布提交；源码快照由 `224c5b2` 生成。
++`MANIFEST.sha256` 对应代码提交 `0f0d9b7`。
++标签 `v1.18.0` 指向包含发布说明与附件的发布提交；源码快照由 `0f0d9b7` 生成。
+diff --git a/backend/.env.local.example b/backend/.env.local.example
+index 8ed5e3b..9cee28a 100644
+--- a/backend/.env.local.example
++++ b/backend/.env.local.example
+@@ -43,9 +43,10 @@ MG_DEMO_MODE=1
+ # 图解语义一致性检查(默认开):每张图多一次异源模型调用,判断图是否对题;
+ # 校验超时/失败时放行不拦图。设为 0 可关闭以省调用。
+ # MG_DIAGRAM_VERIFY=0
+-# 图解引擎:legacy=只用自绘 SVG/Three(默认);geogebra=优先 GeoGebra 2D 命令内核,
+-# 页面仍由我们自己的 SVG 渲染;校验/转换失败回退 legacy。auto 同 geogebra。
+-# 3D 暂不接内核,继续走 legacy + Three.js。GeoGebra 仅非商用免费。
++# 图解引擎:legacy=只用自绘 SVG/Three(默认);geogebra=优先 GeoGebra 命令,
++# 页面仍由我们自己的 SVG/Three 渲染;校验/转换失败回退 legacy。auto 同 geogebra。
++# 2D 接函数/切线/圆/交点;3D 只接点/线/段/平面/球/多边形,曲面/梯度继续 legacy。
++# GeoGebra 仅非商用免费。
+ # MG_DIAGRAM_ENGINE=geogebra
+ # 游客账号上限(0=禁止访客登录);超出时先清理无有效 token 的最旧游客
+ MG_GUEST_MAX=500
+diff --git a/backend/diagram_taxonomy.py b/backend/diagram_taxonomy.py
+index a709689..92c5fba 100644
+--- a/backend/diagram_taxonomy.py
++++ b/backend/diagram_taxonomy.py
+@@ -47,7 +47,11 @@ VISUAL_CUES: dict[str, dict[str, float]] = {
+         "特征值": 2.5, "特征向量": 2.5, "特征空间": 1.2, "行列式": 1.5,
+         "迹": 0.8, "投影": 1.5, "正交": 1.2, "基变换": 1.5,
+         "线性方程组": 1.5, "解空间": 1.5, "子空间": 1.2,
++        "R^2": 2.8, "R²": 2.8, "二维子空间": 2.2,
+         "奇异值分解": 2.0, "二次型": 1.5, "正定性": 1.2,
++        "内积": 1.5, "正交投影": 1.6, "双线性": 1.5,
++        "仿射": 2.1, "射影": 2.2, "无穷远": 2.2, "交比": 2.2,
++        "SVD": 2.2, "奇异值": 2.2, "极分解": 2.0, "条件数": 2.0,
+         # 复平面
+         "复平面": 2.0, "复变函数": 1.5, "共形映射": 2.0, "留数": 1.2,
+         # 优化/可行域
+@@ -68,7 +72,9 @@ VISUAL_CUES: dict[str, dict[str, float]] = {
+         "联合概率密度": 2.5, "边缘分布": 1.5, "条件分布": 1.5,
+         "曲顶柱体": 3.0, "曲顶": 2.0, "柱体": 1.5,
+         # 二次型/优化曲面
+-        "二次型": 2.5, "凸函数": 1.5, "凹函数": 1.2, "鞍面": 2.0,
++        "二次型": 2.5, "二次曲面": 3.0, "双线性": 2.0,
++        "正定": 1.8, "惯性": 1.8,
++        "凸函数": 1.5, "凹函数": 1.2, "鞍面": 2.0,
+         "目标函数": 1.5, "损失函数": 2.0,
+     },
+     "geometry3d": {
+@@ -79,6 +85,18 @@ VISUAL_CUES: dict[str, dict[str, float]] = {
+         "球体": 1.5, "球面": 2.0, "圆锥": 1.5, "圆柱": 1.5,
+         "立方体": 1.5, "旋转体": 2.5, "三重积分": 2.5, "体积": 1.5,
+         "平面方程": 2.0, "法平面": 1.5, "柱面": 1.5, "锥面": 1.5,
++        # 线性代数空间
++        "子空间": 2.6, "线性空间": 2.4, "张成": 2.3, "span": 2.2,
++        "基向量": 2.2, "维数": 2.2, "R^3": 3.0, "R³": 3.0,
++        "核空间": 2.3, "像空间": 2.3, "零空间": 2.3, "特征空间": 2.2,
++        "正交补": 2.1, "线性变换": 1.9, "线性映射": 1.9,
++        "内积": 2.0, "正交投影": 2.2, "Gram": 2.0, "施密特": 2.0,
++        "二次型": 2.5, "双线性": 2.5, "正定": 2.0, "惯性": 2.0,
++        "对称矩阵": 1.8, "酉空间": 2.6, "酉变换": 2.6, "酉矩阵": 2.6, "复内积": 2.4,
++        "Hermitian": 2.4, "辛空间": 2.8, "辛变换": 2.8, "辛矩阵": 2.8, "辛形式": 2.8,
++        "各向同性": 2.2, "Lagrangian": 2.4, "相空间": 2.2,
++        "仿射": 1.8, "射影": 1.8, "SVD": 2.2, "奇异值": 2.2,
++        "极分解": 2.0, "条件数": 2.0,
+     },
+     "flow": {
+         "步骤": 2.0, "首先": 1.2, "其次": 1.2, "然后": 1.2,
+@@ -114,6 +132,9 @@ DIMENSION_CUES: dict[str, dict[str, float]] = {
+         "z轴": 2.0, "f(x,y)": 3.0, "f(x, y)": 3.0,
+         "梯度": 2.0, "法向量": 2.0, "二重积分": 2.0, "三重积分": 2.5,
+         "两个变量": 2.5, "多个变量": 2.5,
++        "子空间": 2.2, "张成": 2.0, "span": 1.8, "R^3": 2.8, "R³": 2.8,
++        "二次型": 1.8, "双线性": 1.8, "内积": 1.5, "正交投影": 1.6,
++        "酉空间": 2.2, "酉变换": 2.2, "辛空间": 2.4, "辛变换": 2.4,
+     },
+ }
+ 
+diff --git a/backend/linear_algebra.py b/backend/linear_algebra.py
+new file mode 100644
+index 0000000..657f669
+--- /dev/null
++++ b/backend/linear_algebra.py
+@@ -0,0 +1,1801 @@
++"""高等代数可几何表示层:Phase 1 实子空间、线性变换、行列式、方程组、实特征方向。
++
++模型只输出代数语义;本模块负责校验并确定性生成 DiagramSpec 的 shapes。
++"""
++
++from __future__ import annotations
++
++import cmath
++import json
++import math
++import re
++from typing import Iterable
++
++from rag import llm
++
++LINEAR_VISUALS = {
++    "subspace", "linear_map", "determinant", "system", "eigen",
++    "inner_product", "quadratic_form", "bilinear_form",
++    "unitary", "symplectic", "affine", "projective", "svd",
++}
++TOL = 1e-9
++DISPLAY = 1.6
++
++_LINEAR_RE = re.compile(
++    r"子空间|张成|span|线性空间|线性变换|线性映射|核空间|像空间|零空间|"
++    r"特征值|特征向量|对角化|行列式|线性方程组|解空间|正交补|投影矩阵|"
++    r"基向量|维数|内积|正交投影|Gram|施密特|二次型|双线性|正定|惯性|"
++    r"对称矩阵|酉空间|酉变换|酉矩阵|复内积|Hermitian|辛空间|辛变换|"
++    r"辛矩阵|辛形式|各向同性|Lagrangian|相空间|仿射|射影|无穷远|交比|"
++    r"SVD|奇异值|unitary|symplectic|"
++    r"极分解|条件数|低秩|R\s*\^\s*[234]|\\\\mathbb\{R\}\s*\^\s*[234]|"
++    r"\bR[234]\b",
++    re.IGNORECASE,
++)
++# 只表示“这是高等代数语义题”的词;R^n 单独出现可能只是多元微积分的定义域。
++_LINEAR_CORE_RE = re.compile(
++    r"子空间|张成|span|线性空间|线性变换|线性映射|核空间|像空间|零空间|"
++    r"特征值|特征向量|对角化|行列式|线性方程组|解空间|正交补|投影矩阵|"
++    r"基向量|维数|内积|正交投影|Gram|施密特|二次型|双线性|正定|惯性|"
++    r"对称矩阵|酉空间|酉变换|酉矩阵|复内积|Hermitian|辛空间|辛变换|"
++    r"辛矩阵|辛形式|各向同性|Lagrangian|相空间|仿射|射影|无穷远|交比|"
++    r"SVD|奇异值|unitary|symplectic|极分解|条件数|低秩",
++    re.IGNORECASE,
++)
++
++
++def looks_linear(question: str) -> bool:
++    return bool(_LINEAR_RE.search(question or ""))
++
++
++def looks_linear_core(question: str) -> bool:
++    """是否明确是高等代数语义题;避免 R^2/R^3 把多元微积分也拦成线性题。"""
++    return bool(_LINEAR_CORE_RE.search(question or ""))
++
++
++def _num(value: object) -> float | None:
++    try:
++        parsed = float(value)
++    except (TypeError, ValueError):
++        return None
++    if not math.isfinite(parsed) or abs(parsed) > 1e4:
++        return None
++    return parsed
++
++
++def _text(value: object, limit: int = 200) -> str:
++    return str(value or "").strip()[:limit]
++
++
++def _vec(value: object, size: int) -> list[float] | None:
++    if not isinstance(value, (list, tuple)) or len(value) != size:
++        return None
++    parsed = [_num(item) for item in value]
++    if any(item is None for item in parsed):
++        return None
++    return [float(item) for item in parsed]
++
++
++def _integer(value: object, low: int, high: int) -> int | None:
++    parsed = _num(value)
++    if parsed is None or not parsed.is_integer() or not low <= parsed <= high:
++        return None
++    return int(parsed)
++
++
++def _vectors(value: object, size: int, count: int | None = None) -> list[list[float]] | None:
++    if not isinstance(value, list):
++        return None
++    out: list[list[float]] = []
++    for item in value:
++        vec = _vec(item, size)
++        if vec is None:
++            return None
++        out.append(vec)
++    if count is not None and len(out) != count:
++        return None
++    return out
++
++
++def _matrix(value: object, size: int) -> list[list[float]] | None:
++    if not isinstance(value, list) or len(value) != size:
++        return None
++    rows: list[list[float]] = []
++    for item in value:
++        row = _vec(item, size)
++        if row is None:
++            return None
++        rows.append(row)
++    return rows
++
++
++def _complex(value: object) -> complex | None:
++    if not isinstance(value, (list, tuple)) or len(value) != 2:
++        return None
++    real, imag = _num(value[0]), _num(value[1])
++    if real is None or imag is None:
++        return None
++    return complex(real, imag)
++
++
++def _cvec(value: object, size: int) -> list[complex] | None:
++    if not isinstance(value, list) or len(value) != size:
++        return None
++    out = [_complex(item) for item in value]
++    if any(item is None for item in out):
++        return None
++    return [item for item in out if item is not None]
++
++
++def _cmatrix(value: object, size: int) -> list[list[complex]] | None:
++    if not isinstance(value, list) or len(value) != size:
++        return None
++    rows: list[list[complex]] = []
++    for item in value:
++        row = _cvec(item, size)
++        if row is None:
++            return None
++        rows.append(row)
++    return rows
++
++
++def _cmatvec(matrix: list[list[complex]], vector: list[complex]) -> list[complex]:
++    return [sum(a * b for a, b in zip(row, vector)) for row in matrix]
++
++
++def _cabs(value: complex) -> float:
++    return abs(value)
++
++
++def _is_unitary(matrix: list[list[complex]]) -> bool:
++    size = len(matrix)
++    for row in range(size):
++        for col in range(size):
++            value = sum(
++                matrix[index][row].conjugate() * matrix[index][col]
++                for index in range(size)
++            )
++            expected = 1.0 if row == col else 0.0
++            if abs(value - expected) > 1e-7:
++                return False
++    return True
++
++
++def _j_matrix(dimension: int) -> list[list[float]]:
++    size = dimension * 2
++    matrix = [[0.0] * size for _ in range(size)]
++    for index in range(dimension):
++        matrix[index][dimension + index] = 1.0
++        matrix[dimension + index][index] = -1.0
++    return matrix
++
++
++def _is_symplectic(matrix: list[list[float]], dimension: int) -> bool:
++    size = dimension * 2
++    if len(matrix) != size or any(len(row) != size for row in matrix):
++        return False
++    j = _j_matrix(dimension)
++    for row in range(size):
++        for col in range(size):
++            value = sum(
++                matrix[k][row] * j[k][l] * matrix[l][col]
++                for k in range(size) for l in range(size)
++            )
++            if abs(value - j[row][col]) > 1e-7:
++                return False
++    return True
++
++
++def _project_complex(vector: list[complex], kind: str) -> list[float]:
++    real = []
++    for value in vector:
++        real.extend([value.real, value.imag])
++    if kind == "r4_to_3d":
++        # 固定投影 (Re z1, Im z1, Re z2),丢掉 Im z2;图上必须标注。
++        return real[:3]
++    if kind == "r4_to_2d":
++        return [real[0], real[1]]
++    return real
++
++
++
++def _norm(vec: Iterable[float]) -> float:
++    return math.sqrt(sum(item * item for item in vec))
++
++
++def _unit(vec: list[float]) -> list[float] | None:
++    length = _norm(vec)
++    if length < TOL:
++        return None
++    return [item / length for item in vec]
++
++
++def _add(a: list[float], b: list[float], scale: float = 1.0) -> list[float]:
++    return [x + y * scale for x, y in zip(a, b)]
++
++
++def _scale(vec: list[float], scale: float) -> list[float]:
++    return [item * scale for item in vec]
++
++
++def _cross(a: list[float], b: list[float]) -> list[float]:
++    if len(a) != 3 or len(b) != 3:
++        return [0.0, 0.0, 0.0]
++    return [
++        a[1] * b[2] - a[2] * b[1],
++        a[2] * b[0] - a[0] * b[2],
++        a[0] * b[1] - a[1] * b[0],
++    ]
++
++
++def _rref(matrix: list[list[float]]) -> tuple[list[list[float]], list[tuple[int, int]]]:
++    rows = [row[:] for row in matrix]
++    if not rows:
++        return rows, []
++    cols = len(rows[0])
++    pivot_row = 0
++    pivots: list[tuple[int, int]] = []
++    for col in range(cols):
++        best = max(range(pivot_row, len(rows)), key=lambda r: abs(rows[r][col]))
++        if abs(rows[best][col]) < TOL:
++            continue
++        rows[pivot_row], rows[best] = rows[best], rows[pivot_row]
++        pivot = rows[pivot_row][col]
++        rows[pivot_row] = [value / pivot for value in rows[pivot_row]]
++        for row_index, row in enumerate(rows):
++            if row_index == pivot_row:
++                continue
++            factor = row[col]
++            if abs(factor) < TOL:
++                continue
++            rows[row_index] = [
++                value - factor * base
++                for value, base in zip(row, rows[pivot_row])
++            ]
++        pivots.append((pivot_row, col))
++        pivot_row += 1
++        if pivot_row >= len(rows):
++            break
++    return rows, pivots
++
++
++def _rank(matrix: list[list[float]]) -> int:
++    if not matrix or not matrix[0]:
++        return 0
++    return len(_rref(matrix)[1])
++
++
++def _nullspace(matrix: list[list[float]]) -> list[list[float]]:
++    if not matrix or not matrix[0]:
++        return []
++    reduced, pivots = _rref(matrix)
++    pivot_cols = {col for _row, col in pivots}
++    free_cols = [col for col in range(len(matrix[0])) if col not in pivot_cols]
++    basis: list[list[float]] = []
++    for free in free_cols:
++        vector = [0.0] * len(matrix[0])
++        vector[free] = 1.0
++        for row, pivot_col in pivots:
++            vector[pivot_col] = -reduced[row][free]
++        basis.append(vector)
++    return basis
++
++
++def _independent(vectors: list[list[float]]) -> list[list[float]]:
++    basis: list[list[float]] = []
++    rank = 0
++    for vector in vectors:
++        candidate = basis + [vector]
++        next_rank = _rank(candidate)
++        if next_rank > rank:
++            basis.append(vector)
++            rank = next_rank
++    return basis
++
++
++def _det(matrix: list[list[float]]) -> float:
++    size = len(matrix)
++    if size == 1:
++        return matrix[0][0]
++    if size == 2:
++        return matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]
++    if size == 3:
++        a, b, c = matrix[0]
++        d, e, f = matrix[1]
++        g, h, i = matrix[2]
++        return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
++    return 0.0
++
++
++def _matvec(matrix: list[list[float]], vector: list[float]) -> list[float]:
++    return [sum(a * b for a, b in zip(row, vector)) for row in matrix]
++
++
++def _transpose(matrix: list[list[float]]) -> list[list[float]]:
++    return [list(row) for row in zip(*matrix)]
++
++
++def _matmul(left: list[list[float]], right: list[list[float]]) -> list[list[float]]:
++    return [
++        [sum(left[row][k] * right[k][col] for k in range(len(right)))
++         for col in range(len(right[0]))]
++        for row in range(len(left))
++    ]
++
++
++def _svd(matrix: list[list[float]]) -> tuple[list[float], list[list[float]], list[list[float]]]:
++    """小矩阵 SVD:A = U diag(σ) Vᵀ,只用于 2×2/3×3 教学图。"""
++    transpose = _transpose(matrix)
++    ata = _matmul(transpose, matrix)
++    pairs = _eigen_symmetric(ata)
++    singular: list[float] = []
++    right: list[list[float]] = []
++    left: list[list[float]] = []
++    for value, vector in pairs:
++        sigma = math.sqrt(max(0.0, value))
++        if sigma <= 1e-9:
++            continue
++        unit = _unit(vector)
++        if unit is None:
++            continue
++        image = _matvec(matrix, unit)
++        u = _unit(image)
++        if u is None:
++            continue
++        singular.append(sigma)
++        right.append(unit)
++        left.append(u)
++    return singular, left, right
++
++
++
++def _dot(a: list[float], b: list[float]) -> float:
++    return sum(x * y for x, y in zip(a, b))
++
++
++def _solve_small(matrix: list[list[float]], rhs: list[float]) -> list[float] | None:
++    size = len(matrix)
++    if size == 1:
++        return [rhs[0] / matrix[0][0]] if abs(matrix[0][0]) > TOL else None
++    if size == 2:
++        det = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]
++        if abs(det) <= TOL:
++            return None
++        return [
++            (rhs[0] * matrix[1][1] - rhs[1] * matrix[0][1]) / det,
++            (matrix[0][0] * rhs[1] - matrix[1][0] * rhs[0]) / det,
++        ]
++    return None
++
++
++def _gram_schmidt(vectors: list[list[float]]) -> list[list[float]]:
++    out: list[list[float]] = []
++    for vector in vectors:
++        work = vector[:]
++        for basis in out:
++            coefficient = _dot(work, basis) / max(_dot(basis, basis), TOL)
++            work = [value - coefficient * base for value, base in zip(work, basis)]
++        if _norm(work) > 1e-7:
++            out.append(work)
++    return out
++
++
++def _project_onto(basis: list[list[float]], vector: list[float]) -> list[float]:
++    if not basis:
++        return [0.0] * len(vector)
++    gram = [[_dot(a, b) for b in basis] for a in basis]
++    rhs = [_dot(a, vector) for a in basis]
++    coefficients = _solve_small(gram, rhs)
++    if coefficients is None:
++        return [0.0] * len(vector)
++    return [
++        sum(coefficients[index] * basis[index][axis]
++            for index in range(len(basis)))
++        for axis in range(len(vector))
++    ]
++
++
++def _quadratic_shapes(matrix: list[list[float]], level: float,
++                      ambient: int) -> list[dict]:
++    if any(abs(matrix[i][j] - matrix[j][i]) > 1e-7
++           for i in range(ambient) for j in range(ambient)):
++        return []
++    pairs = _eigen_symmetric(matrix)
++    values = [value for value, _vector in pairs]
++    vectors = [vector for _value, vector in pairs]
++    positive = sum(1 for value in values if value > 1e-7)
++    negative = sum(1 for value in values if value < -1e-7)
++    zero = ambient - positive - negative
++    lvl = abs(level)
++    if zero:
++        return []
++
++    def rotate(local: list[float]) -> list[float]:
++        return [
++            sum(local[index] * vectors[index][axis]
++                for index in range(ambient))
++            for axis in range(ambient)
++        ]
++
++    if ambient == 2:
++        shapes: list[dict] = []
++        if positive == 2:
++            a = math.sqrt(lvl / max(values[0], TOL))
++            b = math.sqrt(lvl / max(values[1], TOL))
++            points = [rotate([a * math.cos(t), b * math.sin(t)])
++                      for t in (2 * math.pi * i / 120 for i in range(121))]
++            shapes.append({"kind": "curve", "points": points,
++                           "label": f"xᵀAx = {level:g}"})
++        elif negative == 2:
++            a = math.sqrt(lvl / max(-values[0], TOL))
++            b = math.sqrt(lvl / max(-values[1], TOL))
++            points = [rotate([a * math.cos(t), b * math.sin(t)])
++                      for t in (2 * math.pi * i / 120 for i in range(121))]
++            shapes.append({"kind": "curve", "points": points,
++                           "label": f"xᵀAx = {level:g}"})
++        elif positive == 1 and negative == 1:
++            a = math.sqrt(lvl / max(values[0], TOL))
++            b = math.sqrt(lvl / max(-values[1], TOL))
++            for sign in (1, -1):
++                points = [
++                    rotate([sign * a * math.cosh(t), b * math.sinh(t)])
++                    for t in (-2 + 4 * i / 100 for i in range(101))
++                ]
++                shapes.append({"kind": "curve", "points": points})
++        return shapes
++
++    if ambient != 3:
++        return []
++    rows, cols = 31, 31
++    points: list[list[float]] = []
++    if positive == 3:
++        a = math.sqrt(lvl / max(values[0], TOL))
++        b = math.sqrt(lvl / max(values[1], TOL))
++        c = math.sqrt(lvl / max(values[2], TOL))
++        for row in range(rows):
++            u = -math.pi / 2 + math.pi * row / (rows - 1)
++            for col in range(cols):
++                v = 2 * math.pi * col / (cols - 1)
++                points.append(rotate([
++                    a * math.cos(u) * math.cos(v),
++                    b * math.cos(u) * math.sin(v),
++                    c * math.sin(u),
++                ]))
++    elif negative == 3:
++        a = math.sqrt(lvl / max(-values[0], TOL))
++        b = math.sqrt(lvl / max(-values[1], TOL))
++        c = math.sqrt(lvl / max(-values[2], TOL))
++        for row in range(rows):
++            u = -math.pi / 2 + math.pi * row / (rows - 1)
++            for col in range(cols):
++                v = 2 * math.pi * col / (cols - 1)
++                points.append(rotate([
++                    a * math.cos(u) * math.cos(v),
++                    b * math.cos(u) * math.sin(v),
++                    c * math.sin(u),
++                ]))
++    elif positive == 2 and negative == 1:
++        a = math.sqrt(lvl / max(values[0], TOL))
++        b = math.sqrt(lvl / max(values[1], TOL))
++        c = math.sqrt(lvl / max(-values[2], TOL))
++        for row in range(rows):
++            u = -1.2 + 2.4 * row / (rows - 1)
++            for col in range(cols):
++                v = 2 * math.pi * col / (cols - 1)
++                points.append(rotate([
++                    a * math.cosh(u) * math.cos(v),
++                    b * math.cosh(u) * math.sin(v),
++                    c * math.sinh(u),
++                ]))
++    elif positive == 1 and negative == 2:
++        a = math.sqrt(lvl / max(values[0], TOL))
++        b = math.sqrt(lvl / max(-values[1], TOL))
++        c = math.sqrt(lvl / max(-values[2], TOL))
++        for row in range(rows):
++            u = -1.2 + 2.4 * row / (rows - 1)
++            for col in range(cols):
++                v = 2 * math.pi * col / (cols - 1)
++                points.append(rotate([
++                    a * math.cosh(u),
++                    b * math.sinh(u) * math.cos(v),
++                    c * math.sinh(u) * math.sin(v),
++                ]))
++    if not points:
++        return []
++    return [{
++        "kind": "surface", "points": points,
++        "rows": rows, "cols": cols,
++        "label": f"xᵀAx = {level:g}",
++    }]
++
++
++def _signature(matrix: list[list[float]]) -> tuple[int, int, int]:
++    values = [value for value, _vector in _eigen_symmetric(matrix)]
++    positive = sum(1 for value in values if value > 1e-7)
++    negative = sum(1 for value in values if value < -1e-7)
++    return positive, negative, len(values) - positive - negative
++
++
++
++def _eigen_symmetric(matrix: list[list[float]]) -> list[tuple[float, list[float]]]:
++    """Jacobi 特征分解,只用于小尺寸实对称矩阵。"""
++    size = len(matrix)
++    a = [row[:] for row in matrix]
++    vectors = [[1.0 if i == j else 0.0 for j in range(size)] for i in range(size)]
++    for _ in range(64):
++        p, q = 0, 1 if size > 1 else 0
++        largest = 0.0
++        for i in range(size):
++            for j in range(i + 1, size):
++                if abs(a[i][j]) > largest:
++                    largest = abs(a[i][j])
++                    p, q = i, j
++        if largest < 1e-10:
++            break
++        theta = (a[q][q] - a[p][p]) / (2 * a[p][q])
++        sign = 1.0 if theta >= 0 else -1.0
++        t = sign / (abs(theta) + math.sqrt(theta * theta + 1))
++        c = 1 / math.sqrt(t * t + 1)
++        s = t * c
++        for k in range(size):
++            akp = a[k][p]
++            akq = a[k][q]
++            a[k][p] = c * akp - s * akq
++            a[k][q] = s * akp + c * akq
++        for k in range(size):
++            apk = a[p][k]
++            aqk = a[q][k]
++            a[p][k] = c * apk - s * aqk
++            a[q][k] = s * apk + c * aqk
++        for k in range(size):
++            vkp = vectors[k][p]
++            vkq = vectors[k][q]
++            vectors[k][p] = c * vkp - s * vkq
++            vectors[k][q] = s * vkp + c * vkq
++    pairs = [
++        (a[index][index], [vectors[row][index] for row in range(size)])
++        for index in range(size)
++    ]
++    pairs.sort(key=lambda item: item[0], reverse=True)
++    return pairs
++
++
++def _point(vec: list[float], label: str = "") -> dict:
++    shape: dict = {"kind": "point", "x": vec[0], "y": vec[1]}
++    if len(vec) > 2:
++        shape["z"] = vec[2]
++    if label:
++        shape["label"] = label
++    return shape
++
++
++def _vector(start: list[float], end: list[float], label: str = "") -> dict:
++    shape: dict = {"kind": "vector", "from": start[:], "to": end[:]}
++    if label:
++        shape["label"] = label
++    return shape
++
++
++def _segment(start: list[float], end: list[float], label: str = "") -> dict:
++    shape: dict = {"kind": "segment", "from": start[:], "to": end[:]}
++    if label:
++        shape["label"] = label
++    return shape
++
++
++def _plane(center: list[float], normal: list[float], size: float,
++           label: str = "") -> dict:
++    shape: dict = {
++        "kind": "plane",
++        "x": center[0], "y": center[1], "z": center[2],
++        "width": size, "height": size, "normal": normal[:],
++    }
++    if label:
++        shape["label"] = label
++    return shape
++
++
++def _polygon(points: list[list[float]], label: str = "") -> dict:
++    shape: dict = {"kind": "polygon", "points": [point[:] for point in points]}
++    if label:
++        shape["label"] = label
++    return shape
++
++
++def _annotation(point: list[float], text: str) -> dict:
++    note: dict = {"x": point[0], "y": point[1], "text": text}
++    if len(point) > 2:
++        note["z"] = point[2]
++    return note
++
++
++def _subspace_basis(subspace: dict, ambient: int) -> tuple[int, str, list[float], list[list[float]]] | None:
++    dimension = _integer(subspace.get("dimension"), 0, ambient)
++    if dimension is None:
++        return None
++    kind = _text(subspace.get("kind"), 20).lower()
++    if kind not in ("linear", "affine"):
++        return None
++    offset = _vec(subspace.get("offset", [0.0] * ambient), ambient)
++    if offset is None:
++        return None
++    if kind == "linear" and any(abs(value) > TOL for value in offset):
++        return None
++    basis = _vectors(subspace.get("basis"), ambient)
++    if basis is None or len(basis) != dimension:
++        return None
++    if any(_norm(vector) < TOL for vector in basis):
++        return None
++    if _rank(basis) != dimension:
++        return None
++    return dimension, kind, offset, basis
++
++
++def sanitize_linear(raw: object) -> dict | None:
++    """校验模型给出的线性代数语义计划;实空间 2D/3D,复空间 C/C² 投影。"""
++    if not isinstance(raw, dict):
++        return None
++    visual = _text(raw.get("visual"), 30).lower()
++    if visual not in LINEAR_VISUALS:
++        return None
++    domain = _text(raw.get("domain", "real"), 20).lower()
++    if visual == "unitary":
++        if domain != "complex":
++            return None
++        ambient = _integer(raw.get("ambient"), 1, 2)
++        # 模型常把 2×2 复矩阵的 ambient 写成 1;矩阵本身是 2×2 时按 C² 处理,
++        # 不能截成 1×1,否则会把旋转/特征值关系画错。
++        if ambient == 1:
++            candidate = _cmatrix(raw.get("matrix"), 2)
++            if candidate is not None:
++                ambient = 2
++    elif visual == "symplectic":
++        if domain != "real":
++            return None
++        ambient = _integer(raw.get("ambient"), 2, 4)
++        if ambient not in (2, 4):
++            return None
++    else:
++        if domain != "real":
++            return None
++        ambient = _integer(raw.get("ambient"), 2, 3)
++    if ambient is None:
++        return None
++    result: dict = {
++        "visual": visual,
++        "domain": domain,
++        "ambient": ambient,
++    }
++    title = _text(raw.get("title"), 200)
++    if title:
++        result["title"] = title
++    projection = raw.get("projection")
++    if isinstance(projection, dict):
++        kind = _text(projection.get("kind"), 30).lower()
++        if kind not in ("none", "complex_to_real", "r4_to_3d", "r4_to_2d"):
++            return None
++        note = _text(projection.get("note"), 160)
++        result["projection"] = {"kind": kind, "note": note}
++    if visual == "subspace":
++        subspace = raw.get("subspace")
++        if not isinstance(subspace, dict):
++            return None
++        basis = _subspace_basis(subspace, ambient)
++        if basis is None:
++            return None
++        dimension, kind, offset, vectors = basis
++        result["subspace"] = {
++            "dimension": dimension,
++            "kind": kind,
++            "offset": offset,
++            "basis": vectors,
++        }
++        label = _text(subspace.get("label"), 80)
++        if label:
++            result["subspace"]["label"] = label
++    elif visual in ("linear_map", "eigen"):
++        matrix = _matrix(raw.get("matrix"), ambient)
++        if matrix is None:
++            return None
++        result["matrix"] = matrix
++    elif visual == "determinant":
++        vectors = _vectors(raw.get("vectors"), ambient, ambient)
++        if vectors is None or any(_norm(vector) < TOL for vector in vectors):
++            return None
++        result["vectors"] = vectors
++    elif visual == "system":
++        raw_equations = raw.get("equations")
++        if not isinstance(raw_equations, list) or not raw_equations:
++            return None
++        equations: list[list[float]] = []
++        for item in raw_equations[:ambient]:
++            equation = _vec(item, ambient + 1)
++            if equation is None:
++                return None
++            if any(abs(value) > TOL for value in equation[:ambient]):
++                equations.append(equation)
++        if not equations:
++            return None
++        result["equations"] = equations
++    elif visual == "quadratic_form":
++        matrix = _matrix(raw.get("matrix"), ambient)
++        if matrix is None:
++            return None
++        level = _num(raw.get("level", 1.0))
++        if level is None or abs(level) < TOL:
++            level = 1.0
++        result["matrix"] = matrix
++        result["level"] = level
++    elif visual == "bilinear_form":
++        matrix = _matrix(raw.get("matrix"), ambient)
++        if matrix is None:
++            return None
++        result["matrix"] = matrix
++    elif visual == "inner_product":
++        operation = _text(raw.get("operation"), 30).lower()
++        if operation not in (
++                "projection", "orthogonal_complement",
++                "gram_schmidt", "orthonormal_basis"):
++            return None
++        result["operation"] = operation
++        if operation == "projection":
++            vector = _vec(raw.get("vector"), ambient)
++            subspace = raw.get("subspace")
++            if vector is None or not isinstance(subspace, dict):
++                return None
++            basis = _subspace_basis(subspace, ambient)
++            if basis is None:
++                return None
++            dimension, kind, offset, vectors = basis
++            result["vector"] = vector
++            result["subspace"] = {
++                "dimension": dimension, "kind": kind,
++                "offset": offset, "basis": vectors,
++            }
++        elif operation == "orthogonal_complement":
++            subspace = raw.get("subspace")
++            if not isinstance(subspace, dict):
++                return None
++            basis = _subspace_basis(subspace, ambient)
++            if basis is None:
++                return None
++            dimension, kind, offset, vectors = basis
++            result["subspace"] = {
++                "dimension": dimension, "kind": kind,
++                "offset": offset, "basis": vectors,
++            }
++        else:
++            vectors = _vectors(raw.get("vectors"), ambient)
++            if vectors is None or not 1 <= len(vectors) <= ambient:
++                return None
++            if any(_norm(vector) < TOL for vector in vectors):
++                return None
++            result["vectors"] = vectors
++    elif visual == "unitary":
++        matrix = _cmatrix(raw.get("matrix"), ambient)
++        if matrix is None or not _is_unitary(matrix):
++            return None
++        vector = _cvec(raw.get("vector", None), ambient)
++        if vector is None:
++            vector = [1.0 + 0.0j] + [0.0j] * (ambient - 1)
++        projection = result.get("projection") or {}
++        if ambient == 1:
++            result["projection"] = {
++                "kind": "complex_to_real",
++                "note": _text(projection.get("note"), 160) or "C → R² 实坐标",
++            }
++        elif not projection or projection.get("kind") not in (
++                "r4_to_3d", "r4_to_2d"):
++            result["projection"] = {
++                "kind": "r4_to_3d",
++                "note": "C² → R⁴ → R³ 投影,虚线方向仅示意",
++            }
++        result["matrix"] = matrix
++        result["vector"] = vector
++    elif visual == "symplectic":
++        size = ambient
++        matrix = _matrix(raw.get("matrix"), size)
++        if matrix is None:
++            matrix = _j_matrix(size // 2)
++        if not _is_symplectic(matrix, size // 2):
++            return None
++        projection = result.get("projection") or {}
++        if ambient == 4 and projection.get("kind") not in (
++                "r4_to_3d", "r4_to_2d"):
++            result["projection"] = {
++                "kind": "r4_to_3d",
++                "note": "R⁴ → R³ 投影,只示意辛基与面积关系",
++            }
++        result["matrix"] = matrix
++    elif visual == "affine":
++        operation = _text(
++            raw.get("operation")
++            or ("subspace" if raw.get("subspace") else "transform"), 20).lower()
++        if operation not in ("transform", "subspace"):
++            return None
++        result["operation"] = operation
++        if operation == "transform":
++            matrix = _matrix(raw.get("matrix"), ambient)
++            translation = _vec(raw.get("translation", [0.0] * ambient), ambient)
++            if matrix is None or translation is None:
++                return None
++            result["matrix"] = matrix
++            result["translation"] = translation
++            source = _text(raw.get("source"), 20).lower()
++            if source in ("triangle", "square", "parallelogram"):
++                result["source"] = source
++        else:
++            subspace = raw.get("subspace")
++            if not isinstance(subspace, dict):
++                return None
++            basis = _subspace_basis(subspace, ambient)
++            if basis is None:
++                return None
++            dimension, kind, offset, vectors = basis
++            result["subspace"] = {
++                "dimension": dimension, "kind": kind,
++                "offset": offset, "basis": vectors,
++            }
++    elif visual == "projective":
++        if ambient != 2:
++            return None
++        operation = _text(
++            raw.get("operation")
++            or ("transform" if raw.get("matrix") else "line_at_infinity"),
++            25).lower()
++        if operation not in ("line_at_infinity", "transform", "cross_ratio"):
++            return None
++        result["operation"] = operation
++        if operation == "transform":
++            matrix = _matrix(raw.get("matrix"), 3)
++            if matrix is None:
++                return None
++            result["matrix"] = matrix
++        elif operation == "cross_ratio":
++            points = _vectors(raw.get("points"), 2, 4)
++            if points is None:
++                return None
++            result["points"] = points
++    elif visual == "svd":
++        matrix = _matrix(raw.get("matrix"), ambient)
++        if matrix is None:
++            return None
++        operation = _text(raw.get("operation", "svd"), 20).lower()
++        if operation not in ("svd", "polar", "condition"):
++            return None
++        result["operation"] = operation
++        result["matrix"] = matrix
++    return result
++
++
++def _build_subspace(linear: dict) -> tuple[str, list[dict], list[dict]]:
++    ambient = linear["ambient"]
++    subspace = linear["subspace"]
++    dimension = subspace["dimension"]
++    kind = subspace["kind"]
++    offset = subspace["offset"]
++    basis = subspace["basis"]
++    shapes: list[dict] = []
++    notes: list[dict] = []
++    shapes.append(_point(offset, "p" if kind == "affine" else "O"))
++    units = [_unit(vector) for vector in basis]
++    units = [vector for vector in units if vector is not None]
++    label_prefix = "p + span" if kind == "affine" else "span"
++    if dimension == 0:
++        notes.append(_annotation(_add(offset, [0.45] * ambient), "dim = 0"))
++    elif dimension == 1:
++        unit = units[0]
++        shapes.append(_segment(_add(offset, unit, -DISPLAY),
++                               _add(offset, unit, DISPLAY)))
++        shapes.append(_vector(offset, _add(offset, unit, DISPLAY), "v1"))
++        notes.append(_annotation(_add(offset, unit, DISPLAY * 0.75),
++                                 f"{label_prefix}(v1), dim = 1"))
++    elif dimension == 2:
++        if ambient == 3:
++            u, v = units[0], units[1]
++            normal = _unit(_cross(u, v))
++            if normal is None:
++                return "geometry3d", shapes, notes
++            center = _add(offset, _add(u, v), DISPLAY * 0.75)
++            shapes.append(_plane(center, normal, DISPLAY * 2.0, "S"))
++            shapes.append(_vector(offset, _add(offset, u, DISPLAY), "v1"))
++            shapes.append(_vector(offset, _add(offset, v, DISPLAY), "v2"))
++            notes.append(_annotation(center, f"dim = 2"))
++        else:
++            shapes.append(_vector(offset, _add(offset, units[0], DISPLAY), "v1"))
++            shapes.append(_vector(offset, _add(offset, units[1], DISPLAY), "v2"))
++            notes.append(_annotation(_add(offset, [0.8, 0.8]), "R²"))
++    else:
++        for index, unit in enumerate(units[:3]):
++            shapes.append(_vector(offset, _add(offset, unit, DISPLAY), f"v{index + 1}"))
++        notes.append(_annotation(_add(offset, [1.0, 1.0, 1.0]), "R³"))
++    type_name = "geometry3d" if ambient == 3 else "plot2d"
++    return type_name, shapes, notes
++
++
++def _subspace_through(origin: list[float], basis: list[list[float]],
++                      label: str, ambient: int) -> list[dict]:
++    units = [unit for unit in (_unit(vector) for vector in basis) if unit is not None]
++    shapes: list[dict] = []
++    if not units:
++        return [_point(origin, label)]
++    if len(units) == 1:
++        shapes.append(_segment(_add(origin, units[0], -DISPLAY * 1.2),
++                               _add(origin, units[0], DISPLAY * 1.2),
++                               label))
++        return shapes
++    if len(units) >= 2 and ambient == 3:
++        normal = _unit(_cross(units[0], units[1]))
++        if normal:
++            center = _add(origin, _add(units[0], units[1]), DISPLAY * 0.8)
++            shapes.append(_plane(center, normal, DISPLAY * 2.0, label))
++            return shapes
++    if len(units) >= 3:
++        return [_point(origin, label)]
++    shapes.append(_point(origin, label))
++    return shapes
++
++
++def _build_linear_map(linear: dict) -> tuple[str, list[dict], list[dict]]:
++    ambient = linear["ambient"]
++    matrix = linear["matrix"]
++    origin = [0.0] * ambient
++    shapes: list[dict] = [_point(origin, "O")]
++    notes: list[dict] = []
++    for index in range(ambient):
++        basis = [0.0] * ambient
++        basis[index] = 1.0
++        image = _matvec(matrix, basis)
++        if _norm(image) > TOL:
++            unit = _unit(image)
++            shapes.append(_vector(origin, _add(origin, unit, DISPLAY),
++                                  f"T(e{index + 1})"))
++    kernel = _nullspace(matrix)
++    image_basis = _independent([
++        [matrix[row][col] for row in range(ambient)]
++        for col in range(ambient)
++    ])
++    shapes.extend(_subspace_through(origin, kernel, "ker T", ambient))
++    shapes.extend(_subspace_through(origin, image_basis, "Im T", ambient))
++    notes.append(_annotation(_add(origin, [0.8] * ambient),
++                             f"rank = {len(image_basis)}, nullity = {len(kernel)}"))
++    type_name = "geometry3d" if ambient == 3 else "plot2d"
++    return type_name, shapes, notes
++
++
++def _build_determinant(linear: dict) -> tuple[str, list[dict], list[dict]]:
++    ambient = linear["ambient"]
++    vectors = linear["vectors"]
++    max_length = max(_norm(vector) for vector in vectors)
++    factor = min(1.0, 3.0 / max_length) if max_length > TOL else 1.0
++    display = [_scale(vector, factor) for vector in vectors]
++    origin = [0.0] * ambient
++    shapes: list[dict] = [_point(origin, "O")]
++    notes: list[dict] = []
++    for index, vector in enumerate(display):
++        shapes.append(_vector(origin, vector, f"v{index + 1}"))
++    if ambient == 2:
++        u, v = display
++        shapes.append(_polygon([origin, u, _add(u, v), v], "det"))
++        value = _det([vectors[0], vectors[1]])
++        notes.append(_annotation(_add(_add(u, v), [0.3, 0.3]),
++                                 f"det = {value:.3g}"))
++    else:
++        u, v, w = display
++        corners = [
++            [0.0, 0.0, 0.0], u, v, w,
++            _add(u, v), _add(u, w), _add(v, w), _add(_add(u, v), w),
++        ]
++        edges = [
++            (0, 1), (0, 2), (0, 4), (1, 3), (1, 5),
++            (2, 3), (2, 6), (4, 5), (4, 6), (3, 7), (5, 7), (6, 7),
++        ]
++        for start, end in edges:
++            shapes.append(_segment(corners[start], corners[end]))
++        value = _det([vectors[0], vectors[1], vectors[2]])
++        notes.append(_annotation(_add(_add(u, v), w, 0.6),
++                                 f"det = {value:.3g}"))
++    type_name = "geometry3d" if ambient == 3 else "plot2d"
++    return type_name, shapes, notes
++
++
++def _build_eigen(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
++    ambient = linear["ambient"]
++    matrix = linear["matrix"]
++    if any(abs(matrix[i][j] - matrix[j][i]) > 1e-7
++           for i in range(ambient) for j in range(ambient)):
++        return None
++    pairs = _eigen_symmetric(matrix)
++    origin = [0.0] * ambient
++    shapes: list[dict] = [_point(origin, "O")]
++    notes: list[dict] = []
++    for index, (value, vector) in enumerate(pairs):
++        unit = _unit(vector)
++        if unit is None:
++            continue
++        shapes.append(_vector(origin, _add(origin, unit, DISPLAY), f"λ{index + 1}"))
++        notes.append(_annotation(_add(origin, unit, DISPLAY * 0.75),
++                                 f"λ = {value:.3g}"))
++    if len(notes) == 0:
++        return None
++    type_name = "geometry3d" if ambient == 3 else "plot2d"
++    return type_name, shapes, notes
++
++
++def _line_points(equation: list[float], radius: float) -> tuple[list[float], list[float]] | None:
++    a, b, c = equation
++    if abs(b) > TOL:
++        first = [-radius, (c - a * -radius) / b]
++        second = [radius, (c - a * radius) / b]
++        return first, second
++    if abs(a) > TOL:
++        x = c / a
++        return [x, -radius], [x, radius]
++    return None
++
++
++def _build_system(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
++    ambient = linear["ambient"]
++    equations = linear["equations"]
++    shapes: list[dict] = []
++    notes: list[dict] = []
++    if ambient == 2:
++        radius = max(3.0, max(
++            abs(eq[2]) / max(math.hypot(eq[0], eq[1]), TOL)
++            for eq in equations
++        ) + 2.0)
++        for equation in equations:
++            points = _line_points(equation, radius)
++            if points:
++                shapes.append(_segment(points[0], points[1]))
++        if len(equations) >= 2:
++            a1, b1, c1 = equations[0]
++            a2, b2, c2 = equations[1]
++            det = a1 * b2 - a2 * b1
++            if abs(det) > TOL:
++                x = (c1 * b2 - c2 * b1) / det
++                y = (a1 * c2 - a2 * c1) / det
++                shapes.append(_point([x, y], "解"))
++                notes.append(_annotation([x + 0.4, y + 0.4], f"({x:.3g}, {y:.3g})"))
++            else:
++                notes.append(_annotation([0.6, 0.6], "无唯一解或两线重合"))
++        type_name = "plot2d"
++    else:
++        planes = []
++        for equation in equations:
++            a, b, c, d = equation
++            normal = [a, b, c]
++            unit = _unit(normal)
++            if unit is None:
++                continue
++            distance = d / _norm(normal)
++            center = _scale(unit, distance)
++            shapes.append(_plane(center, unit, 4.0))
++            planes.append((normal, d))
++        if len(planes) >= 2:
++            direction = _cross(planes[0][0], planes[1][0])
++            if _norm(direction) > TOL:
++                unit = _unit(direction)
++                free = max(range(3), key=lambda index: abs(unit[index]))
++                axes = [index for index in range(3) if index != free]
++                rows = [
++                    [planes[0][0][index] for index in axes],
++                    [planes[1][0][index] for index in axes],
++                ]
++                rhs = [planes[0][1], planes[1][1]]
++                det = _det(rows)
++                if abs(det) > TOL:
++                    values = [
++                        (rhs[0] * rows[1][1] - rhs[1] * rows[0][1]) / det,
++                        (rows[0][0] * rhs[1] - rows[1][0] * rhs[0]) / det,
++                    ]
++                    point = [0.0, 0.0, 0.0]
++                    point[free] = 0.0
++                    point[axes[0]] = values[0]
++                    point[axes[1]] = values[1]
++                    shapes.append(_segment(
++                        _add(point, unit, -3.0), _add(point, unit, 3.0),
++                        "交线"))
++                    notes.append(_annotation(_add(point, [0.4, 0.4, 0.4]),
++                                             "解集为直线"))
++            else:
++                notes.append(_annotation([0.5, 0.5, 0.5], "两平面平行或重合"))
++        type_name = "geometry3d"
++    return type_name, shapes, notes
++
++
++def _build_quadratic(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
++    ambient = linear["ambient"]
++    matrix = linear["matrix"]
++    level = linear.get("level", 1.0)
++    shapes = _quadratic_shapes(matrix, level, ambient)
++    if not shapes:
++        return None
++    shapes.insert(0, _point([0.0] * ambient, "O"))
++    positive, negative, zero = _signature(matrix)
++    notes = [_annotation(
++        [0.8] * ambient,
++        f"signature = ({positive}, {negative}, {zero})",
++    )]
++    type_name = "geometry3d" if ambient == 3 else "plot2d"
++    return type_name, shapes, notes
++
++
++def _build_bilinear(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
++    ambient = linear["ambient"]
++    matrix = linear["matrix"]
++    symmetric = all(
++        abs(matrix[i][j] - matrix[j][i]) < 1e-7
++        for i in range(ambient) for j in range(ambient)
++    )
++    if symmetric:
++        built = _build_quadratic({
++            "ambient": ambient, "matrix": matrix, "level": 1.0,
++        })
++        if built is None:
++            return None
++        type_name, shapes, notes = built
++        notes.append(_annotation([0.8] * ambient, "对称双线性型"))
++        return type_name, shapes, notes
++    if ambient == 2:
++        # 反对称型在二维就是有向面积形式。
++        e1 = [1.0, 0.0]
++        e2 = [0.0, 1.0]
++        shapes = [
++            _point([0.0, 0.0], "O"),
++            _vector([0.0, 0.0], e1, "e1"),
++            _vector([0.0, 0.0], e2, "e2"),
++            _polygon([[0.0, 0.0], e1, [1.0, 1.0], e2], "ω"),
++        ]
++        value = matrix[0][1]
++        notes = [_annotation([0.6, 0.6], f"ω(e1,e2) = {value:.3g}")]
++        return "plot2d", shapes, notes
++    return None
++
++
++def _build_inner_product(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
++    ambient = linear["ambient"]
++    operation = linear["operation"]
++    origin = [0.0] * ambient
++    shapes: list[dict] = [_point(origin, "O")]
++    notes: list[dict] = []
++    if operation == "projection":
++        vector = linear["vector"]
++        subspace = linear["subspace"]
++        offset = subspace["offset"]
++        basis = subspace["basis"]
++        shifted = [value - base for value, base in zip(vector, offset)]
++        projected = _add(offset, _project_onto(basis, shifted))
++        residual = [value - base for value, base in zip(vector, projected)]
++        shapes.extend(_subspace_through(offset, basis, "S", ambient))
++        shapes.append(_vector(origin, vector, "v"))
++        shapes.append(_vector(origin, projected, "proj_S v"))
++        shapes.append(_vector(projected, vector, "v - proj"))
++        notes.append(_annotation(
++            _add(projected, residual, 0.25),
++            "残差与 S 正交",
++        ))
++    elif operation == "orthogonal_complement":
++        subspace = linear["subspace"]
++        offset = subspace["offset"]
++        basis = subspace["basis"]
++        transpose = [
++            [basis[j][axis] for j in range(len(basis))]
++            for axis in range(ambient)
++        ]
++        complement = _nullspace(transpose)
++        shapes.extend(_subspace_through(offset, basis, "S", ambient))
++        shapes.extend(_subspace_through(origin, complement, "S⊥", ambient))
++        notes.append(_annotation(
++            _add(origin, [0.8] * ambient),
++            f"dim S = {len(basis)}, dim S⊥ = {len(complement)}",
++        ))
++    else:
++        vectors = linear["vectors"]
++        basis = _gram_schmidt(vectors)
++        for index, vector in enumerate(basis):
++            unit = _unit(vector) if operation == "orthonormal_basis" else None
++            display = unit if unit is not None else _unit(vector)
++            if display is None:
++                continue
++            shapes.append(_vector(origin, _add(origin, display, DISPLAY),
++                                  f"u{index + 1}"))
++        if operation == "orthonormal_basis":
++            notes.append(_annotation(_add(origin, [0.8] * ambient),
++                                     "标准正交基"))
++        else:
++            notes.append(_annotation(_add(origin, [0.8] * ambient),
++                                     "Gram-Schmidt 正交化"))
++    type_name = "geometry3d" if ambient == 3 else "plot2d"
++    return type_name, shapes, notes
++
++
++def _project_real4(vector: list[float], kind: str) -> list[float]:
++    if kind == "r4_to_3d":
++        return vector[:3]
++    if kind == "r4_to_2d":
++        return vector[:2]
++    return vector[:]
++
++
++def _angle_text(angle: float) -> str:
++    """把弧度角写成 π 的简约分数;非有理数才退回小数。"""
++    ratio = angle / math.pi
++    for denominator in range(1, 13):
++        numerator = round(ratio * denominator)
++        if abs(ratio - numerator / denominator) < 1e-6:
++            if numerator == 0:
++                return "0"
++            sign = "-" if numerator < 0 else ""
++            numerator = abs(numerator)
++            if denominator == 1:
++                return f"{sign}π" if numerator == 1 else f"{sign}{numerator}π"
++            if numerator == 1:
++                return f"{sign}π/{denominator}"
++            return f"{sign}{numerator}π/{denominator}"
++    return f"{angle:.3g} rad"
++
++
++def _build_unitary(linear: dict) -> tuple[str, list[dict], list[dict]]:
++    ambient = linear["ambient"]
++    matrix = linear["matrix"]
++    vector = linear["vector"]
++    image = _cmatvec(matrix, vector)
++    projection = linear.get("projection", {})
++    kind = projection.get("kind", "complex_to_real")
++    note = projection.get("note", "")
++    shapes: list[dict] = []
++    notes: list[dict] = []
++    if ambient == 1:
++        z = [vector[0].real, vector[0].imag]
++        uz = [image[0].real, image[0].imag]
++        circle = [
++            [math.cos(2 * math.pi * i / 120), math.sin(2 * math.pi * i / 120)]
++            for i in range(121)
++        ]
++        shapes.append({"kind": "curve", "points": circle, "label": "|z|=1"})
++        shapes.append(_point([0.0, 0.0], "O"))
++        shapes.append(_vector([0.0, 0.0], z, "z"))
++        shapes.append(_vector([0.0, 0.0], uz, "Uz"))
++        start = math.atan2(z[1], z[0])
++        angle = math.atan2(uz[1], uz[0]) - start
++        while angle <= -math.pi:
++            angle += 2 * math.pi
++        while angle > math.pi:
++            angle -= 2 * math.pi
++        if abs(angle) > 1e-6:
++            # 从 z 到 Uz 的短弧:直接标在映射发生的位置,不另设图例。
++            arc = [
++                [math.cos(start + angle * step / 48),
++                 math.sin(start + angle * step / 48)]
++                for step in range(49)
++            ]
++            shapes.append({
++                "kind": "curve", "points": arc,
++                "label": f"旋转 {_angle_text(angle)}",
++            })
++        notes.append(_annotation([0.8, 0.8],
++                                 f"|z| = {math.hypot(*z):.3g}"))
++        type_name = "plot2d"
++    else:
++        project = lambda value: _project_complex(value, kind)  # noqa: E731
++        z = project(vector)
++        uz = project(image)
++        shapes.append(_point([0.0] * len(z), "O"))
++        shapes.append(_vector([0.0] * len(z), z, "z"))
++        shapes.append(_vector([0.0] * len(z), uz, "Uz"))
++        if len(z) >= 3:
++            shapes.append(_plane([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 2.4, "C² 投影"))
++        notes.append(_annotation(_add([0.0] * len(z), [0.7] * len(z)),
++                                 f"|z| = {math.sqrt(sum(abs(v) ** 2 for v in vector)):.3g}"))
++        type_name = "geometry3d" if len(z) >= 3 else "plot2d"
++    if note:
++        notes.append(_annotation([0.0] * len(z), note))
++    return type_name, shapes, notes
++
++
++def _build_symplectic(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
++    ambient = linear["ambient"]
++    matrix = linear["matrix"]
++    projection = linear.get("projection", {})
++    kind = projection.get("kind", "none")
++    note = projection.get("note", "")
++    origin = [0.0] * ambient
++    shapes: list[dict] = []
++    notes: list[dict] = []
++    if ambient == 2:
++        e1 = [1.0, 0.0]
++        f1 = [0.0, 1.0]
++        shapes.append(_point(origin, "O"))
++        shapes.append(_vector(origin, e1, "e1"))
++        shapes.append(_vector(origin, f1, "f1"))
++        shapes.append(_polygon([origin, e1, [1.0, 1.0], f1], "ω"))
++        shapes.append(_segment([-1.4, -1.4], [1.4, 1.4], "各向同性"))
++        shapes.append(_segment([-1.4, 1.4], [1.4, -1.4], "各向同性"))
++        notes.append(_annotation([0.7, 0.7], "ω(e1,f1) = 1"))
++        return "plot2d", shapes, notes
++    if ambient != 4:
++        return None
++    basis = [[1.0 if i == j else 0.0 for j in range(4)] for i in range(4)]
++    labels = ["e1", "e2", "f1", "f2"]
++    projected = [_project_real4(vector, kind) for vector in basis]
++    dim = len(projected[0])
++    shapes.append(_point([0.0] * dim, "O"))
++    for vector, label in zip(projected, labels):
++        unit = _unit(vector)
++        if unit is not None:
++            shapes.append(_vector([0.0] * dim, _add([0.0] * dim, unit, DISPLAY),
++                                  label))
++    if dim >= 3:
++        shapes.append(_plane([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 2.4,
++                             "Lagrangian 投影"))
++    notes.append(_annotation([0.7] * dim, "ω 由辛基与面积给"))
++    if note:
++        notes.append(_annotation([0.0] * dim, note))
++    return "geometry3d" if dim >= 3 else "plot2d", shapes, notes
++
++
++def _build_affine(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
++    ambient = linear["ambient"]
++    operation = linear["operation"]
++    if operation == "subspace":
++        built = _build_subspace({
++            "ambient": ambient, "subspace": linear["subspace"],
++        })
++        type_name, shapes, notes = built
++        offset = linear["subspace"]["offset"]
++        if linear["subspace"]["kind"] == "affine" and _norm(offset) > TOL:
++            shapes.append(_segment([0.0] * ambient, offset, "b"))
++        return type_name, shapes, notes
++    matrix = linear["matrix"]
++    translation = linear["translation"]
++    origin = [0.0] * ambient
++    shapes: list[dict] = [_point(origin, "O")]
++    notes: list[dict] = []
++    if ambient == 2:
++        source_kind = linear.get("source", "square")
++        if source_kind == "triangle":
++            source = [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]
++        elif source_kind == "parallelogram":
++            source = [[0.0, 0.0], [1.0, 0.0], [1.4, 0.8], [0.4, 0.8]]
++        else:
++            source = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
++        image = [
++            _add(_matvec(matrix, point), translation)
++            for point in source
++        ]
++        shapes.append(_polygon(source, "原像"))
++        shapes.append(_polygon(image, "像"))
++        for index, point in enumerate(source):
++            shapes.append(_point(point, chr(ord("A") + index)))
++        for index, point in enumerate(image):
++            shapes.append(_point(point, f"{chr(ord('A') + index)}'"))
++        notes.append(_annotation(_add(image[0], [-0.8, -0.8]),
++                                 "x ↦ Ax + b"))
++        if source_kind != "triangle":
++            notes.append(_annotation(
++                _add(image[1], [0.7, -0.7]),
++                "对应边保持平行",
++            ))
++        else:
++            notes.append(_annotation(
++                _add(image[0], [0.4, -0.8]),
++                "仿射不保方向,只保平行;三角形无平行边可对照",
++            ))
++        type_name = "plot2d"
++    else:
++        basis = [[1.0 if i == j else 0.0 for j in range(ambient)]
++                 for i in range(ambient)]
++        for index, vector in enumerate(basis):
++            shapes.append(_vector(origin, vector, f"e{index + 1}"))
++            image = _add(_matvec(matrix, vector), translation)
++            shapes.append(_vector(translation, image, f"Ae{index + 1}"))
++        shapes.append(_point(translation, "b"))
++        notes.append(_annotation(_add(translation, [0.6, 0.6, 0.6]),
++                                 "x ↦ Ax + b"))
++        type_name = "geometry3d"
++    return type_name, shapes, notes
++
++
++def _homography(matrix: list[list[float]], point: list[float]) -> list[float] | None:
++    vector = [point[0], point[1], 1.0]
++    result = [sum(row[index] * vector[index] for index in range(3))
++              for row in matrix]
++    if abs(result[2]) < 1e-9:
++        return None
++    return [result[0] / result[2], result[1] / result[2]]
++
++
++def _build_projective(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
++    operation = linear["operation"]
++    shapes: list[dict] = []
++    notes: list[dict] = []
++    if operation == "line_at_infinity":
++        shapes.append(_segment([-2.4, 2.0], [2.4, 2.0], "无穷远线"))
++        shapes.append(_segment([-2.4, 0.0], [2.4, 0.0]))
++        shapes.append(_segment([-2.4, 1.0], [2.4, 1.0]))
++        shapes.append(_point([0.0, 2.0], "∞"))
++        notes.append(_annotation([0.5, 2.25], "平行线在无穷远点相交"))
++    elif operation == "cross_ratio":
++        points = linear["points"]
++        shapes.append(_point(points[0], "P1"))
++        shapes.append(_point(points[1], "P2"))
++        shapes.append(_point(points[2], "P3"))
++        shapes.append(_point(points[3], "P4"))
++        direction = [points[-1][0] - points[0][0],
++                     points[-1][1] - points[0][1]]
++        length = max(_norm(direction), TOL)
++        unit = [direction[0] / length, direction[1] / length]
++        params = [_dot([p[0] - points[0][0], p[1] - points[0][1]], unit)
++                  for p in points]
++        denominator = (params[0] - params[3]) * (params[1] - params[2])
++        value = (
++            (params[0] - params[2]) * (params[1] - params[3]) / denominator
++            if abs(denominator) > TOL else float("inf")
++        )
++        shapes.append(_segment(
++            [points[0][0] - unit[0], points[0][1] - unit[1]],
++            [points[-1][0] + unit[0], points[-1][1] + unit[1]],
++        ))
++        notes.append(_annotation([0.4, 0.4], f"交比 = {value:.3g}"))
++    else:
++        matrix = linear["matrix"]
++        source = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]
++        image = [_homography(matrix, point) for point in source]
++        if any(point is None for point in image):
++            return None
++        shapes.append(_polygon(source, "原像"))
++        shapes.append(_polygon([point for point in image if point is not None],
++                               "射影像"))
++        shapes.append(_segment([-2.4, 2.0], [2.4, 2.0], "无穷远线"))
++        notes.append(_annotation([1.4, 1.3], "齐次坐标 / 投影变换"))
++        notes.append(_annotation([1.4, -1.4],
++                                 "射影不保平行;原图平行边交于无穷远"))
++    return "plot2d", shapes, notes
++
++
++def _build_svd(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
++    ambient = linear["ambient"]
++    matrix = linear["matrix"]
++    operation = linear.get("operation", "svd")
++    singular, left, _right = _svd(matrix)
++    if not singular:
++        return None
++    origin = [0.0] * ambient
++    shapes: list[dict] = [_point(origin, "O")]
++    notes: list[dict] = []
++    for index, (sigma, vector) in enumerate(zip(singular, left)):
++        axis = _scale(vector, sigma)
++        shapes.append(_vector(origin, axis, f"σ{index + 1}"))
++    if ambient == 2:
++        circle = [[math.cos(2 * math.pi * i / 120),
++                   math.sin(2 * math.pi * i / 120)] for i in range(121)]
++        shapes.append({"kind": "curve", "points": circle, "label": "单位圆"})
++        ellipse = [_matvec(matrix, point) for point in circle]
++        shapes.append({"kind": "curve", "points": ellipse, "label": "A(S¹)"})
++        type_name = "plot2d"
++    else:
++        rows, cols = 25, 25
++        points: list[list[float]] = []
++        for row in range(rows):
++            u = -math.pi / 2 + math.pi * row / (rows - 1)
++            for col in range(cols):
++                v = 2 * math.pi * col / (cols - 1)
++                unit = [math.cos(u) * math.cos(v),
++                        math.cos(u) * math.sin(v), math.sin(u)]
++                points.append(_matvec(matrix, unit))
++        shapes.append({
++            "kind": "surface", "points": points,
++            "rows": rows, "cols": cols, "label": "A(S²)",
++        })
++        type_name = "geometry3d"
++    values = ", ".join(f"{value:.3g}" for value in singular)
++    if len(singular) >= 2:
++        condition = singular[0] / max(singular[-1], TOL)
++        notes.append(_annotation([0.6] * ambient,
++                                 f"σ = ({values}), cond = {condition:.3g}"))
++    else:
++        notes.append(_annotation([0.6] * ambient, f"σ = ({values})"))
++    if operation == "polar":
++        notes.append(_annotation([0.6] * ambient, "极分解 = 旋转 × 对称拉伸"))
++    elif operation == "condition":
++        notes.append(_annotation([0.6] * ambient, "条件数 = 最大/最小拉伸"))
++    return type_name, shapes, notes
++
++
++def build_linear_diagram(raw: object) -> dict | None:
++    """把含 linear 语义块的原始图解转成确定性 DiagramSpec。"""
++    if not isinstance(raw, dict):
++        return None
++    linear = sanitize_linear(raw.get("linear"))
++    if linear is None:
++        return None
++    visual = linear["visual"]
++    if visual == "subspace":
++        built = _build_subspace(linear)
++    elif visual == "linear_map":
++        built = _build_linear_map(linear)
++    elif visual == "determinant":
++        built = _build_determinant(linear)
++    elif visual == "eigen":
++        built = _build_eigen(linear)
++    elif visual == "quadratic_form":
++        built = _build_quadratic(linear)
++    elif visual == "bilinear_form":
++        built = _build_bilinear(linear)
++    elif visual == "inner_product":
++        built = _build_inner_product(linear)
++    elif visual == "unitary":
++        built = _build_unitary(linear)
++    elif visual == "symplectic":
++        built = _build_symplectic(linear)
++    elif visual == "affine":
++        built = _build_affine(linear)
++    elif visual == "projective":
++        built = _build_projective(linear)
++    elif visual == "svd":
++        built = _build_svd(linear)
++    else:
++        built = _build_system(linear)
++    if built is None:
++        return None
++    type_name, shapes, notes = built
++    if not shapes:
++        return None
++    title = _text(raw.get("title") or linear.get("title"), 200)
++    if not title:
++        title = {
++            "subspace": "子空间",
++            "linear_map": "线性变换的核与像",
++            "determinant": "行列式的几何意义",
++            "system": "线性方程组的解集",
++            "eigen": "实特征方向",
++            "inner_product": "内积与正交",
++            "quadratic_form": "二次型的几何形状",
++            "bilinear_form": "双线性型的几何意义",
++            "unitary": "酉变换与复结构投影",
++            "symplectic": "辛结构与相空间",
++            "affine": "仿射变换与仿射子空间",
++            "projective": "射影几何",
++            "svd": "SVD 与矩阵拉伸",
++        }.get(visual, "高等代数图解")
++    if visual == "subspace":
++        subspace = linear["subspace"]
++        title = f"R^{linear['ambient']} 中 {subspace['dimension']} 维子空间"
++    return {
++        "schemaVersion": 1,
++        "type": type_name,
++        "title": title,
++        "nodes": [],
++        "edges": [],
++        "shapes": shapes,
++        "annotations": notes,
++        "linear": linear,
++    }
++
++
++def _load_json(text: str) -> dict | None:
++    raw = (text or "").strip()
++    if raw.startswith("```"):
++        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
++        raw = re.sub(r"\s*```$", "", raw)
++    start, end = raw.find("{"), raw.rfind("}")
++    if start < 0 or end <= start:
++        return None
++    try:
++        value = json.loads(raw[start:end + 1])
++    except (json.JSONDecodeError, TypeError, ValueError):
++        return None
++    return value if isinstance(value, dict) else None
++
++
++def _parse_complex_entry(value: str) -> complex | None:
++    text = value.strip().replace("−", "-").replace(" ", "")
++    if not text:
++        return None
++    if text in ("i", "+i"):
++        return 1j
++    if text == "-i":
++        return -1j
++    try:
++        return complex(float(text), 0.0)
++    except ValueError:
++        pass
++    match = re.fullmatch(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))?([+-])?i", text)
++    if match and match.group(1) is None:
++        return complex(0.0, -1.0 if match.group(2) == "-" else 1.0)
++    match = re.fullmatch(
++        r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))([+-])(\d+(?:\.\d*)?|\.\d+)?i",
++        text)
++    if match:
++        real = float(match.group(1))
++        imag = float(match.group(3) or 1.0)
++        return complex(real, -imag if match.group(2) == "-" else imag)
++    return None
++
++
++def _question_matrix(question: str) -> list[list[complex]] | None:
++    """从题面里的 [[a,b],[c,d]] 提取 2×2 复矩阵,并处理常见 1/√2 因子。"""
++    match = re.search(
++        r"\[\s*\[[^\]]+\]\s*,\s*\[[^\]]+\]\s*\]", question or "")
++    if not match:
++        return None
++    rows = re.findall(r"\[([^\[\]]+)\]", match.group(0))
++    if len(rows) != 2:
++        return None
++    matrix: list[list[complex]] = []
++    for row in rows:
++        cells = [cell for cell in re.split(r"[,，]", row) if cell.strip()]
++        if len(cells) != 2:
++            return None
++        parsed = [_parse_complex_entry(cell) for cell in cells]
++        if any(item is None for item in parsed):
++            return None
++        matrix.append([item for item in parsed if item is not None])
++    factor = 1.0
++    before = (question or "")[:match.start()]
++    scale = re.search(r"1\s*/\s*(?:√|sqrt\()?\s*(2)\s*\)?\s*$", before)
++    if scale:
++        factor = 1.0 / math.sqrt(float(scale.group(1)))
++    return [[item * factor for item in row] for row in matrix]
++
++
++def _eigenvalues_2x2(matrix: list[list[complex]]) -> tuple[complex, complex]:
++    a, b = matrix[0]
++    c, d = matrix[1]
++    trace = a + d
++    determinant = a * d - b * c
++    root = cmath.sqrt(trace * trace - 4 * determinant)
++    return (trace + root) / 2, (trace - root) / 2
++
++
++def _complex_text(value: complex) -> str:
++    if abs(abs(value) - 1.0) < 1e-6:
++        angle = cmath.phase(value)
++        if abs(angle) < 1e-9:
++            return "1"
++        if abs(abs(angle) - math.pi) < 1e-9:
++            return "-1"
++        text = _angle_text(angle)
++        if text in ("π", "-π"):
++            return "-1"
++        if text == "π/2":
++            return "i"
++        if text == "-π/2":
++            return "-i"
++        if angle < 0:
++            return f"e^(-i{text[1:]})"
++        return f"e^(i{text})"
++    return f"{value.real:.3g}{value.imag:+.3g}i"
++
++
++def _unitary_spectrum_from_question(question: str) -> dict | None:
++    """语义规划失败时的确定性兜底:把 2×2 酉矩阵的谱画在复平面单位圆上。
++
++    每个 λ 点用自己算出的坐标和角度标注,不再让模型自由摆放 λ 标签。
++    """
++    if not re.search(r"酉|unitary", question or "", re.IGNORECASE):
++        return None
++    matrix = _question_matrix(question)
++    if matrix is None or not _is_unitary(matrix):
++        return None
++    first, second = _eigenvalues_2x2(matrix)
++    circle = [
++        [math.cos(2 * math.pi * index / 120),
++         math.sin(2 * math.pi * index / 120)]
++        for index in range(121)
++    ]
++    shapes: list[dict] = [
++        {"kind": "curve", "points": circle, "label": "|z|=1"},
++        _point([0.0, 0.0], "O"),
++    ]
++    notes: list[dict] = []
++    for index, value in enumerate((first, second)):
++        label = f"λ{'₁₂'[index]}"
++        shapes.append(_point([value.real, value.imag], label))
++        notes.append(_annotation(
++            [value.real * 1.18, value.imag * 1.18],
++            f"{label} = {_complex_text(value)}",
++        ))
++    notes.append(_annotation([0.0, -1.22], "C² 保范:单位圆→单位圆"))
++    notes.append(_annotation([0.0, -1.46], "2×2 U;单平面只画谱"))
++    return {
++        "schemaVersion": 1,
++        "type": "plot2d",
++        "title": "2×2 酉矩阵:保范与谱",
++        "nodes": [], "edges": [],
++        "shapes": shapes, "annotations": notes,
++    }
++
++
++_LINEAR_SYSTEM = """你是高等代数图解规划器。只输出一个 JSON 对象,不要 Markdown、不要解释。
++模型只给代数语义,不要给 shapes/points/坐标网格。
++schema:
++{
++  "visual": "subspace|linear_map|determinant|system|eigen|inner_product|quadratic_form|bilinear_form|unitary|symplectic|affine|projective|svd",
++  "domain": "real|complex",
++  "ambient": 1|2|3|4,
++  "title": "中文标题",
++  "operation": "projection|orthogonal_complement|gram_schmidt|orthonormal_basis|transform|subspace|line_at_infinity|cross_ratio|svd|polar|condition",
++  "projection": {"kind": "none|complex_to_real|r4_to_3d|r4_to_2d", "note": "投影说明"},
++  "subspace": {"dimension": 0-3, "kind": "linear|affine",
++               "offset": [x,y] 或 [x,y,z], "basis": [[...]], "label": "短标签"},
++  "matrix": [[...]],
++  "translation": [x,y] 或 [x,y,z],
++  "source": "triangle|square|parallelogram",
++  "vectors": [[...]],
++  "vector": [x,y] 或 [x,y,z],
++  "points": [[x,y]],
++  "level": 1,
++  "equations": [[a,b,c] 或 [a,b,c,d]]
++}
++规则:
++1. R^2/R² 用 ambient 2;R^3/R³/空间子空间用 ambient 3。
++2. 线性子空间 offset 必须为零;仿射子空间 offset 非零。
++3. basis 数量必须等于 dimension,且线性无关。
++4. determinant 的 vectors 数量等于 ambient。
++5. eigen 只给实对称矩阵。
++6. system 每条方程:2D 为 [a,b,c] 表示 ax+by=c;3D 为 [a,b,c,d] 表示 ax+by+cz=d。
++7. inner_product:
++   - projection 给 vector + subspace;
++   - orthogonal_complement 给 subspace;
++   - gram_schmidt / orthonormal_basis 给 vectors。
++8. quadratic_form / bilinear_form 给对称矩阵;二次型曲面默认 level=1。
++9. unitary 用 domain=complex;1×1 复矩阵才用 ambient=1,2×2 复矩阵必须用
++   ambient=2;复数矩阵元素写 [实部,虚部];ambient=2 时必须给 projection
++   r4_to_3d 或 r4_to_2d 和 note。不要把 2×2 矩阵硬塞成 1×1。
++10. symplectic 用 domain=real,ambient=2 或 4;矩阵必须满足 MᵀJM=J;
++    ambient=4 时必须给 projection r4_to_3d 或 r4_to_2d 和 note。
++11. affine: transform 给 matrix + translation;subspace 给 subspace。
++   用户说三角形时 source=triangle,说平行四边形时 source=parallelogram,
++   否则 source=square。
++12. projective: ambient=2;transform 给 3×3 齐次矩阵;cross_ratio 给 4 个共线点。
++13. svd: 给 2×2/3×3 实矩阵;operation 为 svd/polar/condition。
++14. 不要输出 abstract 的商空间/张量/PID 模;这些不在本期内。
++15. 不要解释选型或权重。
++示例: R^3 中由 e1,e2 张成的平面
++{"visual":"subspace","domain":"real","ambient":3,"title":"R^3 中的坐标平面",
++ "subspace":{"dimension":2,"kind":"linear","offset":[0,0,0],
++ "basis":[[1,0,0],[0,1,0]],"label":"span(e1,e2)"}}
++示例: 二次型 x^2+2y^2=1
++{"visual":"quadratic_form","domain":"real","ambient":2,
++ "matrix":[[1,0],[0,2]],"level":1}
++"""
++
++
++async def plan_linear(question: str, before: str, role: str = "main") -> dict | None:
++    """让模型输出高等代数语义计划;酉矩阵可走确定性谱图兜底。"""
++    if not llm.is_configured(role):
++        return _unitary_spectrum_from_question(question)
++    latest = re.sub(r"\s+", " ", before or "").strip()[-1600:]
++    context = (
++        f"用户问题:{_text(question, 900)}\n"
++        f"当前讲解:{_text(latest, 1200)}"
++    )
++    parts: list[str] = []
++    try:
++        async for delta in llm.stream_chat(
++                _LINEAR_SYSTEM, context, role=role, fallback=True,
++                max_tokens=900, thinking=False):
++            parts.append(delta)
++            if sum(len(part) for part in parts) >= 5000:
++                break
++    except Exception:  # noqa: BLE001
++        return _unitary_spectrum_from_question(question)
++    raw = _load_json("".join(parts))
++    if raw is None:
++        return _unitary_spectrum_from_question(question)
++    if not raw.get("type"):
++        raw["type"] = "geometry3d" if raw.get("ambient") == 3 else "geometry2d"
++    built = build_linear_diagram({"type": raw.get("type"),
++                                  "title": raw.get("title"),
++                                  "linear": raw})
++    # 2×2 酉矩阵问“复平面/单位圆/特征值”时,C² 的四维投影会绕开用户要看的谱;
++    # 用题面矩阵确定性地画单位圆上的 λ,不依赖模型摆标签。
++    if re.search(r"复平面|单位圆|特征值|谱", question or ""):
++        spectrum = _unitary_spectrum_from_question(question)
++        if spectrum is not None:
++            return spectrum
++    if built is None:
++        built = _unitary_spectrum_from_question(question)
++    return built
+diff --git a/backend/research_diagrams.py b/backend/research_diagrams.py
+index 6fb638c..63f4801 100644
+--- a/backend/research_diagrams.py
++++ b/backend/research_diagrams.py
+@@ -22,6 +22,7 @@ from rate_limit import SlidingWindowLimiter
+ import diagram_alerts
+ import diagram_metrics
+ import diagram_taxonomy as taxonomy
++import linear_algebra
+ 
+ PREFIX = "[[MG_DIAGRAM:"
+ _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]")
+@@ -176,9 +177,13 @@ def diagram_cost(diagram: dict) -> tuple[int, int]:
+ 
+ # 用户明确说出的表示方式优先于模型自选类型:要三维就画三维,不要改画思维导图。
+ _3D_SURFACE_RE = re.compile(
+-    r"曲面|梯度|切平面|等高线|z\s*=\s*f\s*\(|surface|gradient", re.IGNORECASE)
++    r"曲面|梯度|切平面|等高线|抛物面|双曲面|锥面|椭球面|z\s*=\s*f\s*\(|"
++    r"surface|gradient", re.IGNORECASE)
+ _3D_RE = re.compile(
+     r"三维|3d|3-d|立体|空间向量|空间曲面|three[- ]?dimensional", re.IGNORECASE)
++_GEO3D_SURFACE_DEFER_RE = re.compile(
++    r"曲面|梯度|等高线|抛物面|双曲面|锥面|椭球面|z\s*=\s*f\s*\(|"
++    r"surface|gradient", re.IGNORECASE)
+ _2D_GEOMETRY_RE = re.compile(
+     r"二维几何|平面几何|平面图形|二维图", re.IGNORECASE)
+ _PLOT_RE = re.compile(
+@@ -1298,10 +1303,102 @@ def _snap_annotations(shapes: list[dict], raw: dict) -> dict:
+     return {**raw, "annotations": kept}
+ 
+ 
++_SURFACE_CLAUSE_RE = re.compile(r"[，,。;；、]|和|与|及|以及|并且")
++_SURFACE_EXPR_RE = re.compile(r"(?<![A-Za-z])z\s*=\s*([0-9A-Za-z_.^*/()+\-\s]+)")
++
++
++def _surface_question_terms(question: str) -> tuple[str | None, float | None]:
++    """从用户原话里提取 z=f(x,y) 与水平平面 z=c,只用于修补模型漏给的字段。"""
++    expr: str | None = None
++    plane_values: set[float] = set()
++    for clause in _SURFACE_CLAUSE_RE.split(question or ""):
++        match = _SURFACE_EXPR_RE.search(clause)
++        if not match:
++            continue
++        value = match.group(1).strip()
++        if not value:
++            continue
++        if re.search(r"[xy]", value, re.IGNORECASE):
++            if expr is None:
++                expr = value
++            continue
++        number = re.match(r"[-+]?\d+(?:\.\d+)?", value)
++        if number:
++            parsed = _num(number.group(0))
++            if parsed is not None:
++                plane_values.add(round(parsed, 9))
++    # 多个不同高度的平面无法判断哪个缺坐标;不猜,保留模型值。
++    plane_z = next(iter(plane_values)) if len(plane_values) == 1 else None
++    return expr, plane_z
++
++
++def repair_surface_shapes(raw: dict, question: str) -> dict:
++    """修补三维曲面图里的漏坐标:平面/圆落到 z=c,曲面按题面表达式补回。
++
++    模型常只给 normal 或半径,渲染器会把缺省坐标当成 0,于是 z=1 的平面
++    被画到 z=0。这里只用用户题面里明确写出的表达式和数值,不猜。
++    """
++    if raw.get("type") not in ("surface3d", "geometry3d"):
++        return raw
++    expr, plane_z = _surface_question_terms(question)
++    if not expr and plane_z is None:
++        return raw
++    shapes = raw.get("shapes")
++    if not isinstance(shapes, list):
++        shapes = []
++    if expr and not any(
++            isinstance(shape, dict) and shape.get("kind") == "surface"
++            for shape in shapes):
++        shapes.insert(0, {
++            "kind": "surface", "expr": expr,
++            "domain": [-2.0, 2.0, -2.0, 2.0],
++            "rows": 30, "cols": 30,
++        })
++    if plane_z is not None:
++        missing_planes = [
++            shape for shape in shapes
++            if isinstance(shape, dict) and shape.get("kind") == "plane"
++            and not all(isinstance(shape.get(key), (int, float))
++                        for key in ("x", "y", "z"))
++        ]
++        # 多张缺坐标的平面无法判断哪张对应 z=c;不批量填同一个高度。
++        fill_planes = len(missing_planes) == 1
++        for shape in shapes:
++            if not isinstance(shape, dict):
++                continue
++            kind = shape.get("kind")
++            if kind == "plane":
++                if not fill_planes:
++                    continue
++                shape.setdefault("x", 0.0)
++                shape.setdefault("y", 0.0)
++                shape.setdefault("z", plane_z)
++                shape.setdefault("normal", [0.0, 0.0, 1.0])
++                shape.setdefault("width", 4.0)
++                shape.setdefault("height", 4.0)
++            elif kind == "circle":
++                shape.setdefault("x", 0.0)
++                shape.setdefault("y", 0.0)
++                shape.setdefault("z", plane_z)
++                if not any(isinstance(shape.get(key), (int, float))
++                           for key in ("r", "radius")) and expr:
++                    simple = re.fullmatch(
++                        r"\s*x\s*\^\s*2\s*\+\s*y\s*\^\s*2\s*",
++                        expr, re.IGNORECASE)
++                    if simple and plane_z > 0:
++                        shape["r"] = math.sqrt(plane_z)
++    return {**raw, "shapes": shapes}
++
++
+ def prepare_diagram(raw: object) -> dict | None:
+     """采样表达式形状后再做白名单校验。"""
+     if not isinstance(raw, dict):
+         return None
++    if isinstance(raw.get("linear"), dict):
++        built = linear_algebra.build_linear_diagram(raw)
++        if built is None:
++            return None
++        raw = built
+     shapes = raw.get("shapes")
+     if isinstance(shapes, list) and len(shapes) <= _MAX_SHAPES:
+         dict_shapes: list[dict] = []
+@@ -1321,15 +1418,20 @@ def prepare_diagram(raw: object) -> dict | None:
+             normalize_2d_axes(dict_shapes)
+             if raw.get("type") == "plot2d":
+                 raw = _snap_annotations(dict_shapes, raw)
+-        if raw.get("type") in ("geometry3d", "surface3d"):
++        if (raw.get("type") in ("geometry3d", "surface3d")
++                and not isinstance(raw.get("linear"), dict)):
+             dict_shapes = [shape for shape in dict_shapes
+-                           if not _axis_aligned_segment(shape)]
++                           if shape.get("kind") != "axis"
++                           and not _axis_aligned_segment(shape)]
+             notes = raw.get("annotations")
+             if isinstance(notes, list):
+                 raw = {**raw, "annotations": [
+                     note for note in notes
+                     if not (isinstance(note, dict)
+-                            and _text(note.get("text"), 20).lower() in {"x", "y", "z"})
++                            and re.fullmatch(
++                                r"[xyz]\s*轴?",
++                                _text(note.get("text"), 20).strip(),
++                                re.IGNORECASE))
+                 ]}
+         raw = {**raw, "shapes": dict_shapes}
+         labels = {
+@@ -1424,17 +1526,25 @@ def _shape(raw: object) -> dict | None:
+     return out
+ 
+ 
+-def _renderable_shape(shape: dict) -> bool:
++def _renderable_shape(shape: dict, diagram_type: str = "") -> bool:
+     """没有实际可画几何的旧图解(例如只有 expr 没有采样点)不能进渲染器。"""
+     kind = shape.get("kind")
++    spatial = diagram_type in ("geometry3d", "surface3d")
+     if kind == "axis":
+         return False
+     if kind in ("curve", "polygon", "surface"):
+         return bool(shape.get("points"))
+     if kind in ("point", "circle"):
++        if spatial and kind == "circle":
++            # 三维圆的中心缺 z 会被渲染器当成 0;宁可丢弃,也不画错位置。
++            return all(key in shape for key in ("x", "y", "z"))
+         return "x" in shape and "y" in shape
+     if kind in ("segment", "line", "vector"):
+         return "from" in shape and "to" in shape
++    if kind == "plane":
++        # 平面只给了法向量时,渲染器会把位置默认成原点;这不是“过原点的平面”,
++        # 而是未知位置。必须要求显式中心坐标。
++        return (not spatial) or all(key in shape for key in ("x", "y", "z"))
+     return True
+ 
+ 
+@@ -1506,7 +1616,9 @@ def validate_diagram(raw: object) -> dict | None:
+             return None
+         for item in raw_shapes:
+             shape = _shape(item)
+-            if shape is not None:
++            if shape is not None and (
++                    shape.get("kind") == "axis"
++                    or _renderable_shape(shape, kind)):
+                 shapes.append(shape)
+ 
+     annotations: list[dict] = []
+@@ -1539,13 +1651,20 @@ def validate_diagram(raw: object) -> dict | None:
+     if kind in ("tree", "relation", "flow"):
+         if not nodes:
+             return None
+-    elif not shapes or not any(_renderable_shape(shape) for shape in shapes):
++    elif not shapes or not any(_renderable_shape(shape, kind) for shape in shapes):
++        return None
++    if kind == "surface3d" and not any(
++            shape.get("kind") == "surface" for shape in shapes):
++        # surface3d 没有曲面只剩平面/点,是模型漏掉主体后的残图;不拿它冒充曲面图。
+         return None
+     result: dict = {
+         "schemaVersion": DIAGRAM_SCHEMA_VERSION,
+         "type": kind, "nodes": nodes, "edges": edges,
+         "shapes": shapes, "annotations": annotations,
+     }
++    linear = linear_algebra.sanitize_linear(raw.get("linear"))
++    if linear is not None:
++        result["linear"] = linear
+     title = _text(raw.get("title"), 200)
+     if title:
+         result["title"] = title
+@@ -1829,6 +1948,8 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
+             if isinstance(raw, dict) and kind and not raw.get("type"):
+                 # 规划器经常省略 type;把请求类型补上再校验。
+                 raw["type"] = kind
++            if isinstance(raw, dict):
++                raw = repair_surface_shapes(raw, question)
+             # 表达式采样是 CPU 活,放线程里,避免卡住 SSE 事件循环。
+             diagram = await asyncio.to_thread(prepare_diagram, raw)
+     except asyncio.CancelledError:
+@@ -1980,10 +2101,9 @@ async def plan_geogebra(question: str, before: str, role: str = "main") -> dict
+     kind = "geogebra3d" if (
+         _3D_RE.search(question or "") or _3D_SURFACE_RE.search(question or "")
+     ) else "geogebra2d"
+-    if kind == "geogebra3d":
+-        # 2D 内核先落地:3D 仍走旧规划器 + 我们的 Three.js 渲染,
+-        # 不在页面里回退成 GeoGebra 自己的 3D 画布。
+-        diagram_metrics.record("plan_geo", False, "3d_deferred")
++    if kind == "geogebra3d" and _GEO3D_SURFACE_DEFER_RE.search(question or ""):
++        # 参数曲面/梯度仍走旧表达式采样 + Three.js;3D 内核只接可精确构造对象。
++        diagram_metrics.record("plan_geo", False, "3d_surface_deferred")
+         return None
+     latest = re.sub(r"\s+", " ", before or "").strip()[-1200:]
+     context = f"""类型:{kind}
+@@ -2004,6 +2124,12 @@ async def plan_geogebra(question: str, before: str, role: str = "main") -> dict
+     if isinstance(raw, dict) and not raw.get("type"):
+         raw["type"] = kind
+     diagram = validate_geogebra(raw)
++    if (diagram is not None
++            and any((_geo_command_name(command) or "") == "surface"
++                    for command in diagram.get("commands") or [])):
++        # 3D XML 对 Surface 不直接给网格;这类问题交回旧采样器。
++        diagram_metrics.record("plan_geo", False, "3d_surface_deferred")
++        return None
+     diagram_metrics.record("plan_geo", diagram is not None,
+                            "ok" if diagram else "invalid")
+     return diagram
+@@ -2011,7 +2137,19 @@ async def plan_geogebra(question: str, before: str, role: str = "main") -> dict
+ 
+ async def plan_diagram_auto(question: str, before: str, excerpts: list[dict],
+                             kind: str, role: str = "main", **kwargs) -> dict | None:
+-    """按 MG_DIAGRAM_ENGINE 选择引擎；GeoGebra 失败自动回退旧规划器。"""
++    """按内容领域与 MG_DIAGRAM_ENGINE 选择引擎;失败自动回退旧规划器。"""
++    if (linear_algebra.looks_linear(question)
++            and (wants_visual(question) or not is_relation_question(question))):
++        diagram = await linear_algebra.plan_linear(question, before, role=role)
++        if diagram is not None:
++            diagram_metrics.record("plan_linear", True, "ok")
++            return diagram
++        diagram_metrics.record("plan_linear", False, "fallback")
++        # 高等代数语义题一旦语义计划失败,不能退回自由作图:
++        # 模型很容易把 λ 标签、旋转方向、平行关系画反,错图比没图更糟。
++        # 只有 R^2/R^3 这类维度词、没有代数语义的题仍允许回退旧管线。
++        if linear_algebra.looks_linear_core(question):
++            return None
+     if (geogebra_enabled()
+             and kind not in ("tree", "relation", "flow")
+             and not is_relation_question(question)):
+diff --git a/backend/tests/test_linear_algebra_diagrams.py b/backend/tests/test_linear_algebra_diagrams.py
+new file mode 100644
+index 0000000..4fdac73
+--- /dev/null
++++ b/backend/tests/test_linear_algebra_diagrams.py
+@@ -0,0 +1,515 @@
++"""Phase 1: 高等代数几何表示层。"""
++
++from __future__ import annotations
++
++import asyncio
++
++import linear_algebra as la
++import research_diagrams as rd
++
++
++def _subspace(ambient=3, dimension=2, kind="linear", offset=None, basis=None):
++    if offset is None:
++        offset = [0.0] * ambient
++    if basis is None:
++        basis = [[1.0 if i == j else 0.0 for j in range(ambient)]
++                 for i in range(dimension)]
++    return {
++        "visual": "subspace",
++        "domain": "real",
++        "ambient": ambient,
++        "title": "测试子空间",
++        "subspace": {
++            "dimension": dimension,
++            "kind": kind,
++            "offset": offset,
++            "basis": basis,
++        },
++    }
++
++
++def _build(raw):
++    return la.build_linear_diagram({"type": "geometry3d", "linear": raw})
++
++
++def test_subspace_dimensions_build_geometry():
++    expected = {0: "point", 1: "segment", 2: "plane", 3: "vector"}
++    for dimension in range(4):
++        diagram = _build(_subspace(3, dimension))
++        assert diagram is not None
++        assert diagram["type"] == "geometry3d"
++        kinds = {shape["kind"] for shape in diagram["shapes"]}
++        assert expected[dimension] in kinds
++
++
++def test_affine_subspace_keeps_origin_offset():
++    diagram = _build(_subspace(
++        3, 2, kind="affine", offset=[1, 2, 3],
++        basis=[[1, 0, 0], [0, 1, 0]],
++    ))
++    assert diagram is not None
++    points = [shape for shape in diagram["shapes"] if shape["kind"] == "point"]
++    assert any(abs(shape["x"] - 1) < 1e-9
++               and abs(shape["y"] - 2) < 1e-9
++               and abs(shape["z"] - 3) < 1e-9 for shape in points)
++    assert diagram["linear"]["subspace"]["kind"] == "affine"
++
++
++def test_linear_subspace_rejects_nonzero_offset():
++    assert _build(_subspace(
++        3, 2, kind="linear", offset=[1, 0, 0],
++    )) is None
++
++
++def test_subspace_rejects_bad_dimension_and_dependent_basis():
++    assert _build(_subspace(3, 4)) is None
++    assert _build({
++        "visual": "subspace", "domain": "real", "ambient": 3,
++        "subspace": {
++            "dimension": 2, "kind": "linear",
++            "offset": [0, 0, 0],
++            "basis": [[1, 0, 0], [2, 0, 0]],
++        },
++    }) is None
++
++
++def test_linear_map_builds_kernel_and_image():
++    diagram = _build({
++        "visual": "linear_map", "domain": "real", "ambient": 2,
++        "matrix": [[1, 0], [0, 0]],
++    })
++    assert diagram is not None
++    labels = " ".join(str(shape.get("label", "")) for shape in diagram["shapes"])
++    assert "ker T" in labels
++    assert "Im T" in labels
++    assert any("rank" in note["text"] for note in diagram["annotations"])
++
++
++def test_determinant_builds_parallelogram_and_volume():
++    area = _build({
++        "visual": "determinant", "domain": "real", "ambient": 2,
++        "vectors": [[2, 0], [0, 3]],
++    })
++    assert area is not None
++    assert any(shape["kind"] == "polygon" for shape in area["shapes"])
++    assert any("det = 6" in note["text"] for note in area["annotations"])
++
++    volume = _build({
++        "visual": "determinant", "domain": "real", "ambient": 3,
++        "vectors": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
++    })
++    assert volume is not None
++    assert len([shape for shape in volume["shapes"]
++                if shape["kind"] == "segment"]) >= 12
++
++
++def test_eigen_symmetric_builds_real_axes():
++    diagram = _build({
++        "visual": "eigen", "domain": "real", "ambient": 2,
++        "matrix": [[2, 1], [1, 2]],
++    })
++    assert diagram is not None
++    assert any(shape["kind"] == "vector" for shape in diagram["shapes"])
++    assert any("λ" in note["text"] for note in diagram["annotations"])
++
++
++def test_system_unique_solution():
++    diagram = _build({
++        "visual": "system", "domain": "real", "ambient": 2,
++        "equations": [[1, 1, 3], [1, -1, 1]],
++    })
++    assert diagram is not None
++    assert any(shape["kind"] == "point" for shape in diagram["shapes"])
++
++
++def test_prepare_diagram_preserves_linear_metadata():
++    raw = {
++        "type": "geometry3d",
++        "title": "R^3 的坐标平面",
++        "linear": _subspace(3, 2),
++        "nodes": [], "edges": [], "shapes": [], "annotations": [],
++    }
++    diagram = rd.prepare_diagram(raw)
++    assert diagram is not None
++    assert diagram["type"] == "geometry3d"
++    assert diagram["linear"]["subspace"]["dimension"] == 2
++    assert any(shape["kind"] == "plane" for shape in diagram["shapes"])
++
++
++def test_prepare_two_dimensional_subspace():
++    raw = {
++        "type": "plot2d",
++        "linear": _subspace(2, 2),
++        "nodes": [], "edges": [], "shapes": [], "annotations": [],
++    }
++    diagram = rd.prepare_diagram(raw)
++    assert diagram is not None
++    assert diagram["type"] == "plot2d"
++    assert any(shape["kind"] == "vector" for shape in diagram["shapes"])
++
++
++def test_three_dimensional_plane_intersection():
++    diagram = _build({
++        "visual": "system", "domain": "real", "ambient": 3,
++        "equations": [[1, 0, 0, 0], [0, 1, 0, 0]],
++    })
++    assert diagram is not None
++    assert any(shape.get("label") == "交线" for shape in diagram["shapes"])
++
++
++def test_taxonomy_prefers_three_dimensional_linear_algebra():
++    from diagram_taxonomy import choose_visual
++    assert choose_visual("解释 R^3 中由两个向量张成的子空间").kind == "geometry3d"
++
++
++def test_orthogonal_projection_keeps_residual():
++    diagram = _build({
++        "visual": "inner_product", "operation": "projection",
++        "domain": "real", "ambient": 3,
++        "vector": [1, 2, 3],
++        "subspace": {
++            "dimension": 2, "kind": "linear", "offset": [0, 0, 0],
++            "basis": [[1, 0, 0], [0, 1, 0]],
++        },
++    })
++    assert diagram is not None
++    vectors = [shape for shape in diagram["shapes"] if shape["kind"] == "vector"]
++    assert len(vectors) >= 3
++    assert any(shape.get("label") == "proj_S v" for shape in vectors)
++
++
++def test_orthogonal_complement_in_three_dimensions():
++    diagram = _build({
++        "visual": "inner_product", "operation": "orthogonal_complement",
++        "domain": "real", "ambient": 3,
++        "subspace": {
++            "dimension": 2, "kind": "linear", "offset": [0, 0, 0],
++            "basis": [[1, 0, 0], [0, 1, 0]],
++        },
++    })
++    assert diagram is not None
++    labels = " ".join(str(shape.get("label", "")) for shape in diagram["shapes"])
++    assert "S" in labels and "S⊥" in labels
++
++
++def test_gram_schmidt_builds_orthogonal_vectors():
++    diagram = _build({
++        "visual": "inner_product", "operation": "gram_schmidt",
++        "domain": "real", "ambient": 2,
++        "vectors": [[1, 1], [1, 0]],
++    })
++    assert diagram is not None
++    assert len([shape for shape in diagram["shapes"]
++                if shape["kind"] == "vector"]) == 2
++
++
++def test_quadratic_form_ellipse_and_signature():
++    diagram = _build({
++        "visual": "quadratic_form", "domain": "real", "ambient": 2,
++        "matrix": [[1, 0], [0, 4]], "level": 1,
++    })
++    assert diagram is not None
++    assert any(shape["kind"] == "curve" for shape in diagram["shapes"])
++    assert any("signature = (2, 0, 0)" in note["text"]
++               for note in diagram["annotations"])
++
++
++def test_quadratic_form_three_dimensional_surface():
++    diagram = _build({
++        "visual": "quadratic_form", "domain": "real", "ambient": 3,
++        "matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "level": 1,
++    })
++    assert diagram is not None
++    surface = next(shape for shape in diagram["shapes"]
++                   if shape["kind"] == "surface")
++    assert surface["rows"] == 31 and surface["cols"] == 31
++    assert len(surface["points"]) == 31 * 31
++
++
++def test_quadratic_form_rejects_asymmetric_matrix():
++    assert _build({
++        "visual": "quadratic_form", "domain": "real", "ambient": 2,
++        "matrix": [[1, 2], [0, 1]], "level": 1,
++    }) is None
++
++
++def test_bilinear_forms_symmetric_and_alternating():
++    symmetric = _build({
++        "visual": "bilinear_form", "domain": "real", "ambient": 2,
++        "matrix": [[1, 0], [0, 2]],
++    })
++    assert symmetric is not None
++    assert any(shape["kind"] == "curve" for shape in symmetric["shapes"])
++
++    alternating = _build({
++        "visual": "bilinear_form", "domain": "real", "ambient": 2,
++        "matrix": [[0, 1], [-1, 0]],
++    })
++    assert alternating is not None
++    assert any(shape["kind"] == "polygon" for shape in alternating["shapes"])
++
++
++def test_prepare_quadratic_surface_keeps_linear_metadata():
++    raw = {
++        "type": "geometry3d",
++        "linear": {
++            "visual": "quadratic_form", "domain": "real", "ambient": 3,
++            "matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "level": 1,
++        },
++        "nodes": [], "edges": [], "shapes": [], "annotations": [],
++    }
++    diagram = rd.prepare_diagram(raw)
++    assert diagram is not None
++    assert diagram["linear"]["visual"] == "quadratic_form"
++    assert any(shape["kind"] == "surface" for shape in diagram["shapes"])
++
++
++def test_unitary_complex_plane_keeps_circle_and_vectors():
++    diagram = _build({
++        "visual": "unitary", "domain": "complex", "ambient": 1,
++        "matrix": [[[0, 1]]],
++        "vector": [[1, 0]],
++    })
++    assert diagram is not None
++    assert diagram["type"] == "plot2d"
++    assert any(shape["kind"] == "curve" for shape in diagram["shapes"])
++    assert any(shape.get("label") == "Uz" for shape in diagram["shapes"])
++    assert diagram["linear"]["projection"]["kind"] == "complex_to_real"
++
++
++def test_unitary_rotation_arc_is_labelled_and_has_no_lambda_axes():
++    import math
++    diagram = _build({
++        "visual": "unitary", "domain": "complex", "ambient": 1,
++        "matrix": [[[math.cos(math.pi / 4), math.sin(math.pi / 4)]]],
++        "vector": [[1, 0]],
++    })
++    assert diagram is not None
++    labels = [str(shape.get("label") or "") for shape in diagram["shapes"]]
++    assert any("旋转 π/4" in label for label in labels)
++    assert not any("λ" in label for label in labels)
++
++
++def test_unitary_keyword_routes_to_linear_planner():
++    assert la.looks_linear("判断 U 是否是酉矩阵，并在复平面上表示单位圆的像")
++    assert la.looks_linear("解释辛矩阵与辛变换")
++    from diagram_taxonomy import choose_visual
++    assert choose_visual("在复平面解释酉矩阵的谱").kind in ("geometry2d", "geometry3d")
++
++
++def test_dimension_words_alone_do_not_block_generic_visual_pipeline():
++    question = "画出 z=x^2+y^2 在 R^2 上的等高线"
++    assert la.looks_linear(question)
++    assert not la.looks_linear_core(question)
++
++
++def test_unitary_spectrum_fallback_puts_each_lambda_on_its_own_point():
++    diagram = la._unitary_spectrum_from_question(
++        "判断 U = (1/√2)[[1, i],[i, 1]] 是否是酉矩阵，并在复平面上表示单位圆。")
++    assert diagram is not None
++    points = {shape["label"]: (shape["x"], shape["y"])
++              for shape in diagram["shapes"] if shape["kind"] == "point"}
++    assert points["λ₁"][0] > 0 and points["λ₁"][1] > 0
++    assert points["λ₂"][0] > 0 and points["λ₂"][1] < 0
++    notes = {note["text"].split(" =")[0]: note["text"]
++             for note in diagram["annotations"] if "λ" in note["text"]}
++    assert "e^(iπ/4)" in notes["λ₁"]
++    assert "e^(-iπ/4)" in notes["λ₂"]
++    assert any("C² 保范" in note["text"]
++               for note in diagram["annotations"])
++    assert any("单平面只画谱" in note["text"] for note in diagram["annotations"])
++
++
++def test_unitary_c2_projection_is_labelled():
++    diagram = _build({
++        "visual": "unitary", "domain": "complex", "ambient": 2,
++        "matrix": [
++            [[1, 0], [0, 0]],
++            [[0, 0], [1, 0]],
++        ],
++        "vector": [[1, 0], [0, 0]],
++        "projection": {"kind": "r4_to_3d", "note": "C² 实四维投影到 R³"},
++    })
++    assert diagram is not None
++    assert diagram["type"] == "geometry3d"
++    assert diagram["linear"]["projection"]["kind"] == "r4_to_3d"
++    assert any(note["text"] == "C² 实四维投影到 R³"
++               for note in diagram["annotations"])
++
++
++def test_unitary_rejects_non_unitary_matrix():
++    assert _build({
++        "visual": "unitary", "domain": "complex", "ambient": 1,
++        "matrix": [[[2, 0]]],
++        "vector": [[1, 0]],
++    }) is None
++
++
++def test_symplectic_plane_area_and_isotropic_lines():
++    diagram = _build({
++        "visual": "symplectic", "domain": "real", "ambient": 2,
++        "matrix": [[0, 1], [-1, 0]],
++    })
++    assert diagram is not None
++    assert diagram["type"] == "plot2d"
++    assert any(shape["kind"] == "polygon" for shape in diagram["shapes"])
++    assert any("各向同性" in str(shape.get("label", ""))
++               for shape in diagram["shapes"])
++
++
++def test_symplectic_r4_projection_is_labelled():
++    matrix = [
++        [0, 0, 1, 0],
++        [0, 0, 0, 1],
++        [-1, 0, 0, 0],
++        [0, -1, 0, 0],
++    ]
++    diagram = _build({
++        "visual": "symplectic", "domain": "real", "ambient": 4,
++        "matrix": matrix,
++        "projection": {"kind": "r4_to_3d", "note": "R⁴ 辛基投影到 R³"},
++    })
++    assert diagram is not None
++    assert diagram["type"] == "geometry3d"
++    assert diagram["linear"]["projection"]["kind"] == "r4_to_3d"
++    assert any("R⁴ 辛基投影" in note["text"]
++               for note in diagram["annotations"])
++
++
++def test_taxonomy_prefers_symplectic_geometry():
++    from diagram_taxonomy import choose_visual
++    assert choose_visual("解释 R^4 中的辛空间与辛变换").kind == "geometry3d"
++
++
++def test_affine_transform_builds_source_and_image():
++    diagram = _build({
++        "visual": "affine", "operation": "transform",
++        "domain": "real", "ambient": 2,
++        "matrix": [[1, 1], [0, 1]], "translation": [1, 2],
++    })
++    assert diagram is not None
++    assert len([shape for shape in diagram["shapes"]
++                if shape["kind"] == "polygon"]) == 2
++
++
++def test_affine_image_opposite_edges_stay_parallel():
++    diagram = _build({
++        "visual": "affine", "operation": "transform",
++        "domain": "real", "ambient": 2,
++        "matrix": [[2, 1], [1, 3]], "translation": [1, -2],
++    })
++    assert diagram is not None
++    image = next(shape for shape in diagram["shapes"]
++                 if shape["kind"] == "polygon" and shape.get("label") == "像")
++    points = image["points"]
++    edges = [
++        [points[(index + 1) % len(points)][axis] - points[index][axis]
++         for axis in (0, 1)]
++        for index in range(len(points))
++    ]
++    assert abs(edges[0][0] * edges[2][1] - edges[0][1] * edges[2][0]) < 1e-9
++    assert abs(edges[1][0] * edges[3][1] - edges[1][1] * edges[3][0]) < 1e-9
++
++
++def test_affine_subspace_keeps_offset():
++    diagram = _build({
++        "visual": "affine", "operation": "subspace",
++        "domain": "real", "ambient": 2,
++        "subspace": {
++            "dimension": 1, "kind": "affine", "offset": [1, 2],
++            "basis": [[1, 0]],
++        },
++    })
++    assert diagram is not None
++    assert any(shape.get("label") == "b" for shape in diagram["shapes"])
++
++
++def test_projective_line_at_infinity():
++    diagram = _build({
++        "visual": "projective", "operation": "line_at_infinity",
++        "domain": "real", "ambient": 2,
++    })
++    assert diagram is not None
++    assert any(shape.get("label") == "无穷远线" for shape in diagram["shapes"])
++    assert any(shape.get("label") == "∞" for shape in diagram["shapes"])
++
++
++def test_projective_transform_and_cross_ratio():
++    transform = _build({
++        "visual": "projective", "operation": "transform",
++        "domain": "real", "ambient": 2,
++        "matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
++    })
++    assert transform is not None
++    assert len([shape for shape in transform["shapes"]
++                if shape["kind"] == "polygon"]) == 2
++
++    ratio = _build({
++        "visual": "projective", "operation": "cross_ratio",
++        "domain": "real", "ambient": 2,
++        "points": [[0, 0], [1, 0], [2, 0], [3, 0]],
++    })
++    assert ratio is not None
++    assert any("交比" in note["text"] for note in ratio["annotations"])
++
++
++def test_svd_ellipse_axes_and_condition():
++    diagram = _build({
++        "visual": "svd", "domain": "real", "ambient": 2,
++        "operation": "condition", "matrix": [[2, 0], [0, 0.5]],
++    })
++    assert diagram is not None
++    curves = [shape for shape in diagram["shapes"] if shape["kind"] == "curve"]
++    assert len(curves) == 2
++    assert any("cond" in note["text"] for note in diagram["annotations"])
++    assert any(shape.get("label") == "σ1" for shape in diagram["shapes"])
++
++
++def test_svd_three_dimensional_surface():
++    diagram = _build({
++        "visual": "svd", "domain": "real", "ambient": 3,
++        "matrix": [[2, 0, 0], [0, 1, 0], [0, 0, 0.5]],
++    })
++    assert diagram is not None
++    assert any(shape["kind"] == "surface" for shape in diagram["shapes"])
++
++
++def test_taxonomy_prefers_svd_and_affine():
++    from diagram_taxonomy import choose_visual
++    assert choose_visual("用图解释 SVD 奇异值分解").kind in ("geometry2d", "geometry3d")
++    assert choose_visual("用图解释仿射变换").kind in ("geometry2d", "geometry3d")
++
++
++def test_looks_linear_and_plan_linear(monkeypatch):
++    assert la.looks_linear("解释 R^3 中由 e1,e2 张成的子空间")
++    assert not la.looks_linear("y=x^2 的切线")
++
++    async def fake_stream(system, user, role="main", **kwargs):
++        yield (
++            '{"visual":"subspace","domain":"real","ambient":3,'
++            '"subspace":{"dimension":2,"kind":"linear","offset":[0,0,0],'
++            '"basis":[[1,0,0],[0,1,0]],"label":"span(e1,e2)"}}'
++        )
++
++    monkeypatch.setattr(la.llm, "is_configured", lambda role="main", **k: True)
++    monkeypatch.setattr(la.llm, "stream_chat", fake_stream)
++    diagram = asyncio.run(la.plan_linear("R^3 的二维子空间", "解释"))
++    assert diagram is not None
++    assert diagram["linear"]["subspace"]["dimension"] == 2
++
++
++def test_plan_diagram_auto_prefers_linear(monkeypatch):
++    sentinel = {"type": "geometry3d", "shapes": [{"kind": "point", "x": 0, "y": 0, "z": 0}]}
++
++    async def fake_linear(question, before, role="main"):
++        return sentinel
++
++    async def legacy(*args, **kwargs):
++        raise AssertionError("linear route should win")
++
++    monkeypatch.setattr(la, "looks_linear", lambda question: True)
++    monkeypatch.setattr(la, "plan_linear", fake_linear)
++    monkeypatch.setattr(rd, "plan_diagram", legacy)
++    got = asyncio.run(rd.plan_diagram_auto(
++        "R^3 的子空间图解", "解释", [], "", strict=False))
++    assert got is sentinel
+diff --git a/backend/tests/test_research_diagrams.py b/backend/tests/test_research_diagrams.py
+index cca0d6e..694164e 100644
+--- a/backend/tests/test_research_diagrams.py
++++ b/backend/tests/test_research_diagrams.py
+@@ -612,7 +612,8 @@ def test_gradient_does_not_move_unrelated_point_or_invent_zero_vector():
+              "rows": 3, "cols": 3},
+             {"kind": "point", "x": 3, "y": 3, "z": 18},
+             {"kind": "vector", "label": "gradient", "from": [0, 0, 0], "to": [1, 0, 1]},
+-            {"kind": "plane", "label": "tangent", "normal": [1, 0, 1]},
++            {"kind": "plane", "label": "tangent", "normal": [1, 0, 1],
++             "x": 0, "y": 0, "z": 0},
+         ],
+     })
+     assert result
+@@ -621,6 +622,67 @@ def test_gradient_does_not_move_unrelated_point_or_invent_zero_vector():
+     assert next(s for s in result["shapes"] if s["kind"] == "plane")["normal"] == [0, 0, 1]
+ 
+ 
++def test_surface_repair_fills_missing_surface_and_plane_height():
++    raw = {
++        "type": "surface3d",
++        "shapes": [
++            {"kind": "plane", "normal": [0, 0, 1]},
++            {"kind": "circle", "radius": 1},
++            {"kind": "point", "x": 1, "y": 0, "z": 1},
++        ],
++    }
++    repaired = rd.repair_surface_shapes(
++        raw, "用三维图画出抛物面 z = x^2 + y^2 和平面 z = 1 的交线。")
++    result = rd.prepare_diagram(repaired)
++    assert result
++    assert any(shape["kind"] == "surface" for shape in result["shapes"])
++    plane = next(shape for shape in result["shapes"] if shape["kind"] == "plane")
++    circle = next(shape for shape in result["shapes"] if shape["kind"] == "circle")
++    assert plane["x"] == 0 and plane["y"] == 0 and plane["z"] == 1
++    assert circle["x"] == 0 and circle["y"] == 0 and circle["z"] == 1
++
++
++def test_surface_repair_does_not_pick_one_of_multiple_plane_heights():
++    raw = {
++        "type": "surface3d",
++        "shapes": [
++            {"kind": "surface", "expr": "x^2+y^2", "domain": [-1, 1],
++             "rows": 4, "cols": 4},
++            {"kind": "plane", "normal": [0, 0, 1]},
++        ],
++    }
++    repaired = rd.repair_surface_shapes(
++        raw, "画出曲面 z=x^2+y^2 与平面 z=1、平面 z=2 的交线")
++    plane = repaired["shapes"][1]
++    assert "z" not in plane
++
++
++def test_surface3d_without_surface_is_rejected():
++    assert rd.prepare_diagram({
++        "type": "surface3d",
++        "shapes": [{"kind": "plane", "x": 0, "y": 0, "z": 1,
++                    "normal": [0, 0, 1]}],
++    }) is None
++
++
++def test_3d_model_axes_are_removed_because_renderer_owns_axes():
++    result = rd.prepare_diagram({
++        "type": "geometry3d",
++        "shapes": [
++            {"kind": "axis", "label": "x", "from": [0, 0, 0], "to": [2, 0, 0]},
++            {"kind": "axis", "label": "y", "from": [0, 0, 0], "to": [0, 2, 0]},
++            {"kind": "point", "x": 1, "y": 1, "z": 1, "label": "P"},
++        ],
++        "annotations": [
++            {"x": 2, "y": 0, "z": 0, "text": "x 轴"},
++            {"x": 0, "y": 2, "z": 0, "text": "y"},
++        ],
++    })
++    assert result
++    assert not any(shape["kind"] == "axis" for shape in result["shapes"])
++    assert not any(note["text"].startswith(("x", "y")) for note in result["annotations"])
++
++
+ @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+ def test_nonfinite_sampling_counts_do_not_crash(invalid):
+     result = rd.prepare_diagram({
+@@ -1098,12 +1160,44 @@ def test_geogebra_validator_whitelist():
+ 
+ 
+ def test_plan_geogebra_defers_3d_to_legacy(monkeypatch):
+-    """3D 继续走旧规划器 + Three.js,不在页面回退成 GeoGebra 画布。"""
++    """3D 曲面继续走旧规划器 + Three.js,不在页面回退成 GeoGebra 画布。"""
+     monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+     assert asyncio.run(rd.plan_geogebra(
+         "用三维图讲讲曲面 z=x^2+y^2 的梯度", "解释")) is None
+ 
+ 
++def test_plan_geogebra_accepts_constructible_3d(monkeypatch):
++    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
++
++    async def fake_stream(system, user, **kwargs):
++        yield json.dumps({
++            "type": "geogebra3d",
++            "commands": [
++                "A=(1,0,0)", "B=(0,1,0)", "C=(0,0,1)",
++                "p=Plane(A,B,C)", "S=Sphere((0,0,0),2)",
++            ],
++        })
++
++    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
++    diagram = asyncio.run(rd.plan_geogebra(
++        "画出空间中的平面和球面", "解释"))
++    assert diagram is not None and diagram["type"] == "geogebra3d"
++
++
++def test_plan_geogebra_defers_surface_command(monkeypatch):
++    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
++
++    async def fake_stream(system, user, **kwargs):
++        yield json.dumps({
++            "type": "geogebra3d",
++            "commands": ["s=Surface(u,v,u^2+v^2,u,-1,1,v,-1,1)"],
++        })
++
++    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
++    assert asyncio.run(rd.plan_geogebra(
++        "画一个旋转抛物面", "解释")) is None
++
++
+ def test_plan_diagram_auto_falls_back_to_legacy(monkeypatch):
+     monkeypatch.setenv("MG_DIAGRAM_ENGINE", "geogebra")
+     sentinel = {"type": "plot2d", "shapes": [{"kind": "point", "x": 0, "y": 0}],
+@@ -1120,3 +1214,40 @@ def test_plan_diagram_auto_falls_back_to_legacy(monkeypatch):
+     got = asyncio.run(rd.plan_diagram_auto(
+         "画出抛物线", "y=x^2", [], "plot2d", strict=False))
+     assert got is sentinel
++
++
++def test_plan_diagram_auto_keeps_generic_fallback_for_dimension_only_cue(monkeypatch):
++    monkeypatch.setenv("MG_DIAGRAM_ENGINE", "geogebra")
++    sentinel = {"type": "surface3d", "shapes": [{"kind": "surface", "points": [[0, 0, 0]]}],
++                "nodes": [], "edges": [], "annotations": []}
++
++    async def no_linear(question, before, role="main"):
++        return None
++
++    async def no_geo(question, before, role="main"):
++        return None
++
++    async def legacy(*args, **kwargs):
++        return sentinel
++
++    monkeypatch.setattr(rd.linear_algebra, "plan_linear", no_linear)
++    monkeypatch.setattr(rd, "plan_geogebra", no_geo)
++    monkeypatch.setattr(rd, "plan_diagram", legacy)
++    got = asyncio.run(rd.plan_diagram_auto(
++        "画出 z=x^2+y^2 在 R^2 上的等高线", "解释", [], "surface3d",
++        strict=False))
++    assert got is sentinel
++
++
++def test_plan_diagram_auto_blocks_freehand_for_linear_semantic_question(monkeypatch):
++    async def no_linear(question, before, role="main"):
++        return None
++
++    async def legacy(*args, **kwargs):
++        raise AssertionError("linear semantic failure must not fall back")
++
++    monkeypatch.setattr(rd.linear_algebra, "plan_linear", no_linear)
++    monkeypatch.setattr(rd, "plan_diagram", legacy)
++    assert asyncio.run(rd.plan_diagram_auto(
++        "解释 R^3 中由两个向量张成的子空间", "解释", [], "geometry3d",
++        strict=False)) is None
+diff --git a/docs/DIAGRAM_INVARIANTS.md b/docs/DIAGRAM_INVARIANTS.md
+index 8be0e87..441d12a 100644
+--- a/docs/DIAGRAM_INVARIANTS.md
++++ b/docs/DIAGRAM_INVARIANTS.md
+@@ -58,10 +58,11 @@
+ 
+ **防线**：
+ - 2D 标注先量文字宽度并换行，再在锚点上/下/左/右及四角试位；
+-- 主体包围盒作为软障碍，标注优先排到图形外围，必要时用细引线指回锚点；
++- 标注以“对象旁”优先：不再把整个主体包围盒当成必须绕开的外框，只避开曲线/线段等实际几何；
++- 实心多边形额外登记内部包围框，标签沿多边形边缘就近摆放，不落进填充区域；
+ - 每条标注、形状标签、边标签都登记占位框，后续标签不得压住已占位标签；
+ - 节点图边标签沿边错位摆放，避开节点方框、其他边和已放标签；
+-- 3D 标签按屏幕投影尺寸参与碰撞，围绕主体包围盒的外围分散；引线随相机旋转重排；
++- 3D 标签按屏幕投影尺寸参与碰撞，只在对象附近的小范围避让，不因整幅包围盒被推到画面边缘；
+ - 3D 点、箭头、标签按场景尺度缩放；点是注记不是主体；
+ - 3D/2D 标签不加底板，文字贴近对象；
+ - 节点宽度按中英文字符实测宽度计算，两行截断；
+@@ -76,6 +77,9 @@
+ 
+ **防线**：
+ - 类型-结构-可渲染性三重校验；无实际几何的图解直接丢弃；
++- 3D 平面/圆必须显式给出中心坐标；缺 z 的平面不再默默落到原点；
++- `surface3d` 必须有曲面主体；模型漏掉曲面后只剩平面/点时整图丢弃；
++- 题面明确写了 `z=f(x,y)` 与水平平面 `z=c` 时，规划阶段只按题面补回缺失的曲面/高度，不猜其他位置；
+ - 恢复会话重新跑 `parseDiagramSpec`；
+ - 3D 首次进入视口后保持挂载；
+ - 单图错误边界、WebGL 丢失提示、配额失败保留旧存档。
+diff --git a/docs/GEOGEBRA_KERNEL.md b/docs/GEOGEBRA_KERNEL.md
+index 30fc4d7..02b3500 100644
+--- a/docs/GEOGEBRA_KERNEL.md
++++ b/docs/GEOGEBRA_KERNEL.md
+@@ -32,7 +32,9 @@ MG_DIAGRAM_ENGINE=geogebra
+ ```
+ 
+ 默认 `legacy`。GeoGebra 规划失败、命令校验失败或前端转换失败都会回退旧管线。
+-3D 暂不接内核：`plan_geogebra()` 遇到三维问题直接返回 `None`，由旧规划器 + Three.js 处理。
++3D 内核只接实数三维可精确构造对象：点、线、段、向量、平面、球、多边形。
++参数曲面 / 梯度 / 抛物面等仍由旧表达式采样 + Three.js 处理；`Surface` 命令会被主动拒绝并回退。
++3D XML 的曲面元素 `surfacecartesian3d` 不直接给网格，因此不硬转。
+ 
+ ## 前端加载
+ 
+diff --git a/docs/HIGHER_ALGEBRA_PLAN.md b/docs/HIGHER_ALGEBRA_PLAN.md
+new file mode 100644
+index 0000000..29f60a5
+--- /dev/null
++++ b/docs/HIGHER_ALGEBRA_PLAN.md
+@@ -0,0 +1,437 @@
++# 高等代数几何表示层实施方案
++
++日期：2026-11-03
++关联：[可几何表示版块总表](HIGHER_ALGEBRA_VISUAL_MAP.md) · [图解不变量](DIAGRAM_INVARIANTS.md) · [GeoGebra 2D 隐藏内核](GEOGEBRA_KERNEL.md)
++
++## 1. 目标
++
++把高等代数中“能用几何表达”的内容做成独立表示层：
++
++- 模型只输出代数语义，不自由手画几何；
++- 后端校验基、维数、形式、变换和不变量；
++- 后端确定性生成图形；
++- 前端继续用现有 SVG / Three.js 渲染；
++- GeoGebra 只做实数二维/三维的精确几何执行器；
++- 抽象内容不硬画，直接不做或降级为结构图。
++
++非目标：
++
++- 不覆盖纯符号代数、纯矩阵证明、存在性定理；
++- 不把若尔当标准形、λ-矩阵、PID 模、Galois 理论硬画成 3D；
++- 不把复空间/R⁴ 直接冒充三维空间。
++- 概率统计图示另立计划，不纳入本工程；本计划只负责高等代数可几何表示部分。
++
++## 2. 总体架构
++
++```
++问题 / 回答段落
++  ↓
++线性代数分类器（版块 + 底域 + 维数 + 意图）
++  ↓
++语义计划（subspace / form / transform / projection）
++  ↓
++语义校验（基、维数、形式、不变量）
++  ↓
++确定性构造器
++  ↓
++DiagramSpec（geometry2d / geometry3d）
++  ↓
++DiagramSvg / Diagram3D
++  ↑
++可选：GeoGebra 3D 隐藏内核（仅实数三维精确构造）
++```
++
++原则：
++
++1. 模型不直接决定点、线、面的坐标；
++2. 语义层决定“画什么”，构造器决定“怎么画”；
++3. GeoGebra 失败不影响主链路；
++4. 任何投影必须显式标注，不冒充原空间。
++
++## 3. 数据契约
++
++在现有 `DiagramSpec` 上增加可选 `linear` 语义块，不新增渲染组件：
++
++```json
++{
++  "type": "geometry3d",
++  "title": "R^3 中由 v1,v2 张成的平面",
++  "linear": {
++    "domain": "real",
++    "ambient": 3,
++    "visual": "subspace",
++    "subspace": {
++      "dimension": 2,
++      "kind": "linear",
++      "offset": [0, 0, 0],
++      "basis": [[1, 0, 0], [0, 1, 0]],
++      "label": "span(v1, v2)"
++    },
++    "form": null,
++    "transform": null,
++    "projection": {
++      "kind": "none",
++      "note": ""
++    }
++  },
++  "shapes": [],
++  "annotations": []
++}
++```
++
++### 3.1 字段
++
++- `domain`: `real` / `complex`
++- `ambient`: 2 / 3 / 4
++- `visual`:
++  - `subspace`
++  - `linear_map`
++  - `determinant`
++  - `system`
++  - `eigen`
++  - `inner_product`
++  - `quadratic_form`
++  - `bilinear_form`
++  - `unitary`
++  - `symplectic`
++  - `affine`
++  - `projective`
++  - `svd`
++- `subspace`:
++  - `dimension`
++  - `kind`: `linear` / `affine`
++  - `offset`: 实数或复数向量
++  - `basis`: 向量数组
++  - `label`
++- `form`:
++  - `kind`: `dot` / `symmetric` / `alternating` / `hermitian`
++  - `matrix`
++  - `rank`
++  - `signature`
++- `transform`:
++  - `kind`: `linear` / `orthogonal` / `unitary` / `symplectic`
++  - `matrix`
++- `projection`:
++  - `kind`: `none` / `complex_to_real` / `r4_to_3d` / `r4_to_2d`
++  - `note`: 例如“C² 的实四维投影，仅示意”
++
++### 3.2 复数表示
++
++复向量/复矩阵用 `[re, im]` 对表示：
++
++```json
++[1, 2]        // 1 + 2i
++[[re, im], [re, im]]
++```
++
++避免字符串解析和 `eval`。
++
++## 4. 分类与路由
++
++### 4.1 新增版块分类
++
++在现有 [diagram_taxonomy.py](../backend/diagram_taxonomy.py) 的权重网之外，增加线性代数版块分类：
++
++- `subspace`
++- `linear_map`
++- `determinant`
++- `system`
++- `eigen`
++- `inner_product`
++- `quadratic_form`
++- `bilinear_form`
++- `unitary`
++- `symplectic`
++- `affine`
++- `projective`
++- `svd`
++
++每个版块带关键词、底域线索、环境维数线索。
++
++### 4.2 维度与底域
++
++- `R^2` / `\mathbb{R}^2` → real, ambient 2
++- `R^3` / `\mathbb{R}^3` → real, ambient 3
++- `R^4` / `\mathbb{R}^4` → real, ambient 4
++- `C` / `\mathbb{C}` / 复向量空间 / 酉空间 → complex
++- `子空间`、`span`、`张成`、`基`、`维数`、`秩` → 默认 real，按上下文定 ambient
++- `辛` → real，偶数维，至少 2
++- `酉` / `Hermitian` / `复内积` → complex
++
++### 4.3 意图
++
++- 明确“画/图解/直观/表示” → 优先几何；
++- 纯定义、纯证明、纯计算 → 不强行画；
++- 概念关系问题 → 仍可走 `tree`，但不能替代子空间几何；
++- 用户要“子空间图解”时，不允许默认成思维导图。
++
++### 4.4 路由顺序
++
++1. 显式表示要求；
++2. 版块分类；
++3. 底域/维数；
++4. 是否能几何化；
++5. 不能几何化 → 不出图或结构图；
++6. 能几何化 → 语义计划。
++
++## 5. 语义校验
++
++校验在构造之前执行，失败不画，回退旧链路或文字。
++
++### 5.1 子空间
++
++- `dimension <= ambient`
++- `basis` 数量等于 `dimension`
++- 基向量线性无关（高斯消元求秩）
++- `kind=linear` → `offset` 必须为零
++- `kind=affine` → 允许非零 offset
++- 坐标有限、不过大
++
++### 5.2 形式
++
++- 对称：`A = A^T`
++- 反对称：`A = -A^T`
++- Hermitian：`A = A^*`
++- 非退化：`det(A) != 0`（辛形式必须）
++- 辛形式：维数偶数，反对称且非退化
++- 符号差由特征值/合同标准形计算
++
++### 5.3 变换
++
++- 正交：`M^T M = I`
++- 酉：`M^* M = I`
++- 辛：`M^T J M = J`
++- 一般线性：只检查矩阵尺寸和有限性
++
++### 5.4 投影
++
++- 复数或 R⁴ 内容必须有 `projection.note`
++- 投影后维数、保留/丢失的结构写清楚
++- 不能把投影图标题写成原空间结论
++
++## 6. 确定性构造器
++
++### 6.1 子空间
++
++- 0 维：原点；
++- 1 维：过 offset 的直线 + 一个基向量；
++- 2 维：过 offset 的有限平面片 + 两个基向量；
++- 3 维：整个环境空间，不画平面片，只画坐标轴和基向量；
++- 线性：基向量从原点出发；
++- 仿射：基向量从 offset 出发，虚线连接原点到 offset；
++- 平面片大小按基向量长度和视野归一化；
++- 标签：`O`、`v1`、`v2`、`span(...)`、`dim=...`、`affine: p+S`。
++
++### 6.2 线性变换
++
++- 变换前网格/基向量；
++- 变换后网格/基向量；
++- 核：被压到零的子空间；
++- 像：变换后的子空间；
++- 秩-零度用标签，不画额外抽象图。
++
++### 6.3 行列式/方程组
++
++- 行列式：平行四边形/平行六面体、面积/体积、方向；
++- 方程组：二维直线族/三维平面族、交点、解集为点/线/面；
++- 齐次：过原点的核；
++- 非齐次：平移后的仿射子空间。
++
++### 6.4 特征值/谱
++
++- 实特征方向：不变直线/平面；
++- 实对称：正交特征轴 + 椭球主轴；
++- 复特征值：二维旋转 + 缩放，标注复结构；
++- 重根/不可对角化：不硬画 3D，降级为矩阵/文字。
++
++### 6.5 内积/正交
++
++- 投影：点到直线/平面的垂线；
++- Gram-Schmidt：逐步正交化；
++- 正交补：垂直子空间；
++- 正交变换：旋转/反射，保长；
++- QR：正交基 + 上三角（矩阵部分只做辅助标注）。
++
++### 6.6 二次型/双线性型
++
++- 对称型：圆锥曲线/二次曲面、主轴、符号差；
++- 反对称型：面积形式、平行四边形、辛结构；
++- 退化：锥面/压扁图形；
++- 正定/半正定/不定：椭球/抛物面/双曲面/锥面；
++- 合同：旋转变换到标准形；
++- 复杂二次曲面优先交给 GeoGebra 3D 内核。
++
++### 6.7 复/酉
++
++- C → R²：复平面、单位圆、旋转+伸缩；
++- C² → R⁴ → 3D/2D 投影；
++- Hermitian 内积：单位球、正交复方向；
++- 酉变换：保范数、保内积；
++- 所有投影显式标注。
++
++### 6.8 辛
++
++- R² 相平面：面积、辛基、各向同性直线；
++- R⁴ → 3D/2D 投影：辛基、Lagrangian 平面；
++- 辛变换：保面积/保 ω；
++- 不伪装成普通欧氏旋转。
++
++### 6.9 仿射/投影
++
++- 仿射网格、平移、仿射子空间；
++- 射影平面/无穷远线；
++- 交比、射影变换；
++- 圆锥曲线射影分类。
++
++### 6.10 SVD/矩阵分解
++
++- 单位圆 → 椭圆；
++- 奇异值主轴；
++- 极分解：旋转 + 对称拉伸；
++- 条件数：椭圆扁率；
++- 低秩近似：主轴截断。
++
++## 7. 前端渲染
++
++先复用现有渲染器，不新增复杂组件：
++
++- `geometry2d` → `DiagramSvg`；
++- `geometry3d` → `Diagram3D`；
++- 平面片、直线、向量、多边形、球已有；
++- 需要新增：
++  - 虚线样式（仿射 offset、投影连接）；
++  - 平面片透明度/边框；
++  - 投影提示标签；
++  - `linear` 语义块的 sanitize（不直接渲染）。
++
++矩阵网格、交换图等示意结构不在本阶段；只做几何图。
++
++## 8. GeoGebra 3D 内核
++
++### 8.1 范围
++
++只接实数三维：
++
++- 点、线、平面、球、多边形；
++- 交点、交线、切平面；
++- 二次曲面；
++- 实矩阵变换。
++
++不接：
++
++- 复空间；
++- R⁴ 辛结构；
++- 抽象张量/模/域；
++- 高维投影语义。
++
++### 8.2 实现
++
++- 离屏 `appName:'3d'` Applet；
++- 单独实例，不和 2D 共用；
++- 白名单命令；
++- `getXML()` 读取 3D 元素；
++- 转成 `geometry3d`；
++- 失败回退确定性构造器；
++- 仍不显示 GeoGebra 3D 画布。
++
++### 8.3 用途
++
++- 精确平面/球/二次曲面；
++- 平面交线、交点；
++- 切平面；
++- 实矩阵变换演示。
++
++## 9. 分阶段交付
++
++### Phase 1：实子空间与线性变换
++
++- 版块分类：`subspace`、`linear_map`、`determinant`、`system`、`eigen`
++- 语义 schema + 校验
++- R²/R³ 子空间构造器
++- 仿射子空间
++- 核/像/秩-零度
++- 行列式/方程组
++- 实特征方向
++- 测试：0/1/2/3 维、仿射、核像、退化、非法基
++
++### Phase 2：内积与二次型
++
++- `inner_product`、`quadratic_form`、`bilinear_form`
++- 正交投影、Gram-Schmidt、正交补
++- 二次型/二次曲面、符号差、正定性
++- 实数三维二次曲面优先接 GeoGebra 3D
++- 测试：投影、惯性定理、退化、正定/不定
++
++### Phase 3：复/酉/辛投影
++
++- `unitary`、`symplectic`
++- C→R²、C²→R⁴→3D/2D 投影
++- R⁴→3D/2D 投影
++- 单位圆/球、Hermitian 内积、保范数
++- 相平面、辛基、各向同性、Lagrangian
++- 所有投影标注
++- 测试：酉矩阵保范数、辛矩阵保 ω、投影说明
++
++### Phase 4：仿射/投影与 SVD
++
++- `affine`、`projective`、`svd`
++- 仿射变换、射影变换、交比
++- SVD/极分解/条件数/低秩近似
++- 测试：仿射偏移、无穷远线、圆→椭圆
++
++### Phase 5：3D GeoGebra 内核
++
++- 隐藏 3D Applet
++- 3D XML 转换
++- 平面/球/二次曲面/交线/切平面
++- 回退与超时
++- 测试：真实 XML、失败回退、无 GeoGebra 画布
++
++## 10. 验收标准
++
++- “R³ 的子空间”不再输出 2D 图或思维导图；
++- 0/1/2/3 维图形和标签正确；
++- 线性子空间过原点，仿射子空间显示偏移；
++- 基向量数量、维数、线性无关校验通过；
++- 核/像/秩-零度几何正确；
++- 二次型符号差与图形一致；
++- 复/辛内容有投影标注，不冒充原空间；
++- GeoGebra 3D 失败不影响正文和旧图；
++- 纯代数内容不出几何图。
++
++## 11. 风险
++
++- **投影歧义**：复空间/R⁴ 投影必须标注，不能只画一张 3D 图就结束。
++- **GeoGebra 3D 性能**：WebGL、内存、移动端；必须超时和回退。
++- **二次曲面提取**：GeoGebra XML 对曲面输出需要单独探测；不行就继续表达式采样。
++- **模型语义错误**：必须靠校验器拒绝非法基/维数，不交给模型自查。
++- **范围膨胀**：纯代数内容明确不做，避免把系统拖成通用 CAS。
++
++## 12. 代码落点
++
++- `backend/diagram_taxonomy.py`：线性代数版块与线索。
++- `backend/research_diagrams.py`：规划、校验、确定性构造器、验证摘要。
++- `backend/linear_algebra/`：建议新增
++  - `schema.py`
++  - `classify.py`
++  - `validate.py`
++  - `builders/subspace.py`
++  - `builders/forms.py`
++  - `builders/transform.py`
++  - `projections.py`
++- `frontend/src/utils/diagramSpec.ts`：`linear` 语义块 sanitize。
++- `frontend/src/components/diagram/Diagram3D.vue`：平面片、虚线、投影标注。
++- `frontend/src/components/diagram/DiagramBlock.vue`：新类型路由（若后续拆分类型）。
++- `frontend/src/utils/geogebra3dSpec.ts` / `services/geogebra3dKernel.ts`：Phase 5。
++- 测试：
++  - `backend/tests/test_linear_algebra_diagrams.py`
++  - `frontend/scripts/diagram-test.ts`
++  - `frontend/scripts/math-text-test.ts`（不涉及表格时保持现状）
++
++## 13. 实施顺序建议
++
++1. Phase 1 先做，解决“子空间画错/画成思维导图”的核心问题。
++2. Phase 2 做二次型，GeoGebra 3D 可以先只作为可选加速器。
++3. Phase 3 做复/辛投影，必须把“投影说明”作为一等字段。
++4. Phase 4 做仿射/投影/SVD。
++5. Phase 5 再接完整 3D GeoGebra 内核，不要阻塞前四阶段。
+diff --git a/docs/HIGHER_ALGEBRA_VISUAL_MAP.md b/docs/HIGHER_ALGEBRA_VISUAL_MAP.md
+new file mode 100644
+index 0000000..6034ad9
+--- /dev/null
++++ b/docs/HIGHER_ALGEBRA_VISUAL_MAP.md
+@@ -0,0 +1,175 @@
++# 高等代数“可几何表示”版块总表
++
++日期：2026-11-03
++范围：只收录能用二维/三维几何、低维投影、水平集、向量场或结构示意图表达的内容。
++不收录纯符号代数、纯矩阵证明、纯存在性定理。
++
++说明：
++
++- **GeoGebra** 只负责可嵌入实二维/三维的精确几何构造。
++- **语义层** 负责对象定义、选型、基/维数/形式、投影规则、不变量校验和降级。
++- 抽象内容不硬画 3D；能画矩阵图、箭头图、水平集、投影图才收录。
++
++## 优先级
++
++- **P0**：实二维/三维可直接画，GeoGebra 深度参与。
++- **P1**：需要复结构、四维投影、二次型/辛结构，GeoGebra 只参与局部。
++- **P2**：低维外代数、对偶、商空间等“几何化边缘”内容，主要靠我们的结构图。
++
++## 一、空间与子空间
++
++| 内容 | 可几何化对象 | 推荐画面 | GeoGebra | 语义层 |
++|---|---|---|---|---|
++| R²/R³ 向量空间 | 原点、坐标轴、向量 | 坐标系 + 向量 | 强 | 维数、坐标、基 |
++| 线性组合/张成 span | 基向量的所有线性组合 | 直线/平面/整个空间 | 强 | 基、系数、维数 |
++| 线性相关/无关 | 共线、共面、退化 | 向量共线/共面/体积为零 | 强 | 秩、线性关系 |
++| 基与坐标 | 基向量、坐标网格 | 斜坐标网格、基箭头 | 强 | 基变换、坐标 |
++| 维数 | 点/线/面/体 | 0/1/2/3 维对应 | 强 | 维数约束 |
++| 子空间 | 过原点的点/线/面 | 原点、基、平面片 | 强 | 线性 vs 仿射 |
++| 仿射子空间 | 平移后的点/线/面 | 偏移点 + 基向量 | 强 | offset、维数 |
++| 子空间的和/交 | 两片平面、交线 | 平面交线、和空间 | 强 | 维数公式 |
++| 直和 | 互补子空间 | 两片互补平面/直线 | 强 | 交集为零 |
++| 商空间 | 陪集、平行子空间族 | 平行线/平行面族 + 投影 | 部分 | 陪集、投影 |
++| 对偶空间 | 线性函数水平集 | 平面族/等值线 + 法向量 | 部分 | 线性泛函、对偶基 |
++| 坐标变换/基变换 | 两组基、同一向量 | 双基箭头、坐标网格 | 强 | 过渡矩阵 |
++
++## 二、线性变换与矩阵
++
++| 内容 | 可几何化对象 | 推荐画面 | GeoGebra | 语义层 |
++|---|---|---|---|---|
++| 线性变换 | 网格变形、基向量像 | 变换前后网格/箭头 | 强 | 矩阵、线性性 |
++| 核 kernel | 被压到零的子空间 | 核直线/核平面 | 强 | 核、零度 |
++| 像 image | 变换后的子空间 | 像直线/像平面 | 强 | 秩、像 |
++| 秩-零度定理 | 核与像的维数 | 两个子空间 + 维数标签 | 强 | 维数关系 |
++| 复合/逆变换 | 连续两次变换 | 分步网格/箭头 | 强 | 复合矩阵 |
++| 投影变换 | 投影到直线/平面 | 垂直投影、影子 | 强 | 投影矩阵、幂等 |
++| 反射变换 | 关于直线/平面反射 | 镜像图形 | 强 | 反射矩阵、保长 |
++| 旋转/缩放/剪切 | 网格变形 | 旋转、拉伸、剪切 | 强 | 正交/行列式 |
++| 不变子空间 | 变换后仍在子空间内 | 不变直线/平面 | 强 | 不变性校验 |
++| 特征向量/特征空间 | 方向不变、长度伸缩 | 特征方向、伸缩箭头 | 强 | 特征值、重数 |
++| 可对角化 | 特征基 | 特征基网格 | 强 | 特征基、重数 |
++| 实对称矩阵谱分解 | 正交特征轴 | 椭球主轴/正交基 | 强 | 正交对角化 |
++| 复特征值 | 旋转+缩放 | 二维旋转、螺旋 | 部分 | 复结构、投影 |
++| 幂零/若尔当链 | 链式结构 | 矩阵分块/箭头链（非几何） | 弱 | 不变量（示意） |
++
++## 三、行列式与线性方程组
++
++| 内容 | 可几何化对象 | 推荐画面 | GeoGebra | 语义层 |
++|---|---|---|---|---|
++| 行列式 | 面积/体积缩放、方向 | 平行四边形/平行六面体 | 强 | 符号、秩、退化 |
++| 线性相关与零行列式 | 压扁的平行四边形 | 面积为零 | 强 | 秩判定 |
++| 线性方程组 | 直线/平面交点 | 二维直线、三维平面 | 强 | 解集类型 |
++| 齐次方程解空间 | 过原点的核 | 核直线/核平面 | 强 | 零空间、维数 |
++| 非齐次解集 | 仿射子空间 | 平移后的线/面 | 强 | 特解 + 零空间 |
++| 最小二乘 | 投影 | 点到平面/直线投影 | 强 | 正规方程、投影 |
++| 行列式与体积 | 平行六面体体积 | 棱向量 + 体积 | 强 | 三重积、方向 |
++
++## 四、内积空间与正交
++
++| 内容 | 可几何化对象 | 推荐画面 | GeoGebra | 语义层 |
++|---|---|---|---|---|
++| 内积/长度/夹角 | 点积、投影 | 向量夹角、投影 | 强 | 内积、范数 |
++| 正交/正交补 | 垂直子空间 | 正交直线/平面 | 强 | 正交补维数 |
++| 正交投影 | 影子 | 投影向量、垂线 | 强 | 投影矩阵 |
++| Gram-Schmidt | 逐次正交化 | 基向量正交化过程 | 强 | 正交基、系数 |
++| 标准正交基 | 单位正交轴 | 正交单位基 | 强 | 正交矩阵 |
++| 正交变换 | 保长/保角 | 旋转、反射 | 强 | 保内积 |
++| QR 分解 | Gram-Schmidt 矩阵化 | 正交基 + 上三角 | 部分 | Q/R 语义 |
++| 最小二乘几何 | 投影残差 | 投影 + 残差向量 | 强 | 正规方程 |
++| 伴随算子 | 转置/共轭转置 | 矩阵 + 对偶箭头 | 部分 | 伴随性 |
++| 正规/谱定理 | 正交特征轴 | 椭球/主轴 | 强 | 谱分解 |
++
++## 五、二次型与双线性型
++
++| 内容 | 可几何化对象 | 推荐画面 | GeoGebra | 语义层 |
++|---|---|---|---|---|
++| 二次型 | 圆锥曲线/二次曲面 | 椭圆、双曲线、抛物面、鞍面 | 强 | 矩阵、秩、符号差 |
++| 对称双线性型 | 矩阵、等值面 | 二次型水平集 | 强 | 对称性、合同 |
++| 反对称双线性型 | 面积形式 | 有向面积、平行四边形 | 部分 | 交错性、秩 |
++| 退化/非退化 | 压扁的二次型 | 退化锥面/平面 | 强 | 行列式、核 |
++| 惯性定理/符号差 | 正/负/零方向 | 椭球/双叶双曲面/锥面 | 强 | 符号差 |
++| 合同标准形 | 主轴化 | 旋转后的标准二次曲面 | 强 | 合同变换 |
++| 正定性 | 椭球/抛物面 | 正定、半正定、不定 | 强 | 特征值/顺序主子式 |
++| 双线性函数矩阵 | 矩阵网格、水平集 | 矩阵 + 二次型 | 部分 | 矩阵表示、秩 |
++| 正交/辛群作用 | 保持形式的变换 | 球面/面积保持 | 部分 | 群、保形式 |
++
++## 六、复空间与酉空间
++
++| 内容 | 可几何化对象 | 推荐画面 | GeoGebra | 语义层 |
++|---|---|---|---|---|
++| 复数乘法 | 旋转+伸缩 | 复平面、单位圆 | 强 | 模、辐角 |
++| 共轭/模 | 镜像、长度 | 复平面镜像 | 强 | Hermitian 形式 |
++| Hermitian 内积 | 复夹角、长度 | 单位圆/单位球 | 部分 | 共轭对称、正定 |
++| 酉变换 | 保 Hermitian 内积 | 复平面旋转、C² 投影 | 部分 | 酉矩阵、保范数 |
++| 酉对角化/谱定理 | 正交复特征轴 | 复投影 + 主轴 | 部分 | 特征值、酉基 |
++| C²/C^n | 实 2n 维投影 | 二维/三维投影示意 | 弱 | 复维数、投影规则 |
++| 复线性变换 | 旋转+伸缩组合 | 复平面网格变形 | 部分 | 复矩阵 |
++
++2×2 酉矩阵问“复平面/单位圆/特征值/谱”时，语义层直接从题面矩阵计算两个特征值，
++画在单位圆上并各自标注；同时注明“C² 保范:单位圆→单位圆”和“单平面只画谱”，
++避免把二维谱图误当成单复平面上的完整映射。若按射影/Möbius 作用理解，单位圆会映为实轴，
++需要另画射影图。
++
++## 七、辛空间与辛变换
++
++| 内容 | 可几何化对象 | 推荐画面 | GeoGebra | 语义层 |
++|---|---|---|---|---|
++| 辛形式 ω | 有向面积 | 相位平面、平行四边形面积 | 部分 | 反对称、非退化 |
++| 辛基 | e1,e2,...,en,fn | 辛基箭头、面积对 | 部分 | ω 矩阵 |
++| 各向同性子空间 | ω 限制为零 | 相平面中的特殊直线/平面 | 部分 | 各向同性校验 |
++| Lagrangian 子空间 | 极大各向同性子空间 | 投影中的 Lagrangian 平面 | 弱 | 维数、ω=0 |
++| 辛变换 | 保面积/保 ω | 面积保持、相图变形 | 部分 | 保辛矩阵 |
++| R⁴ 辛空间 | 二维/三维投影 | 相平面 + 投影说明 | 弱 | 投影规则、维数 |
++| 辛正交补 | ω-正交 | 与欧氏正交补对比 | 弱 | ω-正交 |
++
++## 八、仿射与投影几何
++
++| 内容 | 可几何化对象 | 推荐画面 | GeoGebra | 语义层 |
++|---|---|---|---|---|
++| 仿射变换 | 平移+线性变换 | 网格平移/拉伸 | 强 | 仿射矩阵 |
++| 仿射子空间 | 平移后的子空间 | 偏移点/线/面 | 强 | offset、方向 |
++| 仿射坐标系 | 原点+基 | 斜坐标网格 | 强 | 坐标、基 |
++| 射影平面/直线 | 无穷远点、投影 | 投影平面、交比 | 部分 | 齐次坐标 |
++| 射影变换 | 保持交比 | 投影变形 | 部分 | 射影矩阵 |
++| 圆锥曲线射影分类 | 椭圆/双曲线/抛物线统一 | 射影圆锥 | 部分 | 射影等价 |
++
++## 九、低维外代数与多重线性
++
++| 内容 | 可几何化对象 | 推荐画面 | GeoGebra | 语义层 |
++|---|---|---|---|---|
++| 外积/楔积 | 有向平行四边形/平行六面体 | 面积/体积、方向 | 部分 | 交错性、维数 |
++| 行列式作为交错形式 | 体积形式 | 平行六面体 | 强 | 多重线性、交错 |
++| 双向量/二重向量 | 有向面积元 | 平面片 + 方向 | 弱 | 外代数结构 |
++| 低维张量 | 外积/秩一张量 | 矩阵网格、外积箭头 | 弱 | 张量语义（示意） |
++
++## 十、矩阵分解与数值几何
++
++| 内容 | 可几何化对象 | 推荐画面 | GeoGebra | 语义层 |
++|---|---|---|---|---|
++| SVD | 圆到椭圆的映射 | 奇异值主轴、圆→椭圆 | 部分 | UΣVᵀ、奇异值 |
++| 极分解 | 旋转+对称拉伸 | 旋转 + 椭球拉伸 | 部分 | 正交/对称部分 |
++| QR | Gram-Schmidt | 正交基 + 上三角 | 部分 | Q/R |
++| 条件数 | 椭圆扁率 | 单位圆→扁椭圆 | 部分 | 最大/最小奇异值 |
++| 低秩近似 | 主轴截断 | 椭球主轴截断 | 部分 | 秩、误差 |
++| 矩阵范数 | 最大拉伸 | 球→椭球 | 部分 | 算子范数 |
++
++## 不收录
++
++以下内容主要是符号/结构证明，不能稳定几何化，不进入本表：
++
++- 多项式整除、因式分解、结式、判别式。
++- λ-矩阵、Smith 标准形、初等因子。
++- 若尔当标准形、有理标准形的完整证明；只保留“不变子空间/链式结构示意图”。
++- PID 上有限生成模、结构定理。
++- 域扩张、Galois 理论。
++- 高维张量、外代数的抽象运算。
++- 纯矩阵秩不等式、分块矩阵证明、存在性定理。
++- 有限域上的线性代数（无实几何直观）。
++- 抽象范畴、同调代数。
++
++## 与 GeoGebra 的分工
++
++- GeoGebra：实二维/三维点、线、面、球、圆锥曲线、二次曲面、交点/交线、实矩阵变换。
++- 我们的语义层：底域、形式、基、维数、投影、不变量、视觉选型、校验、降级。
++- 我们的渲染层：SVG/Three.js 负责矩阵图、基箭头、平面片、二次曲面、投影说明和抽象示意图。
++- 不能几何化的内容：矩阵/箭头/结构图，不硬画 3D。
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index 9238772..ffdd490 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "mathguide-frontend",
+-  "version": "1.17.0",
++  "version": "1.18.0",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "mathguide-frontend",
+-      "version": "1.17.0",
++      "version": "1.18.0",
+       "dependencies": {
+         "gsap": "^3.13.0",
+         "katex": "^0.16.22",
+diff --git a/frontend/package.json b/frontend/package.json
+index dc65e3b..611b033 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "mathguide-frontend",
+   "private": true,
+-  "version": "1.17.0",
++  "version": "1.18.0",
+   "type": "module",
+   "scripts": {
+     "dev": "vite",
+diff --git a/frontend/scripts/diagram-test.ts b/frontend/scripts/diagram-test.ts
+index 5c8f3b5..f07c6e3 100644
+--- a/frontend/scripts/diagram-test.ts
++++ b/frontend/scripts/diagram-test.ts
+@@ -18,12 +18,14 @@ import {
+   compileExpression,
+   diagramFromGeoGebraXml,
+ } from '../src/utils/geogebraSpec'
++import { diagramFromGeoGebra3DXml } from '../src/utils/geogebra3dSpec'
+ import {
+   measureLabel,
+   measureTextWidth,
+   overlapArea,
+   placeLabels,
+   placeScreenLabels,
++  plainLabel,
+   shapeObstacleRects,
+ } from '../src/utils/diagramLabels'
+ 
+@@ -339,7 +341,7 @@ check('边标签互不重叠', edgeRects.every((label, index) => edgeRects.every
+   (other, otherIndex) => index === otherIndex || overlapArea(label, other) === 0,
+ )))
+ 
+-// 3D 屏幕空间标注:围绕主体外围排布,互不重叠。
++// 3D 屏幕空间标注:优先贴近锚点,互不重叠。
+ const screenFigure = { x: 160, y: 110, w: 220, h: 180 }
+ const screenPlaced = placeScreenLabels([
+   {
+@@ -362,12 +364,52 @@ check('3D 标注避开主体', screenPlaced.every(
+   (label) => overlapArea(label, screenFigure) === 0,
+ ))
+ 
++// 对象旁标注:不把整幅图当障碍,标签中心应贴近锚点。
++const nearPlaced = placeScreenLabels([{
++  id: 'near', anchorX: 300, anchorY: 260, width: 54, height: 16, priority: 2,
++}], { width: 720, height: 520 })
++check('3D 标注贴近对象', nearPlaced.every((label) => (
++  Math.hypot(label.centerX - 300, label.centerY - 260) <= 40
++)))
++
++const localNear = placeLabels([{
++  id: 'local-near', text: 'λ = 1', anchorX: 200, anchorY: 200,
++  figure: { x: 40, y: 40, w: 400, h: 360 }, figureWeight: 0,
++}], [], { x: -100, y: -100, w: 700, h: 700 })
++check('2D 标注贴近对象', localNear.every((label) => (
++  Math.hypot(label.x + label.w / 2 - 200, label.y + label.h / 2 - 200) <= 40
++)))
++
++const filledPolygon = { x: 100, y: 100, w: 200, h: 160 }
++const polygonObstacles = shapeObstacleRects([{
++  kind: 'polygon',
++  points: [[100, 100], [300, 100], [300, 260], [100, 260]],
++}])
++const polygonLabel = placeLabels([{
++  id: 'inside-polygon', text: '内部说明', anchorX: 200, anchorY: 180,
++}], polygonObstacles, { x: -100, y: -100, w: 700, h: 700 })
++check('实心多边形标注不落进填充', polygonLabel.every(
++  (label) => overlapArea(label, filledPolygon) === 0,
++))
++
++check('LaTeX 标签还原成纯文本', plainLabel('$U^\\dagger U=I$') === 'U† U=I')
++check('下标标签还原', plainLabel('λ_1, λ_2') === 'λ₁, λ₂')
++check('标签不保留省略号', plainLabel('交线: x²+y²=1…') === '交线: x²+y²=1')
++
+ const wrapped = measureLabel({
+   id: 'wrap', text: '这是一个需要换行显示的较长标注说明文字',
+   anchorX: 0, anchorY: 0, fontSize: 10, maxWidth: 60, maxLines: 2,
+ })
+ check('标注按宽度换行', wrapped.lines.length <= 2
+   && wrapped.lines.every((line) => measureTextWidth(line, 10) <= 60))
++const trimmedAnnotation = measureLabel({
++  id: 'trim', role: 'annotation',
++  text: '这是一个需要换行显示的较长标注说明文字',
++  anchorX: 0, anchorY: 0, fontSize: 10, maxWidth: 60, maxLines: 2,
++})
++check('注释截断不加省略号', trimmedAnnotation.lines.every(
++  (line) => !line.includes('…'),
++))
+ 
+ // 用户明确说“不要画图”时,前端不能在回答结束后自行补图。
+ const noDrawHistory = [{ role: 'user', content: '先不要画图，等我讲完' }]
+@@ -426,6 +468,48 @@ check('GeoGebra 多边形不重复画辅助边', ggbSpec?.shapes.filter(
+   (shape) => shape.kind === 'segment' && !shape.label,
+ ).length === 1)
+ 
++const ggb3dXml = `<geogebra><construction>
++<expression label="A" exp="(1, 0, 0)" type="point"/>
++<element type="point3d" label="A"><coords x="1" y="0" z="0" w="1"/></element>
++<expression label="B" exp="(0, 1, 0)" type="point"/>
++<element type="point3d" label="B"><coords x="0" y="1" z="0" w="1"/></element>
++<expression label="C" exp="(0, 0, 1)" type="point"/>
++<element type="point3d" label="C"><coords x="0" y="0" z="1" w="1"/></element>
++<command name="Segment"><input a0="A" a1="B"/><output a0="s"/></command>
++<element type="segment3d" label="s"/>
++<command name="Plane"><input a0="A" a1="B" a2="C"/><output a0="p"/></command>
++<element type="plane3d" label="p"><coords x="1" y="1" z="1" w="-1"/></element>
++<command name="Sphere"><input a0="(0, 0, 0)" a1="2"/><output a0="S"/></command>
++<element type="quadric" label="S"/>
++<command name="Polygon">
++  <input a0="A" a1="B" a2="C"/>
++  <output a0="q" a1="c" a2="a" a3="b"/>
++</command>
++<element type="polygon3d" label="q"/>
++<element type="segment3d" label="c"/>
++<element type="segment3d" label="a"/>
++<element type="segment3d" label="b"/>
++<command name="Surface">
++  <input a0="u" a1="v" a2="u^(2) + v^(2)" a3="u" a4="-1" a5="1" a6="v" a7="-1" a8="1"/>
++  <output a0="surf"/>
++</command>
++<element type="surfacecartesian3d" label="surf"/>
++</construction></geogebra>`
++const ggb3dSpec = diagramFromGeoGebra3DXml(ggb3dXml)
++check('GeoGebra 3D XML 转为自绘三维图', ggb3dSpec?.type === 'geometry3d'
++  && ggb3dSpec.shapes.some((shape) => shape.kind === 'point')
++  && ggb3dSpec.shapes.some((shape) => shape.kind === 'segment')
++  && ggb3dSpec.shapes.some((shape) => shape.kind === 'plane')
++  && ggb3dSpec.shapes.some((shape) => shape.kind === 'sphere')
++  && ggb3dSpec.shapes.some((shape) => shape.kind === 'polygon'))
++check('GeoGebra 3D 曲面不硬转网格', !ggb3dSpec?.shapes.some(
++  (shape) => shape.kind === 'surface',
++))
++check('GeoGebra 3D 多边形辅助边去重', ggb3dSpec?.shapes.filter(
++  (shape) => shape.kind === 'segment',
++).length === 1)
++
++
+ // 图在文字上方时,正文里的“如下图”必须改成“如上图”;反之亦然。
+ const afterFigure = splitMessageBlocks('前言\n\n如下图，曲线有两支。', [{
+   id: 'd3', anchorIndex: 3, spec: relation!,
+diff --git a/frontend/scripts/math-text-test.ts b/frontend/scripts/math-text-test.ts
+index 01c8ee2..b9103d6 100644
+--- a/frontend/scripts/math-text-test.ts
++++ b/frontend/scripts/math-text-test.ts
+@@ -55,6 +55,16 @@ async function main() {
+     html = await renderComp('导数是 $f(x)$ 的斜率')
+     check('$ 行内公式被渲染', html.includes('katex'), '')
+ 
++    // ②b 伴随/转置符号不能被转义吃掉
++    html = await renderComp('验证 $U^\\dagger U=I$ 成立')
++    check('\\dagger 在行内公式中渲染',
++      html.includes('katex') && html.includes('†') && !html.includes('seg-math-raw'),
++      `输出: ${html.slice(0, 600)}`)
++    html = await renderComp('验证 \\(U^\\dagger U=I\\) 成立')
++    check('\\dagger 在括号式公式中渲染',
++      html.includes('katex') && html.includes('†') && !html.includes('seg-math-raw'),
++      `输出: ${html.slice(0, 600)}`)
++
+     // ③ $$..$$ 块级公式(display 模式)
+     html = await renderComp('$$\n\\int_0^1 x^2 dx\n$$')
+     check('块级公式被渲染(display)', html.includes('katex-display'), '')
+diff --git a/frontend/src/components/diagram/Diagram3D.vue b/frontend/src/components/diagram/Diagram3D.vue
+index f90dd10..5a4bf39 100644
+--- a/frontend/src/components/diagram/Diagram3D.vue
++++ b/frontend/src/components/diagram/Diagram3D.vue
+@@ -5,7 +5,7 @@ import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
+ import { t } from '@/utils/i18n'
+ import {
+   placeScreenLabels,
+-  type Rect,
++  plainLabel,
+   type ScreenLabelRequest,
+ } from '@/utils/diagramLabels'
+ 
+@@ -23,7 +23,6 @@ interface LabelEntry {
+ }
+ 
+ let labelEntries: LabelEntry[] = []
+-let figureBounds: import('three').Box3 | null = null
+ 
+ let renderer: import('three').WebGLRenderer | null = null
+ let scene: import('three').Scene | null = null
+@@ -106,16 +105,14 @@ function annotationSprite(
+ ): import('three').Sprite | null {
+   const body = text.trim()
+   if (!body) return null
+-  const maxChars = 14
++  const maxChars = 18
+   const maxLines = 1
+   const chars = Array.from(body)
+   const lines: string[] = []
+   for (let index = 0; index < chars.length && lines.length < maxLines; index += maxChars) {
+     lines.push(chars.slice(index, index + maxChars).join(''))
+   }
+-  if (chars.length > maxChars * maxLines && lines.length) {
+-    lines[lines.length - 1] = `${lines[lines.length - 1].slice(0, -1)}…`
+-  }
++  if (!lines.length) return null
+   const measure = document.createElement('canvas').getContext('2d')
+   if (!measure) return null
+   measure.font = '34px sans-serif'
+@@ -500,7 +497,7 @@ function addShape(
+       && !/梯度|∇|gradient/i.test(String(shape.label))
+     if (!auxiliaryVector) {
+       const sprite = labelSprite(
+-        String(shape.label), THREE, labelScale, '#dbe4f0',
++        plainLabel(shape.label), THREE, labelScale, '#dbe4f0',
+       )
+       if (sprite) {
+         const to = triple(shape.to)
+@@ -560,32 +557,6 @@ function layoutLabels(THREE: typeof import('three')): void {
+       ppw: height / (2 * depth * Math.tan((camera!.fov * Math.PI / 180) / 2)),
+     }
+   }
+-  let figureRect: Rect | null = null
+-  if (figureBounds) {
+-    const corners: import('three').Vector3[] = []
+-    for (const x of [figureBounds.min.x, figureBounds.max.x]) {
+-      for (const y of [figureBounds.min.y, figureBounds.max.y]) {
+-        for (const z of [figureBounds.min.z, figureBounds.max.z]) {
+-          corners.push(new THREE.Vector3(x, y, z))
+-        }
+-      }
+-    }
+-    const projected = corners
+-      .map(project)
+-      .filter((item): item is ScreenPoint => item !== null)
+-    // 相机贴近/穿过包围盒时会有角点落在身后;用仍可见的角点估算主体区域,
+-    // 总比整块区域失效、标签重新压到曲面上好。
+-    if (projected.length >= 3) {
+-      const left = Math.min(...projected.map((item) => item.x))
+-      const right = Math.max(...projected.map((item) => item.x))
+-      const top = Math.min(...projected.map((item) => item.y))
+-      const bottom = Math.max(...projected.map((item) => item.y))
+-      figureRect = {
+-        x: left - 4, y: top - 4,
+-        w: right - left + 8, h: bottom - top + 8,
+-      }
+-    }
+-  }
+   const requests: ScreenLabelRequest[] = []
+   for (const entry of labelEntries) {
+     const point = project(entry.anchor)
+@@ -593,7 +564,7 @@ function layoutLabels(THREE: typeof import('three')): void {
+     const base = entry.sprite.userData.baseLabelScale as
+       { x: number; y: number } | undefined
+     if (base) {
+-      const maxPx = entry.role === 'note' ? 34 : entry.role === 'axis' ? 18 : 22
++      const maxPx = entry.role === 'note' ? 26 : entry.role === 'axis' ? 16 : 19
+       const screenHeight = base.y * point.ppw
+       const factor = screenHeight > maxPx ? maxPx / screenHeight : 1
+       entry.sprite.scale.set(base.x * factor, base.y * factor, 1)
+@@ -607,8 +578,11 @@ function layoutLabels(THREE: typeof import('three')): void {
+       height: Math.max(4, entry.sprite.scale.y * point.ppw),
+       priority: entry.role === 'note' ? 3 : entry.role === 'shape' ? 2 : 4,
+       fixed: entry.fixed,
+-      avoidRect: entry.role === 'axis' ? null : figureRect,
+-      avoidWeight: entry.role === 'note' ? 3 : 0.8,
++      // 只避让对象自己附近的一小块,不再用整幅场景包围盒把标签推到边缘。
++      avoidRect: entry.role === 'axis'
++        ? null
++        : { x: point.x - 8, y: point.y - 8, w: 16, h: 16 },
++      avoidWeight: entry.role === 'shape' ? 2 : entry.role === 'note' ? 1.2 : 0,
+     })
+   }
+   const placements = placeScreenLabels(requests, { width, height })
+@@ -671,11 +645,12 @@ async function boot(): Promise<void> {
+     light.position.set(4, 8, 6)
+     scene.add(light)
+     labelEntries = []
+-    figureBounds = null
+-    const unit = sceneUnit(props.spec.shapes)
+-    const labelScale = Math.max(1.6, Math.min(3.2, unit * 5))
++    // 3D 坐标轴由渲染器统一生成;旧缓存里模型自带的 axis 不再重复画。
++    const geometryShapes = props.spec.shapes.filter((shape) => shape.kind !== 'axis')
++    const unit = sceneUnit(geometryShapes)
++    const labelScale = Math.max(1.3, Math.min(2.6, unit * 4.2))
+     const shapeLabels: LabelEntry[] = []
+-    for (const shape of props.spec.shapes) {
++    for (const shape of geometryShapes) {
+       addShape(shape, THREE, root, unit, labelScale, shapeLabels)
+     }
+     labelEntries.push(...shapeLabels)
+@@ -703,9 +678,9 @@ async function boot(): Promise<void> {
+       })
+     })
+     props.spec.annotations.forEach((note, index) => {
+-      // 3D 里长文字直接贴图会叠在一起;用编号标记,正文放到画布下方图例。
+-      const text = String(note.text || '').trim()
+-      if (!text) return
++      // 3D 说明直接用短文字贴在对象旁,不再另设编号图例。
++      const text = plainLabel(note.text).trim()
++      if (!text || /^[xyz]\s*轴?$/i.test(text)) return
+       const sprite = annotationSprite(text, THREE, Math.max(1, unit * 2.4))
+       if (!sprite) return
+       const anchor = vec3([note.x, note.y, num(note.z)], THREE)
+@@ -720,7 +695,6 @@ async function boot(): Promise<void> {
+         leader: createLeaderLine(THREE, root),
+       })
+     })
+-    figureBounds = shapeBounds.isEmpty() ? null : shapeBounds.clone()
+     const bounds = shapeBounds.isEmpty() ? null : shapeBounds
+     if (bounds) {
+       const sphere = bounds.getBoundingSphere(new THREE.Sphere())
+@@ -773,7 +747,6 @@ async function boot(): Promise<void> {
+ function dispose(): void {
+   disposed = true
+   labelEntries = []
+-  figureBounds = null
+   observer?.disconnect()
+   observer = null
+   controls?.dispose()
+diff --git a/frontend/src/components/diagram/DiagramBlock.vue b/frontend/src/components/diagram/DiagramBlock.vue
+index eef76c8..45ea176 100644
+--- a/frontend/src/components/diagram/DiagramBlock.vue
++++ b/frontend/src/components/diagram/DiagramBlock.vue
+@@ -27,10 +27,10 @@ const GeoGebraKernelBlock = defineAsyncComponent({
+   },
+ })
+ 
+-const GeoGebraBlock = defineAsyncComponent({
+-  loader: () => import('@/components/diagram/GeoGebraBlock.vue'),
++const GeoGebra3DKernelBlock = defineAsyncComponent({
++  loader: () => import('@/components/diagram/GeoGebra3DKernelBlock.vue'),
+   delay: 200,
+-  timeout: 20000,
++  timeout: 30000,
+   loadingComponent: {
+     render: () => h('div', { class: 'diagram-loading' }),
+   },
+@@ -87,7 +87,7 @@ onBeforeUnmount(() => {
+     <figcaption v-if="spec.title" class="diagram-title">{{ spec.title }}</figcaption>
+     <GeoGebraKernelBlock v-if="isGeo2d && visible" :spec="spec" />
+     <div v-else-if="isGeo2d" class="diagram-loading" />
+-    <GeoGebraBlock v-else-if="isGeo3d && visible" :spec="spec" />
++    <GeoGebra3DKernelBlock v-else-if="isGeo3d && visible" :spec="spec" />
+     <div v-else-if="isGeo3d" class="diagram-loading" />
+     <Diagram3D v-else-if="is3d && visible" :spec="spec" />
+     <div v-else-if="is3d" class="diagram-loading" />
+diff --git a/frontend/src/components/diagram/DiagramSvg.vue b/frontend/src/components/diagram/DiagramSvg.vue
+index 4435983..aeb29d5 100644
+--- a/frontend/src/components/diagram/DiagramSvg.vue
++++ b/frontend/src/components/diagram/DiagramSvg.vue
+@@ -8,6 +8,7 @@ import {
+   figureRectOfShapes,
+   outwardSides,
+   placeLabels,
++  plainLabel,
+   shapeObstacleRects,
+   type LabelRequest,
+   type PlacedLabel,
+@@ -200,21 +201,23 @@ const shapeGeometry = computed(() => {
+       : rawY
+     requests.push({
+       id: `annotation-${index}`,
+-      text: note.text,
++      text: plainLabel(note.text),
+       anchorX,
+       anchorY,
+       role: 'annotation',
+-      fontSize: 12,
+-      maxWidth: 160,
+-      maxLines: 3,
++      fontSize: 10,
++      maxWidth: 130,
++      maxLines: 2,
+       priority: 3,
+-      figure,
+-      figureWeight: 2.5,
++      // 不再把整个 figure 当作障碍:那会把标注推到画布边缘。
++      // 曲线/线段由 obstacles 精确避让,标注就能贴着对象放。
++      figure: null,
++      figureWeight: 0,
+       preferred: outwardSides({ x: anchorX, y: anchorY }, figure),
+     })
+   })
+   shapes.forEach((shape, index) => {
+-    const label = String(shape.label || '').trim()
++    const label = plainLabel(shape.label)
+     if (!label) return
+     const anchor = labelAnchor(shape)
+     const fixed = shape.kind === 'axis' && /^[xyz]$/i.test(label)
+@@ -224,11 +227,11 @@ const shapeGeometry = computed(() => {
+       anchorX: anchor.x,
+       anchorY: anchor.y,
+       role: fixed ? 'axis' : 'shape',
+-      fontSize: 13,
+-      maxWidth: fixed ? 60 : 170,
++      fontSize: fixed ? 10 : 11,
++      maxWidth: fixed ? 50 : 140,
+       maxLines: fixed ? 1 : 2,
+       priority: fixed ? 5 : 2,
+-      figure: fixed ? null : figure,
++      figure: null,
+       figureWeight: 0,
+       preferred: fixed ? [] : outwardSides(anchor, figure),
+       fixed,
+@@ -273,7 +276,7 @@ const shapeGeometry = computed(() => {
+     if (label.role !== 'annotation') return true
+     const dx = label.x + label.w / 2 - label.anchorX
+     const dy = label.y + label.h / 2 - label.anchorY
+-    return Math.hypot(dx, dy) <= 160
++    return Math.hypot(dx, dy) <= 90
+   })
+   let minLeft = 0
+   let minTop = 0
+diff --git a/frontend/src/components/diagram/GeoGebra3DKernelBlock.vue b/frontend/src/components/diagram/GeoGebra3DKernelBlock.vue
+new file mode 100644
+index 0000000..59ed04c
+--- /dev/null
++++ b/frontend/src/components/diagram/GeoGebra3DKernelBlock.vue
+@@ -0,0 +1,71 @@
++<script setup lang="ts">
++/** GeoGebra 3D 隐藏内核:命令只用于精确构造,画面交给 Diagram3D。 */
++import { onBeforeUnmount, onMounted, ref } from 'vue'
++import type { DiagramSpec } from '@/utils/diagramSpec'
++import { parseDiagramSpec } from '@/utils/diagramSpec'
++import { t } from '@/utils/i18n'
++import { convertGeoGebra3DCommands } from '@/services/geogebra3dKernel'
++import { planDiagram } from '@/services/diagramService'
++import Diagram3D from '@/components/diagram/Diagram3D.vue'
++
++const props = defineProps<{ spec: DiagramSpec }>()
++const converted = ref<DiagramSpec | null>(null)
++const error = ref('')
++let disposed = false
++
++onMounted(async () => {
++  let next: DiagramSpec | null = null
++  try {
++    const result = await convertGeoGebra3DCommands(
++      props.spec.commands || [], props.spec.title,
++    )
++    if (disposed) return
++    next = result ? parseDiagramSpec(result) : null
++  } catch {
++    next = null
++  }
++  if (!next && !disposed) {
++    // 3D XML 转换失败时回退旧规划器,仍然用自己的 Three.js。
++    try {
++      const title = (props.spec.title || '').trim()
++      next = await planDiagram({
++        question: title || '根据当前讲解画一张三维图',
++        answer: title || (props.spec.commands || []).join('；'),
++      })
++    } catch {
++      next = null
++    }
++  }
++  if (disposed) return
++  if (!next) {
++    error.value = t('diagram.renderFail')
++    return
++  }
++  converted.value = next
++})
++
++onBeforeUnmount(() => { disposed = true })
++</script>
++
++<template>
++  <Diagram3D v-if="converted" :spec="converted" />
++  <div v-else-if="error" class="ggb3d-fallback">{{ error }}</div>
++  <div v-else class="ggb3d-loading" />
++</template>
++
++<style scoped>
++.ggb3d-loading,
++.ggb3d-fallback {
++  width: 100%;
++  max-width: 480px;
++  min-height: 340px;
++  margin: 0 auto;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  border: 1px dashed var(--line);
++  border-radius: 8px;
++  color: var(--text-dim);
++  font-size: 12px;
++}
++</style>
+diff --git a/frontend/src/services/geogebra3dKernel.ts b/frontend/src/services/geogebra3dKernel.ts
+new file mode 100644
+index 0000000..6f2a029
+--- /dev/null
++++ b/frontend/src/services/geogebra3dKernel.ts
+@@ -0,0 +1,183 @@
++/** 隐藏 GeoGebra 3D 内核:只计算实数三维构造,不显示 GeoGebra 画布。 */
++
++import type { DiagramSpec } from '@/utils/diagramSpec'
++import { diagramFromGeoGebra3DXml } from '@/utils/geogebra3dSpec'
++
++interface GgbApi {
++  evalCommand(command: string): boolean
++  getXML(): string
++  reset?(): void
++  newConstruction?(): void
++  setErrorDialogsActive?(active: boolean): void
++  setPerspective?(perspective: string): void
++  remove?(): void
++}
++
++interface GgbAppletCtor {
++  new (params: Record<string, unknown>, html5: boolean): { inject(id: string): void }
++}
++
++declare global {
++  interface Window {
++    __mgGgb3dKernel?: Promise<GgbApi>
++    __mgGgb3dLoader?: Promise<void>
++  }
++}
++
++const SCRIPT_URL = (import.meta.env.VITE_GEOGEBRA_BASE as string | undefined)
++  || 'https://www.geogebra.org/apps/deployggb.js'
++const HOST_ID = 'mg-ggb3d-kernel-host'
++const SCRIPT_TIMEOUT = 20000
++const APPLET_TIMEOUT = 30000
++
++function ggbCtor(): GgbAppletCtor | null {
++  return (window as unknown as { GGBApplet?: GgbAppletCtor }).GGBApplet || null
++}
++
++function loadScript(): Promise<void> {
++  if (ggbCtor()) return Promise.resolve()
++  if (window.__mgGgb3dLoader) return window.__mgGgb3dLoader
++  window.__mgGgb3dLoader = new Promise((resolve, reject) => {
++    const script = document.createElement('script')
++    script.src = SCRIPT_URL
++    script.async = true
++    const timer = window.setTimeout(() => reject(new Error('geogebra script timeout')),
++      SCRIPT_TIMEOUT)
++    script.onload = () => {
++      window.clearTimeout(timer)
++      resolve()
++    }
++    script.onerror = () => {
++      window.clearTimeout(timer)
++      reject(new Error('geogebra script failed'))
++    }
++    document.head.appendChild(script)
++  })
++  return window.__mgGgb3dLoader
++}
++
++function ensureHost(): string {
++  let host = document.getElementById(HOST_ID)
++  if (!host) {
++    host = document.createElement('div')
++    host.id = HOST_ID
++    Object.assign(host.style, {
++      position: 'fixed',
++      left: '-10000px',
++      top: '0',
++      width: '640px',
++      height: '480px',
++      overflow: 'hidden',
++      opacity: '0',
++      pointerEvents: 'none',
++    })
++    document.body.appendChild(host)
++  }
++  return HOST_ID
++}
++
++async function ensureKernel(): Promise<GgbApi> {
++  if (window.__mgGgb3dKernel) return window.__mgGgb3dKernel
++  window.__mgGgb3dKernel = (async () => {
++    await loadScript()
++    const Applet = ggbCtor()
++    if (!Applet) throw new Error('geogebra unavailable')
++    const hostId = ensureHost()
++    return await new Promise<GgbApi>((resolve, reject) => {
++      let settled = false
++      const timer = window.setTimeout(() => {
++        if (!settled) {
++          settled = true
++          reject(new Error('geogebra applet timeout'))
++        }
++      }, APPLET_TIMEOUT)
++      const params = {
++        appName: '3d',
++        width: 640,
++        height: 480,
++        showMenuBar: false,
++        showToolBar: false,
++        showAlgebraInput: false,
++        showAlgebraView: false,
++        showInputBar: false,
++        showResetIcon: false,
++        showZoomButtons: false,
++        enableLabelDrags: false,
++        enableRightClick: false,
++        language: 'zh-CN',
++        useBrowserForJS: false,
++        appletOnLoad(api: GgbApi) {
++          if (settled) return
++          settled = true
++          window.clearTimeout(timer)
++          try { api.setErrorDialogsActive?.(false) } catch { /* ignore */ }
++          try { api.setPerspective?.('T') } catch { /* ignore */ }
++          resolve(api)
++        },
++      }
++      new Applet(params, true).inject(hostId)
++    })
++  })()
++  try {
++    return await window.__mgGgb3dKernel
++  } catch (error) {
++    window.__mgGgb3dKernel = undefined
++    window.__mgGgb3dLoader = undefined
++    throw error
++  }
++}
++
++function resetKernel(): void {
++  window.__mgGgb3dKernel = undefined
++  window.__mgGgb3dLoader = undefined
++  document.getElementById(HOST_ID)?.remove()
++}
++
++function resetConstruction(api: GgbApi): void {
++  if (typeof api.newConstruction === 'function') api.newConstruction()
++  else if (typeof api.reset === 'function') api.reset()
++}
++
++async function runConversion(commands: string[]): Promise<DiagramSpec | null> {
++  if (!commands.length) return null
++  const api = await ensureKernel()
++  resetConstruction(api)
++  let ok = 0
++  for (const command of commands) {
++    try {
++      if (api.evalCommand(command)) ok += 1
++    } catch {
++      /* single command failure should not block others */
++    }
++  }
++  if (!ok) return null
++  return diagramFromGeoGebra3DXml(api.getXML())
++}
++
++let queue: Promise<unknown> = Promise.resolve()
++
++async function attempt(commands: string[]): Promise<DiagramSpec | null> {
++  try {
++    return await runConversion(commands)
++  } catch {
++    return null
++  }
++}
++
++export function convertGeoGebra3DCommands(
++  commands: string[],
++  title?: string,
++): Promise<DiagramSpec | null> {
++  const task = queue.then(async () => {
++    let spec = await attempt(commands)
++    if (!spec) {
++      resetKernel()
++      spec = await attempt(commands)
++    }
++    if (!spec) throw new Error('geogebra 3d conversion failed')
++    if (title) spec.title = title
++    return spec
++  })
++  queue = task.catch(() => undefined)
++  return task
++}
+diff --git a/frontend/src/utils/aboutContent.ts b/frontend/src/utils/aboutContent.ts
+index 2f4a912..2f18379 100644
+--- a/frontend/src/utils/aboutContent.ts
++++ b/frontend/src/utils/aboutContent.ts
+@@ -6,9 +6,9 @@
+  */
+ 
+ export const APP_NAME = 'MathGuide'
+-export const APP_VERSION = 'v1.17.0'
+-export const APP_STABLE_VERSION = 'v1.17.0'
+-export const APP_STABLE_DATE = '2026-11-01'
++export const APP_VERSION = 'v1.18.0'
++export const APP_STABLE_VERSION = 'v1.18.0'
++export const APP_STABLE_DATE = '2026-11-03'
+ export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
+ export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
+ export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
+@@ -51,6 +51,33 @@ export const RELEASES: ReleaseEntry[] = [
+     version: APP_VERSION,
+     date: APP_STABLE_DATE,
+     status: 'latest',
++    items: [
++      {
++        zh: '高等代数几何表示:子空间、线性映射、行列式、方程组、特征方向、内积、二次型、双线性、酉/辛、仿射/射影与 SVD 全部由语义层确定性构图。',
++        en: 'Geometric representation for higher algebra: subspaces, linear maps, determinants, systems, eigen-directions, inner products, quadratic and bilinear forms, unitary/symplectic, affine/projective geometry and SVD are built deterministically from semantic plans.',
++      },
++      {
++        zh: 'GeoGebra 3D 隐藏内核:点、线、段、向量、平面、球和多边形由离屏内核构造,页面仍由 Three.js 渲染;曲面/梯度继续走表达式采样。',
++        en: 'Hidden GeoGebra 3D kernel: points, lines, segments, vectors, planes, spheres and polygons are constructed offscreen, while Three.js still renders the page; surfaces and gradients keep the expression sampler.',
++      },
++      {
++        zh: '图解排版修正:标注贴到对象旁,实心多边形沿边摆放,3D 不再重复画模型自带的 x/y/z 轴,注释不加省略号。',
++        en: 'Diagram layout fixes: labels sit beside their objects, filled polygons place labels along their edges, 3D no longer duplicates model-supplied x/y/z axes, and annotations no longer use ellipses.',
++      },
++      {
++        zh: '3D 坐标校验:平面/圆必须给出中心坐标,缺坐标不再默认落到原点;题面 z=f(x,y) 与 z=c 可确定性补回曲面和高度。',
++        en: '3D coordinate validation: planes and circles must provide a center; missing coordinates no longer silently fall to the origin, and explicit z=f(x,y) plus z=c terms can deterministically restore the surface and height.',
++      },
++      {
++        zh: '高等代数路由与防错图:酉矩阵/辛矩阵等词进入语义层;语义计划失败时不退回自由作图,2×2 酉矩阵按题面矩阵直接算谱。',
++        en: 'Higher-algebra routing and error prevention: unitary/symplectic terms enter the semantic layer; semantic-plan failures no longer fall back to freehand drawing, and 2×2 unitary spectra are computed directly from the stated matrix.',
++      },
++    ],
++  },
++  {
++    version: 'v1.17.0',
++    date: '2026-11-01',
++    status: 'released',
+     items: [
+       {
+         zh: '论文工作台:研究档案每篇论文可点「继续」,左侧对话、右侧阅读器,第三栏展开论文结构与思维导图;页码与批注保存,聊天记录关闭即清空。',
+diff --git a/frontend/src/utils/diagramLabels.ts b/frontend/src/utils/diagramLabels.ts
+index c3c117d..ef730c9 100644
+--- a/frontend/src/utils/diagramLabels.ts
++++ b/frontend/src/utils/diagramLabels.ts
+@@ -77,6 +77,50 @@ export interface ScreenLabelPlacement {
+ const CJK_RE = /[　-鿿＀-￯]/
+ const ELLIPSIS = '…'
+ 
++const MATH_WORDS: Array<[RegExp, string]> = [
++  [/\^\s*\\dagger|\\dagger/g, '†'],
++  [/\^\s*\\top|\\top/g, 'ᵀ'],
++  [/\\lambda/g, 'λ'],
++  [/\\pi/g, 'π'],
++  [/\\theta/g, 'θ'],
++  [/\\sigma/g, 'σ'],
++  [/\\mu/g, 'μ'],
++  [/\\Delta/g, 'Δ'],
++  [/\\nabla/g, '∇'],
++  [/\\pm/g, '±'],
++  [/\\mp/g, '∓'],
++  [/\\times/g, '×'],
++  [/\\cdot/g, '·'],
++  [/\\sqrt/g, '√'],
++  [/\\infty/g, '∞'],
++  [/\\in\b/g, '∈'],
++  [/\\subset/g, '⊂'],
++  [/\\to\b/g, '→'],
++  [/\\mapsto/g, '↦'],
++  [/\\left|\\right/g, ''],
++]
++const SUBSCRIPTS: Record<string, string> = {
++  '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
++  '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
++  i: 'ᵢ', j: 'ⱼ', k: 'ₖ', n: 'ₙ', m: 'ₘ',
++}
++const SUPERSCRIPTS: Record<string, string> = {
++  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
++  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', T: 'ᵀ',
++}
++
++/** SVG/Three 标签是纯文本,先把常见 LaTeX 片段还原成可读符号。 */
++export function plainLabel(text: unknown): string {
++  let value = String(text ?? '').replace(/\$/g, '')
++  for (const [pattern, replacement] of MATH_WORDS) {
++    value = value.replace(pattern, replacement)
++  }
++  value = value.replace(/_([0-9ijknm])/g, (_, key: string) => SUBSCRIPTS[key] || key)
++  value = value.replace(/\^([0-9T])/g, (_, key: string) => SUPERSCRIPTS[key] || key)
++  value = value.replace(/…/g, '').replace(/\.{3,}/g, '')
++  return value.trim()
++}
++
+ export function charWidth(ch: string, fontSize: number): number {
+   if (CJK_RE.test(ch)) return fontSize
+   if (ch === ' ') return fontSize * 0.34
+@@ -91,9 +135,14 @@ export function measureTextWidth(text: string, fontSize: number): number {
+   return width
+ }
+ 
+-function truncateLine(text: string, maxWidth: number, fontSize: number): string {
++function truncateLine(
++  text: string,
++  maxWidth: number,
++  fontSize: number,
++  ellipsis = true,
++): string {
+   const chars = Array.from(text)
+-  const dotWidth = charWidth(ELLIPSIS, fontSize)
++  const dotWidth = ellipsis ? charWidth(ELLIPSIS, fontSize) : 0
+   let width = 0
+   let out = ''
+   for (const ch of chars) {
+@@ -102,7 +151,7 @@ function truncateLine(text: string, maxWidth: number, fontSize: number): string
+     out += ch
+     width += next
+   }
+-  return out.length < chars.length ? `${out}${ELLIPSIS}` : out
++  return out.length < chars.length && ellipsis ? `${out}${ELLIPSIS}` : out
+ }
+ 
+ export interface MeasuredLabel {
+@@ -134,6 +183,7 @@ export function measureLabel(request: LabelRequest): MeasuredLabel {
+           `${lines[maxLines - 1]}${chars.slice(index).join('')}`,
+           maxWidth,
+           fontSize,
++          request.role !== 'annotation',
+         )
+         return {
+           lines,
+@@ -315,6 +365,55 @@ function scoreCandidate(
+   return score
+ }
+ 
++function obstacleCandidates(
++  request: LabelRequest,
++  label: MeasuredLabel,
++  obstacles: Rect[],
++  gaps: number[],
++): Candidate[] {
++  const out: Candidate[] = []
++  const { anchorX: ax, anchorY: ay } = request
++  const { w, h } = label
++  for (const obstacle of obstacles) {
++    // 只对实心多边形这类大障碍补“贴边”候选;曲线采样的小方块不参与,
++    // 否则候选数量会爆炸,标签也会沿曲线乱跳。
++    if (obstacle.w < 24 && obstacle.h < 24) continue
++    for (const gap of gaps) {
++      const boxes: Array<[number, number, Side]> = [
++        [
++          clamp(ax, obstacle.x + w / 2, obstacle.x + obstacle.w - w / 2) - w / 2,
++          obstacle.y - gap - h,
++          'top',
++        ],
++        [
++          clamp(ax, obstacle.x + w / 2, obstacle.x + obstacle.w - w / 2) - w / 2,
++          obstacle.y + obstacle.h + gap,
++          'bottom',
++        ],
++        [
++          obstacle.x - gap - w,
++          clamp(ay, obstacle.y + h / 2, obstacle.y + obstacle.h - h / 2) - h / 2,
++          'left',
++        ],
++        [
++          obstacle.x + obstacle.w + gap,
++          clamp(ay, obstacle.y + h / 2, obstacle.y + obstacle.h - h / 2) - h / 2,
++          'right',
++        ],
++      ]
++      for (const [x, y, side] of boxes) {
++        const rect = { x, y, w, h }
++        out.push({
++          rect,
++          side,
++          distance: pointRectDistance(rect, ax, ay),
++        })
++      }
++    }
++  }
++  return out
++}
++
+ export function placeLabels(
+   requests: LabelRequest[],
+   obstacles: Rect[],
+@@ -326,7 +425,7 @@ export function placeLabels(
+   const placed: Rect[] = []
+   const sideUse: Record<Side, number> = { top: 0, bottom: 0, left: 0, right: 0 }
+   const byId = new Map<string, PlacedLabel>()
+-  const gaps = [8, 16, 26, 40, 60]
++  const gaps = [6, 12, 20, 30, 44, 60]
+ 
+   for (const request of ordered) {
+     const label = measureLabel(request)
+@@ -356,6 +455,7 @@ export function placeLabels(
+     }
+     const candidates = [
+       ...localCandidates(request, label, gaps),
++      ...obstacleCandidates(request, label, obstacles, [6, 12, 20]),
+       ...figureCandidates(request, label, [8, 16, 26, 40]),
+     ]
+     let best = candidates[0]
+@@ -488,7 +588,7 @@ export function placeScreenLabels(
+       })
+       continue
+     }
+-    const candidates = screenCandidates(request, [8, 16, 28, 44, 64, 88, 120])
++    const candidates = screenCandidates(request, [6, 12, 20, 30, 44, 60])
+     let best = candidates[0]
+     let bestScore = Number.POSITIVE_INFINITY
+     for (const candidate of candidates) {
+@@ -624,6 +724,17 @@ export function shapeObstacleRects(shapes: DiagramShape[], pad = 2): Rect[] {
+           out,
+           8,
+         )
++        // 多边形是实心填充;只避边会让文字落在填充内部,看起来像压在图形上。
++        const xs = points.map((point) => Number(point[0]) || 0)
++        const ys = points.map((point) => Number(point[1]) || 0)
++        const minX = Math.min(...xs) - pad
++        const minY = Math.min(...ys) - pad
++        out.push({
++          x: minX,
++          y: minY,
++          w: Math.max(...xs) - minX + pad,
++          h: Math.max(...ys) - minY + pad,
++        })
+       }
+     }
+   }
+diff --git a/frontend/src/utils/geogebra3dSpec.ts b/frontend/src/utils/geogebra3dSpec.ts
+new file mode 100644
+index 0000000..83ec454
+--- /dev/null
++++ b/frontend/src/utils/geogebra3dSpec.ts
+@@ -0,0 +1,343 @@
++/** GeoGebra 3D XML → 本系统 geometry3d。
++ *
++ * 只转换实数三维可精确构造对象:点、线、段、向量、平面、球、多边形。
++ * 参数曲面 `surfacecartesian3d` 不直接给网格,继续由旧构造器/采样处理。
++ */
++
++import type { DiagramShape, DiagramSpec } from './diagramSpec'
++
++interface Block {
++  attrs: Record<string, string>
++  body: string
++}
++
++function decode(value: string): string {
++  return value.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, code: string) => {
++    if (code[0] === '#') {
++      const hex = code[1]?.toLowerCase() === 'x'
++      const point = Number.parseInt(code.slice(hex ? 2 : 1), hex ? 16 : 10)
++      return Number.isFinite(point) ? String.fromCodePoint(point) : match
++    }
++    const named: Record<string, string> = {
++      amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
++    }
++    return named[code.toLowerCase()] ?? match
++  })
++}
++
++function attrs(source: string): Record<string, string> {
++  const out: Record<string, string> = {}
++  const re = /([A-Za-z_:][A-Za-z0-9_:.-]*)\s*=\s*"([^"]*)"/g
++  for (const match of source.matchAll(re)) out[match[1]] = decode(match[2])
++  return out
++}
++
++function blocks(source: string, tag: string): Block[] {
++  const out: Block[] = []
++  const re = new RegExp(
++    `<${tag}\\s+([^>]*?)(?:\\/>|>([\\s\\S]*?)<\\/${tag}>)`,
++    'g',
++  )
++  for (const match of source.matchAll(re)) {
++    out.push({ attrs: attrs(match[1] || ''), body: match[2] || '' })
++  }
++  return out
++}
++
++function construction(xml: string): string {
++  const start = xml.indexOf('<construction')
++  if (start < 0) return xml
++  const end = xml.indexOf('</construction>', start)
++  return end > start ? xml.slice(start, end) : xml.slice(start)
++}
++
++function args(body: string, tag: 'input' | 'output'): string[] {
++  const out: string[] = []
++  for (const block of blocks(body, tag)) {
++    const keys = Object.keys(block.attrs)
++      .filter((key) => /^a\d+$/.test(key))
++      .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)))
++    for (const key of keys) if (block.attrs[key]) out.push(block.attrs[key])
++  }
++  return out
++}
++
++function parsePoint(token: string): [number, number, number] | null {
++  const text = token.trim()
++  const match = text.match(
++    /^\(\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*,\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*,\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*\)$/,
++  )
++  if (!match) return null
++  const point: [number, number, number] = [
++    Number(match[1]), Number(match[2]), Number(match[3]),
++  ]
++  return point.every(Number.isFinite) ? point : null
++}
++
++function pointShape(point: [number, number, number], label = ''): DiagramShape {
++  const shape: DiagramShape = {
++    kind: 'point', x: point[0], y: point[1], z: point[2],
++  }
++  if (label) shape.label = label
++  return shape
++}
++
++function segmentShape(a: [number, number, number], b: [number, number, number],
++                      label = ''): DiagramShape {
++  const shape: DiagramShape = {
++    kind: 'segment', from: a.slice(), to: b.slice(),
++  }
++  if (label) shape.label = label
++  return shape
++}
++
++function vectorShape(a: [number, number, number], b: [number, number, number],
++                     label = ''): DiagramShape {
++  const shape: DiagramShape = {
++    kind: 'vector', from: a.slice(), to: b.slice(),
++  }
++  if (label) shape.label = label
++  return shape
++}
++
++function planeShape(center: [number, number, number],
++                    normal: [number, number, number], size: number,
++                    label = ''): DiagramShape | null {
++  const length = Math.hypot(...normal)
++  if (length < 1e-9) return null
++  const shape: DiagramShape = {
++    kind: 'plane',
++    x: center[0], y: center[1], z: center[2],
++    width: size, height: size,
++    normal: [normal[0] / length, normal[1] / length, normal[2] / length],
++  }
++  if (label) shape.label = label
++  return shape
++}
++
++function pointLabel(name: string): string {
++  return /^[A-Za-z][A-Za-z0-9_']{0,5}$/.test(name) ? name : ''
++}
++
++function bounds(points: Map<string, [number, number, number]>,
++                shapes: DiagramShape[]): { span: number } {
++  const values: number[] = []
++  for (const point of points.values()) values.push(...point.map(Math.abs))
++  for (const shape of shapes) {
++    if (shape.kind === 'point') {
++      values.push(Math.abs(Number(shape.x)), Math.abs(Number(shape.y)),
++        Math.abs(Number(shape.z)))
++    }
++  }
++  return { span: Math.max(2, ...values, 1) * 1.4 }
++}
++
++/** 3D 构造 XML → geometry3d;曲面/未知对象跳过。 */
++export function diagramFromGeoGebra3DXml(xml: string): DiagramSpec | null {
++  if (!xml || !xml.includes('<construction')) return null
++  const body = construction(xml)
++  const commands = new Map<string, { name: string; inputs: string[]; outputs: string[] }>()
++  for (const block of blocks(body, 'command')) {
++    const command = {
++      name: (block.attrs.name || '').toLowerCase(),
++      inputs: args(block.body, 'input'),
++      outputs: args(block.body, 'output'),
++    }
++    for (const output of command.outputs) {
++      if (!commands.has(output)) commands.set(output, command)
++    }
++  }
++  const elements = blocks(body, 'element')
++  const pointMap = new Map<string, [number, number, number]>()
++  for (const element of elements) {
++    if (element.attrs.type !== 'point3d' || !element.attrs.label) continue
++    const coords = blocks(element.body, 'coords')[0]
++    if (!coords) continue
++    const w = Number(coords.attrs.w ?? 1)
++    if (!Number.isFinite(w) || Math.abs(w) < 1e-9) continue
++    const point: [number, number, number] = [
++      Number(coords.attrs.x) / w,
++      Number(coords.attrs.y) / w,
++      Number(coords.attrs.z) / w,
++    ]
++    if (point.every((value) => Number.isFinite(value) && Math.abs(value) <= 1e4)) {
++      pointMap.set(element.attrs.label, point)
++    }
++  }
++  const resolve = (token: string): [number, number, number] | null => {
++    const key = token.trim()
++    return pointMap.get(key) || parsePoint(key)
++  }
++  const shapes: DiagramShape[] = []
++  const consumed = new Set<string>()
++  const seenPoints = new Set<string>()
++  const pendingLines: Array<{
++    origin: [number, number, number]
++    direction: [number, number, number]
++    label: string
++  }> = []
++  const pendingPlanes: Array<{
++    normal: [number, number, number]
++    constant: number
++    label: string
++  }> = []
++
++  const addPoint = (name: string, point: [number, number, number]): void => {
++    const key = point.map((value) => value.toFixed(6)).join('|')
++    if (seenPoints.has(key)) return
++    seenPoints.add(key)
++    shapes.push(pointShape(point, pointLabel(name)))
++  }
++
++  for (const element of elements) {
++    const name = element.attrs.label || ''
++    const type = (element.attrs.type || '').toLowerCase()
++    if (!name || consumed.has(name)) continue
++    const command = commands.get(name)
++    if (type === 'point3d') {
++      const point = pointMap.get(name)
++      if (point) addPoint(name, point)
++      continue
++    }
++    if (type === 'line3d') {
++      const points = (command?.inputs || []).map(resolve).filter(
++        (item): item is [number, number, number] => item !== null,
++      )
++      if (points.length >= 2) {
++        const direction: [number, number, number] = [
++          points[1][0] - points[0][0],
++          points[1][1] - points[0][1],
++          points[1][2] - points[0][2],
++        ]
++        pendingLines.push({ origin: points[0], direction, label: '' })
++        continue
++      }
++      const coords = blocks(element.body, 'coords')[0]
++      if (coords) {
++        pendingLines.push({
++          origin: [
++            Number(coords.attrs.ox), Number(coords.attrs.oy),
++            Number(coords.attrs.oz),
++          ],
++          direction: [
++            Number(coords.attrs.vx), Number(coords.attrs.vy),
++            Number(coords.attrs.vz),
++          ],
++          label: '',
++        })
++      }
++      continue
++    }
++    if (type === 'segment3d') {
++      const points = (command?.inputs || []).map(resolve).filter(
++        (item): item is [number, number, number] => item !== null,
++      )
++      if (points.length >= 2) shapes.push(segmentShape(points[0], points[1]))
++      continue
++    }
++    if (type === 'vector3d') {
++      const points = (command?.inputs || []).map(resolve).filter(
++        (item): item is [number, number, number] => item !== null,
++      )
++      if (points.length >= 2) {
++        shapes.push(vectorShape(points[0], points[1], pointLabel(name)))
++        continue
++      }
++      const start = blocks(element.body, 'startPoint')[0]
++      const coords = blocks(element.body, 'coords')[0]
++      const origin = start ? resolve(start.attrs.exp || '') : null
++      if (origin && coords) {
++        const end: [number, number, number] = [
++          origin[0] + Number(coords.attrs.x),
++          origin[1] + Number(coords.attrs.y),
++          origin[2] + Number(coords.attrs.z),
++        ]
++        shapes.push(vectorShape(origin, end, pointLabel(name)))
++      }
++      continue
++    }
++    if (type === 'plane3d') {
++      const coords = blocks(element.body, 'coords')[0]
++      if (!coords) continue
++      pendingPlanes.push({
++        normal: [
++          Number(coords.attrs.x), Number(coords.attrs.y),
++          Number(coords.attrs.z),
++        ],
++        constant: Number(coords.attrs.w ?? 0),
++        label: '',
++      })
++      continue
++    }
++    if (type === 'quadric') {
++      if (command?.name !== 'sphere') continue
++      const points = (command.inputs || []).map(resolve).filter(
++        (item): item is [number, number, number] => item !== null,
++      )
++      const center = points[0] || [0, 0, 0]
++      const radius = Number(command.inputs?.[1] ?? 0)
++      if (!Number.isFinite(radius) || radius <= 0) continue
++      shapes.push({
++        kind: 'sphere', x: center[0], y: center[1], z: center[2],
++        r: radius,
++      })
++      continue
++    }
++    if (type === 'polygon3d' || type === 'triangle' || type === 'quadrilateral') {
++      const points = (command?.inputs || []).map(resolve).filter(
++        (item): item is [number, number, number] => item !== null,
++      )
++      if (points.length < 3) continue
++      shapes.push({
++        kind: 'polygon', points: points.map((point) => point.slice()),
++      })
++      for (const output of command?.outputs || []) consumed.add(output)
++      continue
++    }
++    // surfacecartesian3d / list / numeric / text 不转,交给 fallback。
++  }
++
++  const span = bounds(pointMap, shapes).span
++  for (const pending of pendingLines) {
++    const length = Math.hypot(...pending.direction)
++    if (length < 1e-9) continue
++    const unit: [number, number, number] = [
++      pending.direction[0] / length,
++      pending.direction[1] / length,
++      pending.direction[2] / length,
++    ]
++    const start: [number, number, number] = [
++      pending.origin[0] - unit[0] * span,
++      pending.origin[1] - unit[1] * span,
++      pending.origin[2] - unit[2] * span,
++    ]
++    const end: [number, number, number] = [
++      pending.origin[0] + unit[0] * span,
++      pending.origin[1] + unit[1] * span,
++      pending.origin[2] + unit[2] * span,
++    ]
++    shapes.push(segmentShape(start, end, pending.label))
++  }
++  for (const pending of pendingPlanes) {
++    const lengthSq = pending.normal[0] ** 2 + pending.normal[1] ** 2
++      + pending.normal[2] ** 2
++    if (lengthSq < 1e-9) continue
++    const factor = -pending.constant / lengthSq
++    const center: [number, number, number] = [
++      pending.normal[0] * factor,
++      pending.normal[1] * factor,
++      pending.normal[2] * factor,
++    ]
++    const shape = planeShape(center, pending.normal, span * 2, pending.label)
++    if (shape) shapes.push(shape)
++  }
++  if (!shapes.length) return null
++  return {
++    schemaVersion: 1,
++    type: 'geometry3d',
++    nodes: [],
++    edges: [],
++    shapes,
++    annotations: [],
++  }
++}
