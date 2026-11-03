@@ -18,6 +18,7 @@ interface LabelEntry {
   role: 'shape' | 'note' | 'axis'
   anchor: import('three').Vector3
   sprite: import('three').Sprite
+  leader?: import('three').Line
   fixed?: boolean
 }
 
@@ -96,33 +97,69 @@ function labelSprite(
   return sprite
 }
 
-function markerSprite(
+/** 3D 注记直接显示短文字,不再用编号和下方图例把文字甩远。 */
+function annotationSprite(
   text: string,
   THREE: typeof import('three'),
-  scale: number,
+  scale = 1,
+  color = '#ffd166',
 ): import('three').Sprite | null {
+  const body = text.trim()
+  if (!body) return null
+  const maxChars = 14
+  const maxLines = 1
+  const chars = Array.from(body)
+  const lines: string[] = []
+  for (let index = 0; index < chars.length && lines.length < maxLines; index += maxChars) {
+    lines.push(chars.slice(index, index + maxChars).join(''))
+  }
+  if (chars.length > maxChars * maxLines && lines.length) {
+    lines[lines.length - 1] = `${lines[lines.length - 1].slice(0, -1)}…`
+  }
+  const measure = document.createElement('canvas').getContext('2d')
+  if (!measure) return null
+  measure.font = '34px sans-serif'
+  const textWidth = Math.max(...lines.map((line) => measure.measureText(line).width))
   const canvas = document.createElement('canvas')
+  canvas.width = Math.max(96, Math.min(640, Math.ceil(textWidth) + 28))
+  canvas.height = lines.length * 44 + 16
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
-  canvas.width = 96
-  canvas.height = 96
-  // 编号同样不加底板,只留描边数字。
-  ctx.font = 'bold 52px sans-serif'
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
+  ctx.font = '34px sans-serif'
   ctx.lineWidth = 7
-  ctx.strokeStyle = 'rgba(5, 10, 18, 0.92)'
-  ctx.strokeText(text.slice(0, 3), 48, 50)
-  ctx.fillStyle = '#8be9fd'
-  ctx.fillText(text.slice(0, 3), 48, 50)
+  ctx.strokeStyle = 'rgba(5, 10, 18, 0.94)'
+  ctx.fillStyle = color
+  lines.forEach((line, index) => {
+    const baseline = 36 + index * 44
+    ctx.strokeText(line, 14, baseline)
+    ctx.fillText(line, 14, baseline)
+  })
   const texture = new THREE.CanvasTexture(canvas)
   const material = new THREE.SpriteMaterial({
     map: texture, transparent: true, depthTest: false,
   })
   const sprite = new THREE.Sprite(material)
-  sprite.scale.set(scale, scale, 1)
+  const worldHeight = 0.5 * scale
+  sprite.scale.set(worldHeight * canvas.width / canvas.height, worldHeight, 1)
   sprite.renderOrder = 20
   return sprite
+}
+
+/** 注记被排到外围时用细引线指回对象;引线不计入取景包围盒。 */
+function createLeaderLine(
+  THREE: typeof import('three'),
+  root: import('three').Object3D,
+): import('three').Line {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setFromPoints([new THREE.Vector3(), new THREE.Vector3()])
+  const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
+    color: 0xffd166, transparent: true, opacity: 0.42, depthTest: false,
+  }))
+  line.renderOrder = 15
+  line.visible = false
+  line.userData.labelDecoration = true
+  root.add(line)
+  return line
 }
 
 /** 语义配色:曲面、梯度、方向、关键点尽量拉开色相,不靠相近青色区分。 */
@@ -561,7 +598,7 @@ function layoutLabels(THREE: typeof import('three')): void {
     const base = entry.sprite.userData.baseLabelScale as
       { x: number; y: number } | undefined
     if (base) {
-      const maxPx = entry.role === 'note' ? 22 : entry.role === 'axis' ? 18 : 22
+      const maxPx = entry.role === 'note' ? 34 : entry.role === 'axis' ? 18 : 22
       const screenHeight = base.y * point.ppw
       const factor = screenHeight > maxPx ? maxPx / screenHeight : 1
       entry.sprite.scale.set(base.x * factor, base.y * factor, 1)
@@ -587,15 +624,27 @@ function layoutLabels(THREE: typeof import('three')): void {
     const placement = byId.get(entry.id)
     const point = project(entry.anchor)
     if (!placement || !point) continue
-    // 排不下时宁可少一个形状标签,也不能让文字压在曲面上。
-    const hide = entry.role === 'shape'
-      && (placement.overlapsAvoid || placement.overlapsLabel)
+    // 排不下时宁可少一个标签,也不能让文字压在图形或其他标签上。
+    const hide = (entry.role === 'shape'
+      && (placement.overlapsAvoid || placement.overlapsLabel))
+      || (entry.role === 'note' && placement.overlapsLabel)
     entry.sprite.visible = !hide
     const dx = (placement.centerX - point.x) / point.ppw
     const dy = -(placement.centerY - point.y) / point.ppw
     entry.sprite.position.copy(entry.anchor)
       .addScaledVector(right, dx)
       .addScaledVector(up, dy)
+    if (entry.leader) {
+      const distance = Math.hypot(
+        placement.centerX - point.x, placement.centerY - point.y,
+      )
+      entry.leader.visible = !hide && distance > 4
+      if (entry.leader.visible) {
+        const geometry = entry.leader.geometry as import('three').BufferGeometry
+        geometry.setFromPoints([entry.anchor, entry.sprite.position])
+        geometry.computeBoundingSphere()
+      }
+    }
   }
 }
 
@@ -660,7 +709,9 @@ async function boot(): Promise<void> {
     })
     props.spec.annotations.forEach((note, index) => {
       // 3D 里长文字直接贴图会叠在一起;用编号标记,正文放到画布下方图例。
-      const sprite = markerSprite(String(index + 1), THREE, Math.max(0.5, unit * 1.8))
+      const text = String(note.text || '').trim()
+      if (!text) return
+      const sprite = annotationSprite(text, THREE, Math.max(1, unit * 2.4))
       if (!sprite) return
       const anchor = vec3([note.x, note.y, num(note.z)], THREE)
       sprite.position.copy(anchor)
@@ -671,6 +722,7 @@ async function boot(): Promise<void> {
         role: 'note',
         anchor,
         sprite,
+        leader: createLeaderLine(THREE, root),
       })
     })
     figureBounds = shapeBounds.isEmpty() ? null : shapeBounds.clone()
@@ -765,11 +817,6 @@ onBeforeUnmount(dispose)
     <div ref="host" class="diagram-3d">
       <p v-if="error" class="diagram-3d-error">{{ error }}</p>
     </div>
-    <ol v-if="props.spec.annotations.length" class="diagram-3d-legend">
-      <li v-for="(note, index) in props.spec.annotations" :key="index">
-        <span class="diagram-3d-num">{{ index + 1 }}</span>{{ note.text }}
-      </li>
-    </ol>
   </div>
 </template>
 
@@ -809,23 +856,5 @@ onBeforeUnmount(dispose)
   justify-content: center;
   color: var(--text-dim);
   font-size: 11px;
-}
-
-.diagram-3d-legend {
-  margin: 0;
-  padding: 6px 10px 8px 12px;
-  list-style: none;
-  border-top: 1px solid var(--line);
-  color: var(--text-dim);
-  font-size: 10px;
-  line-height: 1.6;
-}
-
-.diagram-3d-num {
-  display: inline-block;
-  min-width: 15px;
-  margin-right: 5px;
-  color: var(--cyan);
-  font-family: var(--font-tech);
 }
 </style>

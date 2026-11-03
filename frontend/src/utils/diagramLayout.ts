@@ -1,6 +1,7 @@
 /** 图解布局:确定性坐标,不依赖 DOM,不做物理动画。 */
 import type { DiagramSpec } from './diagramSpec'
 import {
+  overlapArea,
   placeLabels,
   type LabelRequest,
   type Rect,
@@ -181,9 +182,21 @@ function placeEdgeLabels(
   const byId = new Map(placed.map((label) => [label.id, label]))
   let finalWidth = width
   let finalHeight = height
+  const keptLabels: Rect[] = []
   const nextEdges = edges.map((edge, index) => {
     const label = byId.get(`edge-${index}`)
     if (!label) return edge
+    // 节点框画在边标签之后;若标签仍落进节点,文字会被节点底色盖住。
+    const covered = nodes.some((node) => overlapArea(label, {
+      x: node.x - 2, y: node.y - 2, w: node.w + 4, h: node.h + 4,
+    }) > 0)
+    const overlapsLabel = keptLabels.some(
+      (other) => overlapArea(label, other) > 0,
+    )
+    if (covered || overlapsLabel) {
+      return { ...edge, label: undefined, labelLines: undefined }
+    }
+    keptLabels.push(label)
     finalWidth = Math.max(finalWidth, label.x + label.w + 8)
     finalHeight = Math.max(finalHeight, label.y + label.h + 8)
     return {
