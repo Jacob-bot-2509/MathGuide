@@ -8,6 +8,8 @@ export type DiagramType =
   | 'plot2d'
   | 'geometry3d'
   | 'surface3d'
+  | 'geogebra2d'
+  | 'geogebra3d'
 
 export interface DiagramNode {
   id: string
@@ -49,6 +51,8 @@ export interface DiagramSpec {
   edges: DiagramEdge[]
   shapes: DiagramShape[]
   annotations: DiagramAnnotation[]
+  /** GeoGebra 引擎:模型生成的命令数组(已由后端白名单校验) */
+  commands?: string[]
   view?: DiagramView
 }
 
@@ -64,6 +68,7 @@ export type MessageBlock =
 
 const TYPES = new Set<DiagramType>([
   'tree', 'relation', 'flow', 'geometry2d', 'plot2d', 'geometry3d', 'surface3d',
+  'geogebra2d', 'geogebra3d',
 ])
 const MAX_NODES = 40
 const MAX_EDGES = 80
@@ -72,6 +77,29 @@ const MAX_ANNOTATIONS = 40
 const MAX_POINTS = 2000
 const MAX_DIAGRAMS = 2
 const MAX_TOTAL_POINTS = 8000
+const GEO_MAX_COMMANDS = 30
+const GEO_MAX_COMMAND_CHARS = 200
+const GEO_FORBIDDEN = [
+  'execute', 'javascript', 'setvalue', 'startanimation', 'play(',
+  'delete', 'rename', 'setperspective', 'zoomin', 'zoomout', 'pan(',
+  'image', 'text(', 'text[', 'http', '://', 'export', 'save', 'open(', 'load(',
+  'script', 'setactiveview', 'setcoordsystem',
+]
+
+function sanitizeGeoCommands(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > GEO_MAX_COMMANDS) return null
+  const out: string[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string') return null
+    const command = item.trim()
+    if (!command || command.length > GEO_MAX_COMMAND_CHARS) return null
+    if (command.includes('\n') || command.includes('\r') || command.includes(';')) return null
+    const lowered = command.toLowerCase()
+    if (GEO_FORBIDDEN.some((token) => lowered.includes(token))) return null
+    out.push(command)
+  }
+  return out
+}
 const MAX_COORD = 1e4
 const DIAGRAM_SCHEMA_VERSION = 1
 
@@ -187,6 +215,18 @@ export function parseDiagramSpec(raw: unknown): DiagramSpec | null {
   if (!TYPES.has(type)) return null
   const version = Number(item.schemaVersion)
   if (Number.isFinite(version) && version > DIAGRAM_SCHEMA_VERSION) return null
+
+  if (type === 'geogebra2d' || type === 'geogebra3d') {
+    const commands = sanitizeGeoCommands(item.commands)
+    if (!commands) return null
+    const spec: DiagramSpec = {
+      schemaVersion: DIAGRAM_SCHEMA_VERSION,
+      type, nodes: [], edges: [], shapes: [], annotations: [], commands,
+    }
+    const geoTitle = text(item.title, 200)
+    if (geoTitle) spec.title = geoTitle
+    return spec
+  }
 
   const nodes: DiagramNode[] = []
   const nodeIds = new Set<string>()

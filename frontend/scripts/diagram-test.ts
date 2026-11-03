@@ -15,6 +15,10 @@ import {
 import { layoutFlow, layoutRelation, layoutTree } from '../src/utils/diagramLayout'
 import { diagramSuppressed, needsDiagram } from '../src/utils/diagramIntent'
 import {
+  compileExpression,
+  diagramFromGeoGebraXml,
+} from '../src/utils/geogebraSpec'
+import {
   measureLabel,
   measureTextWidth,
   overlapArea,
@@ -347,6 +351,54 @@ check('用三维图也算恢复画图', needsDiagram('用三维图讲讲梯度',
 check('不画思维导图但改画三维图不算停止', !diagramSuppressed('不要画思维导图，画三维图'))
 check('别画了也算停止', diagramSuppressed('别画了，用文字说'))
 
+// GeoGebra 隐藏内核:只解析构造结果,最终仍转成我们的 DiagramSpec。
+const square = compileExpression('x^2')
+check('GeoGebra 表达式平方', square?.(3) === 9)
+const trig = compileExpression('sin(pi/2)')
+check('GeoGebra 表达式三角函数', trig !== null && Math.abs(trig(0) - 1) < 1e-9)
+const implicit = compileExpression('2x+1')
+check('GeoGebra 表达式隐式乘法', implicit?.(2) === 5)
+check('GeoGebra 表达式拒绝命令注入', compileExpression('Execute("x")') === null)
+
+const ggbXml = `<geogebra><construction>
+<expression label="f" exp="f(x) = x^(2)" type="function"/>
+<element type="function" label="f"><show object="true"/></element>
+<expression label="A" exp="(1, 1)" type="point"/>
+<element type="point" label="A"><coords x="1" y="1" z="1"/></element>
+<expression label="B" exp="(2, 3)" type="point"/>
+<element type="point" label="B"><coords x="2" y="3" z="1"/></element>
+<expression label="C" exp="(3, 1)" type="point"/>
+<element type="point" label="C"><coords x="3" y="1" z="1"/></element>
+<command name="Tangent"><input a0="A" a1="f"/><output a0="t"/></command>
+<element type="line" label="t"><coords x="-2" y="1" z="1"/></element>
+<command name="Segment"><input a0="A" a1="B"/><output a0="s"/></command>
+<element type="segment" label="s"><coords x="-2" y="1" z="1"/></element>
+<command name="Circle"><input a0="(0, 0)" a1="2"/><output a0="c"/></command>
+<element type="conic" label="c">
+  <matrix A0="1" A1="1" A2="-4" A3="0" A4="0" A5="0"/>
+</element>
+<command name="Polygon">
+  <input a0="A" a1="B" a2="C"/>
+  <output a0="p" a1="c_1" a2="a" a3="b"/>
+</command>
+<element type="polygon" label="p"><show object="true"/></element>
+<element type="segment" label="c_1"><coords x="-2" y="1" z="1"/></element>
+<element type="segment" label="a"><coords x="2" y="1" z="-7"/></element>
+<element type="segment" label="b"><coords x="0" y="-2" z="2"/></element>
+</construction></geogebra>`
+const ggbSpec = diagramFromGeoGebraXml(ggbXml)
+check('GeoGebra XML 转为自绘图解', ggbSpec?.type === 'plot2d'
+  && ggbSpec.shapes.some((shape) => shape.kind === 'curve')
+  && ggbSpec.shapes.some((shape) => shape.kind === 'point')
+  && ggbSpec.shapes.some((shape) => shape.kind === 'circle')
+  && ggbSpec.shapes.some((shape) => shape.kind === 'polygon'))
+check('GeoGebra 切线转成短切线', ggbSpec?.shapes.some(
+  (shape) => shape.kind === 'segment' && shape.label === '切线',
+) === true)
+check('GeoGebra 多边形不重复画辅助边', ggbSpec?.shapes.filter(
+  (shape) => shape.kind === 'segment' && !shape.label,
+).length === 1)
+
 // 图在文字上方时,正文里的“如下图”必须改成“如上图”;反之亦然。
 const afterFigure = splitMessageBlocks('前言\n\n如下图，曲线有两支。', [{
   id: 'd3', anchorIndex: 3, spec: relation!,
@@ -363,6 +415,27 @@ const beforeFigureText = beforeFigure[0]
 check('图在下方:上图改为下图',
   beforeFigureText.kind === 'text' && beforeFigureText.text.includes('如下图'),
   beforeFigureText.kind === 'text' ? beforeFigureText.text : '')
+
+// GeoGebra 命令 spec:白名单、上限、类型
+const geo2d = parseDiagramSpec({
+  type: 'geogebra2d',
+  title: '切线',
+  commands: ['f(x)=x^2', 'A=(1,1)', 't=Tangent(A,f)'],
+})
+check('GeoGebra 2D spec 可解析',
+  geo2d?.type === 'geogebra2d' && geo2d?.commands?.length === 3)
+check('GeoGebra 危险命令拒绝',
+  parseDiagramSpec({ type: 'geogebra2d', commands: ['Execute("x")'] }) === null)
+check('GeoGebra 命令数量上限',
+  parseDiagramSpec({
+    type: 'geogebra2d',
+    commands: Array.from({ length: 31 }, () => 'A=(1,1)'),
+  }) === null)
+check('GeoGebra 3D 曲面命令可解析',
+  parseDiagramSpec({
+    type: 'geogebra3d',
+    commands: ['s=Surface(u,v,u^2+v^2,u,-2,2,v,-2,2)'],
+  })?.type === 'geogebra3d')
 
 if (failed.length) {
   console.error('图解协议自测失败:')

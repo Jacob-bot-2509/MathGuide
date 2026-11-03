@@ -234,6 +234,36 @@ const shapeGeometry = computed(() => {
       fixed,
     })
   })
+  const hasAxisLabel = shapes.some((shape) => (
+    shape.kind === 'axis' && /^[xy]$/i.test(String(shape.label || '').trim())
+  ))
+  if (spec.type === 'plot2d' && !hasAxisLabel) {
+    // 自动坐标轴也要有 x/y 名称;放进同一套占位器,避免和曲线标签打架。
+    requests.push({
+      id: 'axis-label-x',
+      text: 'x',
+      anchorX: tx(b.maxX) + 8,
+      anchorY: ty(0) + 10,
+      role: 'axis',
+      fontSize: 10,
+      maxWidth: 24,
+      maxLines: 1,
+      priority: 6,
+      fixed: true,
+    })
+    requests.push({
+      id: 'axis-label-y',
+      text: 'y',
+      anchorX: tx(0) - 8,
+      anchorY: ty(b.maxY) - 8,
+      role: 'axis',
+      fontSize: 10,
+      maxWidth: 24,
+      maxLines: 1,
+      priority: 6,
+      fixed: true,
+    })
+  }
   // 虚拟画布给外围标注留空间;放完再收紧,避免文字被 viewBox 裁掉。
   const placed = placeLabels(requests, obstacles, {
     x: -240, y: -180, w: width + 480, h: height + 360,

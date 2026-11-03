@@ -1062,3 +1062,52 @@ def test_axis_labels_pinned_to_their_equations():
     assert notes["垂直渐近线 x=0"]["x"] == 0.0
     # "y = 1/x" 不能被当成 "y = 1"
     assert notes["y = 1/x 的图像"]["y"] == 5.0
+
+
+# ---------- GeoGebra 引擎 ----------
+
+def test_geogebra_validator_whitelist():
+    ok = rd.validate_geogebra({
+        "type": "geogebra2d",
+        "commands": ["f(x)=x^2", "A=(1,1)", "t=Tangent(A,f)"],
+    })
+    assert ok is not None and ok["commands"][0] == "f(x)=x^2"
+
+    assert rd.validate_geogebra(
+        {"type": "geogebra2d", "commands": ['Execute("x")']}) is None
+    assert rd.validate_geogebra(
+        {"type": "geogebra2d", "commands": ["f(x)=x^2"] * 31}) is None
+    assert rd.validate_geogebra(
+        {"type": "geogebra2d", "commands": ["SetColor(f,1,2,3)"]}) is None
+    assert rd.validate_geogebra({
+        "type": "geogebra3d",
+        "commands": ["s=Surface(u,v,u^2+v^2,u,-2,2,v,-2,2)"],
+    }) is not None
+    assert rd.validate_geogebra({
+        "type": "geogebra2d", "commands": ["l: y=x"],
+    }) is not None
+
+
+def test_plan_geogebra_defers_3d_to_legacy(monkeypatch):
+    """3D 继续走旧规划器 + Three.js,不在页面回退成 GeoGebra 画布。"""
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+    assert asyncio.run(rd.plan_geogebra(
+        "用三维图讲讲曲面 z=x^2+y^2 的梯度", "解释")) is None
+
+
+def test_plan_diagram_auto_falls_back_to_legacy(monkeypatch):
+    monkeypatch.setenv("MG_DIAGRAM_ENGINE", "geogebra")
+    sentinel = {"type": "plot2d", "shapes": [{"kind": "point", "x": 0, "y": 0}],
+                "nodes": [], "edges": [], "annotations": []}
+
+    async def no_geo(question, before, role="main"):
+        return None
+
+    async def legacy(*args, **kwargs):
+        return sentinel
+
+    monkeypatch.setattr(rd, "plan_geogebra", no_geo)
+    monkeypatch.setattr(rd, "plan_diagram", legacy)
+    got = asyncio.run(rd.plan_diagram_auto(
+        "画出抛物线", "y=x^2", [], "plot2d", strict=False))
+    assert got is sentinel

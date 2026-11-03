@@ -7,9 +7,37 @@ import DiagramSvg from '@/components/diagram/DiagramSvg.vue'
 
 const props = defineProps<{ spec: DiagramSpec }>()
 const is3d = computed(() => ['geometry3d', 'surface3d'].includes(props.spec.type))
-const visible = ref(!is3d.value)
+const isGeo2d = computed(() => props.spec.type === 'geogebra2d')
+const isGeo3d = computed(() => props.spec.type === 'geogebra3d')
+const isGeo = computed(() => isGeo2d.value || isGeo3d.value)
+const lazy = computed(() => is3d.value || isGeo.value)
+const visible = ref(!lazy.value)
 const host = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
+
+const GeoGebraKernelBlock = defineAsyncComponent({
+  loader: () => import('@/components/diagram/GeoGebraKernelBlock.vue'),
+  delay: 200,
+  timeout: 30000,
+  loadingComponent: {
+    render: () => h('div', { class: 'diagram-loading' }),
+  },
+  errorComponent: {
+    render: () => h('div', { class: 'diagram-fallback' }, t('diagram.renderFail')),
+  },
+})
+
+const GeoGebraBlock = defineAsyncComponent({
+  loader: () => import('@/components/diagram/GeoGebraBlock.vue'),
+  delay: 200,
+  timeout: 20000,
+  loadingComponent: {
+    render: () => h('div', { class: 'diagram-loading' }),
+  },
+  errorComponent: {
+    render: () => h('div', { class: 'diagram-fallback' }, t('diagram.renderFail')),
+  },
+})
 
 const Diagram3D = defineAsyncComponent({
   loader: () => import('@/components/diagram/Diagram3D.vue'),
@@ -25,7 +53,7 @@ const Diagram3D = defineAsyncComponent({
 })
 
 onMounted(() => {
-  if (!is3d.value) return
+  if (!lazy.value) return
   if (typeof IntersectionObserver === 'undefined' || !host.value) {
     visible.value = true
     return
@@ -49,7 +77,11 @@ onBeforeUnmount(() => {
 <template>
   <figure ref="host" class="diagram-block">
     <figcaption v-if="spec.title" class="diagram-title">{{ spec.title }}</figcaption>
-    <Diagram3D v-if="is3d && visible" :spec="spec" />
+    <GeoGebraKernelBlock v-if="isGeo2d && visible" :spec="spec" />
+    <div v-else-if="isGeo2d" class="diagram-loading" />
+    <GeoGebraBlock v-else-if="isGeo3d && visible" :spec="spec" />
+    <div v-else-if="isGeo3d" class="diagram-loading" />
+    <Diagram3D v-else-if="is3d && visible" :spec="spec" />
     <div v-else-if="is3d" class="diagram-loading" />
     <DiagramSvg v-else :spec="spec" />
   </figure>

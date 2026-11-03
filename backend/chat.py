@@ -854,7 +854,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                     scheduled_diagrams += 1
                     # 用户没指定类型时不让标记类型绑架选型:交给权重 + 规划器判断 2D/3D。
                     planned_kind = explicit_requested or ""
-                    task = asyncio.create_task(research_diagrams.plan_diagram(
+                    task = asyncio.create_task(research_diagrams.plan_diagram_auto(
                         diagram_question or prompt, "".join(answer),
                         excerpt_items, planned_kind, "main", strict=False,
                         local_hint=True))
@@ -897,7 +897,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                         anchor_index=segment.anchor_index)
                     auto_context[marker.anchor_id] = segment.text
                     kept_anchors.append(marker.anchor_index)
-                    task = asyncio.create_task(research_diagrams.plan_diagram(
+                    task = asyncio.create_task(research_diagrams.plan_diagram_auto(
                         diagram_question or prompt, segment.text,
                         excerpt_items, segment.kind, "main", strict=False))
                     diagram_tasks.append((marker, task))

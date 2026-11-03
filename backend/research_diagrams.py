@@ -30,6 +30,83 @@ _MAX_SURFACE_GRID = 41
 _CURVE_SAMPLES = 400
 _TYPES = {"tree", "relation", "flow", "geometry2d", "plot2d",
           "geometry3d", "surface3d"}
+
+# ---- GeoGebra 引擎(非商用嵌入)----
+GEO_TYPES = {"geogebra2d", "geogebra3d"}
+GEO_MAX_COMMANDS = 30
+GEO_MAX_COMMAND_CHARS = 200
+_GEO_FORBIDDEN = (
+    "execute", "javascript", "setvalue", "startanimation", "play(",
+    "delete", "rename", "setperspective", "zoomin", "zoomout", "pan(",
+    "image", "text(", "text[", "http", "://", "export", "save", "open(", "load(",
+    "script", "setactiveview", "setcoordsystem",
+)
+_GEO_COMMANDS_2D = {
+    "point", "segment", "line", "ray", "vector", "circle", "ellipse",
+    "polygon", "curve", "function", "tangent", "intersect", "derivative",
+    "integral", "root", "extremum", "solve", "nsolve", "angle", "distance",
+    "midpoint", "perpendicular", "parallel", "normal", "intersection",
+}
+_GEO_COMMANDS_3D = _GEO_COMMANDS_2D | {
+    "surface", "plane", "sphere", "cube", "cylinder", "cone", "prism",
+    "pyramid", "tetrahedron", "octahedron", "icosahedron", "dodecahedron",
+    "curve", "polygon", "intersect",
+}
+
+
+def _geo_command_name(command: str) -> str | None:
+    # 函数定义 f(x)=... 不是命令调用,交给简单赋值分支处理
+    if re.match(r"^[A-Za-z]\w*\s*\([^)]*\)\s*=", command):
+        return None
+    match = re.match(r"^(?:[A-Za-z]\w*\s*=\s*)?([A-Za-z]\w*)\s*\(", command)
+    return match.group(1).lower() if match else None
+
+
+def validate_geogebra(raw: object) -> dict | None:
+    """校验模型生成的 GeoGebra 命令:只允许白名单命令与简单赋值/函数定义。"""
+    if not isinstance(raw, dict):
+        return None
+    kind = raw.get("type")
+    if kind not in GEO_TYPES:
+        return None
+    commands = raw.get("commands")
+    if not isinstance(commands, list) or not 1 <= len(commands) <= GEO_MAX_COMMANDS:
+        return None
+    allowed = _GEO_COMMANDS_2D if kind == "geogebra2d" else _GEO_COMMANDS_3D
+    clean: list[str] = []
+    for item in commands:
+        if not isinstance(item, str):
+            return None
+        command = item.strip()
+        if not command or len(command) > GEO_MAX_COMMAND_CHARS:
+            return None
+        if "\n" in command or "\r" in command or ";" in command:
+            return None
+        lowered = command.lower()
+        if any(token in lowered for token in _GEO_FORBIDDEN):
+            return None
+        name = _geo_command_name(command)
+        if name is not None:
+            if name not in allowed:
+                return None
+        elif not re.match(
+                r"^[A-Za-z]\w*\s*(?:\([^)]*\))?\s*(?::=|:|=)\s*\S",
+                command):
+            return None
+        clean.append(command)
+    result: dict = {
+        "schemaVersion": DIAGRAM_SCHEMA_VERSION,
+        "type": kind,
+        "commands": clean,
+        "nodes": [],
+        "edges": [],
+        "shapes": [],
+        "annotations": [],
+    }
+    title = _text(raw.get("title"), 200)
+    if title:
+        result["title"] = title
+    return result
 DIAGRAM_SCHEMA_VERSION = 1
 _SHAPES = {"point", "segment", "line", "vector", "circle", "polygon",
            "curve", "axis", "plane", "sphere", "box", "cone", "cylinder",
@@ -1807,6 +1884,14 @@ def _diagram_summary(diagram: dict) -> str:
     ][:4]
     if exprs:
         lines.append("表达式:" + "、".join(exprs))
+    commands = [
+        _text(item, 160)
+        for item in diagram.get("commands") or []
+        if isinstance(item, str)
+    ][:12]
+    if commands:
+        # GeoGebra 图没有 shapes,只给类型/标题会让质检员误判为空图。
+        lines.append("构造命令:" + "；".join(commands))
     notes = [
         _text(item.get("text"), 80)
         for item in diagram.get("annotations") or []
@@ -1850,6 +1935,76 @@ async def verify_diagram(question: str, context: str, diagram: dict,
         return None
     ok = data.get("ok")
     return ok if isinstance(ok, bool) else None
+
+
+_GEO_PLAN_SYSTEM = """你是 GeoGebra 绘图规划器。只输出一个 JSON 对象，不要 Markdown、不要解释：
+{"type":"geogebra2d"或"geogebra3d","title":"中文标题","commands":["命令1","命令2"]}
+规则：
+1. 2D 用 geogebra2d，3D/曲面/空间用 geogebra3d；一条命令一行，最多 12 条。
+2. 只用这些命令：
+   2D：Point, Segment, Line, Vector, Circle, Ellipse, Polygon, Curve, Tangent, Intersect, Derivative, Integral, Root, Extremum, Solve
+   3D：Point, Segment, Vector, Line, Polygon, Plane, Sphere, Cube, Cylinder, Cone, Prism, Pyramid, Surface, Curve, Intersect
+3. 函数定义与点赋值可直接写：f(x)=x^2、A=(1,2)、P=(0,0,0)。
+4. 曲面必须用参数式：Surface(u,v,f(u,v),u,-2,2,v,-2,2)。
+5. 不要写样式命令（SetColor/SetVisible 等），不要写 Execute/JavaScript/Text/Image/URL。
+6. 坐标与范围要贴合问题，不要给离谱的大范围。
+示例 2D：{"type":"geogebra2d","title":"y=x^2 在 (1,1) 的切线","commands":["f(x)=x^2","A=(1,1)","t=Tangent(A,f)"]}
+示例 3D：{"type":"geogebra3d","title":"旋转抛物面","commands":["f(x,y)=x^2+y^2","s=Surface(u,v,f(u,v),u,-2,2,v,-2,2)"]}
+"""
+
+
+def geogebra_enabled() -> bool:
+    return os.getenv("MG_DIAGRAM_ENGINE", "legacy").strip().lower() in (
+        "geogebra", "auto")
+
+
+async def plan_geogebra(question: str, before: str, role: str = "main") -> dict | None:
+    """让模型输出 GeoGebra 命令；校验不过返回 None，由调用方回退旧规划器。"""
+    if not llm.is_configured(role):
+        return None
+    kind = "geogebra3d" if (
+        _3D_RE.search(question or "") or _3D_SURFACE_RE.search(question or "")
+    ) else "geogebra2d"
+    if kind == "geogebra3d":
+        # 2D 内核先落地:3D 仍走旧规划器 + 我们的 Three.js 渲染,
+        # 不在页面里回退成 GeoGebra 自己的 3D 画布。
+        diagram_metrics.record("plan_geo", False, "3d_deferred")
+        return None
+    latest = re.sub(r"\s+", " ", before or "").strip()[-1200:]
+    context = f"""类型:{kind}
+用户问题:{_text(question, 800)}
+当前讲解:{_text(latest, 1200)}"""
+    parts: list[str] = []
+    try:
+        async for delta in llm.stream_chat(
+                _GEO_PLAN_SYSTEM, context, role=role, fallback=True,
+                max_tokens=700, thinking=False):
+            parts.append(delta)
+            if sum(len(part) for part in parts) >= 4000:
+                break
+    except Exception:  # noqa: BLE001 生成失败交给旧规划器
+        diagram_metrics.record("plan_geo", False, "exception")
+        return None
+    raw = _load_json("".join(parts))
+    if isinstance(raw, dict) and not raw.get("type"):
+        raw["type"] = kind
+    diagram = validate_geogebra(raw)
+    diagram_metrics.record("plan_geo", diagram is not None,
+                           "ok" if diagram else "invalid")
+    return diagram
+
+
+async def plan_diagram_auto(question: str, before: str, excerpts: list[dict],
+                            kind: str, role: str = "main", **kwargs) -> dict | None:
+    """按 MG_DIAGRAM_ENGINE 选择引擎；GeoGebra 失败自动回退旧规划器。"""
+    if (geogebra_enabled()
+            and kind not in ("tree", "relation", "flow")
+            and not is_relation_question(question)):
+        diagram = await plan_geogebra(question, before, role=role)
+        if diagram is not None:
+            return diagram
+        diagram_metrics.record("plan", False, "geo_fallback")
+    return await plan_diagram(question, before, excerpts, kind, role=role, **kwargs)
 
 
 _diagram_limiter = SlidingWindowLimiter(12, 60.0)
