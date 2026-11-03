@@ -137,6 +137,20 @@ async function main() {
     check('表格内块级公式按行内排版',
       html.includes('<table') && !html.includes('katex-display'))
 
+    // 模型偶尔把块级公式折成多行;表格行必须按公式闭合位置拼回
+    html = await renderComp(
+      '| 维数 $$\n\\dim(S)\n$$ | 几何形态 | 特征 |\n'
+      + '|:-:|:-:|:-:|\n'
+      + '| $$0$$ | 一个点 | 仅原点 \\(\\{0\\}\\) |\n'
+      + '| $$1$$ | 一条直线 | 过原点的直线 |')
+    check('跨行公式表格可识别', html.includes('<table')
+      && (html.match(/<th\b/g) || []).length === 3,
+    `th 数量: ${(html.match(/<th\b/g) || []).length}`)
+
+    html = await renderComp('| a | b |\n|---|---|\n| x \\| y | 2 |')
+    check('转义竖线不拆列且还原',
+      (html.match(/<td/g) || []).length === 2 && html.includes('x | y'))
+
     // ⑮ 代码/转义里的 | 不拆列
     html = await renderComp('| a | b |\n|---|---|\n| `x|y` | 2 |')
     check('代码内竖线不拆列', (html.match(/<td/g) || []).length === 2)

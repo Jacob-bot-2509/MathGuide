@@ -206,7 +206,12 @@ function splitTableRow(line: string): string[] {
       continue
     }
     if (ch === '\\') {
-      // 转义字符整体保留,尤其 \| 不能拆列。
+      // 转义字符整体保留,尤其 \| 不能拆列;表格里的 \| 还原成普通竖线。
+      if (next === '|') {
+        current += '|'
+        i += 1
+        continue
+      }
       current += ch
       if (next !== undefined) {
         current += next
@@ -239,6 +244,68 @@ function isTableSeparator(line: string): boolean {
   return cells.length > 0 && cells.every((cell) => /^:?-{1,}:?$/.test(cell))
 }
 
+/** 检查一行结束时是否还有未闭合的公式/行内代码。 */
+function openAtLineEnd(text: string): boolean {
+  let math: '' | '$' | '$$' | '\\(' | '\\[' = ''
+  let code = false
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]
+    const next = text[i + 1]
+    if (code) {
+      if (ch === '`') code = false
+      continue
+    }
+    if (math) {
+      if (math === '$' && ch === '$') {
+        math = ''
+        continue
+      }
+      if (math === '$$' && ch === '$' && next === '$') {
+        math = ''
+        i += 1
+        continue
+      }
+      if ((math === '\\(' || math === '\\[') && ch === '\\') {
+        const close = math === '\\(' ? ')' : ']'
+        if (next === close) {
+          math = ''
+          i += 1
+        }
+      }
+      continue
+    }
+    if (ch === '`') {
+      code = true
+      continue
+    }
+    if (ch === '\\' && (next === '(' || next === '[')) {
+      math = next === '(' ? '\\(' : '\\['
+      i += 1
+      continue
+    }
+    if (ch === '\\') {
+      i += 1
+      continue
+    }
+    if (ch === '$') {
+      math = next === '$' ? '$$' : '$'
+      if (math === '$$') i += 1
+    }
+  }
+  return Boolean(math || code)
+}
+
+/** 把被公式/代码折断的表格物理行拼回一个逻辑行。 */
+function readLogicalRow(lines: string[], start: number): { text: string; next: number } {
+  let text = lines[start] || ''
+  let next = start + 1
+  while (next < lines.length && openAtLineEnd(text)) {
+    text += ` ${lines[next].trim()}`
+    next += 1
+  }
+  return { text, next }
+}
+
 function tableAligns(line: string): Array<'left' | 'center' | 'right'> {
   return splitTableRow(line).map((cell) => {
     if (cell.startsWith(':') && cell.endsWith(':')) return 'center'
@@ -263,17 +330,18 @@ function parseBlock(src: string): Seg[] {
   const lines = src.split('\n')
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]
-    if (line.includes('|') && i + 1 < lines.length
-      && isTableSeparator(lines[i + 1])) {
+    const headerRow = line.includes('|') ? readLogicalRow(lines, i) : null
+    if (headerRow && isTableSeparator(lines[headerRow.next] || '')) {
       flushNormal()
       flushQuote()
-      const header = splitTableRow(line)
-      const aligns = tableAligns(lines[i + 1])
+      const header = splitTableRow(headerRow.text)
+      const aligns = tableAligns(lines[headerRow.next])
       const rows: string[][] = []
-      let j = i + 2
+      let j = headerRow.next + 1
       while (j < lines.length && lines[j].trim() && lines[j].includes('|')) {
-        rows.push(splitTableRow(lines[j]))
-        j += 1
+        const row = readLogicalRow(lines, j)
+        rows.push(splitTableRow(row.text))
+        j = row.next
       }
       segs.push({ type: 'table', value: '', header, rows, aligns })
       i = j - 1
