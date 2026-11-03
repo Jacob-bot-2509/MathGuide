@@ -6,9 +6,9 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.17.0'
-export const APP_STABLE_VERSION = 'v1.17.0'
-export const APP_STABLE_DATE = '2026-11-01'
+export const APP_VERSION = 'v1.18.0'
+export const APP_STABLE_VERSION = 'v1.18.0'
+export const APP_STABLE_DATE = '2026-11-03'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
 export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
@@ -51,6 +51,33 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '高等代数几何表示:子空间、线性映射、行列式、方程组、特征方向、内积、二次型、双线性、酉/辛、仿射/射影与 SVD 全部由语义层确定性构图。',
+        en: 'Geometric representation for higher algebra: subspaces, linear maps, determinants, systems, eigen-directions, inner products, quadratic and bilinear forms, unitary/symplectic, affine/projective geometry and SVD are built deterministically from semantic plans.',
+      },
+      {
+        zh: 'GeoGebra 3D 隐藏内核:点、线、段、向量、平面、球和多边形由离屏内核构造,页面仍由 Three.js 渲染;曲面/梯度继续走表达式采样。',
+        en: 'Hidden GeoGebra 3D kernel: points, lines, segments, vectors, planes, spheres and polygons are constructed offscreen, while Three.js still renders the page; surfaces and gradients keep the expression sampler.',
+      },
+      {
+        zh: '图解排版修正:标注贴到对象旁,实心多边形沿边摆放,3D 不再重复画模型自带的 x/y/z 轴,注释不加省略号。',
+        en: 'Diagram layout fixes: labels sit beside their objects, filled polygons place labels along their edges, 3D no longer duplicates model-supplied x/y/z axes, and annotations no longer use ellipses.',
+      },
+      {
+        zh: '3D 坐标校验:平面/圆必须给出中心坐标,缺坐标不再默认落到原点;题面 z=f(x,y) 与 z=c 可确定性补回曲面和高度。',
+        en: '3D coordinate validation: planes and circles must provide a center; missing coordinates no longer silently fall to the origin, and explicit z=f(x,y) plus z=c terms can deterministically restore the surface and height.',
+      },
+      {
+        zh: '高等代数路由与防错图:酉矩阵/辛矩阵等词进入语义层;语义计划失败时不退回自由作图,2×2 酉矩阵按题面矩阵直接算谱。',
+        en: 'Higher-algebra routing and error prevention: unitary/symplectic terms enter the semantic layer; semantic-plan failures no longer fall back to freehand drawing, and 2×2 unitary spectra are computed directly from the stated matrix.',
+      },
+    ],
+  },
+  {
+    version: 'v1.17.0',
+    date: '2026-11-01',
+    status: 'released',
     items: [
       {
         zh: '论文工作台:研究档案每篇论文可点「继续」,左侧对话、右侧阅读器,第三栏展开论文结构与思维导图;页码与批注保存,聊天记录关闭即清空。',

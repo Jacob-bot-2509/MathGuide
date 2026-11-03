@@ -5,7 +5,7 @@ import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
 import { t } from '@/utils/i18n'
 import {
   placeScreenLabels,
-  type Rect,
+  plainLabel,
   type ScreenLabelRequest,
 } from '@/utils/diagramLabels'
 
@@ -23,7 +23,6 @@ interface LabelEntry {
 }
 
 let labelEntries: LabelEntry[] = []
-let figureBounds: import('three').Box3 | null = null
 
 let renderer: import('three').WebGLRenderer | null = null
 let scene: import('three').Scene | null = null
@@ -106,16 +105,14 @@ function annotationSprite(
 ): import('three').Sprite | null {
   const body = text.trim()
   if (!body) return null
-  const maxChars = 14
+  const maxChars = 18
   const maxLines = 1
   const chars = Array.from(body)
   const lines: string[] = []
   for (let index = 0; index < chars.length && lines.length < maxLines; index += maxChars) {
     lines.push(chars.slice(index, index + maxChars).join(''))
   }
-  if (chars.length > maxChars * maxLines && lines.length) {
-    lines[lines.length - 1] = `${lines[lines.length - 1].slice(0, -1)}…`
-  }
+  if (!lines.length) return null
   const measure = document.createElement('canvas').getContext('2d')
   if (!measure) return null
   measure.font = '34px sans-serif'
@@ -500,7 +497,7 @@ function addShape(
       && !/梯度|∇|gradient/i.test(String(shape.label))
     if (!auxiliaryVector) {
       const sprite = labelSprite(
-        String(shape.label), THREE, labelScale, '#dbe4f0',
+        plainLabel(shape.label), THREE, labelScale, '#dbe4f0',
       )
       if (sprite) {
         const to = triple(shape.to)
@@ -560,32 +557,6 @@ function layoutLabels(THREE: typeof import('three')): void {
       ppw: height / (2 * depth * Math.tan((camera!.fov * Math.PI / 180) / 2)),
     }
   }
-  let figureRect: Rect | null = null
-  if (figureBounds) {
-    const corners: import('three').Vector3[] = []
-    for (const x of [figureBounds.min.x, figureBounds.max.x]) {
-      for (const y of [figureBounds.min.y, figureBounds.max.y]) {
-        for (const z of [figureBounds.min.z, figureBounds.max.z]) {
-          corners.push(new THREE.Vector3(x, y, z))
-        }
-      }
-    }
-    const projected = corners
-      .map(project)
-      .filter((item): item is ScreenPoint => item !== null)
-    // 相机贴近/穿过包围盒时会有角点落在身后;用仍可见的角点估算主体区域,
-    // 总比整块区域失效、标签重新压到曲面上好。
-    if (projected.length >= 3) {
-      const left = Math.min(...projected.map((item) => item.x))
-      const right = Math.max(...projected.map((item) => item.x))
-      const top = Math.min(...projected.map((item) => item.y))
-      const bottom = Math.max(...projected.map((item) => item.y))
-      figureRect = {
-        x: left - 4, y: top - 4,
-        w: right - left + 8, h: bottom - top + 8,
-      }
-    }
-  }
   const requests: ScreenLabelRequest[] = []
   for (const entry of labelEntries) {
     const point = project(entry.anchor)
@@ -593,7 +564,7 @@ function layoutLabels(THREE: typeof import('three')): void {
     const base = entry.sprite.userData.baseLabelScale as
       { x: number; y: number } | undefined
     if (base) {
-      const maxPx = entry.role === 'note' ? 34 : entry.role === 'axis' ? 18 : 22
+      const maxPx = entry.role === 'note' ? 26 : entry.role === 'axis' ? 16 : 19
       const screenHeight = base.y * point.ppw
       const factor = screenHeight > maxPx ? maxPx / screenHeight : 1
       entry.sprite.scale.set(base.x * factor, base.y * factor, 1)
@@ -607,8 +578,11 @@ function layoutLabels(THREE: typeof import('three')): void {
       height: Math.max(4, entry.sprite.scale.y * point.ppw),
       priority: entry.role === 'note' ? 3 : entry.role === 'shape' ? 2 : 4,
       fixed: entry.fixed,
-      avoidRect: entry.role === 'axis' ? null : figureRect,
-      avoidWeight: entry.role === 'note' ? 3 : 0.8,
+      // 只避让对象自己附近的一小块,不再用整幅场景包围盒把标签推到边缘。
+      avoidRect: entry.role === 'axis'
+        ? null
+        : { x: point.x - 8, y: point.y - 8, w: 16, h: 16 },
+      avoidWeight: entry.role === 'shape' ? 2 : entry.role === 'note' ? 1.2 : 0,
     })
   }
   const placements = placeScreenLabels(requests, { width, height })
@@ -671,11 +645,12 @@ async function boot(): Promise<void> {
     light.position.set(4, 8, 6)
     scene.add(light)
     labelEntries = []
-    figureBounds = null
-    const unit = sceneUnit(props.spec.shapes)
-    const labelScale = Math.max(1.6, Math.min(3.2, unit * 5))
+    // 3D 坐标轴由渲染器统一生成;旧缓存里模型自带的 axis 不再重复画。
+    const geometryShapes = props.spec.shapes.filter((shape) => shape.kind !== 'axis')
+    const unit = sceneUnit(geometryShapes)
+    const labelScale = Math.max(1.3, Math.min(2.6, unit * 4.2))
     const shapeLabels: LabelEntry[] = []
-    for (const shape of props.spec.shapes) {
+    for (const shape of geometryShapes) {
       addShape(shape, THREE, root, unit, labelScale, shapeLabels)
     }
     labelEntries.push(...shapeLabels)
@@ -703,9 +678,9 @@ async function boot(): Promise<void> {
       })
     })
     props.spec.annotations.forEach((note, index) => {
-      // 3D 里长文字直接贴图会叠在一起;用编号标记,正文放到画布下方图例。
-      const text = String(note.text || '').trim()
-      if (!text) return
+      // 3D 说明直接用短文字贴在对象旁,不再另设编号图例。
+      const text = plainLabel(note.text).trim()
+      if (!text || /^[xyz]\s*轴?$/i.test(text)) return
       const sprite = annotationSprite(text, THREE, Math.max(1, unit * 2.4))
       if (!sprite) return
       const anchor = vec3([note.x, note.y, num(note.z)], THREE)
@@ -720,7 +695,6 @@ async function boot(): Promise<void> {
         leader: createLeaderLine(THREE, root),
       })
     })
-    figureBounds = shapeBounds.isEmpty() ? null : shapeBounds.clone()
     const bounds = shapeBounds.isEmpty() ? null : shapeBounds
     if (bounds) {
       const sphere = bounds.getBoundingSphere(new THREE.Sphere())
@@ -773,7 +747,6 @@ async function boot(): Promise<void> {
 function dispose(): void {
   disposed = true
   labelEntries = []
-  figureBounds = null
   observer?.disconnect()
   observer = null
   controls?.dispose()

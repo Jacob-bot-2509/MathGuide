@@ -1303,6 +1303,93 @@ def _snap_annotations(shapes: list[dict], raw: dict) -> dict:
     return {**raw, "annotations": kept}
 
 
+_SURFACE_CLAUSE_RE = re.compile(r"[，,。;；、]|和|与|及|以及|并且")
+_SURFACE_EXPR_RE = re.compile(r"(?<![A-Za-z])z\s*=\s*([0-9A-Za-z_.^*/()+\-\s]+)")
+
+
+def _surface_question_terms(question: str) -> tuple[str | None, float | None]:
+    """从用户原话里提取 z=f(x,y) 与水平平面 z=c,只用于修补模型漏给的字段。"""
+    expr: str | None = None
+    plane_values: set[float] = set()
+    for clause in _SURFACE_CLAUSE_RE.split(question or ""):
+        match = _SURFACE_EXPR_RE.search(clause)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        if not value:
+            continue
+        if re.search(r"[xy]", value, re.IGNORECASE):
+            if expr is None:
+                expr = value
+            continue
+        number = re.match(r"[-+]?\d+(?:\.\d+)?", value)
+        if number:
+            parsed = _num(number.group(0))
+            if parsed is not None:
+                plane_values.add(round(parsed, 9))
+    # 多个不同高度的平面无法判断哪个缺坐标;不猜,保留模型值。
+    plane_z = next(iter(plane_values)) if len(plane_values) == 1 else None
+    return expr, plane_z
+
+
+def repair_surface_shapes(raw: dict, question: str) -> dict:
+    """修补三维曲面图里的漏坐标:平面/圆落到 z=c,曲面按题面表达式补回。
+
+    模型常只给 normal 或半径,渲染器会把缺省坐标当成 0,于是 z=1 的平面
+    被画到 z=0。这里只用用户题面里明确写出的表达式和数值,不猜。
+    """
+    if raw.get("type") not in ("surface3d", "geometry3d"):
+        return raw
+    expr, plane_z = _surface_question_terms(question)
+    if not expr and plane_z is None:
+        return raw
+    shapes = raw.get("shapes")
+    if not isinstance(shapes, list):
+        shapes = []
+    if expr and not any(
+            isinstance(shape, dict) and shape.get("kind") == "surface"
+            for shape in shapes):
+        shapes.insert(0, {
+            "kind": "surface", "expr": expr,
+            "domain": [-2.0, 2.0, -2.0, 2.0],
+            "rows": 30, "cols": 30,
+        })
+    if plane_z is not None:
+        missing_planes = [
+            shape for shape in shapes
+            if isinstance(shape, dict) and shape.get("kind") == "plane"
+            and not all(isinstance(shape.get(key), (int, float))
+                        for key in ("x", "y", "z"))
+        ]
+        # 多张缺坐标的平面无法判断哪张对应 z=c;不批量填同一个高度。
+        fill_planes = len(missing_planes) == 1
+        for shape in shapes:
+            if not isinstance(shape, dict):
+                continue
+            kind = shape.get("kind")
+            if kind == "plane":
+                if not fill_planes:
+                    continue
+                shape.setdefault("x", 0.0)
+                shape.setdefault("y", 0.0)
+                shape.setdefault("z", plane_z)
+                shape.setdefault("normal", [0.0, 0.0, 1.0])
+                shape.setdefault("width", 4.0)
+                shape.setdefault("height", 4.0)
+            elif kind == "circle":
+                shape.setdefault("x", 0.0)
+                shape.setdefault("y", 0.0)
+                shape.setdefault("z", plane_z)
+                if not any(isinstance(shape.get(key), (int, float))
+                           for key in ("r", "radius")) and expr:
+                    simple = re.fullmatch(
+                        r"\s*x\s*\^\s*2\s*\+\s*y\s*\^\s*2\s*",
+                        expr, re.IGNORECASE)
+                    if simple and plane_z > 0:
+                        shape["r"] = math.sqrt(plane_z)
+    return {**raw, "shapes": shapes}
+
+
 def prepare_diagram(raw: object) -> dict | None:
     """采样表达式形状后再做白名单校验。"""
     if not isinstance(raw, dict):
@@ -1334,13 +1421,17 @@ def prepare_diagram(raw: object) -> dict | None:
         if (raw.get("type") in ("geometry3d", "surface3d")
                 and not isinstance(raw.get("linear"), dict)):
             dict_shapes = [shape for shape in dict_shapes
-                           if not _axis_aligned_segment(shape)]
+                           if shape.get("kind") != "axis"
+                           and not _axis_aligned_segment(shape)]
             notes = raw.get("annotations")
             if isinstance(notes, list):
                 raw = {**raw, "annotations": [
                     note for note in notes
                     if not (isinstance(note, dict)
-                            and _text(note.get("text"), 20).lower() in {"x", "y", "z"})
+                            and re.fullmatch(
+                                r"[xyz]\s*轴?",
+                                _text(note.get("text"), 20).strip(),
+                                re.IGNORECASE))
                 ]}
         raw = {**raw, "shapes": dict_shapes}
         labels = {
@@ -1435,17 +1526,25 @@ def _shape(raw: object) -> dict | None:
     return out
 
 
-def _renderable_shape(shape: dict) -> bool:
+def _renderable_shape(shape: dict, diagram_type: str = "") -> bool:
     """没有实际可画几何的旧图解(例如只有 expr 没有采样点)不能进渲染器。"""
     kind = shape.get("kind")
+    spatial = diagram_type in ("geometry3d", "surface3d")
     if kind == "axis":
         return False
     if kind in ("curve", "polygon", "surface"):
         return bool(shape.get("points"))
     if kind in ("point", "circle"):
+        if spatial and kind == "circle":
+            # 三维圆的中心缺 z 会被渲染器当成 0;宁可丢弃,也不画错位置。
+            return all(key in shape for key in ("x", "y", "z"))
         return "x" in shape and "y" in shape
     if kind in ("segment", "line", "vector"):
         return "from" in shape and "to" in shape
+    if kind == "plane":
+        # 平面只给了法向量时,渲染器会把位置默认成原点;这不是“过原点的平面”,
+        # 而是未知位置。必须要求显式中心坐标。
+        return (not spatial) or all(key in shape for key in ("x", "y", "z"))
     return True
 
 
@@ -1517,7 +1616,9 @@ def validate_diagram(raw: object) -> dict | None:
             return None
         for item in raw_shapes:
             shape = _shape(item)
-            if shape is not None:
+            if shape is not None and (
+                    shape.get("kind") == "axis"
+                    or _renderable_shape(shape, kind)):
                 shapes.append(shape)
 
     annotations: list[dict] = []
@@ -1550,7 +1651,11 @@ def validate_diagram(raw: object) -> dict | None:
     if kind in ("tree", "relation", "flow"):
         if not nodes:
             return None
-    elif not shapes or not any(_renderable_shape(shape) for shape in shapes):
+    elif not shapes or not any(_renderable_shape(shape, kind) for shape in shapes):
+        return None
+    if kind == "surface3d" and not any(
+            shape.get("kind") == "surface" for shape in shapes):
+        # surface3d 没有曲面只剩平面/点,是模型漏掉主体后的残图;不拿它冒充曲面图。
         return None
     result: dict = {
         "schemaVersion": DIAGRAM_SCHEMA_VERSION,
@@ -1843,6 +1948,8 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
             if isinstance(raw, dict) and kind and not raw.get("type"):
                 # 规划器经常省略 type;把请求类型补上再校验。
                 raw["type"] = kind
+            if isinstance(raw, dict):
+                raw = repair_surface_shapes(raw, question)
             # 表达式采样是 CPU 活,放线程里,避免卡住 SSE 事件循环。
             diagram = await asyncio.to_thread(prepare_diagram, raw)
     except asyncio.CancelledError:
@@ -2038,6 +2145,11 @@ async def plan_diagram_auto(question: str, before: str, excerpts: list[dict],
             diagram_metrics.record("plan_linear", True, "ok")
             return diagram
         diagram_metrics.record("plan_linear", False, "fallback")
+        # 高等代数语义题一旦语义计划失败,不能退回自由作图:
+        # 模型很容易把 λ 标签、旋转方向、平行关系画反,错图比没图更糟。
+        # 只有 R^2/R^3 这类维度词、没有代数语义的题仍允许回退旧管线。
+        if linear_algebra.looks_linear_core(question):
+            return None
     if (geogebra_enabled()
             and kind not in ("tree", "relation", "flow")
             and not is_relation_question(question)):

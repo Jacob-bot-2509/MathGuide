@@ -55,6 +55,16 @@ async function main() {
     html = await renderComp('导数是 $f(x)$ 的斜率')
     check('$ 行内公式被渲染', html.includes('katex'), '')
 
+    // ②b 伴随/转置符号不能被转义吃掉
+    html = await renderComp('验证 $U^\\dagger U=I$ 成立')
+    check('\\dagger 在行内公式中渲染',
+      html.includes('katex') && html.includes('†') && !html.includes('seg-math-raw'),
+      `输出: ${html.slice(0, 600)}`)
+    html = await renderComp('验证 \\(U^\\dagger U=I\\) 成立')
+    check('\\dagger 在括号式公式中渲染',
+      html.includes('katex') && html.includes('†') && !html.includes('seg-math-raw'),
+      `输出: ${html.slice(0, 600)}`)
+
     // ③ $$..$$ 块级公式(display 模式)
     html = await renderComp('$$\n\\int_0^1 x^2 dx\n$$')
     check('块级公式被渲染(display)', html.includes('katex-display'), '')

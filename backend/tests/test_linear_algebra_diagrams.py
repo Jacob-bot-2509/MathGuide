@@ -277,6 +277,49 @@ def test_unitary_complex_plane_keeps_circle_and_vectors():
     assert diagram["linear"]["projection"]["kind"] == "complex_to_real"
 
 
+def test_unitary_rotation_arc_is_labelled_and_has_no_lambda_axes():
+    import math
+    diagram = _build({
+        "visual": "unitary", "domain": "complex", "ambient": 1,
+        "matrix": [[[math.cos(math.pi / 4), math.sin(math.pi / 4)]]],
+        "vector": [[1, 0]],
+    })
+    assert diagram is not None
+    labels = [str(shape.get("label") or "") for shape in diagram["shapes"]]
+    assert any("旋转 π/4" in label for label in labels)
+    assert not any("λ" in label for label in labels)
+
+
+def test_unitary_keyword_routes_to_linear_planner():
+    assert la.looks_linear("判断 U 是否是酉矩阵，并在复平面上表示单位圆的像")
+    assert la.looks_linear("解释辛矩阵与辛变换")
+    from diagram_taxonomy import choose_visual
+    assert choose_visual("在复平面解释酉矩阵的谱").kind in ("geometry2d", "geometry3d")
+
+
+def test_dimension_words_alone_do_not_block_generic_visual_pipeline():
+    question = "画出 z=x^2+y^2 在 R^2 上的等高线"
+    assert la.looks_linear(question)
+    assert not la.looks_linear_core(question)
+
+
+def test_unitary_spectrum_fallback_puts_each_lambda_on_its_own_point():
+    diagram = la._unitary_spectrum_from_question(
+        "判断 U = (1/√2)[[1, i],[i, 1]] 是否是酉矩阵，并在复平面上表示单位圆。")
+    assert diagram is not None
+    points = {shape["label"]: (shape["x"], shape["y"])
+              for shape in diagram["shapes"] if shape["kind"] == "point"}
+    assert points["λ₁"][0] > 0 and points["λ₁"][1] > 0
+    assert points["λ₂"][0] > 0 and points["λ₂"][1] < 0
+    notes = {note["text"].split(" =")[0]: note["text"]
+             for note in diagram["annotations"] if "λ" in note["text"]}
+    assert "e^(iπ/4)" in notes["λ₁"]
+    assert "e^(-iπ/4)" in notes["λ₂"]
+    assert any("C² 保范" in note["text"]
+               for note in diagram["annotations"])
+    assert any("单平面只画谱" in note["text"] for note in diagram["annotations"])
+
+
 def test_unitary_c2_projection_is_labelled():
     diagram = _build({
         "visual": "unitary", "domain": "complex", "ambient": 2,
@@ -347,6 +390,25 @@ def test_affine_transform_builds_source_and_image():
     assert diagram is not None
     assert len([shape for shape in diagram["shapes"]
                 if shape["kind"] == "polygon"]) == 2
+
+
+def test_affine_image_opposite_edges_stay_parallel():
+    diagram = _build({
+        "visual": "affine", "operation": "transform",
+        "domain": "real", "ambient": 2,
+        "matrix": [[2, 1], [1, 3]], "translation": [1, -2],
+    })
+    assert diagram is not None
+    image = next(shape for shape in diagram["shapes"]
+                 if shape["kind"] == "polygon" and shape.get("label") == "像")
+    points = image["points"]
+    edges = [
+        [points[(index + 1) % len(points)][axis] - points[index][axis]
+         for axis in (0, 1)]
+        for index in range(len(points))
+    ]
+    assert abs(edges[0][0] * edges[2][1] - edges[0][1] * edges[2][0]) < 1e-9
+    assert abs(edges[1][0] * edges[3][1] - edges[1][1] * edges[3][0]) < 1e-9
 
 
 def test_affine_subspace_keeps_offset():

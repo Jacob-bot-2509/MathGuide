@@ -612,13 +612,75 @@ def test_gradient_does_not_move_unrelated_point_or_invent_zero_vector():
              "rows": 3, "cols": 3},
             {"kind": "point", "x": 3, "y": 3, "z": 18},
             {"kind": "vector", "label": "gradient", "from": [0, 0, 0], "to": [1, 0, 1]},
-            {"kind": "plane", "label": "tangent", "normal": [1, 0, 1]},
+            {"kind": "plane", "label": "tangent", "normal": [1, 0, 1],
+             "x": 0, "y": 0, "z": 0},
         ],
     })
     assert result
     assert next(s for s in result["shapes"] if s["kind"] == "point")["z"] == 18
     assert not any(s["kind"] == "vector" for s in result["shapes"])
     assert next(s for s in result["shapes"] if s["kind"] == "plane")["normal"] == [0, 0, 1]
+
+
+def test_surface_repair_fills_missing_surface_and_plane_height():
+    raw = {
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "plane", "normal": [0, 0, 1]},
+            {"kind": "circle", "radius": 1},
+            {"kind": "point", "x": 1, "y": 0, "z": 1},
+        ],
+    }
+    repaired = rd.repair_surface_shapes(
+        raw, "用三维图画出抛物面 z = x^2 + y^2 和平面 z = 1 的交线。")
+    result = rd.prepare_diagram(repaired)
+    assert result
+    assert any(shape["kind"] == "surface" for shape in result["shapes"])
+    plane = next(shape for shape in result["shapes"] if shape["kind"] == "plane")
+    circle = next(shape for shape in result["shapes"] if shape["kind"] == "circle")
+    assert plane["x"] == 0 and plane["y"] == 0 and plane["z"] == 1
+    assert circle["x"] == 0 and circle["y"] == 0 and circle["z"] == 1
+
+
+def test_surface_repair_does_not_pick_one_of_multiple_plane_heights():
+    raw = {
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "surface", "expr": "x^2+y^2", "domain": [-1, 1],
+             "rows": 4, "cols": 4},
+            {"kind": "plane", "normal": [0, 0, 1]},
+        ],
+    }
+    repaired = rd.repair_surface_shapes(
+        raw, "画出曲面 z=x^2+y^2 与平面 z=1、平面 z=2 的交线")
+    plane = repaired["shapes"][1]
+    assert "z" not in plane
+
+
+def test_surface3d_without_surface_is_rejected():
+    assert rd.prepare_diagram({
+        "type": "surface3d",
+        "shapes": [{"kind": "plane", "x": 0, "y": 0, "z": 1,
+                    "normal": [0, 0, 1]}],
+    }) is None
+
+
+def test_3d_model_axes_are_removed_because_renderer_owns_axes():
+    result = rd.prepare_diagram({
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "axis", "label": "x", "from": [0, 0, 0], "to": [2, 0, 0]},
+            {"kind": "axis", "label": "y", "from": [0, 0, 0], "to": [0, 2, 0]},
+            {"kind": "point", "x": 1, "y": 1, "z": 1, "label": "P"},
+        ],
+        "annotations": [
+            {"x": 2, "y": 0, "z": 0, "text": "x 轴"},
+            {"x": 0, "y": 2, "z": 0, "text": "y"},
+        ],
+    })
+    assert result
+    assert not any(shape["kind"] == "axis" for shape in result["shapes"])
+    assert not any(note["text"].startswith(("x", "y")) for note in result["annotations"])
 
 
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
@@ -1152,3 +1214,40 @@ def test_plan_diagram_auto_falls_back_to_legacy(monkeypatch):
     got = asyncio.run(rd.plan_diagram_auto(
         "画出抛物线", "y=x^2", [], "plot2d", strict=False))
     assert got is sentinel
+
+
+def test_plan_diagram_auto_keeps_generic_fallback_for_dimension_only_cue(monkeypatch):
+    monkeypatch.setenv("MG_DIAGRAM_ENGINE", "geogebra")
+    sentinel = {"type": "surface3d", "shapes": [{"kind": "surface", "points": [[0, 0, 0]]}],
+                "nodes": [], "edges": [], "annotations": []}
+
+    async def no_linear(question, before, role="main"):
+        return None
+
+    async def no_geo(question, before, role="main"):
+        return None
+
+    async def legacy(*args, **kwargs):
+        return sentinel
+
+    monkeypatch.setattr(rd.linear_algebra, "plan_linear", no_linear)
+    monkeypatch.setattr(rd, "plan_geogebra", no_geo)
+    monkeypatch.setattr(rd, "plan_diagram", legacy)
+    got = asyncio.run(rd.plan_diagram_auto(
+        "画出 z=x^2+y^2 在 R^2 上的等高线", "解释", [], "surface3d",
+        strict=False))
+    assert got is sentinel
+
+
+def test_plan_diagram_auto_blocks_freehand_for_linear_semantic_question(monkeypatch):
+    async def no_linear(question, before, role="main"):
+        return None
+
+    async def legacy(*args, **kwargs):
+        raise AssertionError("linear semantic failure must not fall back")
+
+    monkeypatch.setattr(rd.linear_algebra, "plan_linear", no_linear)
+    monkeypatch.setattr(rd, "plan_diagram", legacy)
+    assert asyncio.run(rd.plan_diagram_auto(
+        "解释 R^3 中由两个向量张成的子空间", "解释", [], "geometry3d",
+        strict=False)) is None

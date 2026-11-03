@@ -25,6 +25,7 @@ import {
   overlapArea,
   placeLabels,
   placeScreenLabels,
+  plainLabel,
   shapeObstacleRects,
 } from '../src/utils/diagramLabels'
 
@@ -340,7 +341,7 @@ check('边标签互不重叠', edgeRects.every((label, index) => edgeRects.every
   (other, otherIndex) => index === otherIndex || overlapArea(label, other) === 0,
 )))
 
-// 3D 屏幕空间标注:围绕主体外围排布,互不重叠。
+// 3D 屏幕空间标注:优先贴近锚点,互不重叠。
 const screenFigure = { x: 160, y: 110, w: 220, h: 180 }
 const screenPlaced = placeScreenLabels([
   {
@@ -363,12 +364,52 @@ check('3D 标注避开主体', screenPlaced.every(
   (label) => overlapArea(label, screenFigure) === 0,
 ))
 
+// 对象旁标注:不把整幅图当障碍,标签中心应贴近锚点。
+const nearPlaced = placeScreenLabels([{
+  id: 'near', anchorX: 300, anchorY: 260, width: 54, height: 16, priority: 2,
+}], { width: 720, height: 520 })
+check('3D 标注贴近对象', nearPlaced.every((label) => (
+  Math.hypot(label.centerX - 300, label.centerY - 260) <= 40
+)))
+
+const localNear = placeLabels([{
+  id: 'local-near', text: 'λ = 1', anchorX: 200, anchorY: 200,
+  figure: { x: 40, y: 40, w: 400, h: 360 }, figureWeight: 0,
+}], [], { x: -100, y: -100, w: 700, h: 700 })
+check('2D 标注贴近对象', localNear.every((label) => (
+  Math.hypot(label.x + label.w / 2 - 200, label.y + label.h / 2 - 200) <= 40
+)))
+
+const filledPolygon = { x: 100, y: 100, w: 200, h: 160 }
+const polygonObstacles = shapeObstacleRects([{
+  kind: 'polygon',
+  points: [[100, 100], [300, 100], [300, 260], [100, 260]],
+}])
+const polygonLabel = placeLabels([{
+  id: 'inside-polygon', text: '内部说明', anchorX: 200, anchorY: 180,
+}], polygonObstacles, { x: -100, y: -100, w: 700, h: 700 })
+check('实心多边形标注不落进填充', polygonLabel.every(
+  (label) => overlapArea(label, filledPolygon) === 0,
+))
+
+check('LaTeX 标签还原成纯文本', plainLabel('$U^\\dagger U=I$') === 'U† U=I')
+check('下标标签还原', plainLabel('λ_1, λ_2') === 'λ₁, λ₂')
+check('标签不保留省略号', plainLabel('交线: x²+y²=1…') === '交线: x²+y²=1')
+
 const wrapped = measureLabel({
   id: 'wrap', text: '这是一个需要换行显示的较长标注说明文字',
   anchorX: 0, anchorY: 0, fontSize: 10, maxWidth: 60, maxLines: 2,
 })
 check('标注按宽度换行', wrapped.lines.length <= 2
   && wrapped.lines.every((line) => measureTextWidth(line, 10) <= 60))
+const trimmedAnnotation = measureLabel({
+  id: 'trim', role: 'annotation',
+  text: '这是一个需要换行显示的较长标注说明文字',
+  anchorX: 0, anchorY: 0, fontSize: 10, maxWidth: 60, maxLines: 2,
+})
+check('注释截断不加省略号', trimmedAnnotation.lines.every(
+  (line) => !line.includes('…'),
+))
 
 // 用户明确说“不要画图”时,前端不能在回答结束后自行补图。
 const noDrawHistory = [{ role: 'user', content: '先不要画图，等我讲完' }]

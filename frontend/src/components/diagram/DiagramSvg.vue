@@ -8,6 +8,7 @@ import {
   figureRectOfShapes,
   outwardSides,
   placeLabels,
+  plainLabel,
   shapeObstacleRects,
   type LabelRequest,
   type PlacedLabel,
@@ -200,21 +201,23 @@ const shapeGeometry = computed(() => {
       : rawY
     requests.push({
       id: `annotation-${index}`,
-      text: note.text,
+      text: plainLabel(note.text),
       anchorX,
       anchorY,
       role: 'annotation',
-      fontSize: 12,
-      maxWidth: 160,
-      maxLines: 3,
+      fontSize: 10,
+      maxWidth: 130,
+      maxLines: 2,
       priority: 3,
-      figure,
-      figureWeight: 2.5,
+      // 不再把整个 figure 当作障碍:那会把标注推到画布边缘。
+      // 曲线/线段由 obstacles 精确避让,标注就能贴着对象放。
+      figure: null,
+      figureWeight: 0,
       preferred: outwardSides({ x: anchorX, y: anchorY }, figure),
     })
   })
   shapes.forEach((shape, index) => {
-    const label = String(shape.label || '').trim()
+    const label = plainLabel(shape.label)
     if (!label) return
     const anchor = labelAnchor(shape)
     const fixed = shape.kind === 'axis' && /^[xyz]$/i.test(label)
@@ -224,11 +227,11 @@ const shapeGeometry = computed(() => {
       anchorX: anchor.x,
       anchorY: anchor.y,
       role: fixed ? 'axis' : 'shape',
-      fontSize: 13,
-      maxWidth: fixed ? 60 : 170,
+      fontSize: fixed ? 10 : 11,
+      maxWidth: fixed ? 50 : 140,
       maxLines: fixed ? 1 : 2,
       priority: fixed ? 5 : 2,
-      figure: fixed ? null : figure,
+      figure: null,
       figureWeight: 0,
       preferred: fixed ? [] : outwardSides(anchor, figure),
       fixed,
@@ -273,7 +276,7 @@ const shapeGeometry = computed(() => {
     if (label.role !== 'annotation') return true
     const dx = label.x + label.w / 2 - label.anchorX
     const dy = label.y + label.h / 2 - label.anchorY
-    return Math.hypot(dx, dy) <= 160
+    return Math.hypot(dx, dy) <= 90
   })
   let minLeft = 0
   let minTop = 0

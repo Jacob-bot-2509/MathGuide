@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import cmath
 import json
 import math
 import re
@@ -24,16 +25,32 @@ _LINEAR_RE = re.compile(
     r"子空间|张成|span|线性空间|线性变换|线性映射|核空间|像空间|零空间|"
     r"特征值|特征向量|对角化|行列式|线性方程组|解空间|正交补|投影矩阵|"
     r"基向量|维数|内积|正交投影|Gram|施密特|二次型|双线性|正定|惯性|"
-    r"对称矩阵|酉空间|酉变换|复内积|Hermitian|辛空间|辛变换|辛形式|"
-    r"各向同性|Lagrangian|相空间|仿射|射影|无穷远|交比|SVD|奇异值|"
+    r"对称矩阵|酉空间|酉变换|酉矩阵|复内积|Hermitian|辛空间|辛变换|"
+    r"辛矩阵|辛形式|各向同性|Lagrangian|相空间|仿射|射影|无穷远|交比|"
+    r"SVD|奇异值|unitary|symplectic|"
     r"极分解|条件数|低秩|R\s*\^\s*[234]|\\\\mathbb\{R\}\s*\^\s*[234]|"
     r"\bR[234]\b",
+    re.IGNORECASE,
+)
+# 只表示“这是高等代数语义题”的词;R^n 单独出现可能只是多元微积分的定义域。
+_LINEAR_CORE_RE = re.compile(
+    r"子空间|张成|span|线性空间|线性变换|线性映射|核空间|像空间|零空间|"
+    r"特征值|特征向量|对角化|行列式|线性方程组|解空间|正交补|投影矩阵|"
+    r"基向量|维数|内积|正交投影|Gram|施密特|二次型|双线性|正定|惯性|"
+    r"对称矩阵|酉空间|酉变换|酉矩阵|复内积|Hermitian|辛空间|辛变换|"
+    r"辛矩阵|辛形式|各向同性|Lagrangian|相空间|仿射|射影|无穷远|交比|"
+    r"SVD|奇异值|unitary|symplectic|极分解|条件数|低秩",
     re.IGNORECASE,
 )
 
 
 def looks_linear(question: str) -> bool:
     return bool(_LINEAR_RE.search(question or ""))
+
+
+def looks_linear_core(question: str) -> bool:
+    """是否明确是高等代数语义题;避免 R^2/R^3 把多元微积分也拦成线性题。"""
+    return bool(_LINEAR_CORE_RE.search(question or ""))
 
 
 def _num(value: object) -> float | None:
@@ -626,6 +643,12 @@ def sanitize_linear(raw: object) -> dict | None:
         if domain != "complex":
             return None
         ambient = _integer(raw.get("ambient"), 1, 2)
+        # 模型常把 2×2 复矩阵的 ambient 写成 1;矩阵本身是 2×2 时按 C² 处理,
+        # 不能截成 1×1,否则会把旋转/特征值关系画错。
+        if ambient == 1:
+            candidate = _cmatrix(raw.get("matrix"), 2)
+            if candidate is not None:
+                ambient = 2
     elif visual == "symplectic":
         if domain != "real":
             return None
@@ -798,6 +821,9 @@ def sanitize_linear(raw: object) -> dict | None:
                 return None
             result["matrix"] = matrix
             result["translation"] = translation
+            source = _text(raw.get("source"), 20).lower()
+            if source in ("triangle", "square", "parallelogram"):
+                result["source"] = source
         else:
             subspace = raw.get("subspace")
             if not isinstance(subspace, dict):
@@ -1192,6 +1218,24 @@ def _project_real4(vector: list[float], kind: str) -> list[float]:
     return vector[:]
 
 
+def _angle_text(angle: float) -> str:
+    """把弧度角写成 π 的简约分数;非有理数才退回小数。"""
+    ratio = angle / math.pi
+    for denominator in range(1, 13):
+        numerator = round(ratio * denominator)
+        if abs(ratio - numerator / denominator) < 1e-6:
+            if numerator == 0:
+                return "0"
+            sign = "-" if numerator < 0 else ""
+            numerator = abs(numerator)
+            if denominator == 1:
+                return f"{sign}π" if numerator == 1 else f"{sign}{numerator}π"
+            if numerator == 1:
+                return f"{sign}π/{denominator}"
+            return f"{sign}{numerator}π/{denominator}"
+    return f"{angle:.3g} rad"
+
+
 def _build_unitary(linear: dict) -> tuple[str, list[dict], list[dict]]:
     ambient = linear["ambient"]
     matrix = linear["matrix"]
@@ -1213,6 +1257,23 @@ def _build_unitary(linear: dict) -> tuple[str, list[dict], list[dict]]:
         shapes.append(_point([0.0, 0.0], "O"))
         shapes.append(_vector([0.0, 0.0], z, "z"))
         shapes.append(_vector([0.0, 0.0], uz, "Uz"))
+        start = math.atan2(z[1], z[0])
+        angle = math.atan2(uz[1], uz[0]) - start
+        while angle <= -math.pi:
+            angle += 2 * math.pi
+        while angle > math.pi:
+            angle -= 2 * math.pi
+        if abs(angle) > 1e-6:
+            # 从 z 到 Uz 的短弧:直接标在映射发生的位置,不另设图例。
+            arc = [
+                [math.cos(start + angle * step / 48),
+                 math.sin(start + angle * step / 48)]
+                for step in range(49)
+            ]
+            shapes.append({
+                "kind": "curve", "points": arc,
+                "label": f"旋转 {_angle_text(angle)}",
+            })
         notes.append(_annotation([0.8, 0.8],
                                  f"|z| = {math.hypot(*z):.3g}"))
         type_name = "plot2d"
@@ -1292,15 +1353,35 @@ def _build_affine(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
     shapes: list[dict] = [_point(origin, "O")]
     notes: list[dict] = []
     if ambient == 2:
-        source = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+        source_kind = linear.get("source", "square")
+        if source_kind == "triangle":
+            source = [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]
+        elif source_kind == "parallelogram":
+            source = [[0.0, 0.0], [1.0, 0.0], [1.4, 0.8], [0.4, 0.8]]
+        else:
+            source = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
         image = [
             _add(_matvec(matrix, point), translation)
             for point in source
         ]
         shapes.append(_polygon(source, "原像"))
         shapes.append(_polygon(image, "像"))
-        notes.append(_annotation(_add(translation, [0.4, 0.4]),
+        for index, point in enumerate(source):
+            shapes.append(_point(point, chr(ord("A") + index)))
+        for index, point in enumerate(image):
+            shapes.append(_point(point, f"{chr(ord('A') + index)}'"))
+        notes.append(_annotation(_add(image[0], [-0.8, -0.8]),
                                  "x ↦ Ax + b"))
+        if source_kind != "triangle":
+            notes.append(_annotation(
+                _add(image[1], [0.7, -0.7]),
+                "对应边保持平行",
+            ))
+        else:
+            notes.append(_annotation(
+                _add(image[0], [0.4, -0.8]),
+                "仿射不保方向,只保平行;三角形无平行边可对照",
+            ))
         type_name = "plot2d"
     else:
         basis = [[1.0 if i == j else 0.0 for j in range(ambient)]
@@ -1367,7 +1448,9 @@ def _build_projective(linear: dict) -> tuple[str, list[dict], list[dict]] | None
         shapes.append(_polygon([point for point in image if point is not None],
                                "射影像"))
         shapes.append(_segment([-2.4, 2.0], [2.4, 2.0], "无穷远线"))
-        notes.append(_annotation([0.4, 0.4], "齐次坐标 / 投影变换"))
+        notes.append(_annotation([1.4, 1.3], "齐次坐标 / 投影变换"))
+        notes.append(_annotation([1.4, -1.4],
+                                 "射影不保平行;原图平行边交于无穷远"))
     return "plot2d", shapes, notes
 
 
@@ -1506,6 +1589,125 @@ def _load_json(text: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def _parse_complex_entry(value: str) -> complex | None:
+    text = value.strip().replace("−", "-").replace(" ", "")
+    if not text:
+        return None
+    if text in ("i", "+i"):
+        return 1j
+    if text == "-i":
+        return -1j
+    try:
+        return complex(float(text), 0.0)
+    except ValueError:
+        pass
+    match = re.fullmatch(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))?([+-])?i", text)
+    if match and match.group(1) is None:
+        return complex(0.0, -1.0 if match.group(2) == "-" else 1.0)
+    match = re.fullmatch(
+        r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))([+-])(\d+(?:\.\d*)?|\.\d+)?i",
+        text)
+    if match:
+        real = float(match.group(1))
+        imag = float(match.group(3) or 1.0)
+        return complex(real, -imag if match.group(2) == "-" else imag)
+    return None
+
+
+def _question_matrix(question: str) -> list[list[complex]] | None:
+    """从题面里的 [[a,b],[c,d]] 提取 2×2 复矩阵,并处理常见 1/√2 因子。"""
+    match = re.search(
+        r"\[\s*\[[^\]]+\]\s*,\s*\[[^\]]+\]\s*\]", question or "")
+    if not match:
+        return None
+    rows = re.findall(r"\[([^\[\]]+)\]", match.group(0))
+    if len(rows) != 2:
+        return None
+    matrix: list[list[complex]] = []
+    for row in rows:
+        cells = [cell for cell in re.split(r"[,，]", row) if cell.strip()]
+        if len(cells) != 2:
+            return None
+        parsed = [_parse_complex_entry(cell) for cell in cells]
+        if any(item is None for item in parsed):
+            return None
+        matrix.append([item for item in parsed if item is not None])
+    factor = 1.0
+    before = (question or "")[:match.start()]
+    scale = re.search(r"1\s*/\s*(?:√|sqrt\()?\s*(2)\s*\)?\s*$", before)
+    if scale:
+        factor = 1.0 / math.sqrt(float(scale.group(1)))
+    return [[item * factor for item in row] for row in matrix]
+
+
+def _eigenvalues_2x2(matrix: list[list[complex]]) -> tuple[complex, complex]:
+    a, b = matrix[0]
+    c, d = matrix[1]
+    trace = a + d
+    determinant = a * d - b * c
+    root = cmath.sqrt(trace * trace - 4 * determinant)
+    return (trace + root) / 2, (trace - root) / 2
+
+
+def _complex_text(value: complex) -> str:
+    if abs(abs(value) - 1.0) < 1e-6:
+        angle = cmath.phase(value)
+        if abs(angle) < 1e-9:
+            return "1"
+        if abs(abs(angle) - math.pi) < 1e-9:
+            return "-1"
+        text = _angle_text(angle)
+        if text in ("π", "-π"):
+            return "-1"
+        if text == "π/2":
+            return "i"
+        if text == "-π/2":
+            return "-i"
+        if angle < 0:
+            return f"e^(-i{text[1:]})"
+        return f"e^(i{text})"
+    return f"{value.real:.3g}{value.imag:+.3g}i"
+
+
+def _unitary_spectrum_from_question(question: str) -> dict | None:
+    """语义规划失败时的确定性兜底:把 2×2 酉矩阵的谱画在复平面单位圆上。
+
+    每个 λ 点用自己算出的坐标和角度标注,不再让模型自由摆放 λ 标签。
+    """
+    if not re.search(r"酉|unitary", question or "", re.IGNORECASE):
+        return None
+    matrix = _question_matrix(question)
+    if matrix is None or not _is_unitary(matrix):
+        return None
+    first, second = _eigenvalues_2x2(matrix)
+    circle = [
+        [math.cos(2 * math.pi * index / 120),
+         math.sin(2 * math.pi * index / 120)]
+        for index in range(121)
+    ]
+    shapes: list[dict] = [
+        {"kind": "curve", "points": circle, "label": "|z|=1"},
+        _point([0.0, 0.0], "O"),
+    ]
+    notes: list[dict] = []
+    for index, value in enumerate((first, second)):
+        label = f"λ{'₁₂'[index]}"
+        shapes.append(_point([value.real, value.imag], label))
+        notes.append(_annotation(
+            [value.real * 1.18, value.imag * 1.18],
+            f"{label} = {_complex_text(value)}",
+        ))
+    notes.append(_annotation([0.0, -1.22], "C² 保范:单位圆→单位圆"))
+    notes.append(_annotation([0.0, -1.46], "2×2 U;单平面只画谱"))
+    return {
+        "schemaVersion": 1,
+        "type": "plot2d",
+        "title": "2×2 酉矩阵:保范与谱",
+        "nodes": [], "edges": [],
+        "shapes": shapes, "annotations": notes,
+    }
+
+
 _LINEAR_SYSTEM = """你是高等代数图解规划器。只输出一个 JSON 对象,不要 Markdown、不要解释。
 模型只给代数语义,不要给 shapes/points/坐标网格。
 schema:
@@ -1520,6 +1722,7 @@ schema:
                "offset": [x,y] 或 [x,y,z], "basis": [[...]], "label": "短标签"},
   "matrix": [[...]],
   "translation": [x,y] 或 [x,y,z],
+  "source": "triangle|square|parallelogram",
   "vectors": [[...]],
   "vector": [x,y] 或 [x,y,z],
   "points": [[x,y]],
@@ -1538,11 +1741,14 @@ schema:
    - orthogonal_complement 给 subspace;
    - gram_schmidt / orthonormal_basis 给 vectors。
 8. quadratic_form / bilinear_form 给对称矩阵;二次型曲面默认 level=1。
-9. unitary 用 domain=complex,ambient=1 或 2;复数矩阵元素写 [实部,虚部];
-   ambient=2 时必须给 projection r4_to_3d 或 r4_to_2d 和 note。
+9. unitary 用 domain=complex;1×1 复矩阵才用 ambient=1,2×2 复矩阵必须用
+   ambient=2;复数矩阵元素写 [实部,虚部];ambient=2 时必须给 projection
+   r4_to_3d 或 r4_to_2d 和 note。不要把 2×2 矩阵硬塞成 1×1。
 10. symplectic 用 domain=real,ambient=2 或 4;矩阵必须满足 MᵀJM=J;
     ambient=4 时必须给 projection r4_to_3d 或 r4_to_2d 和 note。
 11. affine: transform 给 matrix + translation;subspace 给 subspace。
+   用户说三角形时 source=triangle,说平行四边形时 source=parallelogram,
+   否则 source=square。
 12. projective: ambient=2;transform 给 3×3 齐次矩阵;cross_ratio 给 4 个共线点。
 13. svd: 给 2×2/3×3 实矩阵;operation 为 svd/polar/condition。
 14. 不要输出 abstract 的商空间/张量/PID 模;这些不在本期内。
@@ -1558,9 +1764,9 @@ schema:
 
 
 async def plan_linear(question: str, before: str, role: str = "main") -> dict | None:
-    """让模型输出高等代数语义计划;失败返回 None。"""
+    """让模型输出高等代数语义计划;酉矩阵可走确定性谱图兜底。"""
     if not llm.is_configured(role):
-        return None
+        return _unitary_spectrum_from_question(question)
     latest = re.sub(r"\s+", " ", before or "").strip()[-1600:]
     context = (
         f"用户问题:{_text(question, 900)}\n"
@@ -1575,12 +1781,21 @@ async def plan_linear(question: str, before: str, role: str = "main") -> dict | 
             if sum(len(part) for part in parts) >= 5000:
                 break
     except Exception:  # noqa: BLE001
-        return None
+        return _unitary_spectrum_from_question(question)
     raw = _load_json("".join(parts))
     if raw is None:
-        return None
+        return _unitary_spectrum_from_question(question)
     if not raw.get("type"):
         raw["type"] = "geometry3d" if raw.get("ambient") == 3 else "geometry2d"
-    return build_linear_diagram({"type": raw.get("type"),
+    built = build_linear_diagram({"type": raw.get("type"),
                                   "title": raw.get("title"),
                                   "linear": raw})
+    # 2×2 酉矩阵问“复平面/单位圆/特征值”时,C² 的四维投影会绕开用户要看的谱;
+    # 用题面矩阵确定性地画单位圆上的 λ,不依赖模型摆标签。
+    if re.search(r"复平面|单位圆|特征值|谱", question or ""):
+        spectrum = _unitary_spectrum_from_question(question)
+        if spectrum is not None:
+            return spectrum
+    if built is None:
+        built = _unitary_spectrum_from_question(question)
+    return built

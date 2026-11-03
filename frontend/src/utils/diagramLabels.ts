@@ -77,6 +77,50 @@ export interface ScreenLabelPlacement {
 const CJK_RE = /[　-鿿＀-￯]/
 const ELLIPSIS = '…'
 
+const MATH_WORDS: Array<[RegExp, string]> = [
+  [/\^\s*\\dagger|\\dagger/g, '†'],
+  [/\^\s*\\top|\\top/g, 'ᵀ'],
+  [/\\lambda/g, 'λ'],
+  [/\\pi/g, 'π'],
+  [/\\theta/g, 'θ'],
+  [/\\sigma/g, 'σ'],
+  [/\\mu/g, 'μ'],
+  [/\\Delta/g, 'Δ'],
+  [/\\nabla/g, '∇'],
+  [/\\pm/g, '±'],
+  [/\\mp/g, '∓'],
+  [/\\times/g, '×'],
+  [/\\cdot/g, '·'],
+  [/\\sqrt/g, '√'],
+  [/\\infty/g, '∞'],
+  [/\\in\b/g, '∈'],
+  [/\\subset/g, '⊂'],
+  [/\\to\b/g, '→'],
+  [/\\mapsto/g, '↦'],
+  [/\\left|\\right/g, ''],
+]
+const SUBSCRIPTS: Record<string, string> = {
+  '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+  '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+  i: 'ᵢ', j: 'ⱼ', k: 'ₖ', n: 'ₙ', m: 'ₘ',
+}
+const SUPERSCRIPTS: Record<string, string> = {
+  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', T: 'ᵀ',
+}
+
+/** SVG/Three 标签是纯文本,先把常见 LaTeX 片段还原成可读符号。 */
+export function plainLabel(text: unknown): string {
+  let value = String(text ?? '').replace(/\$/g, '')
+  for (const [pattern, replacement] of MATH_WORDS) {
+    value = value.replace(pattern, replacement)
+  }
+  value = value.replace(/_([0-9ijknm])/g, (_, key: string) => SUBSCRIPTS[key] || key)
+  value = value.replace(/\^([0-9T])/g, (_, key: string) => SUPERSCRIPTS[key] || key)
+  value = value.replace(/…/g, '').replace(/\.{3,}/g, '')
+  return value.trim()
+}
+
 export function charWidth(ch: string, fontSize: number): number {
   if (CJK_RE.test(ch)) return fontSize
   if (ch === ' ') return fontSize * 0.34
@@ -91,9 +135,14 @@ export function measureTextWidth(text: string, fontSize: number): number {
   return width
 }
 
-function truncateLine(text: string, maxWidth: number, fontSize: number): string {
+function truncateLine(
+  text: string,
+  maxWidth: number,
+  fontSize: number,
+  ellipsis = true,
+): string {
   const chars = Array.from(text)
-  const dotWidth = charWidth(ELLIPSIS, fontSize)
+  const dotWidth = ellipsis ? charWidth(ELLIPSIS, fontSize) : 0
   let width = 0
   let out = ''
   for (const ch of chars) {
@@ -102,7 +151,7 @@ function truncateLine(text: string, maxWidth: number, fontSize: number): string 
     out += ch
     width += next
   }
-  return out.length < chars.length ? `${out}${ELLIPSIS}` : out
+  return out.length < chars.length && ellipsis ? `${out}${ELLIPSIS}` : out
 }
 
 export interface MeasuredLabel {
@@ -134,6 +183,7 @@ export function measureLabel(request: LabelRequest): MeasuredLabel {
           `${lines[maxLines - 1]}${chars.slice(index).join('')}`,
           maxWidth,
           fontSize,
+          request.role !== 'annotation',
         )
         return {
           lines,
@@ -315,6 +365,55 @@ function scoreCandidate(
   return score
 }
 
+function obstacleCandidates(
+  request: LabelRequest,
+  label: MeasuredLabel,
+  obstacles: Rect[],
+  gaps: number[],
+): Candidate[] {
+  const out: Candidate[] = []
+  const { anchorX: ax, anchorY: ay } = request
+  const { w, h } = label
+  for (const obstacle of obstacles) {
+    // 只对实心多边形这类大障碍补“贴边”候选;曲线采样的小方块不参与,
+    // 否则候选数量会爆炸,标签也会沿曲线乱跳。
+    if (obstacle.w < 24 && obstacle.h < 24) continue
+    for (const gap of gaps) {
+      const boxes: Array<[number, number, Side]> = [
+        [
+          clamp(ax, obstacle.x + w / 2, obstacle.x + obstacle.w - w / 2) - w / 2,
+          obstacle.y - gap - h,
+          'top',
+        ],
+        [
+          clamp(ax, obstacle.x + w / 2, obstacle.x + obstacle.w - w / 2) - w / 2,
+          obstacle.y + obstacle.h + gap,
+          'bottom',
+        ],
+        [
+          obstacle.x - gap - w,
+          clamp(ay, obstacle.y + h / 2, obstacle.y + obstacle.h - h / 2) - h / 2,
+          'left',
+        ],
+        [
+          obstacle.x + obstacle.w + gap,
+          clamp(ay, obstacle.y + h / 2, obstacle.y + obstacle.h - h / 2) - h / 2,
+          'right',
+        ],
+      ]
+      for (const [x, y, side] of boxes) {
+        const rect = { x, y, w, h }
+        out.push({
+          rect,
+          side,
+          distance: pointRectDistance(rect, ax, ay),
+        })
+      }
+    }
+  }
+  return out
+}
+
 export function placeLabels(
   requests: LabelRequest[],
   obstacles: Rect[],
@@ -326,7 +425,7 @@ export function placeLabels(
   const placed: Rect[] = []
   const sideUse: Record<Side, number> = { top: 0, bottom: 0, left: 0, right: 0 }
   const byId = new Map<string, PlacedLabel>()
-  const gaps = [8, 16, 26, 40, 60]
+  const gaps = [6, 12, 20, 30, 44, 60]
 
   for (const request of ordered) {
     const label = measureLabel(request)
@@ -356,6 +455,7 @@ export function placeLabels(
     }
     const candidates = [
       ...localCandidates(request, label, gaps),
+      ...obstacleCandidates(request, label, obstacles, [6, 12, 20]),
       ...figureCandidates(request, label, [8, 16, 26, 40]),
     ]
     let best = candidates[0]
@@ -488,7 +588,7 @@ export function placeScreenLabels(
       })
       continue
     }
-    const candidates = screenCandidates(request, [8, 16, 28, 44, 64, 88, 120])
+    const candidates = screenCandidates(request, [6, 12, 20, 30, 44, 60])
     let best = candidates[0]
     let bestScore = Number.POSITIVE_INFINITY
     for (const candidate of candidates) {
@@ -624,6 +724,17 @@ export function shapeObstacleRects(shapes: DiagramShape[], pad = 2): Rect[] {
           out,
           8,
         )
+        // 多边形是实心填充;只避边会让文字落在填充内部,看起来像压在图形上。
+        const xs = points.map((point) => Number(point[0]) || 0)
+        const ys = points.map((point) => Number(point[1]) || 0)
+        const minX = Math.min(...xs) - pad
+        const minY = Math.min(...ys) - pad
+        out.push({
+          x: minX,
+          y: minY,
+          w: Math.max(...xs) - minX + pad,
+          h: Math.max(...ys) - minY + pad,
+        })
       }
     }
   }
