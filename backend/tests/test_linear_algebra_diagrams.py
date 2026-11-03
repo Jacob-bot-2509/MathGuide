@@ -338,6 +338,86 @@ def test_taxonomy_prefers_symplectic_geometry():
     assert choose_visual("解释 R^4 中的辛空间与辛变换").kind == "geometry3d"
 
 
+def test_affine_transform_builds_source_and_image():
+    diagram = _build({
+        "visual": "affine", "operation": "transform",
+        "domain": "real", "ambient": 2,
+        "matrix": [[1, 1], [0, 1]], "translation": [1, 2],
+    })
+    assert diagram is not None
+    assert len([shape for shape in diagram["shapes"]
+                if shape["kind"] == "polygon"]) == 2
+
+
+def test_affine_subspace_keeps_offset():
+    diagram = _build({
+        "visual": "affine", "operation": "subspace",
+        "domain": "real", "ambient": 2,
+        "subspace": {
+            "dimension": 1, "kind": "affine", "offset": [1, 2],
+            "basis": [[1, 0]],
+        },
+    })
+    assert diagram is not None
+    assert any(shape.get("label") == "b" for shape in diagram["shapes"])
+
+
+def test_projective_line_at_infinity():
+    diagram = _build({
+        "visual": "projective", "operation": "line_at_infinity",
+        "domain": "real", "ambient": 2,
+    })
+    assert diagram is not None
+    assert any(shape.get("label") == "无穷远线" for shape in diagram["shapes"])
+    assert any(shape.get("label") == "∞" for shape in diagram["shapes"])
+
+
+def test_projective_transform_and_cross_ratio():
+    transform = _build({
+        "visual": "projective", "operation": "transform",
+        "domain": "real", "ambient": 2,
+        "matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    })
+    assert transform is not None
+    assert len([shape for shape in transform["shapes"]
+                if shape["kind"] == "polygon"]) == 2
+
+    ratio = _build({
+        "visual": "projective", "operation": "cross_ratio",
+        "domain": "real", "ambient": 2,
+        "points": [[0, 0], [1, 0], [2, 0], [3, 0]],
+    })
+    assert ratio is not None
+    assert any("交比" in note["text"] for note in ratio["annotations"])
+
+
+def test_svd_ellipse_axes_and_condition():
+    diagram = _build({
+        "visual": "svd", "domain": "real", "ambient": 2,
+        "operation": "condition", "matrix": [[2, 0], [0, 0.5]],
+    })
+    assert diagram is not None
+    curves = [shape for shape in diagram["shapes"] if shape["kind"] == "curve"]
+    assert len(curves) == 2
+    assert any("cond" in note["text"] for note in diagram["annotations"])
+    assert any(shape.get("label") == "σ1" for shape in diagram["shapes"])
+
+
+def test_svd_three_dimensional_surface():
+    diagram = _build({
+        "visual": "svd", "domain": "real", "ambient": 3,
+        "matrix": [[2, 0, 0], [0, 1, 0], [0, 0, 0.5]],
+    })
+    assert diagram is not None
+    assert any(shape["kind"] == "surface" for shape in diagram["shapes"])
+
+
+def test_taxonomy_prefers_svd_and_affine():
+    from diagram_taxonomy import choose_visual
+    assert choose_visual("用图解释 SVD 奇异值分解").kind in ("geometry2d", "geometry3d")
+    assert choose_visual("用图解释仿射变换").kind in ("geometry2d", "geometry3d")
+
+
 def test_looks_linear_and_plan_linear(monkeypatch):
     assert la.looks_linear("解释 R^3 中由 e1,e2 张成的子空间")
     assert not la.looks_linear("y=x^2 的切线")

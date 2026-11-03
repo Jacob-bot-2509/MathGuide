@@ -15,7 +15,7 @@ from rag import llm
 LINEAR_VISUALS = {
     "subspace", "linear_map", "determinant", "system", "eigen",
     "inner_product", "quadratic_form", "bilinear_form",
-    "unitary", "symplectic",
+    "unitary", "symplectic", "affine", "projective", "svd",
 }
 TOL = 1e-9
 DISPLAY = 1.6
@@ -25,7 +25,8 @@ _LINEAR_RE = re.compile(
     r"特征值|特征向量|对角化|行列式|线性方程组|解空间|正交补|投影矩阵|"
     r"基向量|维数|内积|正交投影|Gram|施密特|二次型|双线性|正定|惯性|"
     r"对称矩阵|酉空间|酉变换|复内积|Hermitian|辛空间|辛变换|辛形式|"
-    r"各向同性|Lagrangian|相空间|R\s*\^\s*[234]|\\\\mathbb\{R\}\s*\^\s*[234]|"
+    r"各向同性|Lagrangian|相空间|仿射|射影|无穷远|交比|SVD|奇异值|"
+    r"极分解|条件数|低秩|R\s*\^\s*[234]|\\\\mathbb\{R\}\s*\^\s*[234]|"
     r"\bR[234]\b",
     re.IGNORECASE,
 )
@@ -291,6 +292,44 @@ def _det(matrix: list[list[float]]) -> float:
 
 def _matvec(matrix: list[list[float]], vector: list[float]) -> list[float]:
     return [sum(a * b for a, b in zip(row, vector)) for row in matrix]
+
+
+def _transpose(matrix: list[list[float]]) -> list[list[float]]:
+    return [list(row) for row in zip(*matrix)]
+
+
+def _matmul(left: list[list[float]], right: list[list[float]]) -> list[list[float]]:
+    return [
+        [sum(left[row][k] * right[k][col] for k in range(len(right)))
+         for col in range(len(right[0]))]
+        for row in range(len(left))
+    ]
+
+
+def _svd(matrix: list[list[float]]) -> tuple[list[float], list[list[float]], list[list[float]]]:
+    """小矩阵 SVD:A = U diag(σ) Vᵀ,只用于 2×2/3×3 教学图。"""
+    transpose = _transpose(matrix)
+    ata = _matmul(transpose, matrix)
+    pairs = _eigen_symmetric(ata)
+    singular: list[float] = []
+    right: list[list[float]] = []
+    left: list[list[float]] = []
+    for value, vector in pairs:
+        sigma = math.sqrt(max(0.0, value))
+        if sigma <= 1e-9:
+            continue
+        unit = _unit(vector)
+        if unit is None:
+            continue
+        image = _matvec(matrix, unit)
+        u = _unit(image)
+        if u is None:
+            continue
+        singular.append(sigma)
+        right.append(unit)
+        left.append(u)
+    return singular, left, right
+
 
 
 def _dot(a: list[float], b: list[float]) -> float:
@@ -745,6 +784,61 @@ def sanitize_linear(raw: object) -> dict | None:
                 "note": "R⁴ → R³ 投影,只示意辛基与面积关系",
             }
         result["matrix"] = matrix
+    elif visual == "affine":
+        operation = _text(
+            raw.get("operation")
+            or ("subspace" if raw.get("subspace") else "transform"), 20).lower()
+        if operation not in ("transform", "subspace"):
+            return None
+        result["operation"] = operation
+        if operation == "transform":
+            matrix = _matrix(raw.get("matrix"), ambient)
+            translation = _vec(raw.get("translation", [0.0] * ambient), ambient)
+            if matrix is None or translation is None:
+                return None
+            result["matrix"] = matrix
+            result["translation"] = translation
+        else:
+            subspace = raw.get("subspace")
+            if not isinstance(subspace, dict):
+                return None
+            basis = _subspace_basis(subspace, ambient)
+            if basis is None:
+                return None
+            dimension, kind, offset, vectors = basis
+            result["subspace"] = {
+                "dimension": dimension, "kind": kind,
+                "offset": offset, "basis": vectors,
+            }
+    elif visual == "projective":
+        if ambient != 2:
+            return None
+        operation = _text(
+            raw.get("operation")
+            or ("transform" if raw.get("matrix") else "line_at_infinity"),
+            25).lower()
+        if operation not in ("line_at_infinity", "transform", "cross_ratio"):
+            return None
+        result["operation"] = operation
+        if operation == "transform":
+            matrix = _matrix(raw.get("matrix"), 3)
+            if matrix is None:
+                return None
+            result["matrix"] = matrix
+        elif operation == "cross_ratio":
+            points = _vectors(raw.get("points"), 2, 4)
+            if points is None:
+                return None
+            result["points"] = points
+    elif visual == "svd":
+        matrix = _matrix(raw.get("matrix"), ambient)
+        if matrix is None:
+            return None
+        operation = _text(raw.get("operation", "svd"), 20).lower()
+        if operation not in ("svd", "polar", "condition"):
+            return None
+        result["operation"] = operation
+        result["matrix"] = matrix
     return result
 
 
@@ -1180,6 +1274,152 @@ def _build_symplectic(linear: dict) -> tuple[str, list[dict], list[dict]] | None
     return "geometry3d" if dim >= 3 else "plot2d", shapes, notes
 
 
+def _build_affine(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
+    ambient = linear["ambient"]
+    operation = linear["operation"]
+    if operation == "subspace":
+        built = _build_subspace({
+            "ambient": ambient, "subspace": linear["subspace"],
+        })
+        type_name, shapes, notes = built
+        offset = linear["subspace"]["offset"]
+        if linear["subspace"]["kind"] == "affine" and _norm(offset) > TOL:
+            shapes.append(_segment([0.0] * ambient, offset, "b"))
+        return type_name, shapes, notes
+    matrix = linear["matrix"]
+    translation = linear["translation"]
+    origin = [0.0] * ambient
+    shapes: list[dict] = [_point(origin, "O")]
+    notes: list[dict] = []
+    if ambient == 2:
+        source = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+        image = [
+            _add(_matvec(matrix, point), translation)
+            for point in source
+        ]
+        shapes.append(_polygon(source, "原像"))
+        shapes.append(_polygon(image, "像"))
+        notes.append(_annotation(_add(translation, [0.4, 0.4]),
+                                 "x ↦ Ax + b"))
+        type_name = "plot2d"
+    else:
+        basis = [[1.0 if i == j else 0.0 for j in range(ambient)]
+                 for i in range(ambient)]
+        for index, vector in enumerate(basis):
+            shapes.append(_vector(origin, vector, f"e{index + 1}"))
+            image = _add(_matvec(matrix, vector), translation)
+            shapes.append(_vector(translation, image, f"Ae{index + 1}"))
+        shapes.append(_point(translation, "b"))
+        notes.append(_annotation(_add(translation, [0.6, 0.6, 0.6]),
+                                 "x ↦ Ax + b"))
+        type_name = "geometry3d"
+    return type_name, shapes, notes
+
+
+def _homography(matrix: list[list[float]], point: list[float]) -> list[float] | None:
+    vector = [point[0], point[1], 1.0]
+    result = [sum(row[index] * vector[index] for index in range(3))
+              for row in matrix]
+    if abs(result[2]) < 1e-9:
+        return None
+    return [result[0] / result[2], result[1] / result[2]]
+
+
+def _build_projective(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
+    operation = linear["operation"]
+    shapes: list[dict] = []
+    notes: list[dict] = []
+    if operation == "line_at_infinity":
+        shapes.append(_segment([-2.4, 2.0], [2.4, 2.0], "无穷远线"))
+        shapes.append(_segment([-2.4, 0.0], [2.4, 0.0]))
+        shapes.append(_segment([-2.4, 1.0], [2.4, 1.0]))
+        shapes.append(_point([0.0, 2.0], "∞"))
+        notes.append(_annotation([0.5, 2.25], "平行线在无穷远点相交"))
+    elif operation == "cross_ratio":
+        points = linear["points"]
+        shapes.append(_point(points[0], "P1"))
+        shapes.append(_point(points[1], "P2"))
+        shapes.append(_point(points[2], "P3"))
+        shapes.append(_point(points[3], "P4"))
+        direction = [points[-1][0] - points[0][0],
+                     points[-1][1] - points[0][1]]
+        length = max(_norm(direction), TOL)
+        unit = [direction[0] / length, direction[1] / length]
+        params = [_dot([p[0] - points[0][0], p[1] - points[0][1]], unit)
+                  for p in points]
+        denominator = (params[0] - params[3]) * (params[1] - params[2])
+        value = (
+            (params[0] - params[2]) * (params[1] - params[3]) / denominator
+            if abs(denominator) > TOL else float("inf")
+        )
+        shapes.append(_segment(
+            [points[0][0] - unit[0], points[0][1] - unit[1]],
+            [points[-1][0] + unit[0], points[-1][1] + unit[1]],
+        ))
+        notes.append(_annotation([0.4, 0.4], f"交比 = {value:.3g}"))
+    else:
+        matrix = linear["matrix"]
+        source = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]
+        image = [_homography(matrix, point) for point in source]
+        if any(point is None for point in image):
+            return None
+        shapes.append(_polygon(source, "原像"))
+        shapes.append(_polygon([point for point in image if point is not None],
+                               "射影像"))
+        shapes.append(_segment([-2.4, 2.0], [2.4, 2.0], "无穷远线"))
+        notes.append(_annotation([0.4, 0.4], "齐次坐标 / 投影变换"))
+    return "plot2d", shapes, notes
+
+
+def _build_svd(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
+    ambient = linear["ambient"]
+    matrix = linear["matrix"]
+    operation = linear.get("operation", "svd")
+    singular, left, _right = _svd(matrix)
+    if not singular:
+        return None
+    origin = [0.0] * ambient
+    shapes: list[dict] = [_point(origin, "O")]
+    notes: list[dict] = []
+    for index, (sigma, vector) in enumerate(zip(singular, left)):
+        axis = _scale(vector, sigma)
+        shapes.append(_vector(origin, axis, f"σ{index + 1}"))
+    if ambient == 2:
+        circle = [[math.cos(2 * math.pi * i / 120),
+                   math.sin(2 * math.pi * i / 120)] for i in range(121)]
+        shapes.append({"kind": "curve", "points": circle, "label": "单位圆"})
+        ellipse = [_matvec(matrix, point) for point in circle]
+        shapes.append({"kind": "curve", "points": ellipse, "label": "A(S¹)"})
+        type_name = "plot2d"
+    else:
+        rows, cols = 25, 25
+        points: list[list[float]] = []
+        for row in range(rows):
+            u = -math.pi / 2 + math.pi * row / (rows - 1)
+            for col in range(cols):
+                v = 2 * math.pi * col / (cols - 1)
+                unit = [math.cos(u) * math.cos(v),
+                        math.cos(u) * math.sin(v), math.sin(u)]
+                points.append(_matvec(matrix, unit))
+        shapes.append({
+            "kind": "surface", "points": points,
+            "rows": rows, "cols": cols, "label": "A(S²)",
+        })
+        type_name = "geometry3d"
+    values = ", ".join(f"{value:.3g}" for value in singular)
+    if len(singular) >= 2:
+        condition = singular[0] / max(singular[-1], TOL)
+        notes.append(_annotation([0.6] * ambient,
+                                 f"σ = ({values}), cond = {condition:.3g}"))
+    else:
+        notes.append(_annotation([0.6] * ambient, f"σ = ({values})"))
+    if operation == "polar":
+        notes.append(_annotation([0.6] * ambient, "极分解 = 旋转 × 对称拉伸"))
+    elif operation == "condition":
+        notes.append(_annotation([0.6] * ambient, "条件数 = 最大/最小拉伸"))
+    return type_name, shapes, notes
+
+
 def build_linear_diagram(raw: object) -> dict | None:
     """把含 linear 语义块的原始图解转成确定性 DiagramSpec。"""
     if not isinstance(raw, dict):
@@ -1206,6 +1446,12 @@ def build_linear_diagram(raw: object) -> dict | None:
         built = _build_unitary(linear)
     elif visual == "symplectic":
         built = _build_symplectic(linear)
+    elif visual == "affine":
+        built = _build_affine(linear)
+    elif visual == "projective":
+        built = _build_projective(linear)
+    elif visual == "svd":
+        built = _build_svd(linear)
     else:
         built = _build_system(linear)
     if built is None:
@@ -1226,6 +1472,9 @@ def build_linear_diagram(raw: object) -> dict | None:
             "bilinear_form": "双线性型的几何意义",
             "unitary": "酉变换与复结构投影",
             "symplectic": "辛结构与相空间",
+            "affine": "仿射变换与仿射子空间",
+            "projective": "射影几何",
+            "svd": "SVD 与矩阵拉伸",
         }.get(visual, "高等代数图解")
     if visual == "subspace":
         subspace = linear["subspace"]
@@ -1261,17 +1510,19 @@ _LINEAR_SYSTEM = """你是高等代数图解规划器。只输出一个 JSON 对
 模型只给代数语义,不要给 shapes/points/坐标网格。
 schema:
 {
-  "visual": "subspace|linear_map|determinant|system|eigen|inner_product|quadratic_form|bilinear_form|unitary|symplectic",
+  "visual": "subspace|linear_map|determinant|system|eigen|inner_product|quadratic_form|bilinear_form|unitary|symplectic|affine|projective|svd",
   "domain": "real|complex",
   "ambient": 1|2|3|4,
   "title": "中文标题",
-  "operation": "projection|orthogonal_complement|gram_schmidt|orthonormal_basis",
+  "operation": "projection|orthogonal_complement|gram_schmidt|orthonormal_basis|transform|subspace|line_at_infinity|cross_ratio|svd|polar|condition",
   "projection": {"kind": "none|complex_to_real|r4_to_3d|r4_to_2d", "note": "投影说明"},
   "subspace": {"dimension": 0-3, "kind": "linear|affine",
                "offset": [x,y] 或 [x,y,z], "basis": [[...]], "label": "短标签"},
   "matrix": [[...]],
+  "translation": [x,y] 或 [x,y,z],
   "vectors": [[...]],
   "vector": [x,y] 或 [x,y,z],
+  "points": [[x,y]],
   "level": 1,
   "equations": [[a,b,c] 或 [a,b,c,d]]
 }
@@ -1291,8 +1542,11 @@ schema:
    ambient=2 时必须给 projection r4_to_3d 或 r4_to_2d 和 note。
 10. symplectic 用 domain=real,ambient=2 或 4;矩阵必须满足 MᵀJM=J;
     ambient=4 时必须给 projection r4_to_3d 或 r4_to_2d 和 note。
-11. 不要输出 abstract 的商空间/张量/PID 模;这些不在本期内。
-12. 不要解释选型或权重。
+11. affine: transform 给 matrix + translation;subspace 给 subspace。
+12. projective: ambient=2;transform 给 3×3 齐次矩阵;cross_ratio 给 4 个共线点。
+13. svd: 给 2×2/3×3 实矩阵;operation 为 svd/polar/condition。
+14. 不要输出 abstract 的商空间/张量/PID 模;这些不在本期内。
+15. 不要解释选型或权重。
 示例: R^3 中由 e1,e2 张成的平面
 {"visual":"subspace","domain":"real","ambient":3,"title":"R^3 中的坐标平面",
  "subspace":{"dimension":2,"kind":"linear","offset":[0,0,0],
