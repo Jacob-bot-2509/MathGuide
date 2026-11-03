@@ -160,71 +160,70 @@ function parse(src: string): Seg[] {
 function splitTableRow(line: string): string[] {
   const cells: string[] = []
   let current = ''
-  let math = ''
+  let math: '' | '$' | '$$' | '\\(' | '\\[' = ''
   let code = false
-  let escaped = false
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i]
-    if (escaped) {
+    const next = line[i + 1]
+    if (code) {
       current += ch
-      escaped = false
+      if (ch === '`') code = false
       continue
     }
-    if (ch === '\\') {
-      current += ch
-      escaped = true
-      continue
-    }
-    if (ch === '`') {
-      code = !code
-      current += ch
-      continue
-    }
-    if (!code) {
-      if (math) {
-        if (math === '$' && ch === '$') {
-          math = ''
-          current += ch
-          continue
-        }
-        if (math === '$$' && ch === '$' && line[i + 1] === '$') {
-          math = ''
-          current += '$$'
-          i += 1
-          continue
-        }
-        if (math === '\\(' && ch === '\\' && line[i + 1] === ')') {
-          math = ''
-          current += '\\)'
-          i += 1
-          continue
-        }
-        if (math === '\\[' && ch === '\\' && line[i + 1] === ']') {
-          math = ''
-          current += '\\]'
-          i += 1
-          continue
-        }
+    if (math) {
+      if (math === '$' && ch === '$') {
+        math = ''
         current += ch
         continue
       }
-      if (ch === '$') {
-        math = line[i + 1] === '$' ? '$$' : '$'
-        current += math
-        if (math === '$$') i += 1
-        continue
-      }
-      if (ch === '\\' && (line[i + 1] === '(' || line[i + 1] === '[')) {
-        math = line[i + 1] === '(' ? '\\(' : '\\['
-        current += line.slice(i, i + 2)
+      if (math === '$$' && ch === '$' && next === '$') {
+        math = ''
+        current += '$$'
         i += 1
         continue
       }
-      if (ch === '|') {
-        cells.push(current.trim())
-        current = ''
-        continue
+      if ((math === '\\(' || math === '\\[') && ch === '\\') {
+        const close = math === '\\(' ? ')' : ']'
+        if (next === close) {
+          math = ''
+          current += `\\${next}`
+          i += 1
+          continue
+        }
       }
+      current += ch
+      continue
+    }
+    if (ch === '`') {
+      code = true
+      current += ch
+      continue
+    }
+    if (ch === '\\' && (next === '(' || next === '[')) {
+      math = next === '(' ? '\\(' : '\\['
+      current += `\\${next}`
+      i += 1
+      continue
+    }
+    if (ch === '\\') {
+      // 转义字符整体保留,尤其 \| 不能拆列。
+      current += ch
+      if (next !== undefined) {
+        current += next
+        i += 1
+      }
+      continue
+    }
+    if (ch === '$') {
+      math = next === '$' ? '$$' : '$'
+      current += math
+      if (math === '$$') i += 1
+      continue
+    }
+    if (ch === '|') {
+      cells.push(current.trim())
+      current = ''
+      continue
     }
     current += ch
   }
@@ -236,7 +235,8 @@ function splitTableRow(line: string): string[] {
 
 function isTableSeparator(line: string): boolean {
   const cells = splitTableRow(line)
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+  // 常见模型会写 |:-:|:-:| 这种单横线对齐行;GFM 也接受 1 个以上横线。
+  return cells.length > 0 && cells.every((cell) => /^:?-{1,}:?$/.test(cell))
 }
 
 function tableAligns(line: string): Array<'left' | 'center' | 'right'> {
@@ -306,14 +306,22 @@ function renderLink(key: number | string, value: string, href: string | undefine
   return h('a', { key, class: 'seg-link', href, target: '_blank', rel: 'noopener' }, value)
 }
 
-function inlineNodes(value: string, keyPrefix: string): VNode[] {
+function inlineNodes(
+  value: string,
+  keyPrefix: string,
+  inlineDisplayMath = false,
+): VNode[] {
   return parseInline(value).map((seg, index) => {
     const key = `${keyPrefix}-${index}`
     if (seg.type === 'math') {
       return h('span', { key, class: 'seg-math', innerHTML: renderKatex(seg.value, false) })
     }
     if (seg.type === 'mathd') {
-      return h('span', { key, class: 'seg-mathd', innerHTML: renderKatex(seg.value, true) })
+      // 表格单元格里的 $$...$$ 按行内排版,否则 display 公式会把一格撑成多行。
+      return h('span', {
+        key, class: inlineDisplayMath ? 'seg-math' : 'seg-mathd',
+        innerHTML: renderKatex(seg.value, !inlineDisplayMath),
+      })
     }
     if (seg.type === 'bold') return h('strong', { key }, seg.value)
     if (seg.type === 'link') return renderLink(key, seg.value, seg.href)
@@ -354,14 +362,14 @@ function buildNodes(text: string): VNode[] {
             h('thead', null, [
               h('tr', null, header.map((cell, j) => h(
                 'th', { key: j, style: { textAlign: align(j) } },
-                inlineNodes(cell, `${i}-h-${j}`),
+                inlineNodes(cell, `${i}-h-${j}`, true),
               ))),
             ]),
             h('tbody', null, rows.map((row, r) => h(
               'tr', { key: r },
               header.map((_cell, j) => h(
                 'td', { key: j, style: { textAlign: align(j) } },
-                inlineNodes(row[j] || '', `${i}-${r}-${j}`),
+                inlineNodes(row[j] || '', `${i}-${r}-${j}`, true),
               )),
             ))),
           ]),
