@@ -162,6 +162,108 @@ def test_taxonomy_prefers_three_dimensional_linear_algebra():
     assert choose_visual("解释 R^3 中由两个向量张成的子空间").kind == "geometry3d"
 
 
+def test_orthogonal_projection_keeps_residual():
+    diagram = _build({
+        "visual": "inner_product", "operation": "projection",
+        "domain": "real", "ambient": 3,
+        "vector": [1, 2, 3],
+        "subspace": {
+            "dimension": 2, "kind": "linear", "offset": [0, 0, 0],
+            "basis": [[1, 0, 0], [0, 1, 0]],
+        },
+    })
+    assert diagram is not None
+    vectors = [shape for shape in diagram["shapes"] if shape["kind"] == "vector"]
+    assert len(vectors) >= 3
+    assert any(shape.get("label") == "proj_S v" for shape in vectors)
+
+
+def test_orthogonal_complement_in_three_dimensions():
+    diagram = _build({
+        "visual": "inner_product", "operation": "orthogonal_complement",
+        "domain": "real", "ambient": 3,
+        "subspace": {
+            "dimension": 2, "kind": "linear", "offset": [0, 0, 0],
+            "basis": [[1, 0, 0], [0, 1, 0]],
+        },
+    })
+    assert diagram is not None
+    labels = " ".join(str(shape.get("label", "")) for shape in diagram["shapes"])
+    assert "S" in labels and "S⊥" in labels
+
+
+def test_gram_schmidt_builds_orthogonal_vectors():
+    diagram = _build({
+        "visual": "inner_product", "operation": "gram_schmidt",
+        "domain": "real", "ambient": 2,
+        "vectors": [[1, 1], [1, 0]],
+    })
+    assert diagram is not None
+    assert len([shape for shape in diagram["shapes"]
+                if shape["kind"] == "vector"]) == 2
+
+
+def test_quadratic_form_ellipse_and_signature():
+    diagram = _build({
+        "visual": "quadratic_form", "domain": "real", "ambient": 2,
+        "matrix": [[1, 0], [0, 4]], "level": 1,
+    })
+    assert diagram is not None
+    assert any(shape["kind"] == "curve" for shape in diagram["shapes"])
+    assert any("signature = (2, 0, 0)" in note["text"]
+               for note in diagram["annotations"])
+
+
+def test_quadratic_form_three_dimensional_surface():
+    diagram = _build({
+        "visual": "quadratic_form", "domain": "real", "ambient": 3,
+        "matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "level": 1,
+    })
+    assert diagram is not None
+    surface = next(shape for shape in diagram["shapes"]
+                   if shape["kind"] == "surface")
+    assert surface["rows"] == 31 and surface["cols"] == 31
+    assert len(surface["points"]) == 31 * 31
+
+
+def test_quadratic_form_rejects_asymmetric_matrix():
+    assert _build({
+        "visual": "quadratic_form", "domain": "real", "ambient": 2,
+        "matrix": [[1, 2], [0, 1]], "level": 1,
+    }) is None
+
+
+def test_bilinear_forms_symmetric_and_alternating():
+    symmetric = _build({
+        "visual": "bilinear_form", "domain": "real", "ambient": 2,
+        "matrix": [[1, 0], [0, 2]],
+    })
+    assert symmetric is not None
+    assert any(shape["kind"] == "curve" for shape in symmetric["shapes"])
+
+    alternating = _build({
+        "visual": "bilinear_form", "domain": "real", "ambient": 2,
+        "matrix": [[0, 1], [-1, 0]],
+    })
+    assert alternating is not None
+    assert any(shape["kind"] == "polygon" for shape in alternating["shapes"])
+
+
+def test_prepare_quadratic_surface_keeps_linear_metadata():
+    raw = {
+        "type": "geometry3d",
+        "linear": {
+            "visual": "quadratic_form", "domain": "real", "ambient": 3,
+            "matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "level": 1,
+        },
+        "nodes": [], "edges": [], "shapes": [], "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    assert diagram["linear"]["visual"] == "quadratic_form"
+    assert any(shape["kind"] == "surface" for shape in diagram["shapes"])
+
+
 def test_looks_linear_and_plan_linear(monkeypatch):
     assert la.looks_linear("解释 R^3 中由 e1,e2 张成的子空间")
     assert not la.looks_linear("y=x^2 的切线")

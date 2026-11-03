@@ -12,14 +12,18 @@ from typing import Iterable
 
 from rag import llm
 
-LINEAR_VISUALS = {"subspace", "linear_map", "determinant", "system", "eigen"}
+LINEAR_VISUALS = {
+    "subspace", "linear_map", "determinant", "system", "eigen",
+    "inner_product", "quadratic_form", "bilinear_form",
+}
 TOL = 1e-9
 DISPLAY = 1.6
 
 _LINEAR_RE = re.compile(
     r"子空间|张成|span|线性空间|线性变换|线性映射|核空间|像空间|零空间|"
     r"特征值|特征向量|对角化|行列式|线性方程组|解空间|正交补|投影矩阵|"
-    r"基向量|维数|R\s*\^\s*[23]|\\\\mathbb\{R\}\s*\^\s*[23]|"
+    r"基向量|维数|内积|正交投影|Gram|施密特|二次型|双线性|正定|惯性|"
+    r"对称矩阵|R\s*\^\s*[23]|\\\\mathbb\{R\}\s*\^\s*[23]|"
     r"\bR[23]\b",
     re.IGNORECASE,
 )
@@ -195,6 +199,174 @@ def _det(matrix: list[list[float]]) -> float:
 
 def _matvec(matrix: list[list[float]], vector: list[float]) -> list[float]:
     return [sum(a * b for a, b in zip(row, vector)) for row in matrix]
+
+
+def _dot(a: list[float], b: list[float]) -> float:
+    return sum(x * y for x, y in zip(a, b))
+
+
+def _solve_small(matrix: list[list[float]], rhs: list[float]) -> list[float] | None:
+    size = len(matrix)
+    if size == 1:
+        return [rhs[0] / matrix[0][0]] if abs(matrix[0][0]) > TOL else None
+    if size == 2:
+        det = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]
+        if abs(det) <= TOL:
+            return None
+        return [
+            (rhs[0] * matrix[1][1] - rhs[1] * matrix[0][1]) / det,
+            (matrix[0][0] * rhs[1] - matrix[1][0] * rhs[0]) / det,
+        ]
+    return None
+
+
+def _gram_schmidt(vectors: list[list[float]]) -> list[list[float]]:
+    out: list[list[float]] = []
+    for vector in vectors:
+        work = vector[:]
+        for basis in out:
+            coefficient = _dot(work, basis) / max(_dot(basis, basis), TOL)
+            work = [value - coefficient * base for value, base in zip(work, basis)]
+        if _norm(work) > 1e-7:
+            out.append(work)
+    return out
+
+
+def _project_onto(basis: list[list[float]], vector: list[float]) -> list[float]:
+    if not basis:
+        return [0.0] * len(vector)
+    gram = [[_dot(a, b) for b in basis] for a in basis]
+    rhs = [_dot(a, vector) for a in basis]
+    coefficients = _solve_small(gram, rhs)
+    if coefficients is None:
+        return [0.0] * len(vector)
+    return [
+        sum(coefficients[index] * basis[index][axis]
+            for index in range(len(basis)))
+        for axis in range(len(vector))
+    ]
+
+
+def _quadratic_shapes(matrix: list[list[float]], level: float,
+                      ambient: int) -> list[dict]:
+    if any(abs(matrix[i][j] - matrix[j][i]) > 1e-7
+           for i in range(ambient) for j in range(ambient)):
+        return []
+    pairs = _eigen_symmetric(matrix)
+    values = [value for value, _vector in pairs]
+    vectors = [vector for _value, vector in pairs]
+    positive = sum(1 for value in values if value > 1e-7)
+    negative = sum(1 for value in values if value < -1e-7)
+    zero = ambient - positive - negative
+    lvl = abs(level)
+    if zero:
+        return []
+
+    def rotate(local: list[float]) -> list[float]:
+        return [
+            sum(local[index] * vectors[index][axis]
+                for index in range(ambient))
+            for axis in range(ambient)
+        ]
+
+    if ambient == 2:
+        shapes: list[dict] = []
+        if positive == 2:
+            a = math.sqrt(lvl / max(values[0], TOL))
+            b = math.sqrt(lvl / max(values[1], TOL))
+            points = [rotate([a * math.cos(t), b * math.sin(t)])
+                      for t in (2 * math.pi * i / 120 for i in range(121))]
+            shapes.append({"kind": "curve", "points": points,
+                           "label": f"xᵀAx = {level:g}"})
+        elif negative == 2:
+            a = math.sqrt(lvl / max(-values[0], TOL))
+            b = math.sqrt(lvl / max(-values[1], TOL))
+            points = [rotate([a * math.cos(t), b * math.sin(t)])
+                      for t in (2 * math.pi * i / 120 for i in range(121))]
+            shapes.append({"kind": "curve", "points": points,
+                           "label": f"xᵀAx = {level:g}"})
+        elif positive == 1 and negative == 1:
+            a = math.sqrt(lvl / max(values[0], TOL))
+            b = math.sqrt(lvl / max(-values[1], TOL))
+            for sign in (1, -1):
+                points = [
+                    rotate([sign * a * math.cosh(t), b * math.sinh(t)])
+                    for t in (-2 + 4 * i / 100 for i in range(101))
+                ]
+                shapes.append({"kind": "curve", "points": points})
+        return shapes
+
+    if ambient != 3:
+        return []
+    rows, cols = 31, 31
+    points: list[list[float]] = []
+    if positive == 3:
+        a = math.sqrt(lvl / max(values[0], TOL))
+        b = math.sqrt(lvl / max(values[1], TOL))
+        c = math.sqrt(lvl / max(values[2], TOL))
+        for row in range(rows):
+            u = -math.pi / 2 + math.pi * row / (rows - 1)
+            for col in range(cols):
+                v = 2 * math.pi * col / (cols - 1)
+                points.append(rotate([
+                    a * math.cos(u) * math.cos(v),
+                    b * math.cos(u) * math.sin(v),
+                    c * math.sin(u),
+                ]))
+    elif negative == 3:
+        a = math.sqrt(lvl / max(-values[0], TOL))
+        b = math.sqrt(lvl / max(-values[1], TOL))
+        c = math.sqrt(lvl / max(-values[2], TOL))
+        for row in range(rows):
+            u = -math.pi / 2 + math.pi * row / (rows - 1)
+            for col in range(cols):
+                v = 2 * math.pi * col / (cols - 1)
+                points.append(rotate([
+                    a * math.cos(u) * math.cos(v),
+                    b * math.cos(u) * math.sin(v),
+                    c * math.sin(u),
+                ]))
+    elif positive == 2 and negative == 1:
+        a = math.sqrt(lvl / max(values[0], TOL))
+        b = math.sqrt(lvl / max(values[1], TOL))
+        c = math.sqrt(lvl / max(-values[2], TOL))
+        for row in range(rows):
+            u = -1.2 + 2.4 * row / (rows - 1)
+            for col in range(cols):
+                v = 2 * math.pi * col / (cols - 1)
+                points.append(rotate([
+                    a * math.cosh(u) * math.cos(v),
+                    b * math.cosh(u) * math.sin(v),
+                    c * math.sinh(u),
+                ]))
+    elif positive == 1 and negative == 2:
+        a = math.sqrt(lvl / max(values[0], TOL))
+        b = math.sqrt(lvl / max(-values[1], TOL))
+        c = math.sqrt(lvl / max(-values[2], TOL))
+        for row in range(rows):
+            u = -1.2 + 2.4 * row / (rows - 1)
+            for col in range(cols):
+                v = 2 * math.pi * col / (cols - 1)
+                points.append(rotate([
+                    a * math.cosh(u),
+                    b * math.sinh(u) * math.cos(v),
+                    c * math.sinh(u) * math.sin(v),
+                ]))
+    if not points:
+        return []
+    return [{
+        "kind": "surface", "points": points,
+        "rows": rows, "cols": cols,
+        "label": f"xᵀAx = {level:g}",
+    }]
+
+
+def _signature(matrix: list[list[float]]) -> tuple[int, int, int]:
+    values = [value for value, _vector in _eigen_symmetric(matrix)]
+    positive = sum(1 for value in values if value > 1e-7)
+    negative = sum(1 for value in values if value < -1e-7)
+    return positive, negative, len(values) - positive - negative
+
 
 
 def _eigen_symmetric(matrix: list[list[float]]) -> list[tuple[float, list[float]]]:
@@ -373,6 +545,60 @@ def sanitize_linear(raw: object) -> dict | None:
         if not equations:
             return None
         result["equations"] = equations
+    elif visual == "quadratic_form":
+        matrix = _matrix(raw.get("matrix"), ambient)
+        if matrix is None:
+            return None
+        level = _num(raw.get("level", 1.0))
+        if level is None or abs(level) < TOL:
+            level = 1.0
+        result["matrix"] = matrix
+        result["level"] = level
+    elif visual == "bilinear_form":
+        matrix = _matrix(raw.get("matrix"), ambient)
+        if matrix is None:
+            return None
+        result["matrix"] = matrix
+    elif visual == "inner_product":
+        operation = _text(raw.get("operation"), 30).lower()
+        if operation not in (
+                "projection", "orthogonal_complement",
+                "gram_schmidt", "orthonormal_basis"):
+            return None
+        result["operation"] = operation
+        if operation == "projection":
+            vector = _vec(raw.get("vector"), ambient)
+            subspace = raw.get("subspace")
+            if vector is None or not isinstance(subspace, dict):
+                return None
+            basis = _subspace_basis(subspace, ambient)
+            if basis is None:
+                return None
+            dimension, kind, offset, vectors = basis
+            result["vector"] = vector
+            result["subspace"] = {
+                "dimension": dimension, "kind": kind,
+                "offset": offset, "basis": vectors,
+            }
+        elif operation == "orthogonal_complement":
+            subspace = raw.get("subspace")
+            if not isinstance(subspace, dict):
+                return None
+            basis = _subspace_basis(subspace, ambient)
+            if basis is None:
+                return None
+            dimension, kind, offset, vectors = basis
+            result["subspace"] = {
+                "dimension": dimension, "kind": kind,
+                "offset": offset, "basis": vectors,
+            }
+        else:
+            vectors = _vectors(raw.get("vectors"), ambient)
+            if vectors is None or not 1 <= len(vectors) <= ambient:
+                return None
+            if any(_norm(vector) < TOL for vector in vectors):
+                return None
+            result["vectors"] = vectors
     return result
 
 
@@ -612,6 +838,112 @@ def _build_system(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
     return type_name, shapes, notes
 
 
+def _build_quadratic(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
+    ambient = linear["ambient"]
+    matrix = linear["matrix"]
+    level = linear.get("level", 1.0)
+    shapes = _quadratic_shapes(matrix, level, ambient)
+    if not shapes:
+        return None
+    shapes.insert(0, _point([0.0] * ambient, "O"))
+    positive, negative, zero = _signature(matrix)
+    notes = [_annotation(
+        [0.8] * ambient,
+        f"signature = ({positive}, {negative}, {zero})",
+    )]
+    type_name = "geometry3d" if ambient == 3 else "plot2d"
+    return type_name, shapes, notes
+
+
+def _build_bilinear(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
+    ambient = linear["ambient"]
+    matrix = linear["matrix"]
+    symmetric = all(
+        abs(matrix[i][j] - matrix[j][i]) < 1e-7
+        for i in range(ambient) for j in range(ambient)
+    )
+    if symmetric:
+        built = _build_quadratic({
+            "ambient": ambient, "matrix": matrix, "level": 1.0,
+        })
+        if built is None:
+            return None
+        type_name, shapes, notes = built
+        notes.append(_annotation([0.8] * ambient, "对称双线性型"))
+        return type_name, shapes, notes
+    if ambient == 2:
+        # 反对称型在二维就是有向面积形式。
+        e1 = [1.0, 0.0]
+        e2 = [0.0, 1.0]
+        shapes = [
+            _point([0.0, 0.0], "O"),
+            _vector([0.0, 0.0], e1, "e1"),
+            _vector([0.0, 0.0], e2, "e2"),
+            _polygon([[0.0, 0.0], e1, [1.0, 1.0], e2], "ω"),
+        ]
+        value = matrix[0][1]
+        notes = [_annotation([0.6, 0.6], f"ω(e1,e2) = {value:.3g}")]
+        return "plot2d", shapes, notes
+    return None
+
+
+def _build_inner_product(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
+    ambient = linear["ambient"]
+    operation = linear["operation"]
+    origin = [0.0] * ambient
+    shapes: list[dict] = [_point(origin, "O")]
+    notes: list[dict] = []
+    if operation == "projection":
+        vector = linear["vector"]
+        subspace = linear["subspace"]
+        offset = subspace["offset"]
+        basis = subspace["basis"]
+        shifted = [value - base for value, base in zip(vector, offset)]
+        projected = _add(offset, _project_onto(basis, shifted))
+        residual = [value - base for value, base in zip(vector, projected)]
+        shapes.extend(_subspace_through(offset, basis, "S", ambient))
+        shapes.append(_vector(origin, vector, "v"))
+        shapes.append(_vector(origin, projected, "proj_S v"))
+        shapes.append(_vector(projected, vector, "v - proj"))
+        notes.append(_annotation(
+            _add(projected, residual, 0.25),
+            "残差与 S 正交",
+        ))
+    elif operation == "orthogonal_complement":
+        subspace = linear["subspace"]
+        offset = subspace["offset"]
+        basis = subspace["basis"]
+        transpose = [
+            [basis[j][axis] for j in range(len(basis))]
+            for axis in range(ambient)
+        ]
+        complement = _nullspace(transpose)
+        shapes.extend(_subspace_through(offset, basis, "S", ambient))
+        shapes.extend(_subspace_through(origin, complement, "S⊥", ambient))
+        notes.append(_annotation(
+            _add(origin, [0.8] * ambient),
+            f"dim S = {len(basis)}, dim S⊥ = {len(complement)}",
+        ))
+    else:
+        vectors = linear["vectors"]
+        basis = _gram_schmidt(vectors)
+        for index, vector in enumerate(basis):
+            unit = _unit(vector) if operation == "orthonormal_basis" else None
+            display = unit if unit is not None else _unit(vector)
+            if display is None:
+                continue
+            shapes.append(_vector(origin, _add(origin, display, DISPLAY),
+                                  f"u{index + 1}"))
+        if operation == "orthonormal_basis":
+            notes.append(_annotation(_add(origin, [0.8] * ambient),
+                                     "标准正交基"))
+        else:
+            notes.append(_annotation(_add(origin, [0.8] * ambient),
+                                     "Gram-Schmidt 正交化"))
+    type_name = "geometry3d" if ambient == 3 else "plot2d"
+    return type_name, shapes, notes
+
+
 def build_linear_diagram(raw: object) -> dict | None:
     """把含 linear 语义块的原始图解转成确定性 DiagramSpec。"""
     if not isinstance(raw, dict):
@@ -628,6 +960,12 @@ def build_linear_diagram(raw: object) -> dict | None:
         built = _build_determinant(linear)
     elif visual == "eigen":
         built = _build_eigen(linear)
+    elif visual == "quadratic_form":
+        built = _build_quadratic(linear)
+    elif visual == "bilinear_form":
+        built = _build_bilinear(linear)
+    elif visual == "inner_product":
+        built = _build_inner_product(linear)
     else:
         built = _build_system(linear)
     if built is None:
@@ -643,6 +981,9 @@ def build_linear_diagram(raw: object) -> dict | None:
             "determinant": "行列式的几何意义",
             "system": "线性方程组的解集",
             "eigen": "实特征方向",
+            "inner_product": "内积与正交",
+            "quadratic_form": "二次型的几何形状",
+            "bilinear_form": "双线性型的几何意义",
         }.get(visual, "高等代数图解")
     if visual == "subspace":
         subspace = linear["subspace"]
@@ -678,14 +1019,17 @@ _LINEAR_SYSTEM = """你是高等代数图解规划器。只输出一个 JSON 对
 模型只给代数语义,不要给 shapes/points/坐标网格。
 schema:
 {
-  "visual": "subspace|linear_map|determinant|system|eigen",
+  "visual": "subspace|linear_map|determinant|system|eigen|inner_product|quadratic_form|bilinear_form",
   "domain": "real",
   "ambient": 2 或 3,
   "title": "中文标题",
+  "operation": "projection|orthogonal_complement|gram_schmidt|orthonormal_basis",
   "subspace": {"dimension": 0-3, "kind": "linear|affine",
                "offset": [x,y] 或 [x,y,z], "basis": [[...]], "label": "短标签"},
   "matrix": [[...]],
   "vectors": [[...]],
+  "vector": [x,y] 或 [x,y,z],
+  "level": 1,
   "equations": [[a,b,c] 或 [a,b,c,d]]
 }
 规则:
@@ -695,12 +1039,20 @@ schema:
 4. determinant 的 vectors 数量等于 ambient。
 5. eigen 只给实对称矩阵。
 6. system 每条方程:2D 为 [a,b,c] 表示 ax+by=c;3D 为 [a,b,c,d] 表示 ax+by+cz=d。
-7. 不要输出 abstract 的商空间/张量/PID 模;这些不在本期内。
-8. 不要解释选型或权重。
+7. inner_product:
+   - projection 给 vector + subspace;
+   - orthogonal_complement 给 subspace;
+   - gram_schmidt / orthonormal_basis 给 vectors。
+8. quadratic_form / bilinear_form 给对称矩阵;二次型曲面默认 level=1。
+9. 不要输出 abstract 的商空间/张量/PID 模;这些不在本期内。
+10. 不要解释选型或权重。
 示例: R^3 中由 e1,e2 张成的平面
 {"visual":"subspace","domain":"real","ambient":3,"title":"R^3 中的坐标平面",
  "subspace":{"dimension":2,"kind":"linear","offset":[0,0,0],
  "basis":[[1,0,0],[0,1,0]],"label":"span(e1,e2)"}}
+示例: 二次型 x^2+2y^2=1
+{"visual":"quadratic_form","domain":"real","ambient":2,
+ "matrix":[[1,0],[0,2]],"level":1}
 """
 
 
