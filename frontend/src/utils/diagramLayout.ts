@@ -65,6 +65,30 @@ function finish(nodes: PositionedNode[], edges: PositionedEdge[]): LayoutResult 
   return placeEdgeLabels(nodes, edges, base.width, base.height)
 }
 
+/** 共享子节点/多根会让父节点居中后互相压住;统一向右让位,保证节点不重叠。 */
+function resolveNodeOverlaps(nodes: PositionedNode[]): void {
+  const ordered = [...nodes].sort((a, b) => a.y - b.y || a.x - b.x)
+  for (let pass = 0; pass < 6; pass += 1) {
+    let changed = false
+    for (let i = 0; i < ordered.length; i += 1) {
+      const left = ordered[i]
+      for (let j = i + 1; j < ordered.length; j += 1) {
+        const right = ordered[j]
+        const vertical = left.y < right.y + right.h + 4
+          && right.y < left.y + left.h + 4
+        if (!vertical) continue
+        const target = left.x + left.w + GAP_X
+        if (right.x < target) {
+          right.x = target
+          changed = true
+        }
+      }
+    }
+    if (!changed) break
+    ordered.sort((a, b) => a.y - b.y || a.x - b.x)
+  }
+}
+
 function connect(nodes: PositionedNode[], spec: DiagramSpec): PositionedEdge[] {
   const byId = new Map(nodes.map((node) => [node.id, node]))
   const out: PositionedEdge[] = []
@@ -229,6 +253,7 @@ export function layoutTree(spec: DiagramSpec): LayoutResult {
   const shift = MARGIN - minX
   for (const node of positioned) node.x += shift
   const sorted = [...positioned].sort((a, b) => a.y - b.y || a.x - b.x)
+  resolveNodeOverlaps(sorted)
   return finish(sorted, connect(sorted, spec))
 }
 
@@ -247,6 +272,7 @@ export function layoutRelation(spec: DiagramSpec): LayoutResult {
       y: center + Math.sin(angle) * radius - NODE_H / 2,
     }
   })
+  resolveNodeOverlaps(positioned)
   return finish(positioned, connect(positioned, spec))
 }
 
@@ -314,6 +340,7 @@ export function layoutFlow(spec: DiagramSpec): LayoutResult {
       cursor += w + GAP_X
     }
   })
+  resolveNodeOverlaps(positioned)
   return finish(positioned, connect(positioned, spec))
 }
 

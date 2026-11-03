@@ -59,7 +59,7 @@ from session_cache import (
 
 CHUNK = 6          # 直答模式每帧字符数(配合浏览器端 ~24ms 渲染节流)
 FRAME_MS = 0.02    # 帧间隔(秒),模拟真实模型逐字输出
-DIAGRAM_TIMEOUT = 30.0  # 单张图规划上限(秒);慢可以,不能拖死回答
+DIAGRAM_TIMEOUT = 45.0  # 单张图规划上限(秒);3D 采样较慢,但不能无限拖住回答
 _DONE = "data: [DONE]\n\n"  # SSE 收尾标记(由 _sse 统一补,生成器不再各自 yield)
 
 WELCOME_ZH = (

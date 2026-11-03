@@ -1733,6 +1733,8 @@ _PLAN_SYSTEM = (
     "只有用户明确要类比/实体化/画图且你能给出准确具体的图像时,才改用 2D/3D;"
     "明确步骤/推导/因果链才用 flow;真正的关系网才用 relation。"
     "这些图都不要加装饰性坐标轴;坐标轴只属于几何图、函数图或空间图。\n"
+    "20. 条件/推出关系必须用有向边:若 A 能推出 B,edges 里必须是从 A 指向 B;"
+    "箭头方向就是推出方向,不要反向,也不要用无向连线代替。\n"
 )
 
 
@@ -1877,6 +1879,17 @@ def _diagram_summary(diagram: dict) -> str:
     ][:8]
     if labels:
         lines.append("标注:" + "、".join(labels))
+    edges = []
+    for edge in (diagram.get("edges") or [])[:12]:
+        if not isinstance(edge, dict):
+            continue
+        source = _text(edge.get("from"), 60)
+        target = _text(edge.get("to"), 60)
+        label = _text(edge.get("label"), 40)
+        if source and target:
+            edges.append(f"{source}->{target}" + (f"({label})" if label else ""))
+    if edges:
+        lines.append("有向关系:" + "；".join(edges))
     exprs = [
         _text(item.get("expr"), 80)
         for item in diagram.get("shapes") or []

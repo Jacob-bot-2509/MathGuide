@@ -70,6 +70,8 @@ export interface ScreenLabelPlacement {
   centerY: number
   side: Side | 'center'
   leader: boolean
+  overlapsAvoid: boolean
+  overlapsLabel: boolean
 }
 
 const CJK_RE = /[　-鿿＀-￯]/
@@ -481,6 +483,8 @@ export function placeScreenLabels(
         centerY: rect.y + h / 2,
         side: 'center',
         leader: false,
+        overlapsAvoid: false,
+        overlapsLabel: false,
       })
       continue
     }
@@ -516,6 +520,12 @@ export function placeScreenLabels(
         best = candidate
       }
     }
+    const overlapsLabel = placed.some(
+      (other) => overlapArea(best.rect, other) > 0,
+    )
+    const overlapsAvoid = request.avoidRect
+      ? overlapArea(best.rect, request.avoidRect) > 0
+      : false
     placed.push(best.rect)
     if (best.side !== 'center') sideUse[best.side] += 1
     byId.set(request.id, {
@@ -525,6 +535,8 @@ export function placeScreenLabels(
       centerY: best.rect.y + h / 2,
       side: best.side,
       leader: pointRectDistance(best.rect, request.anchorX, request.anchorY) > 2,
+      overlapsAvoid,
+      overlapsLabel,
     })
   }
 

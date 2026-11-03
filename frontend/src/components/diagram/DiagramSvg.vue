@@ -424,6 +424,13 @@ function showLeader(label: PlacedLabel): boolean {
   return Math.hypot(dx, dy) > 12
 }
 
+function showEdgeLabel(label: unknown): boolean {
+  const text = String(label || '').trim()
+  if (!text) return false
+  // 箭头已经表达推出方向,不再重复一个“⇒/推出”文字压在线旁。
+  return !/^(?:=>|→|⇒|推出|蕴含|可推出)$/.test(text)
+}
+
 function resetView(): void {
   view.value = { x: minX.value, y: minY.value, w: worldWidth.value, h: worldHeight.value }
   zoom.value = 1
@@ -550,7 +557,7 @@ resetView()
           <path d="M0,0 L7,3 L0,6 z" class="diagram-axis-head" />
         </marker>
         <marker
-          v-if="visibleSpec.type === 'flow'"
+          v-if="layout.nodes.length"
           :id="arrowId"
           markerWidth="8" markerHeight="8"
           refX="7" refY="3" orient="auto"
@@ -564,10 +571,10 @@ resetView()
           :key="`${edge.from}-${edge.to}`"
           :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2"
           class="diagram-edge"
-          :marker-end="visibleSpec.type === 'flow' ? `url(#${arrowId})` : undefined"
+          :marker-end="layout.nodes.length ? `url(#${arrowId})` : undefined"
         />
         <text
-          v-for="edge in layout.edges.filter((e) => e.label)"
+          v-for="edge in layout.edges.filter((e) => showEdgeLabel(e.label))"
           :key="`label-${edge.from}-${edge.to}`"
           :x="edge.labelX ?? (edge.x1 + edge.x2) / 2"
           :y="edge.labelY ?? (edge.y1 + edge.y2) / 2 - 4"

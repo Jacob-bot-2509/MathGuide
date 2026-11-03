@@ -202,6 +202,33 @@ check('关系图节点有限坐标', relationLayout.nodes.every((n) =>
 check('关系图不重叠', relationLayout.nodes[0].x !== relationLayout.nodes[1].x
   || relationLayout.nodes[0].y !== relationLayout.nodes[1].y)
 
+const conceptSpec: DiagramSpec = {
+  type: 'tree',
+  nodes: [
+    { id: 'r1', label: '多元函数在一点的局部性质' },
+    { id: 'r2', label: '反例:xy/(x²+y²) 偏导存在但不可微且不连续' },
+    { id: 'a', label: '偏导数连续' },
+    { id: 'b', label: '可微' },
+    { id: 'c', label: '连续' },
+    { id: 'd', label: '偏导数存在' },
+  ],
+  edges: [
+    { from: 'r1', to: 'a' }, { from: 'r1', to: 'b' },
+    { from: 'r2', to: 'c' }, { from: 'r2', to: 'd' },
+    { from: 'a', to: 'b' }, { from: 'b', to: 'c' },
+    { from: 'b', to: 'd' },
+  ],
+  shapes: [], annotations: [],
+}
+const conceptLayout = layoutTree(conceptSpec)
+check('概念图节点不重叠', conceptLayout.nodes.every((node, index) => (
+  conceptLayout.nodes.every((other, otherIndex) => index === otherIndex
+    || overlapArea(
+      { x: node.x, y: node.y, w: node.w, h: node.h },
+      { x: other.x, y: other.y, w: other.w, h: other.h },
+    ) === 0)
+)))
+
 const flowSpec: DiagramSpec = {
   type: 'flow', nodes: [
     { id: 's1', label: '第一步' }, { id: 's2', label: '第二步' },

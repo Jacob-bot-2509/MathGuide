@@ -1066,6 +1066,15 @@ def test_axis_labels_pinned_to_their_equations():
 
 # ---------- GeoGebra 引擎 ----------
 
+def test_diagram_summary_includes_directed_edges():
+    summary = rd._diagram_summary({
+        "type": "tree",
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"from": "a", "to": "b", "label": "推出"}],
+    })
+    assert "a->b(推出)" in summary
+
+
 def test_geogebra_validator_whitelist():
     ok = rd.validate_geogebra({
         "type": "geogebra2d",

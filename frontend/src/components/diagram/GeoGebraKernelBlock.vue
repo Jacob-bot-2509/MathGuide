@@ -5,6 +5,7 @@ import type { DiagramSpec } from '@/utils/diagramSpec'
 import { parseDiagramSpec } from '@/utils/diagramSpec'
 import { t } from '@/utils/i18n'
 import { convertGeoGebraCommands } from '@/services/geogebraKernel'
+import { planDiagram } from '@/services/diagramService'
 import DiagramSvg from '@/components/diagram/DiagramSvg.vue'
 
 const props = defineProps<{ spec: DiagramSpec }>()
@@ -13,20 +14,35 @@ const error = ref('')
 let disposed = false
 
 onMounted(async () => {
+  let convertedSpec: DiagramSpec | null = null
   try {
     const result = await convertGeoGebraCommands(
       props.spec.commands || [], props.spec.title,
     )
     if (disposed) return
-    const sanitized = result ? parseDiagramSpec(result) : null
-    if (!sanitized) {
-      error.value = t('diagram.renderFail')
-      return
-    }
-    converted.value = sanitized
+    convertedSpec = result ? parseDiagramSpec(result) : null
   } catch {
-    if (!disposed) error.value = t('diagram.renderFail')
+    convertedSpec = null
   }
+  if (!convertedSpec && !disposed) {
+    // 内核不可用时回退旧规划器,仍然用我们的 SVG 渲染,不显示 GeoGebra 画布。
+    try {
+      const title = (props.spec.title || '').trim()
+      const fallback = await planDiagram({
+        question: title || '根据当前讲解画一张图',
+        answer: title || (props.spec.commands || []).join('；'),
+      })
+      convertedSpec = fallback
+    } catch {
+      convertedSpec = null
+    }
+  }
+  if (disposed) return
+  if (!convertedSpec) {
+    error.value = t('diagram.renderFail')
+    return
+  }
+  converted.value = convertedSpec
 })
 
 onBeforeUnmount(() => {

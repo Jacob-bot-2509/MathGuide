@@ -40,9 +40,17 @@ const GeoGebraBlock = defineAsyncComponent({
 })
 
 const Diagram3D = defineAsyncComponent({
-  loader: () => import('@/components/diagram/Diagram3D.vue'),
+  loader: async () => {
+    try {
+      return await import('@/components/diagram/Diagram3D.vue')
+    } catch {
+      // 大 chunk 偶发网络失败:短暂等待后重试一次,不让整张图直接变错误。
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      return import('@/components/diagram/Diagram3D.vue')
+    }
+  },
   delay: 200,
-  timeout: 15000,
+  timeout: 30000,
   loadingComponent: {
     // 图片没出来就不显示占位文字,避免用符号/加载文案干扰阅读。
     render: () => h('div', { class: 'diagram-loading' }),

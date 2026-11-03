@@ -159,7 +159,21 @@ async function runConversion(commands: string[]): Promise<DiagramSpec | null> {
   return diagramFromGeoGebraXml(xml)
 }
 
+function resetKernel(): void {
+  window.__mgGgbKernel = undefined
+  window.__mgGgbLoader = undefined
+  document.getElementById(HOST_ID)?.remove()
+}
+
 let queue: Promise<unknown> = Promise.resolve()
+
+async function attemptConversion(commands: string[]): Promise<DiagramSpec | null> {
+  try {
+    return await runConversion(commands)
+  } catch {
+    return null
+  }
+}
 
 /** 串行执行构造命令,避免多个图解共用隐藏 applet 时互相污染。 */
 export function convertGeoGebraCommands(
@@ -167,8 +181,14 @@ export function convertGeoGebraCommands(
   title?: string,
 ): Promise<DiagramSpec | null> {
   const task = queue.then(async () => {
-    const spec = await runConversion(commands)
-    if (spec && title) spec.title = title
+    let spec = await attemptConversion(commands)
+    if (!spec) {
+      // 首次加载可能是 CDN/Applet 超时:换一个干净的离屏实例重试一次。
+      resetKernel()
+      spec = await attemptConversion(commands)
+    }
+    if (!spec) throw new Error('geogebra conversion failed')
+    if (title) spec.title = title
     return spec
   })
   queue = task.catch(() => undefined)

@@ -561,7 +561,7 @@ function layoutLabels(THREE: typeof import('three')): void {
     const base = entry.sprite.userData.baseLabelScale as
       { x: number; y: number } | undefined
     if (base) {
-      const maxPx = entry.role === 'note' ? 24 : entry.role === 'axis' ? 18 : 26
+      const maxPx = entry.role === 'note' ? 22 : entry.role === 'axis' ? 18 : 22
       const screenHeight = base.y * point.ppw
       const factor = screenHeight > maxPx ? maxPx / screenHeight : 1
       entry.sprite.scale.set(base.x * factor, base.y * factor, 1)
@@ -583,22 +583,16 @@ function layoutLabels(THREE: typeof import('three')): void {
   const byId = new Map(placements.map((item) => [item.id, item]))
   const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
   const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
-  let labelIndex = 0
   for (const entry of labelEntries) {
     const placement = byId.get(entry.id)
     const point = project(entry.anchor)
     if (!placement || !point) continue
-    let centerX = placement.centerX
-    let centerY = placement.centerY
-    // 避让把标签甩得太远时,宁可贴着锚点(引线短),也不要横穿整张图。
-    if (Math.hypot(centerX - point.x, centerY - point.y) > 84) {
-      const side = labelIndex % 2 === 0 ? 1 : -1
-      centerX = point.x + side * 26
-      centerY = point.y - 22
-    }
-    labelIndex += 1
-    const dx = (centerX - point.x) / point.ppw
-    const dy = -(centerY - point.y) / point.ppw
+    // 排不下时宁可少一个形状标签,也不能让文字压在曲面上。
+    const hide = entry.role === 'shape'
+      && (placement.overlapsAvoid || placement.overlapsLabel)
+    entry.sprite.visible = !hide
+    const dx = (placement.centerX - point.x) / point.ppw
+    const dy = -(placement.centerY - point.y) / point.ppw
     entry.sprite.position.copy(entry.anchor)
       .addScaledVector(right, dx)
       .addScaledVector(up, dy)
@@ -695,9 +689,9 @@ async function boot(): Promise<void> {
         renderer?.render(scene!, camera!)
       })
       camera.position.set(
-        center.x + radius * 1.8,
-        center.y + radius * 1.25,
-        center.z + radius * 2.1,
+        center.x + radius * 2.0,
+        center.y + radius * 1.4,
+        center.z + radius * 2.3,
       )
       camera.lookAt(center)
     } else {
