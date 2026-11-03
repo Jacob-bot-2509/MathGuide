@@ -66,7 +66,8 @@ WELCOME_ZH = (
     "**欢迎回到 MATHGUIDE · 学习辅助**\n\n"
     "我是 MG,你的高等数学学习与研究助手。直接提问即可,或用下方指令:"
     "概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 待办清单。\n\n"
-    "问题的**板块我会自动识别**,先给严谨的专业表述,再给形象化理解,并带上公式推演;"
+    "问题的**板块我会自动识别**,先给严谨的推导与结论;需要通俗解释时,"
+    "点回答下的「换个直观说法」即可;"
     "中文、英文提问都可以。\n\n"
     "(Welcome to MATHGUIDE · Learn. You can also ask in English, e.g. \"explain limits with intuition\".)"
 )
@@ -85,8 +86,6 @@ FALLBACK_ZH = (
     "**通用三步走(专业表述):** ① 明确对象与条件,把问题转化为标准型(极限式、方程、积分、模型);"
     "② 选择对应工具求解;③ **回代验算**——MG 的「自我验证工作流」会在解答发布前进行一致性检查与符号复验,"
     "低置信度时会主动标注「该解答需进行人工处理」。\n\n"
-    "**形象理解:** 解数学题像侦探破案:先锁定案件类型,再盘点物证(条件),"
-    "最后用匹配的手法收网;每一步结论都要经得起「代入原题」这关审讯。\n\n"
     "把题目原文(或拍照上传)发给我,我会按上面的框架给出带完整过程的解答。"
 )
 
@@ -96,8 +95,6 @@ FALLBACK_EN = (
     "(a limit, an equation, an integral, or a model); 2) apply the matching tool; 3) **verify by substitution**. "
     "MG's self-verification workflow runs consistency checks and symbolic re-validation before publishing an answer, "
     "flagging low-confidence ones as \"manual review required\".\n\n"
-    "**Intuition:** solving a math problem is like detective work — classify the case, collect the evidence, "
-    "close the net with the right method, and cross-examine every conclusion by plugging it back in.\n\n"
     "Paste the full problem (or upload a photo) and I'll work through it step by step."
 )
 
@@ -174,7 +171,7 @@ CHITCHAT_SETS_ZH: dict[str, list[str]] = {
         "我叫 MG,专攻高等数学的学习与科研辅助。你可以直接丢给我一道题,或者问我某个概念怎么理解。",
     ],
     "ability": [
-        "我能帮你做这些:讲概念(带形象理解)、串章节知识、归纳错题、查公式,还能给难题搭解题框架。",
+        "我能帮你做这些:讲概念、串章节知识、归纳错题、查公式,还能给难题搭解题框架;需要时可以把概念换成直观说法。",
         "我的主战场是高等数学:概念讲解、问题记录、公式查询,还能陪你梳理章节脉络。",
     ],
     "usage": [
@@ -1257,6 +1254,74 @@ async def _gen_formula_clarify(question: str):
     if verdict:
         print(f"[chat] 公式手册澄清复核({vrole}): {len(verdict)} 字")
         yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
+
+
+# ---------- 直观解释:按需生成 + 服务端缓存 ----------
+
+_INTUITION_SYSTEM_ZH = (
+    "你是数学直观解释助手。用生活化类比解释给定的数学内容,要求:"
+    "1. 先用一句话点明要解释的对象;"
+    "2. 给出一个贴切的类比;"
+    "3. 明确类比与数学对象的对应关系;"
+    "4. 指出类比的局限;"
+    "5. 200 字以内,不重复原解答的推导步骤,最多保留一个关键公式。"
+)
+_INTUITION_SYSTEM_EN = (
+    "You explain math intuitively. Given a question (and an optional answer excerpt), "
+    "1) name the object being explained in one sentence; 2) give one apt everyday analogy; "
+    "3) map the analogy to the math explicitly; 4) state its limits; "
+    "5) stay under 150 words, do not repeat the original derivation, keep at most one formula."
+)
+_INTUITION_CACHE: OrderedDict[tuple[str, str], tuple[float, str]] = OrderedDict()
+_INTUITION_TTL = 1800.0
+_INTUITION_MAX = 64
+
+
+async def _gen_intuition(question: str, answer: str, zh: bool):
+    system = _INTUITION_SYSTEM_ZH if zh else _INTUITION_SYSTEM_EN
+    user = f"要解释的问题:{question}" if zh else f"Question: {question}"
+    if answer:
+        user += ((f"\n\n原解答摘要(只用于理解上下文,不要复述):\n{answer[:800]}")
+                 if zh else (f"\n\nAnswer excerpt (context only, do not repeat):\n{answer[:800]}"))
+    parts: list[str] = []
+    try:
+        async for delta in rag.llm.stream_chat(
+                system, user, role=rag.llm.pick("main"), fallback=True,
+                thinking=False, max_tokens=600):
+            parts.append(delta)
+            yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+    except Exception as exc:  # noqa: BLE001 失败不伪造内容
+        print(f"[chat] 直观解释生成失败: {exc}")
+        note = ("⚠ 直观解释生成失败,请稍后重试。" if zh
+                else "⚠ Could not generate an intuitive explanation. Please try again.")
+        yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
+        return
+    text = "".join(parts).strip()
+    if text:
+        key = (question.strip().lower(), answer[:400])
+        _INTUITION_CACHE[key] = (time.monotonic(), text)
+        _INTUITION_CACHE.move_to_end(key)
+        while len(_INTUITION_CACHE) > _INTUITION_MAX:
+            _INTUITION_CACHE.popitem(last=False)
+
+
+async def intuition(request: Request) -> StreamingResponse | JSONResponse:
+    """按需生成直观解释;默认命中缓存,refresh=true 时重写(用户点「换个说法」)。"""
+    rec = require_auth(request)
+    body = await read_json_object(request)
+    question = str(body.get("question", "")).strip()[:2000]
+    answer = str(body.get("answer", "")).strip()[:4000]
+    refresh = bool(body.get("refresh"))
+    if not question:
+        return JSONResponse({"detail": "question required"}, status_code=400)
+    _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
+    key = (question.strip().lower(), answer[:400])
+    if not refresh:
+        hit = _INTUITION_CACHE.get(key)
+        if hit and time.monotonic() - hit[0] < _INTUITION_TTL:
+            _INTUITION_CACHE.move_to_end(key)
+            return _stream_text(hit[1])
+    return _sse(_gen_intuition(question, answer, _is_chinese(question)))
 
 
 async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:

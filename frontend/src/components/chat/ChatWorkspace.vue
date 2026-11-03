@@ -39,7 +39,12 @@ import SpeechTips from '@/components/chat/SpeechTips.vue'
 import MgSwitch from '@/components/common/MgSwitch.vue'
 import { COMMANDS, RESEARCH_COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
-import { speechToMath, type ChatMeta, type ChatStreamHandle } from '@/services/chatService'
+import {
+  requestIntuition,
+  speechToMath,
+  type ChatMeta,
+  type ChatStreamHandle,
+} from '@/services/chatService'
 import { getResearchTable } from '@/services/researchTableService'
 import { getResearchDocMeta, uploadTempPaper, type PaperAction, type ResearchDoc } from '@/services/researchService'
 import { deletePaperHistory, importTempPaper } from '@/services/literatureService'
@@ -611,6 +616,32 @@ async function requestDiagram(
   } finally {
     diagramBusy.value = null
   }
+}
+
+const intuitionBusy = ref<number | null>(null)
+
+/** 按需生成直观解释;已有内容时再次点击 = 换个说法(跳过服务端缓存)。 */
+function requestIntuitionFor(msg: ChatMsg): void {
+  const question = previousQuestion(msg)
+  if (!question || intuitionBusy.value === msg.id || !msg.content.trim()) return
+  const refresh = !!msg.intuition
+  intuitionBusy.value = msg.id
+  let acc = ''
+  requestIntuition(question, msg.content, refresh, {
+    onDelta: (chunk) => {
+      acc += chunk
+      msg.intuition = acc
+    },
+    onDone: (full, complete) => {
+      if (complete && full) msg.intuition = full
+      else if (acc) msg.intuition = acc
+      persistSessions()
+      intuitionBusy.value = null
+    },
+    onError: () => {
+      showToast(t('intuition.fail'))
+    },
+  })
 }
 
 /** 让某会话的一条助手消息开始流式接收回复(输出在所属会话内进行,切换界面不中断) */
@@ -1916,6 +1947,10 @@ onBeforeUnmount(() => {
                   </DiagramBoundary>
                 </template>
               </div>
+              <div v-if="m.intuition" class="intuition-block">
+                <div class="intuition-title">{{ t('intuition.title') }}</div>
+                <MathText :text="m.intuition" />
+              </div>
               <button
                 v-if="m.content && !m.streaming && !m.paperImport
                   && previousQuestion(m) && !hasDiagram(m)"
@@ -1924,6 +1959,15 @@ onBeforeUnmount(() => {
                 :disabled="diagramBusy === m.id"
                 @click.stop="requestDiagram(m)"
               >{{ diagramBusy === m.id ? t('diagram.generating') : t('diagram.generate') }}</button>
+              <button
+                v-if="m.content && !m.streaming && !m.paperImport && previousQuestion(m)"
+                class="diagram-btn"
+                type="button"
+                :disabled="intuitionBusy === m.id"
+                @click.stop="requestIntuitionFor(m)"
+              >{{ intuitionBusy === m.id
+                ? t('intuition.generating')
+                : (m.intuition ? t('intuition.regenerate') : t('intuition.generate')) }}</button>
               <span v-if="m.streaming && !m.thinking" class="cursor">▍</span>
               <!-- 半截回答的标记:与完整回答同形,不点明用户看不出缺了一段 -->
               <span v-if="m.interrupted" class="cut-note">{{ t('learn.interrupted') }}</span>
@@ -2591,6 +2635,21 @@ onBeforeUnmount(() => {
 .diagram-btn:hover {
   color: var(--cyan);
   border-color: var(--line-bright);
+}
+
+.intuition-block {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--line-bright);
+  background: color-mix(in srgb, var(--bg-card) 70%, transparent);
+  border-radius: 0 8px 8px 0;
+}
+
+.intuition-title {
+  margin-bottom: 4px;
+  color: var(--cyan);
+  font-size: 11px;
+  letter-spacing: 0.04em;
 }
 
 .diagram-btn:disabled {

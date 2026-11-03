@@ -158,18 +158,22 @@ def _collect_terms(index: KnowledgeIndex) -> frozenset[str]:
 def build_system(chunks: list[tuple[Chunk, float]], cmd: str | None, zh: bool = True) -> str:
     """组装 system prompt:检索到的知识片段 + 角色约束 + 指令语义(回答语言跟随提问语言)"""
     lang = (
-        "请用简体中文回答,先给严谨的专业表述,再给形象化理解"
+        "请用简体中文回答,直接作答,不寒暄、不复述题干"
         if zh
-        else "Answer in the user's language (English), giving a rigorous explanation first, then intuition"
+        else ("Answer in the user's language (English), directly and without filler, "
+              "and do not restate the question")
     )
     parts = [
         f"你是 MathGuide,一个高等数学学习与研究助手。{lang},"
-        "公式用 LaTeX(行内 $...$,块级 $$...$$)。"
-        "回答要有人的温度:语气自然、亲切、不做作,像一位耐心的学长学姐。"
+        "公式用 LaTeX(行内 $...$,块级 $$...$$)。",
+        "输出规范:"
+        "解题时只给推导过程与最终结论,末尾另起一段「**参考思路**」"
+        "(2~4 句,讲关键思路与可推广点),不要写形象化类比;"
+        "解释概念时给定义、成立条件、关键性质和一个最小例子,不主动打比方;"
+        "只有用户明确要求通俗、直观、举例或\"听不懂\"时,才使用生活化类比。"
+        "语气自然,但不客套、不重复题干、不写与问题无关的铺垫。"
         "对寒暄、闲聊、倾诉等一般对话,像正常人一样回应,不要总把话题拽回数学;"
         "只有用户明确在问数学问题时,才给出专业解答。",
-        "解答数学题时:先给出完整解答过程,末尾另起一段「**参考思路**」,"
-        "总结本题的解题思路与关键步骤(为什么这么想、可否推广);"
         "一次提问包含若干道题时,逐题给出解答,每题的参考思路紧随该题。",
         "",
         "以下是从知识库检索到的参考资料,请优先依据它们回答;"

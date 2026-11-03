@@ -760,3 +760,46 @@ def test_chat_drops_diagram_rejected_by_semantic_check(monkeypatch):
               if frame.startswith("data: ") and "mg_event" in frame]
     assert len(calls) == 1
     assert events == []
+
+
+# ---------- 回答规范:默认不写形象化,直观解释按需 ----------
+
+def test_build_system_default_has_no_analogy():
+    system = chat.rag.build_system([], None, zh=True)
+    assert "形象化理解" not in system
+    assert "不要写形象化类比" in system
+
+
+def test_intuition_cached_and_refresh(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    chat._INTUITION_CACHE.clear()
+    calls: list[int] = []
+
+    async def fake_stream(system, user, role="main", **kwargs):
+        calls.append(1)
+        yield "把它想成水管:流量就是导数。"
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat, "require_auth", lambda request: {"uid": "u-intuition"})
+    monkeypatch.setattr(chat, "_rate_limiter", chat.SlidingWindowLimiter(20, 60))
+
+    app = Starlette(routes=[
+        Route("/api/chat/intuition", chat.intuition, methods=["POST"]),
+    ])
+    client = TestClient(app)
+    body = {"question": "什么是导数", "answer": "导数是变化率"}
+
+    first = client.post("/api/chat/intuition", json=body)
+    assert first.status_code == 200 and "水管" in first.text
+    assert len(calls) == 1
+
+    second = client.post("/api/chat/intuition", json=body)
+    assert second.status_code == 200 and "水管" in second.text
+    assert len(calls) == 1  # 命中缓存,不再调模型
+
+    third = client.post("/api/chat/intuition", json={**body, "refresh": True})
+    assert third.status_code == 200
+    assert len(calls) == 2  # 换个说法:强制重写

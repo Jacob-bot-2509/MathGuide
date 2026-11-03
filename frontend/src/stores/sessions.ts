@@ -60,6 +60,8 @@ export interface ChatMsg {
   clarify?: ClarifyRequest
   /** 图解(回答内联,随会话保存;论文工作台不落库) */
   diagrams?: DiagramBlock[]
+  /** 按需生成的直观解释(生成后随会话保存,避免重复请求) */
+  intuition?: string
   /** 拖入论文后的导入询问:用户选择后更新状态,随会话保存 */
   paperImport?: {
     docId: string
@@ -99,6 +101,7 @@ interface PersistedMsg {
   stopped?: boolean
   clarify?: ClarifyRequest
   diagrams?: DiagramBlock[]
+  intuition?: string
   paperImport?: ChatMsg['paperImport']
 }
 
@@ -198,7 +201,8 @@ function createSessionStore(workspace: Workspace): SessionStore {
               nav: m.nav, navGuideFor: m.navGuideFor,
               interrupted: m.interrupted, research: m.research,
               stopped: m.stopped, clarify: m.clarify,
-              diagrams: m.diagrams, paperImport: m.paperImport,
+              diagrams: m.diagrams, intuition: m.intuition,
+              paperImport: m.paperImport,
             }))
             .slice(-120),
         })),

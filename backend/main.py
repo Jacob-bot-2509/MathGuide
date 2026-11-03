@@ -12,6 +12,7 @@ MathGuide 后端(RAG 检索增强生成骨架)
     POST /api/account/export                 导出账号与用量元数据(需 token)
     POST /api/account/delete                 注销账号并级联删除令牌/用量(需 token)
     POST /api/chat/stream                    聊天流式回复(需 token,OpenAI 兼容 SSE)
+    POST /api/chat/intuition                 按需生成直观解释(需 token;默认走缓存)
     POST /api/diagnosis                      掌握度诊断(需 token;答题或自评)
     GET  /api/diagnosis/report               薄弱点报告(需 token)
     GET  /api/recommendation                 学习路径推荐(需 token)
@@ -101,6 +102,7 @@ routes = [
     Route("/api/account/export", auth.export_account, methods=["POST"]),
     Route("/api/account/delete", auth.delete_account, methods=["POST"]),
     Route("/api/chat/stream", chat.chat_stream, methods=["POST"]),
+    Route("/api/chat/intuition", chat.intuition, methods=["POST"]),
     Route("/api/research/docs", research_corpus.upload_doc, methods=["POST"]),
     Route("/api/research/docs", research_corpus.list_docs),
     Route("/api/research/docs", research_corpus.clear_docs, methods=["DELETE"]),

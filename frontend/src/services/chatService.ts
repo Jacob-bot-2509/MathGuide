@@ -87,6 +87,41 @@ export function speechToMath(
   return { cancel: () => controller.abort() }
 }
 
+/** 按需生成直观解释;refresh=true 表示用户点「换个说法」,跳过服务端缓存。 */
+export function requestIntuition(
+  question: string,
+  answer: string,
+  refresh: boolean,
+  cb: StreamCallbacks,
+): ChatStreamHandle {
+  const controller = new AbortController()
+  let settled = false
+  postSSE(
+    '/api/chat/intuition',
+    { question, answer, refresh },
+    {
+      onDelta: (chunk) => cb.onDelta(chunk),
+      onDone: (full, complete) => {
+        if (settled) return
+        settled = true
+        cb.onDone(full, complete)
+      },
+      onError: (err) => {
+        if (settled) return
+        settled = true
+        cb.onError?.(err)
+      },
+    },
+    { headers: authHeaders(), controller },
+  ).catch((err: unknown) => {
+    if (settled) return
+    settled = true
+    cb.onError?.(err)
+    cb.onDone('', false)
+  })
+  return { cancel: () => controller.abort() }
+}
+
 export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta): ChatStreamHandle {
   const controller = new AbortController()
   let settled = false
