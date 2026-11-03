@@ -80,8 +80,8 @@ function labelSprite(
   if (!ctx) return null
   // 不画底板:文字只出现在对象附近,避免大灰框破坏画面。
   ctx.font = '36px sans-serif'
-  ctx.lineWidth = 7
-  ctx.strokeStyle = 'rgba(5, 10, 18, 0.92)'
+  ctx.lineWidth = 3
+  ctx.strokeStyle = 'rgba(5, 10, 18, 0.88)'
   ctx.strokeText(body, 12, 46)
   ctx.fillStyle = color
   ctx.fillText(body, 12, 46)
@@ -102,7 +102,7 @@ function annotationSprite(
   text: string,
   THREE: typeof import('three'),
   scale = 1,
-  color = '#ffd166',
+  color = '#dbe4f0',
 ): import('three').Sprite | null {
   const body = text.trim()
   if (!body) return null
@@ -126,8 +126,8 @@ function annotationSprite(
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
   ctx.font = '34px sans-serif'
-  ctx.lineWidth = 7
-  ctx.strokeStyle = 'rgba(5, 10, 18, 0.94)'
+  ctx.lineWidth = 3
+  ctx.strokeStyle = 'rgba(5, 10, 18, 0.88)'
   ctx.fillStyle = color
   lines.forEach((line, index) => {
     const baseline = 36 + index * 44
@@ -153,7 +153,7 @@ function createLeaderLine(
   const geometry = new THREE.BufferGeometry()
   geometry.setFromPoints([new THREE.Vector3(), new THREE.Vector3()])
   const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
-    color: 0xffd166, transparent: true, opacity: 0.42, depthTest: false,
+    color: 0x94a3b8, transparent: true, opacity: 0.35, depthTest: false,
   }))
   line.renderOrder = 15
   line.visible = false
@@ -173,10 +173,6 @@ function shapeColor(shape: DiagramShape, kind: string): number {
   if (kind === 'axis') return 0x94a3b8
   if (kind === 'plane') return 0xa78bfa
   return 0x4cc9f0
-}
-
-function colorHex(value: number): string {
-  return `#${value.toString(16).padStart(6, '0')}`
 }
 
 /** 记录标签原始世界尺寸;相机动了以后按屏幕像素上限重新缩放。 */
@@ -504,8 +500,7 @@ function addShape(
       && !/梯度|∇|gradient/i.test(String(shape.label))
     if (!auxiliaryVector) {
       const sprite = labelSprite(
-        String(shape.label), THREE, labelScale,
-        colorHex(shapeColor(shape, kind)),
+        String(shape.label), THREE, labelScale, '#dbe4f0',
       )
       if (sprite) {
         const to = triple(shape.to)

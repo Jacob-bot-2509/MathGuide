@@ -815,7 +815,7 @@ resetView()
 }
 
 .diagram-annotation {
-  fill: #ffd166;
+  fill: var(--text-dim);
   font-size: 10px;
 }
 </style>
