@@ -15,6 +15,7 @@ from rag import llm
 LINEAR_VISUALS = {
     "subspace", "linear_map", "determinant", "system", "eigen",
     "inner_product", "quadratic_form", "bilinear_form",
+    "unitary", "symplectic",
 }
 TOL = 1e-9
 DISPLAY = 1.6
@@ -23,8 +24,9 @@ _LINEAR_RE = re.compile(
     r"子空间|张成|span|线性空间|线性变换|线性映射|核空间|像空间|零空间|"
     r"特征值|特征向量|对角化|行列式|线性方程组|解空间|正交补|投影矩阵|"
     r"基向量|维数|内积|正交投影|Gram|施密特|二次型|双线性|正定|惯性|"
-    r"对称矩阵|R\s*\^\s*[23]|\\\\mathbb\{R\}\s*\^\s*[23]|"
-    r"\bR[23]\b",
+    r"对称矩阵|酉空间|酉变换|复内积|Hermitian|辛空间|辛变换|辛形式|"
+    r"各向同性|Lagrangian|相空间|R\s*\^\s*[234]|\\\\mathbb\{R\}\s*\^\s*[234]|"
+    r"\bR[234]\b",
     re.IGNORECASE,
 )
 
@@ -87,6 +89,96 @@ def _matrix(value: object, size: int) -> list[list[float]] | None:
             return None
         rows.append(row)
     return rows
+
+
+def _complex(value: object) -> complex | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    real, imag = _num(value[0]), _num(value[1])
+    if real is None or imag is None:
+        return None
+    return complex(real, imag)
+
+
+def _cvec(value: object, size: int) -> list[complex] | None:
+    if not isinstance(value, list) or len(value) != size:
+        return None
+    out = [_complex(item) for item in value]
+    if any(item is None for item in out):
+        return None
+    return [item for item in out if item is not None]
+
+
+def _cmatrix(value: object, size: int) -> list[list[complex]] | None:
+    if not isinstance(value, list) or len(value) != size:
+        return None
+    rows: list[list[complex]] = []
+    for item in value:
+        row = _cvec(item, size)
+        if row is None:
+            return None
+        rows.append(row)
+    return rows
+
+
+def _cmatvec(matrix: list[list[complex]], vector: list[complex]) -> list[complex]:
+    return [sum(a * b for a, b in zip(row, vector)) for row in matrix]
+
+
+def _cabs(value: complex) -> float:
+    return abs(value)
+
+
+def _is_unitary(matrix: list[list[complex]]) -> bool:
+    size = len(matrix)
+    for row in range(size):
+        for col in range(size):
+            value = sum(
+                matrix[index][row].conjugate() * matrix[index][col]
+                for index in range(size)
+            )
+            expected = 1.0 if row == col else 0.0
+            if abs(value - expected) > 1e-7:
+                return False
+    return True
+
+
+def _j_matrix(dimension: int) -> list[list[float]]:
+    size = dimension * 2
+    matrix = [[0.0] * size for _ in range(size)]
+    for index in range(dimension):
+        matrix[index][dimension + index] = 1.0
+        matrix[dimension + index][index] = -1.0
+    return matrix
+
+
+def _is_symplectic(matrix: list[list[float]], dimension: int) -> bool:
+    size = dimension * 2
+    if len(matrix) != size or any(len(row) != size for row in matrix):
+        return False
+    j = _j_matrix(dimension)
+    for row in range(size):
+        for col in range(size):
+            value = sum(
+                matrix[k][row] * j[k][l] * matrix[l][col]
+                for k in range(size) for l in range(size)
+            )
+            if abs(value - j[row][col]) > 1e-7:
+                return False
+    return True
+
+
+def _project_complex(vector: list[complex], kind: str) -> list[float]:
+    real = []
+    for value in vector:
+        real.extend([value.real, value.imag])
+    if kind == "r4_to_3d":
+        # 固定投影 (Re z1, Im z1, Re z2),丢掉 Im z2;图上必须标注。
+        return real[:3]
+    if kind == "r4_to_2d":
+        return [real[0], real[1]]
+    return real
+
 
 
 def _norm(vec: Iterable[float]) -> float:
@@ -484,26 +576,44 @@ def _subspace_basis(subspace: dict, ambient: int) -> tuple[int, str, list[float]
 
 
 def sanitize_linear(raw: object) -> dict | None:
-    """校验模型给出的线性代数语义计划;只接受 Phase 1 实数 2D/3D。"""
+    """校验模型给出的线性代数语义计划;实空间 2D/3D,复空间 C/C² 投影。"""
     if not isinstance(raw, dict):
         return None
     visual = _text(raw.get("visual"), 30).lower()
     if visual not in LINEAR_VISUALS:
         return None
     domain = _text(raw.get("domain", "real"), 20).lower()
-    if domain != "real":
-        return None
-    ambient = _integer(raw.get("ambient"), 2, 3)
+    if visual == "unitary":
+        if domain != "complex":
+            return None
+        ambient = _integer(raw.get("ambient"), 1, 2)
+    elif visual == "symplectic":
+        if domain != "real":
+            return None
+        ambient = _integer(raw.get("ambient"), 2, 4)
+        if ambient not in (2, 4):
+            return None
+    else:
+        if domain != "real":
+            return None
+        ambient = _integer(raw.get("ambient"), 2, 3)
     if ambient is None:
         return None
     result: dict = {
         "visual": visual,
-        "domain": "real",
+        "domain": domain,
         "ambient": ambient,
     }
     title = _text(raw.get("title"), 200)
     if title:
         result["title"] = title
+    projection = raw.get("projection")
+    if isinstance(projection, dict):
+        kind = _text(projection.get("kind"), 30).lower()
+        if kind not in ("none", "complex_to_real", "r4_to_3d", "r4_to_2d"):
+            return None
+        note = _text(projection.get("note"), 160)
+        result["projection"] = {"kind": kind, "note": note}
     if visual == "subspace":
         subspace = raw.get("subspace")
         if not isinstance(subspace, dict):
@@ -599,6 +709,42 @@ def sanitize_linear(raw: object) -> dict | None:
             if any(_norm(vector) < TOL for vector in vectors):
                 return None
             result["vectors"] = vectors
+    elif visual == "unitary":
+        matrix = _cmatrix(raw.get("matrix"), ambient)
+        if matrix is None or not _is_unitary(matrix):
+            return None
+        vector = _cvec(raw.get("vector", None), ambient)
+        if vector is None:
+            vector = [1.0 + 0.0j] + [0.0j] * (ambient - 1)
+        projection = result.get("projection") or {}
+        if ambient == 1:
+            result["projection"] = {
+                "kind": "complex_to_real",
+                "note": _text(projection.get("note"), 160) or "C → R² 实坐标",
+            }
+        elif not projection or projection.get("kind") not in (
+                "r4_to_3d", "r4_to_2d"):
+            result["projection"] = {
+                "kind": "r4_to_3d",
+                "note": "C² → R⁴ → R³ 投影,虚线方向仅示意",
+            }
+        result["matrix"] = matrix
+        result["vector"] = vector
+    elif visual == "symplectic":
+        size = ambient
+        matrix = _matrix(raw.get("matrix"), size)
+        if matrix is None:
+            matrix = _j_matrix(size // 2)
+        if not _is_symplectic(matrix, size // 2):
+            return None
+        projection = result.get("projection") or {}
+        if ambient == 4 and projection.get("kind") not in (
+                "r4_to_3d", "r4_to_2d"):
+            result["projection"] = {
+                "kind": "r4_to_3d",
+                "note": "R⁴ → R³ 投影,只示意辛基与面积关系",
+            }
+        result["matrix"] = matrix
     return result
 
 
@@ -944,6 +1090,96 @@ def _build_inner_product(linear: dict) -> tuple[str, list[dict], list[dict]] | N
     return type_name, shapes, notes
 
 
+def _project_real4(vector: list[float], kind: str) -> list[float]:
+    if kind == "r4_to_3d":
+        return vector[:3]
+    if kind == "r4_to_2d":
+        return vector[:2]
+    return vector[:]
+
+
+def _build_unitary(linear: dict) -> tuple[str, list[dict], list[dict]]:
+    ambient = linear["ambient"]
+    matrix = linear["matrix"]
+    vector = linear["vector"]
+    image = _cmatvec(matrix, vector)
+    projection = linear.get("projection", {})
+    kind = projection.get("kind", "complex_to_real")
+    note = projection.get("note", "")
+    shapes: list[dict] = []
+    notes: list[dict] = []
+    if ambient == 1:
+        z = [vector[0].real, vector[0].imag]
+        uz = [image[0].real, image[0].imag]
+        circle = [
+            [math.cos(2 * math.pi * i / 120), math.sin(2 * math.pi * i / 120)]
+            for i in range(121)
+        ]
+        shapes.append({"kind": "curve", "points": circle, "label": "|z|=1"})
+        shapes.append(_point([0.0, 0.0], "O"))
+        shapes.append(_vector([0.0, 0.0], z, "z"))
+        shapes.append(_vector([0.0, 0.0], uz, "Uz"))
+        notes.append(_annotation([0.8, 0.8],
+                                 f"|z| = {math.hypot(*z):.3g}"))
+        type_name = "plot2d"
+    else:
+        project = lambda value: _project_complex(value, kind)  # noqa: E731
+        z = project(vector)
+        uz = project(image)
+        shapes.append(_point([0.0] * len(z), "O"))
+        shapes.append(_vector([0.0] * len(z), z, "z"))
+        shapes.append(_vector([0.0] * len(z), uz, "Uz"))
+        if len(z) >= 3:
+            shapes.append(_plane([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 2.4, "C² 投影"))
+        notes.append(_annotation(_add([0.0] * len(z), [0.7] * len(z)),
+                                 f"|z| = {math.sqrt(sum(abs(v) ** 2 for v in vector)):.3g}"))
+        type_name = "geometry3d" if len(z) >= 3 else "plot2d"
+    if note:
+        notes.append(_annotation([0.0] * len(z), note))
+    return type_name, shapes, notes
+
+
+def _build_symplectic(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
+    ambient = linear["ambient"]
+    matrix = linear["matrix"]
+    projection = linear.get("projection", {})
+    kind = projection.get("kind", "none")
+    note = projection.get("note", "")
+    origin = [0.0] * ambient
+    shapes: list[dict] = []
+    notes: list[dict] = []
+    if ambient == 2:
+        e1 = [1.0, 0.0]
+        f1 = [0.0, 1.0]
+        shapes.append(_point(origin, "O"))
+        shapes.append(_vector(origin, e1, "e1"))
+        shapes.append(_vector(origin, f1, "f1"))
+        shapes.append(_polygon([origin, e1, [1.0, 1.0], f1], "ω"))
+        shapes.append(_segment([-1.4, -1.4], [1.4, 1.4], "各向同性"))
+        shapes.append(_segment([-1.4, 1.4], [1.4, -1.4], "各向同性"))
+        notes.append(_annotation([0.7, 0.7], "ω(e1,f1) = 1"))
+        return "plot2d", shapes, notes
+    if ambient != 4:
+        return None
+    basis = [[1.0 if i == j else 0.0 for j in range(4)] for i in range(4)]
+    labels = ["e1", "e2", "f1", "f2"]
+    projected = [_project_real4(vector, kind) for vector in basis]
+    dim = len(projected[0])
+    shapes.append(_point([0.0] * dim, "O"))
+    for vector, label in zip(projected, labels):
+        unit = _unit(vector)
+        if unit is not None:
+            shapes.append(_vector([0.0] * dim, _add([0.0] * dim, unit, DISPLAY),
+                                  label))
+    if dim >= 3:
+        shapes.append(_plane([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 2.4,
+                             "Lagrangian 投影"))
+    notes.append(_annotation([0.7] * dim, "ω 由辛基与面积给"))
+    if note:
+        notes.append(_annotation([0.0] * dim, note))
+    return "geometry3d" if dim >= 3 else "plot2d", shapes, notes
+
+
 def build_linear_diagram(raw: object) -> dict | None:
     """把含 linear 语义块的原始图解转成确定性 DiagramSpec。"""
     if not isinstance(raw, dict):
@@ -966,6 +1202,10 @@ def build_linear_diagram(raw: object) -> dict | None:
         built = _build_bilinear(linear)
     elif visual == "inner_product":
         built = _build_inner_product(linear)
+    elif visual == "unitary":
+        built = _build_unitary(linear)
+    elif visual == "symplectic":
+        built = _build_symplectic(linear)
     else:
         built = _build_system(linear)
     if built is None:
@@ -984,6 +1224,8 @@ def build_linear_diagram(raw: object) -> dict | None:
             "inner_product": "内积与正交",
             "quadratic_form": "二次型的几何形状",
             "bilinear_form": "双线性型的几何意义",
+            "unitary": "酉变换与复结构投影",
+            "symplectic": "辛结构与相空间",
         }.get(visual, "高等代数图解")
     if visual == "subspace":
         subspace = linear["subspace"]
@@ -1019,11 +1261,12 @@ _LINEAR_SYSTEM = """你是高等代数图解规划器。只输出一个 JSON 对
 模型只给代数语义,不要给 shapes/points/坐标网格。
 schema:
 {
-  "visual": "subspace|linear_map|determinant|system|eigen|inner_product|quadratic_form|bilinear_form",
-  "domain": "real",
-  "ambient": 2 或 3,
+  "visual": "subspace|linear_map|determinant|system|eigen|inner_product|quadratic_form|bilinear_form|unitary|symplectic",
+  "domain": "real|complex",
+  "ambient": 1|2|3|4,
   "title": "中文标题",
   "operation": "projection|orthogonal_complement|gram_schmidt|orthonormal_basis",
+  "projection": {"kind": "none|complex_to_real|r4_to_3d|r4_to_2d", "note": "投影说明"},
   "subspace": {"dimension": 0-3, "kind": "linear|affine",
                "offset": [x,y] 或 [x,y,z], "basis": [[...]], "label": "短标签"},
   "matrix": [[...]],
@@ -1044,8 +1287,12 @@ schema:
    - orthogonal_complement 给 subspace;
    - gram_schmidt / orthonormal_basis 给 vectors。
 8. quadratic_form / bilinear_form 给对称矩阵;二次型曲面默认 level=1。
-9. 不要输出 abstract 的商空间/张量/PID 模;这些不在本期内。
-10. 不要解释选型或权重。
+9. unitary 用 domain=complex,ambient=1 或 2;复数矩阵元素写 [实部,虚部];
+   ambient=2 时必须给 projection r4_to_3d 或 r4_to_2d 和 note。
+10. symplectic 用 domain=real,ambient=2 或 4;矩阵必须满足 MᵀJM=J;
+    ambient=4 时必须给 projection r4_to_3d 或 r4_to_2d 和 note。
+11. 不要输出 abstract 的商空间/张量/PID 模;这些不在本期内。
+12. 不要解释选型或权重。
 示例: R^3 中由 e1,e2 张成的平面
 {"visual":"subspace","domain":"real","ambient":3,"title":"R^3 中的坐标平面",
  "subspace":{"dimension":2,"kind":"linear","offset":[0,0,0],

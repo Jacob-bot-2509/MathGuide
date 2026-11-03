@@ -264,6 +264,80 @@ def test_prepare_quadratic_surface_keeps_linear_metadata():
     assert any(shape["kind"] == "surface" for shape in diagram["shapes"])
 
 
+def test_unitary_complex_plane_keeps_circle_and_vectors():
+    diagram = _build({
+        "visual": "unitary", "domain": "complex", "ambient": 1,
+        "matrix": [[[0, 1]]],
+        "vector": [[1, 0]],
+    })
+    assert diagram is not None
+    assert diagram["type"] == "plot2d"
+    assert any(shape["kind"] == "curve" for shape in diagram["shapes"])
+    assert any(shape.get("label") == "Uz" for shape in diagram["shapes"])
+    assert diagram["linear"]["projection"]["kind"] == "complex_to_real"
+
+
+def test_unitary_c2_projection_is_labelled():
+    diagram = _build({
+        "visual": "unitary", "domain": "complex", "ambient": 2,
+        "matrix": [
+            [[1, 0], [0, 0]],
+            [[0, 0], [1, 0]],
+        ],
+        "vector": [[1, 0], [0, 0]],
+        "projection": {"kind": "r4_to_3d", "note": "C² 实四维投影到 R³"},
+    })
+    assert diagram is not None
+    assert diagram["type"] == "geometry3d"
+    assert diagram["linear"]["projection"]["kind"] == "r4_to_3d"
+    assert any(note["text"] == "C² 实四维投影到 R³"
+               for note in diagram["annotations"])
+
+
+def test_unitary_rejects_non_unitary_matrix():
+    assert _build({
+        "visual": "unitary", "domain": "complex", "ambient": 1,
+        "matrix": [[[2, 0]]],
+        "vector": [[1, 0]],
+    }) is None
+
+
+def test_symplectic_plane_area_and_isotropic_lines():
+    diagram = _build({
+        "visual": "symplectic", "domain": "real", "ambient": 2,
+        "matrix": [[0, 1], [-1, 0]],
+    })
+    assert diagram is not None
+    assert diagram["type"] == "plot2d"
+    assert any(shape["kind"] == "polygon" for shape in diagram["shapes"])
+    assert any("各向同性" in str(shape.get("label", ""))
+               for shape in diagram["shapes"])
+
+
+def test_symplectic_r4_projection_is_labelled():
+    matrix = [
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+        [-1, 0, 0, 0],
+        [0, -1, 0, 0],
+    ]
+    diagram = _build({
+        "visual": "symplectic", "domain": "real", "ambient": 4,
+        "matrix": matrix,
+        "projection": {"kind": "r4_to_3d", "note": "R⁴ 辛基投影到 R³"},
+    })
+    assert diagram is not None
+    assert diagram["type"] == "geometry3d"
+    assert diagram["linear"]["projection"]["kind"] == "r4_to_3d"
+    assert any("R⁴ 辛基投影" in note["text"]
+               for note in diagram["annotations"])
+
+
+def test_taxonomy_prefers_symplectic_geometry():
+    from diagram_taxonomy import choose_visual
+    assert choose_visual("解释 R^4 中的辛空间与辛变换").kind == "geometry3d"
+
+
 def test_looks_linear_and_plan_linear(monkeypatch):
     assert la.looks_linear("解释 R^3 中由 e1,e2 张成的子空间")
     assert not la.looks_linear("y=x^2 的切线")
