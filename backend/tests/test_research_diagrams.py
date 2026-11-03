@@ -1098,10 +1098,42 @@ def test_geogebra_validator_whitelist():
 
 
 def test_plan_geogebra_defers_3d_to_legacy(monkeypatch):
-    """3D 继续走旧规划器 + Three.js,不在页面回退成 GeoGebra 画布。"""
+    """3D 曲面继续走旧规划器 + Three.js,不在页面回退成 GeoGebra 画布。"""
     monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
     assert asyncio.run(rd.plan_geogebra(
         "用三维图讲讲曲面 z=x^2+y^2 的梯度", "解释")) is None
+
+
+def test_plan_geogebra_accepts_constructible_3d(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({
+            "type": "geogebra3d",
+            "commands": [
+                "A=(1,0,0)", "B=(0,1,0)", "C=(0,0,1)",
+                "p=Plane(A,B,C)", "S=Sphere((0,0,0),2)",
+            ],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    diagram = asyncio.run(rd.plan_geogebra(
+        "画出空间中的平面和球面", "解释"))
+    assert diagram is not None and diagram["type"] == "geogebra3d"
+
+
+def test_plan_geogebra_defers_surface_command(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+
+    async def fake_stream(system, user, **kwargs):
+        yield json.dumps({
+            "type": "geogebra3d",
+            "commands": ["s=Surface(u,v,u^2+v^2,u,-1,1,v,-1,1)"],
+        })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    assert asyncio.run(rd.plan_geogebra(
+        "画一个旋转抛物面", "解释")) is None
 
 
 def test_plan_diagram_auto_falls_back_to_legacy(monkeypatch):

@@ -32,7 +32,9 @@ MG_DIAGRAM_ENGINE=geogebra
 ```
 
 默认 `legacy`。GeoGebra 规划失败、命令校验失败或前端转换失败都会回退旧管线。
-3D 暂不接内核：`plan_geogebra()` 遇到三维问题直接返回 `None`，由旧规划器 + Three.js 处理。
+3D 内核只接实数三维可精确构造对象：点、线、段、向量、平面、球、多边形。
+参数曲面 / 梯度 / 抛物面等仍由旧表达式采样 + Three.js 处理；`Surface` 命令会被主动拒绝并回退。
+3D XML 的曲面元素 `surfacecartesian3d` 不直接给网格，因此不硬转。
 
 ## 前端加载
 

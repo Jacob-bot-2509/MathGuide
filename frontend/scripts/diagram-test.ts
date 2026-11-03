@@ -18,6 +18,7 @@ import {
   compileExpression,
   diagramFromGeoGebraXml,
 } from '../src/utils/geogebraSpec'
+import { diagramFromGeoGebra3DXml } from '../src/utils/geogebra3dSpec'
 import {
   measureLabel,
   measureTextWidth,
@@ -425,6 +426,48 @@ check('GeoGebra 切线转成短切线', ggbSpec?.shapes.some(
 check('GeoGebra 多边形不重复画辅助边', ggbSpec?.shapes.filter(
   (shape) => shape.kind === 'segment' && !shape.label,
 ).length === 1)
+
+const ggb3dXml = `<geogebra><construction>
+<expression label="A" exp="(1, 0, 0)" type="point"/>
+<element type="point3d" label="A"><coords x="1" y="0" z="0" w="1"/></element>
+<expression label="B" exp="(0, 1, 0)" type="point"/>
+<element type="point3d" label="B"><coords x="0" y="1" z="0" w="1"/></element>
+<expression label="C" exp="(0, 0, 1)" type="point"/>
+<element type="point3d" label="C"><coords x="0" y="0" z="1" w="1"/></element>
+<command name="Segment"><input a0="A" a1="B"/><output a0="s"/></command>
+<element type="segment3d" label="s"/>
+<command name="Plane"><input a0="A" a1="B" a2="C"/><output a0="p"/></command>
+<element type="plane3d" label="p"><coords x="1" y="1" z="1" w="-1"/></element>
+<command name="Sphere"><input a0="(0, 0, 0)" a1="2"/><output a0="S"/></command>
+<element type="quadric" label="S"/>
+<command name="Polygon">
+  <input a0="A" a1="B" a2="C"/>
+  <output a0="q" a1="c" a2="a" a3="b"/>
+</command>
+<element type="polygon3d" label="q"/>
+<element type="segment3d" label="c"/>
+<element type="segment3d" label="a"/>
+<element type="segment3d" label="b"/>
+<command name="Surface">
+  <input a0="u" a1="v" a2="u^(2) + v^(2)" a3="u" a4="-1" a5="1" a6="v" a7="-1" a8="1"/>
+  <output a0="surf"/>
+</command>
+<element type="surfacecartesian3d" label="surf"/>
+</construction></geogebra>`
+const ggb3dSpec = diagramFromGeoGebra3DXml(ggb3dXml)
+check('GeoGebra 3D XML 转为自绘三维图', ggb3dSpec?.type === 'geometry3d'
+  && ggb3dSpec.shapes.some((shape) => shape.kind === 'point')
+  && ggb3dSpec.shapes.some((shape) => shape.kind === 'segment')
+  && ggb3dSpec.shapes.some((shape) => shape.kind === 'plane')
+  && ggb3dSpec.shapes.some((shape) => shape.kind === 'sphere')
+  && ggb3dSpec.shapes.some((shape) => shape.kind === 'polygon'))
+check('GeoGebra 3D 曲面不硬转网格', !ggb3dSpec?.shapes.some(
+  (shape) => shape.kind === 'surface',
+))
+check('GeoGebra 3D 多边形辅助边去重', ggb3dSpec?.shapes.filter(
+  (shape) => shape.kind === 'segment',
+).length === 1)
+
 
 // 图在文字上方时,正文里的“如下图”必须改成“如上图”;反之亦然。
 const afterFigure = splitMessageBlocks('前言\n\n如下图，曲线有两支。', [{

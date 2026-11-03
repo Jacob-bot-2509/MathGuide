@@ -27,10 +27,10 @@ const GeoGebraKernelBlock = defineAsyncComponent({
   },
 })
 
-const GeoGebraBlock = defineAsyncComponent({
-  loader: () => import('@/components/diagram/GeoGebraBlock.vue'),
+const GeoGebra3DKernelBlock = defineAsyncComponent({
+  loader: () => import('@/components/diagram/GeoGebra3DKernelBlock.vue'),
   delay: 200,
-  timeout: 20000,
+  timeout: 30000,
   loadingComponent: {
     render: () => h('div', { class: 'diagram-loading' }),
   },
@@ -87,7 +87,7 @@ onBeforeUnmount(() => {
     <figcaption v-if="spec.title" class="diagram-title">{{ spec.title }}</figcaption>
     <GeoGebraKernelBlock v-if="isGeo2d && visible" :spec="spec" />
     <div v-else-if="isGeo2d" class="diagram-loading" />
-    <GeoGebraBlock v-else-if="isGeo3d && visible" :spec="spec" />
+    <GeoGebra3DKernelBlock v-else-if="isGeo3d && visible" :spec="spec" />
     <div v-else-if="isGeo3d" class="diagram-loading" />
     <Diagram3D v-else-if="is3d && visible" :spec="spec" />
     <div v-else-if="is3d" class="diagram-loading" />

@@ -177,9 +177,13 @@ def diagram_cost(diagram: dict) -> tuple[int, int]:
 
 # 用户明确说出的表示方式优先于模型自选类型:要三维就画三维,不要改画思维导图。
 _3D_SURFACE_RE = re.compile(
-    r"曲面|梯度|切平面|等高线|z\s*=\s*f\s*\(|surface|gradient", re.IGNORECASE)
+    r"曲面|梯度|切平面|等高线|抛物面|双曲面|锥面|椭球面|z\s*=\s*f\s*\(|"
+    r"surface|gradient", re.IGNORECASE)
 _3D_RE = re.compile(
     r"三维|3d|3-d|立体|空间向量|空间曲面|three[- ]?dimensional", re.IGNORECASE)
+_GEO3D_SURFACE_DEFER_RE = re.compile(
+    r"曲面|梯度|等高线|抛物面|双曲面|锥面|椭球面|z\s*=\s*f\s*\(|"
+    r"surface|gradient", re.IGNORECASE)
 _2D_GEOMETRY_RE = re.compile(
     r"二维几何|平面几何|平面图形|二维图", re.IGNORECASE)
 _PLOT_RE = re.compile(
@@ -1990,10 +1994,9 @@ async def plan_geogebra(question: str, before: str, role: str = "main") -> dict 
     kind = "geogebra3d" if (
         _3D_RE.search(question or "") or _3D_SURFACE_RE.search(question or "")
     ) else "geogebra2d"
-    if kind == "geogebra3d":
-        # 2D 内核先落地:3D 仍走旧规划器 + 我们的 Three.js 渲染,
-        # 不在页面里回退成 GeoGebra 自己的 3D 画布。
-        diagram_metrics.record("plan_geo", False, "3d_deferred")
+    if kind == "geogebra3d" and _GEO3D_SURFACE_DEFER_RE.search(question or ""):
+        # 参数曲面/梯度仍走旧表达式采样 + Three.js;3D 内核只接可精确构造对象。
+        diagram_metrics.record("plan_geo", False, "3d_surface_deferred")
         return None
     latest = re.sub(r"\s+", " ", before or "").strip()[-1200:]
     context = f"""类型:{kind}
@@ -2014,6 +2017,12 @@ async def plan_geogebra(question: str, before: str, role: str = "main") -> dict 
     if isinstance(raw, dict) and not raw.get("type"):
         raw["type"] = kind
     diagram = validate_geogebra(raw)
+    if (diagram is not None
+            and any((_geo_command_name(command) or "") == "surface"
+                    for command in diagram.get("commands") or [])):
+        # 3D XML 对 Surface 不直接给网格;这类问题交回旧采样器。
+        diagram_metrics.record("plan_geo", False, "3d_surface_deferred")
+        return None
     diagram_metrics.record("plan_geo", diagram is not None,
                            "ok" if diagram else "invalid")
     return diagram
