@@ -5,7 +5,9 @@ import type { DiagramSpec } from '@/utils/diagramSpec'
 import { t } from '@/utils/i18n'
 import DiagramSvg from '@/components/diagram/DiagramSvg.vue'
 
-const props = defineProps<{ spec: DiagramSpec }>()
+const props = withDefaults(defineProps<{ spec: DiagramSpec; focused?: boolean }>(), {
+  focused: false,
+})
 const is3d = computed(() => ['geometry3d', 'surface3d'].includes(props.spec.type))
 const isGeo2d = computed(() => props.spec.type === 'geogebra2d')
 const isGeo3d = computed(() => props.spec.type === 'geogebra3d')
@@ -83,13 +85,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <figure ref="host" class="diagram-block">
+  <figure ref="host" class="diagram-block" :class="{ 'diagram-block--focused': focused }">
     <figcaption v-if="spec.title" class="diagram-title">{{ spec.title }}</figcaption>
-    <GeoGebraKernelBlock v-if="isGeo2d && visible" :spec="spec" />
+    <GeoGebraKernelBlock v-if="isGeo2d && visible" :spec="spec" :focused="focused" />
     <div v-else-if="isGeo2d" class="diagram-loading" />
-    <GeoGebra3DKernelBlock v-else-if="isGeo3d && visible" :spec="spec" />
+    <GeoGebra3DKernelBlock v-else-if="isGeo3d && visible" :spec="spec" :focused="focused" />
     <div v-else-if="isGeo3d" class="diagram-loading" />
-    <Diagram3D v-else-if="is3d && visible" :spec="spec" />
+    <Diagram3D v-else-if="is3d && visible" :spec="spec" :focused="focused" />
     <div v-else-if="is3d" class="diagram-loading" />
     <DiagramSvg v-else :spec="spec" />
   </figure>
@@ -99,6 +101,56 @@ onBeforeUnmount(() => {
 .diagram-block {
   max-width: 560px;
   margin: 12px auto 16px;
+  padding: 8px;
+  background: #05070a;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 8px;
+  --bg-void: #05070a;
+  --bg-panel: rgba(13, 18, 30, 0.92);
+  --bg-card: #05070a;
+  --text-hi: #e8f2ff;
+  --text: #c2d2e4;
+  --text-dim: #8b9bb0;
+  --line: rgba(96, 165, 250, 0.18);
+  --line-bright: rgba(96, 165, 250, 0.45);
+  --cyan: #4dd6ff;
+}
+
+.diagram-block--focused {
+  max-width: none;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+}
+
+.diagram-block--focused :deep(.diagram-svg-wrap) {
+  flex: 1;
+  min-height: 0;
+  background: #05070a;
+}
+
+.diagram-block--focused :deep(.diagram-svg) {
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+}
+
+.diagram-block--focused :deep(.diagram-3d-wrap) {
+  flex: 1;
+  min-height: 0;
+}
+
+.diagram-block--focused .diagram-loading,
+.diagram-block--focused .diagram-fallback {
+  max-width: none;
+  min-height: 0;
+  flex: 1;
+  margin: 0;
 }
 
 .diagram-title {

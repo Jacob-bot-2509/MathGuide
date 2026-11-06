@@ -8,7 +8,9 @@ import { convertGeoGebra3DCommands } from '@/services/geogebra3dKernel'
 import { planDiagram } from '@/services/diagramService'
 import Diagram3D from '@/components/diagram/Diagram3D.vue'
 
-const props = defineProps<{ spec: DiagramSpec }>()
+const props = withDefaults(defineProps<{ spec: DiagramSpec; focused?: boolean }>(), {
+  focused: false,
+})
 const converted = ref<DiagramSpec | null>(null)
 const error = ref('')
 let disposed = false
@@ -48,9 +50,9 @@ onBeforeUnmount(() => { disposed = true })
 </script>
 
 <template>
-  <Diagram3D v-if="converted" :spec="converted" />
-  <div v-else-if="error" class="ggb3d-fallback">{{ error }}</div>
-  <div v-else class="ggb3d-loading" />
+  <Diagram3D v-if="converted" :spec="converted" :focused="focused" />
+  <div v-else-if="error" class="ggb3d-fallback" :class="{ 'ggb3d--focused': focused }">{{ error }}</div>
+  <div v-else class="ggb3d-loading" :class="{ 'ggb3d--focused': focused }" />
 </template>
 
 <style scoped>
@@ -67,5 +69,14 @@ onBeforeUnmount(() => { disposed = true })
   border-radius: 8px;
   color: var(--text-dim);
   font-size: 12px;
+}
+
+.ggb3d--focused {
+  max-width: none;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
 }
 </style>

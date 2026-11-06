@@ -9,7 +9,9 @@ import {
   type ScreenLabelRequest,
 } from '@/utils/diagramLabels'
 
-const props = defineProps<{ spec: DiagramSpec }>()
+const props = withDefaults(defineProps<{ spec: DiagramSpec; focused?: boolean }>(), {
+  focused: false,
+})
 const host = ref<HTMLDivElement | null>(null)
 const error = ref('')
 
@@ -630,7 +632,7 @@ async function boot(): Promise<void> {
     camera.position.set(5.5, 4.5, 7.5)
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-    renderer.setSize(el.clientWidth, Math.max(340, el.clientHeight))
+    renderer.setSize(el.clientWidth, Math.max(props.focused ? 1 : 340, el.clientHeight))
     el.appendChild(renderer.domElement)
     contextLostHandler = (event: Event) => {
       // 阻止默认行为后浏览器仍可尝试恢复;恢复不了就只显示文字提示。
@@ -730,7 +732,7 @@ async function boot(): Promise<void> {
     observer = new ResizeObserver(() => {
       if (!el || !renderer || !camera) return
       const w = Math.max(1, el.clientWidth)
-      const h = Math.max(340, el.clientHeight)
+      const h = Math.max(props.focused ? 1 : 340, el.clientHeight)
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
@@ -781,8 +783,8 @@ onBeforeUnmount(dispose)
 </script>
 
 <template>
-  <div class="diagram-3d-wrap">
-    <div ref="host" class="diagram-3d">
+  <div class="diagram-3d-wrap" :class="{ 'diagram-3d-wrap--focused': focused }">
+    <div ref="host" class="diagram-3d" :class="{ 'diagram-3d--focused': focused }">
       <p v-if="error" class="diagram-3d-error">{{ error }}</p>
     </div>
   </div>
@@ -798,12 +800,28 @@ onBeforeUnmount(dispose)
   background: var(--bg-card);
 }
 
+.diagram-3d-wrap--focused {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  flex: 1;
+  min-height: 0;
+}
+
 .diagram-3d {
   position: relative;
   height: 560px;
   min-height: 340px;
   overflow: hidden;
   touch-action: none;
+}
+
+.diagram-3d--focused {
+  height: 100%;
+  min-height: 0;
 }
 
 @media (max-width: 680px) {

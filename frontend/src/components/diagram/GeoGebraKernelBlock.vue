@@ -8,7 +8,9 @@ import { convertGeoGebraCommands } from '@/services/geogebraKernel'
 import { planDiagram } from '@/services/diagramService'
 import DiagramSvg from '@/components/diagram/DiagramSvg.vue'
 
-const props = defineProps<{ spec: DiagramSpec }>()
+const props = withDefaults(defineProps<{ spec: DiagramSpec; focused?: boolean }>(), {
+  focused: false,
+})
 const converted = ref<DiagramSpec | null>(null)
 const error = ref('')
 let disposed = false
@@ -52,8 +54,8 @@ onBeforeUnmount(() => {
 
 <template>
   <DiagramSvg v-if="converted" :spec="converted" />
-  <div v-else-if="error" class="ggb-kernel-fallback">{{ error }}</div>
-  <div v-else class="ggb-kernel-loading" />
+  <div v-else-if="error" class="ggb-kernel-fallback" :class="{ 'ggb-kernel--focused': focused }">{{ error }}</div>
+  <div v-else class="ggb-kernel-loading" :class="{ 'ggb-kernel--focused': focused }" />
 </template>
 
 <style scoped>
@@ -71,6 +73,15 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   color: var(--text-dim);
   font-size: 12px;
+}
+
+.ggb-kernel--focused {
+  max-width: none;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
 }
 
 @media (max-width: 680px) {
