@@ -211,8 +211,7 @@ function openResearchSearch(): void {
   // 图解放大占用右侧;打开检索前先退出放大,避免两个分栏抢同一侧。
   if (focusDiagram.value) {
     searchWasOpen.value = false
-    focusDiagram.value = null
-    focusOrigin.value = null
+    closeDiagramFocus()
   }
   if (settingsState.researchSearchMode === 'page' || window.innerWidth < SPLIT_MIN_WIDTH) {
     router.push('/research/search')
