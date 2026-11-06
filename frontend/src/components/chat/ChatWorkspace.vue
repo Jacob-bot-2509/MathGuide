@@ -411,6 +411,13 @@ function onChatPaneClick(): void {
   if (focusDiagram.value) closeDiagramFocus()
 }
 
+function onRootClick(event: MouseEvent): void {
+  if (!focusDiagram.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.diagram-focus-pane')) return
+  closeDiagramFocus()
+}
+
 function onFocusKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape' && focusDiagram.value) {
     event.preventDefault()
@@ -2142,7 +2149,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="learn" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDropFiles">
+  <div class="learn" @click="onRootClick" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDropFiles">
     <header class="chat-header">
       <button class="back" @click="router.push('/home')">{{ t('common.back') }}</button>
       <div class="title-box">
@@ -2535,6 +2542,9 @@ onBeforeUnmount(() => {
           'diagram-focus-pane--fullscreen': isNarrow && focusPanel.fullscreen,
         }"
         :style="focusPaneStyle"
+        :role="isNarrow ? 'dialog' : undefined"
+        :aria-modal="isNarrow ? 'true' : undefined"
+        :aria-label="focusDiagram?.spec.title || t('diagram.figure')"
       >
         <header
           class="diagram-focus-head"
@@ -2548,7 +2558,7 @@ onBeforeUnmount(() => {
             ref="focusCloseEl"
             class="diagram-focus-close"
             type="button"
-            aria-label="关闭放大图解"
+            :aria-label="t('common.close')"
             @pointerdown.stop
             @click="closeDiagramFocus"
           >×</button>
@@ -2688,6 +2698,15 @@ onBeforeUnmount(() => {
   background: #05070a;
   border-left: 1px solid var(--line);
   overflow: hidden;
+  --bg-void: #05070a;
+  --bg-panel: rgba(13, 18, 30, 0.92);
+  --bg-card: #05070a;
+  --text-hi: #e8f2ff;
+  --text: #c2d2e4;
+  --text-dim: #8b9bb0;
+  --line: rgba(96, 165, 250, 0.18);
+  --line-bright: rgba(96, 165, 250, 0.45);
+  --cyan: #4dd6ff;
 }
 
 .diagram-focus-pane--narrow {
