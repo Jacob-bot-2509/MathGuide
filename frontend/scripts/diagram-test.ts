@@ -15,6 +15,10 @@ import {
 import { layoutFlow, layoutRelation, layoutTree } from '../src/utils/diagramLayout'
 import { diagramSuppressed, needsDiagram } from '../src/utils/diagramIntent'
 import {
+  clampDiagramSplit, clampFocusPanel, moveFocusPanel, resizeFocusPanel,
+  isDoubleTap, DIAGRAM_SPLIT_DEFAULT,
+} from '../src/utils/diagramFocus'
+import {
   compileExpression,
   diagramFromGeoGebraXml,
 } from '../src/utils/geogebraSpec'
@@ -547,6 +551,26 @@ check('GeoGebra 3D 曲面命令可解析',
     type: 'geogebra3d',
     commands: ['s=Surface(u,v,u^2+v^2,u,-2,2,v,-2,2)'],
   })?.type === 'geogebra3d')
+
+// 图解放大:分栏与移动浮层几何
+check('图解放大分栏默认 62%', Math.abs(DIAGRAM_SPLIT_DEFAULT - 0.62) < 1e-9)
+check('分栏保留聊天与图解最小宽度',
+  Math.abs(clampDiagramSplit(0.9, 1000) - 0.64) < 1e-9
+  && Math.abs(clampDiagramSplit(0.1, 1000) - 0.42) < 1e-9)
+check('窄屏分栏回退中间比例', clampDiagramSplit(0.9, 700) <= 0.7)
+check('移动窗口不越界',
+  clampFocusPanel({ x: 999, w: 90, h: 82, fullscreen: false },
+    { width: 390, height: 844 }).x < 999)
+check('双指放大到阈值全屏',
+  resizeFocusPanel({ x: 0, w: 90, h: 82, fullscreen: false }, 1.2,
+    { width: 390, height: 844 }).fullscreen)
+check('全屏窗口不能移动',
+  moveFocusPanel({ x: 0, w: 100, h: 100, fullscreen: true }, 40,
+    { width: 390, height: 844 }).x === 0)
+check('双点判定', isDoubleTap(
+  { time: 1000, x: 100, y: 100 }, { time: 1200, x: 104, y: 103 }))
+check('拖拽后不触发放大', !isDoubleTap(
+  { time: 1000, x: 100, y: 100 }, { time: 1200, x: 140, y: 100 }))
 
 if (failed.length) {
   console.error('图解协议自测失败:')
