@@ -18,7 +18,7 @@
  * 回复由后端 LLM 流式生成(services/chatService,SSE 契约);
  * 问题分类由前端关键词预判,后端路由做最终裁决。
  */
-import { computed, defineAsyncComponent, markRaw, nextTick, onBeforeUnmount, onMounted, ref, toRef } from 'vue'
+import { computed, defineAsyncComponent, markRaw, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
@@ -71,6 +71,10 @@ import { beautifyMath, cachedConvert, normalizeSpeechCase, saveConvert, speechMa
 import { showToast } from '@/utils/toast'
 import { chapterNameFromCmd } from '@/utils/cmdLink'
 import { splitStableBlocks } from '@/utils/mathBlocks'
+import {
+  clampDiagramSplit as clampDiagramSplitValue,
+  DIAGRAM_SPLIT_DEFAULT,
+} from '@/utils/diagramFocus'
 
 const props = withDefaults(defineProps<{ workspace?: Workspace }>(), { workspace: 'learn' })
 
@@ -244,6 +248,123 @@ function onSplitAsk(prompt: string): void {
   if (prompt) send(prompt)
 }
 
+/* ---------- 图解放大 ---------- */
+const DIAGRAM_SPLIT_KEY = 'mg-diagram-split'
+const focusDiagram = ref<DiagramBlock | null>(null)
+const focusOrigin = ref<{ msgId: number; scrollTop: number } | null>(null)
+const focusCloseEl = ref<HTMLButtonElement | null>(null)
+const diagramSplitRatio = ref(loadDiagramSplit())
+const diagramSplitResizing = ref(false)
+const searchWasOpen = ref(false)
+const narrowQuery = window.matchMedia('(max-width: 899px)')
+const isNarrow = ref(narrowQuery.matches)
+const focusPaneStyle = computed(() => ({
+  width: `${diagramSplitRatio.value * 100}%`,
+}))
+
+function loadDiagramSplit(): number {
+  try {
+    const value = Number(localStorage.getItem(DIAGRAM_SPLIT_KEY))
+    return Number.isFinite(value) && value > 0
+      ? clampDiagramSplitForBody(value)
+      : DIAGRAM_SPLIT_DEFAULT
+  } catch {
+    return DIAGRAM_SPLIT_DEFAULT
+  }
+}
+
+function clampDiagramSplitForBody(value: number): number {
+  return clampDiagramSplitValue(value, workspaceBodyRef.value?.clientWidth ?? 0)
+}
+
+function saveDiagramSplit(): void {
+  try {
+    localStorage.setItem(DIAGRAM_SPLIT_KEY, String(diagramSplitRatio.value))
+  } catch {
+    /* 忽略 */
+  }
+}
+
+function startDiagramSplitDrag(e: PointerEvent): void {
+  const body = workspaceBodyRef.value
+  if (!body) return
+  e.preventDefault()
+  diagramSplitResizing.value = true
+  const rect = body.getBoundingClientRect()
+  const move = (ev: PointerEvent) => {
+    diagramSplitRatio.value = clampDiagramSplitForBody(
+      (rect.right - ev.clientX) / rect.width,
+    )
+  }
+  const up = () => {
+    diagramSplitResizing.value = false
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+    saveDiagramSplit()
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+}
+
+function nudgeDiagramSplit(delta: number): void {
+  diagramSplitRatio.value = clampDiagramSplitForBody(diagramSplitRatio.value + delta)
+  saveDiagramSplit()
+}
+
+function resetDiagramSplit(): void {
+  diagramSplitRatio.value = clampDiagramSplitForBody(DIAGRAM_SPLIT_DEFAULT)
+  saveDiagramSplit()
+}
+
+function isFocused(block: DiagramBlock): boolean {
+  return focusDiagram.value?.id === block.id
+}
+
+function openDiagramFocus(block: DiagramBlock, msgId: number): void {
+  if (focusDiagram.value?.id === block.id) return
+  focusOrigin.value = {
+    msgId,
+    scrollTop: listEl.value?.scrollTop ?? 0,
+  }
+  searchWasOpen.value = searchOpen.value
+  if (searchOpen.value) searchOpen.value = false
+  focusDiagram.value = block
+  nextTick(() => focusCloseEl.value?.focus())
+}
+
+function closeDiagramFocus(): void {
+  if (!focusDiagram.value) return
+  focusDiagram.value = null
+  if (searchWasOpen.value && !isNarrow.value) searchOpen.value = true
+  searchWasOpen.value = false
+  const origin = focusOrigin.value
+  focusOrigin.value = null
+  nextTick(() => {
+    if (origin && listEl.value) {
+      listEl.value.scrollTop = origin.scrollTop
+      const message = listEl.value.querySelector(
+        `[data-msg-id="${origin.msgId}"]`,
+      )
+      message?.scrollIntoView({ block: 'nearest' })
+    }
+  })
+}
+
+function onChatPaneClick(): void {
+  if (focusDiagram.value) closeDiagramFocus()
+}
+
+function onFocusKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && focusDiagram.value) {
+    event.preventDefault()
+    closeDiagramFocus()
+  }
+}
+
+function onNarrowChange(event: MediaQueryListEvent): void {
+  isNarrow.value = event.matches
+}
+
 /** 模型动作到达:确保右侧阅读器存在,再跳页/高亮/批注。
  *  独立页面模式不强行跳转,避免打断当前对话。 */
 async function applyPaperActionsFromModel(
@@ -294,6 +415,9 @@ const FILE_TEXT_MAX = 30000
 const store = sessionStore(props.workspace)
 const sessions = toRef(store.state, 'sessions')
 const activeId = toRef(store.state, 'activeId')
+watch(activeId, () => {
+  if (focusDiagram.value) closeDiagramFocus()
+})
 const { persistSessions, flushSessions, nextMsgId, nextSessionId } = store
 
 /* 归纳本同样按工作区隔离:科研区收的题不会出现在学习区 */
@@ -1787,6 +1911,8 @@ onMounted(() => {
   }
   window.addEventListener('resize', onWorkspaceResize)
   window.addEventListener('beforeunload', warnPendingPapers)
+  window.addEventListener('keydown', onFocusKeydown)
+  narrowQuery.addEventListener('change', onNarrowChange)
 })
 
 onBeforeRouteLeave(async () => {
@@ -1804,6 +1930,8 @@ function warnPendingPapers(event: BeforeUnloadEvent): void {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onWorkspaceResize)
   window.removeEventListener('beforeunload', warnPendingPapers)
+  window.removeEventListener('keydown', onFocusKeydown)
+  narrowQuery.removeEventListener('change', onNarrowChange)
   stopAllStreams()
   sr?.stop()
   cancelConvert()
@@ -1868,7 +1996,7 @@ onBeforeUnmount(() => {
 
     <!-- 对话区(当前会话) -->
     <div ref="workspaceBodyRef" class="workspace-body" :class="{ 'with-search': searchOpen }">
-      <div class="chat-pane">
+      <div class="chat-pane" @click="onChatPaneClick">
         <div ref="listEl" class="chat-list" @scroll="onListScroll" @click="onListClick">
       <template v-if="activeSession">
         <div
@@ -1938,13 +2066,30 @@ onBeforeUnmount(() => {
               <div v-if="m.content && !m.paperImport" class="mg-blocks">
                 <template v-for="block in messageBlocks(m)" :key="block.key">
                   <MathText v-if="block.kind === 'text'" :text="block.text || ''" />
-                  <DiagramBoundary
+                  <div
                     v-else-if="block.diagram"
-                    :title="block.diagram.spec.title"
-                    :notes="block.diagram.spec.annotations.map((note) => note.text)"
+                    class="diagram-embed"
+                    @dblclick.stop="openDiagramFocus(block.diagram, m.id)"
                   >
-                    <DiagramBlockView :spec="block.diagram.spec" />
-                  </DiagramBoundary>
+                    <Teleport
+                      to="#mg-diagram-focus-stage"
+                      :disabled="!isFocused(block.diagram)"
+                    >
+                      <DiagramBoundary
+                        :title="block.diagram.spec.title"
+                        :notes="block.diagram.spec.annotations.map((note) => note.text)"
+                      >
+                        <DiagramBlockView
+                          :spec="block.diagram.spec"
+                          :focused="isFocused(block.diagram)"
+                        />
+                      </DiagramBoundary>
+                    </Teleport>
+                    <div
+                      v-if="isFocused(block.diagram)"
+                      class="diagram-inline-placeholder"
+                    ></div>
+                  </div>
                 </template>
               </div>
               <div v-if="m.intuition" class="intuition-block">
@@ -2160,6 +2305,40 @@ onBeforeUnmount(() => {
       </div><!-- /chat-pane -->
 
       <div
+        v-if="focusDiagram && !isNarrow"
+        class="split-divider diagram-focus-divider"
+        :class="{ dragging: diagramSplitResizing }"
+        role="separator"
+        aria-orientation="vertical"
+        tabindex="0"
+        @pointerdown="startDiagramSplitDrag"
+        @dblclick="resetDiagramSplit"
+        @keydown.left.prevent="nudgeDiagramSplit(-0.02)"
+        @keydown.right.prevent="nudgeDiagramSplit(0.02)"
+      ></div>
+      <aside
+        v-show="focusDiagram"
+        class="diagram-focus-pane"
+        :class="{ 'diagram-focus-pane--narrow': isNarrow }"
+        :style="focusPaneStyle"
+      >
+        <header class="diagram-focus-head">
+          <span class="diagram-focus-title">{{ focusDiagram?.spec.title }}</span>
+          <button
+            ref="focusCloseEl"
+            class="diagram-focus-close"
+            type="button"
+            aria-label="关闭放大图解"
+            @click="closeDiagramFocus"
+          >×</button>
+        </header>
+        <div
+          id="mg-diagram-focus-stage"
+          class="diagram-focus-stage"
+        ></div>
+      </aside>
+
+      <div
         v-if="searchOpen"
         class="split-divider"
         :class="{ dragging: splitResizing }"
@@ -2261,6 +2440,77 @@ onBeforeUnmount(() => {
   min-width: 0;
   height: 100%;
   overflow: hidden;
+}
+
+.diagram-embed {
+  position: relative;
+}
+
+.diagram-inline-placeholder {
+  min-height: 220px;
+  margin: 12px 0 16px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+.diagram-focus-pane {
+  flex: none;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #05070a;
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.diagram-focus-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  color: var(--text);
+  border-bottom: 1px solid var(--line);
+}
+
+.diagram-focus-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.diagram-focus-close {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.diagram-focus-close:hover {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+}
+
+.diagram-focus-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.diagram-focus-stage :deep(.diagram-block) {
+  width: 100%;
+  height: 100%;
 }
 
 .chat-header {
