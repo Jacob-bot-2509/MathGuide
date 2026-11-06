@@ -32,7 +32,8 @@ function clamp(value: number, low: number, high: number): number {
 
 /** 右侧图解分栏比例;空间不足时退回一个中间比例。 */
 export function clampDiagramSplit(value: number, width: number): number {
-  if (!Number.isFinite(width) || width <= 0) return DIAGRAM_SPLIT_DEFAULT
+  if (!Number.isFinite(value)) return DIAGRAM_SPLIT_DEFAULT
+  if (!Number.isFinite(width) || width <= 0) return clamp(value, 0, 1)
   if (width < DIAGRAM_CHAT_MIN + DIAGRAM_MIN) return clamp(value, 0.55, 0.7)
   return clamp(value, DIAGRAM_MIN / width, 1 - DIAGRAM_CHAT_MIN / width)
 }
@@ -80,6 +81,11 @@ export function resizeFocusPanel(
     w: panel.w * scale,
     h: panel.h * scale,
   }, viewport)
+}
+
+/** 手指离开按下位置超过阈值后视为拖动。 */
+export function tapMoved(start: { x: number; y: number }, point: { x: number; y: number }): boolean {
+  return Math.hypot(point.x - start.x, point.y - start.y) > 8
 }
 
 /** 两次轻点在时间、位移范围内才算双击/双点。 */

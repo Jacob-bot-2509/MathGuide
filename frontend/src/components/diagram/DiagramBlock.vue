@@ -153,6 +153,10 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
+.diagram-block--focused .diagram-title {
+  display: none;
+}
+
 .diagram-title {
   margin-bottom: 6px;
   color: var(--text);

@@ -16,7 +16,7 @@ import { layoutFlow, layoutRelation, layoutTree } from '../src/utils/diagramLayo
 import { diagramSuppressed, needsDiagram } from '../src/utils/diagramIntent'
 import {
   clampDiagramSplit, clampFocusPanel, moveFocusPanel, resizeFocusPanel,
-  isDoubleTap, DIAGRAM_SPLIT_DEFAULT,
+  isDoubleTap, tapMoved, DIAGRAM_SPLIT_DEFAULT,
 } from '../src/utils/diagramFocus'
 import {
   compileExpression,
@@ -558,6 +558,8 @@ check('分栏保留聊天与图解最小宽度',
   Math.abs(clampDiagramSplit(0.9, 1000) - 0.64) < 1e-9
   && Math.abs(clampDiagramSplit(0.1, 1000) - 0.42) < 1e-9)
 check('窄屏分栏回退中间比例', clampDiagramSplit(0.9, 700) <= 0.7)
+check('容器未挂载时保留已保存比例', clampDiagramSplit(0.5, 0) === 0.5
+  && clampDiagramSplit(Number.NaN, 0) === DIAGRAM_SPLIT_DEFAULT)
 check('移动窗口不越界',
   clampFocusPanel({ x: 999, w: 90, h: 82, fullscreen: false },
     { width: 390, height: 844 }).x < 999)
@@ -567,6 +569,8 @@ check('双指放大到阈值全屏',
 check('全屏窗口不能移动',
   moveFocusPanel({ x: 0, w: 100, h: 100, fullscreen: true }, 40,
     { width: 390, height: 844 }).x === 0)
+check('触点拖动超过阈值', tapMoved({ x: 0, y: 0 }, { x: 9, y: 0 })
+  && !tapMoved({ x: 0, y: 0 }, { x: 4, y: 3 }))
 check('双点判定', isDoubleTap(
   { time: 1000, x: 100, y: 100 }, { time: 1200, x: 104, y: 103 }))
 check('拖拽后不触发放大', !isDoubleTap(

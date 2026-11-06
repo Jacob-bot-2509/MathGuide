@@ -76,6 +76,7 @@ import {
   clampDiagramSplit as clampDiagramSplitValue,
   DIAGRAM_SPLIT_DEFAULT,
   isDoubleTap,
+  tapMoved,
   moveFocusPanel,
   resizeFocusPanel,
   type FocusPanel,
@@ -207,6 +208,12 @@ function saveSplitRatio(): void {
 /** 检索按钮:按设置与本机宽度选择分栏或独立页 */
 function openResearchSearch(): void {
   if (!isResearch.value) return
+  // 图解放大占用右侧;打开检索前先退出放大,避免两个分栏抢同一侧。
+  if (focusDiagram.value) {
+    searchWasOpen.value = false
+    focusDiagram.value = null
+    focusOrigin.value = null
+  }
   if (settingsState.researchSearchMode === 'page' || window.innerWidth < SPLIT_MIN_WIDTH) {
     router.push('/research/search')
     return
@@ -262,11 +269,13 @@ const focusCloseEl = ref<HTMLButtonElement | null>(null)
 const diagramSplitRatio = ref(loadDiagramSplit())
 const diagramSplitResizing = ref(false)
 const searchWasOpen = ref(false)
-const narrowQuery = window.matchMedia('(max-width: 899px)')
-const isNarrow = ref(narrowQuery.matches)
+const narrowQuery = typeof window.matchMedia === 'function'
+  ? window.matchMedia('(max-width: 899px)') : null
+const isNarrow = ref(narrowQuery?.matches ?? false)
 const focusPanel = ref<FocusPanel>({ x: 0, w: 90, h: 82, fullscreen: false })
-const lastTap = ref<TapPoint | null>(null)
-const touchPointers = new Set<number>()
+const lastTap = ref<(TapPoint & { diagramId: string; msgId: number }) | null>(null)
+const touchPointers = new Map<number, { x: number; y: number; moved: boolean }>()
+let touchWasMulti = false
 let focusGesture: {
   pointers: Map<number, { x: number; y: number }>
   startX: number
@@ -369,6 +378,7 @@ function openDiagramFocus(block: DiagramBlock, msgId: number): void {
   }
   searchWasOpen.value = searchOpen.value
   if (searchOpen.value) searchOpen.value = false
+  if (!isNarrow.value) diagramSplitRatio.value = clampDiagramSplitForBody(diagramSplitRatio.value)
   if (isNarrow.value) focusPanel.value = { x: 0, w: 90, h: 82, fullscreen: false }
   lastTap.value = null
   focusDiagram.value = block
@@ -378,6 +388,10 @@ function openDiagramFocus(block: DiagramBlock, msgId: number): void {
 function closeDiagramFocus(): void {
   if (!focusDiagram.value) return
   focusDiagram.value = null
+  lastTap.value = null
+  touchPointers.clear()
+  touchWasMulti = false
+  focusGesture = null
   if (searchWasOpen.value && !isNarrow.value) searchOpen.value = true
   searchWasOpen.value = false
   const origin = focusOrigin.value
@@ -412,11 +426,22 @@ function onNarrowChange(event: MediaQueryListEvent): void {
 }
 
 function onDiagramPointerDown(event: PointerEvent): void {
-  if (event.pointerType === 'touch') touchPointers.add(event.pointerId)
+  if (event.pointerType !== 'touch') return
+  touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY, moved: false })
+  if (touchPointers.size > 1) {
+    touchWasMulti = true
+    lastTap.value = null
+  }
+}
+
+function onDiagramPointerMove(event: PointerEvent): void {
+  const start = touchPointers.get(event.pointerId)
+  if (start && tapMoved(start, { x: event.clientX, y: event.clientY })) start.moved = true
 }
 
 function onDiagramPointerCancel(event: PointerEvent): void {
   touchPointers.delete(event.pointerId)
+  if (!touchPointers.size) touchWasMulti = false
   lastTap.value = null
 }
 
@@ -426,18 +451,18 @@ function onDiagramPointerUp(
   msgId: number,
 ): void {
   if (event.pointerType !== 'touch') return
-  const multi = touchPointers.size > 1
+  const start = touchPointers.get(event.pointerId)
   touchPointers.delete(event.pointerId)
-  if (multi || focusDiagram.value || !isNarrow.value) {
+  const invalid = !start || start.moved || tapMoved(start, { x: event.clientX, y: event.clientY })
+    || touchWasMulti || !!focusDiagram.value || !isNarrow.value
+  if (!touchPointers.size) touchWasMulti = false
+  if (invalid) {
     lastTap.value = null
     return
   }
-  const tap: TapPoint = {
-    time: performance.now(),
-    x: event.clientX,
-    y: event.clientY,
-  }
-  if (isDoubleTap(lastTap.value, tap)) {
+  const tap = { time: performance.now(), x: event.clientX, y: event.clientY, diagramId: block.id, msgId }
+  if (lastTap.value?.diagramId === block.id && lastTap.value.msgId === msgId
+    && isDoubleTap(lastTap.value, tap)) {
     lastTap.value = null
     openDiagramFocus(block, msgId)
   } else {
@@ -491,7 +516,7 @@ function onFocusPointerMove(event: PointerEvent): void {
     y: event.clientY,
   })
   if (focusGesture.pointers.size >= 2) {
-    if (focusGesture.startDistance <= 0) return
+    if (focusPanel.value.fullscreen || focusGesture.startDistance <= 0) return
     const scale = focusDistance(focusGesture.pointers) / focusGesture.startDistance
     focusPanel.value = resizeFocusPanel({
       x: focusGesture.startPanelX,
@@ -567,6 +592,9 @@ async function applyPaperActionsFromModel(
 /** 窗口变窄时收起分栏,避免聊天区被压到不可用 */
 function onWorkspaceResize(): void {
   if (searchOpen.value && window.innerWidth < SPLIT_MIN_WIDTH) searchOpen.value = false
+  if (focusDiagram.value && window.innerWidth >= 900) {
+    diagramSplitRatio.value = clampDiagramSplitForBody(diagramSplitRatio.value)
+  }
 }
 
 /** 科研区:独占研究检索链路与搜索范围面板;学习区不跨区查文献 */
@@ -577,7 +605,7 @@ const MAX_DROP_FILES = 3
 const PASTE_TEXT_MAX = 3000
 
 /** 触屏设备判定:手机/平板用「粘贴导入」替代拖拽(拖拽仅限电脑端) */
-const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
+const isTouchDevice = window.matchMedia?.('(pointer: coarse)').matches ?? false
 
 /* 文本/PDF 教材:上传时提取正文随附件保存,章节导航等指令可基于内容工作。
    上限 3 万字,发挥 QwenLong 长上下文能力(移动端粘贴导入仍 3 千字) */
@@ -2085,7 +2113,7 @@ onMounted(() => {
   window.addEventListener('resize', onWorkspaceResize)
   window.addEventListener('beforeunload', warnPendingPapers)
   window.addEventListener('keydown', onFocusKeydown)
-  narrowQuery.addEventListener('change', onNarrowChange)
+  narrowQuery?.addEventListener?.('change', onNarrowChange)
 })
 
 onBeforeRouteLeave(async () => {
@@ -2104,7 +2132,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', onWorkspaceResize)
   window.removeEventListener('beforeunload', warnPendingPapers)
   window.removeEventListener('keydown', onFocusKeydown)
-  narrowQuery.removeEventListener('change', onNarrowChange)
+  narrowQuery?.removeEventListener?.('change', onNarrowChange)
   stopAllStreams()
   sr?.stop()
   cancelConvert()
@@ -2168,7 +2196,7 @@ onBeforeUnmount(() => {
     <SpeechTips v-if="tipsOpen" @close="tipsOpen = false" />
 
     <!-- 对话区(当前会话) -->
-    <div ref="workspaceBodyRef" class="workspace-body" :class="{ 'with-search': searchOpen }">
+    <div ref="workspaceBodyRef" class="workspace-body" :class="{ 'with-search': searchOpen, 'with-focus': focusDiagram }">
       <div class="chat-pane" @click="onChatPaneClick">
         <div ref="listEl" class="chat-list" @scroll="onListScroll" @click="onListClick">
       <template v-if="activeSession">
@@ -2245,6 +2273,7 @@ onBeforeUnmount(() => {
                     @click.stop
                     @dblclick.stop="openDiagramFocus(block.diagram, m.id)"
                     @pointerdown="onDiagramPointerDown"
+                    @pointermove="onDiagramPointerMove"
                     @pointerup="onDiagramPointerUp($event, block.diagram, m.id)"
                     @pointercancel="onDiagramPointerCancel"
                   >
@@ -2265,7 +2294,7 @@ onBeforeUnmount(() => {
                     <div
                       v-if="isFocused(block.diagram)"
                       class="diagram-inline-placeholder"
-                    ></div>
+                    >{{ t('diagram.focusOpened') }}</div>
                   </div>
                 </template>
               </div>
@@ -2394,7 +2423,7 @@ onBeforeUnmount(() => {
           v-model="input"
           rows="1"
           class="input"
-          :placeholder="listening ? t('learn.listening') : t('learn.placeholder')"
+          :placeholder="listening ? t('learn.listening') : (focusDiagram ? t('learn.placeholderFocus') : t('learn.placeholder'))"
           @input="autoGrow"
           @keydown.enter.exact.prevent="send()"
           @paste="onPaste"
@@ -2490,8 +2519,8 @@ onBeforeUnmount(() => {
         tabindex="0"
         @pointerdown="startDiagramSplitDrag"
         @dblclick="resetDiagramSplit"
-        @keydown.left.prevent="nudgeDiagramSplit(-0.02)"
-        @keydown.right.prevent="nudgeDiagramSplit(0.02)"
+        @keydown.left.prevent="nudgeDiagramSplit(0.02)"
+        @keydown.right.prevent="nudgeDiagramSplit(-0.02)"
       ></div>
       <div
         v-if="focusDiagram && isNarrow"
@@ -2520,6 +2549,7 @@ onBeforeUnmount(() => {
             class="diagram-focus-close"
             type="button"
             aria-label="关闭放大图解"
+            @pointerdown.stop
             @click="closeDiagramFocus"
           >×</button>
         </header>
@@ -2642,6 +2672,11 @@ onBeforeUnmount(() => {
   margin: 12px 0 16px;
   border: 1px dashed var(--line);
   border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 11px;
 }
 
 .diagram-focus-pane {
@@ -3171,6 +3206,37 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.workspace-body.with-focus .input-bar {
+  padding: 8px 12px 10px;
+  gap: 6px;
+}
+
+.workspace-body.with-focus .commands {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 6px;
+  scrollbar-width: none;
+}
+
+.workspace-body.with-focus .commands::-webkit-scrollbar {
+  display: none;
+}
+
+.workspace-body.with-focus .cmd-label {
+  display: none;
+}
+
+.workspace-body.with-focus .cmd {
+  flex: none;
+  padding: 4px 9px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.workspace-body.with-focus .input-row {
+  gap: 8px;
 }
 
 .context-chip {

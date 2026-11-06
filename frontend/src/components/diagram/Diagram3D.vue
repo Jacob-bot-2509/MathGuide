@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 3D 静态图解:Three.js 场景,可旋转/缩放,不自动播放动画。 */
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
 import { t } from '@/utils/i18n'
 import {
@@ -34,6 +34,8 @@ let controls: {
   update(): void
   addEventListener(type: string, fn: () => void): void
 } | null = null
+let contentSphere: { center: import('three').Vector3; radius: number } | null = null
+let threeRef: typeof import('three') | null = null
 let observer: ResizeObserver | null = null
 let contextLostHandler: ((event: Event) => void) | null = null
 let disposed = false
@@ -619,6 +621,25 @@ function layoutLabels(THREE: typeof import('three')): void {
   }
 }
 
+function applyCameraFit(focused: boolean): void {
+  if (!camera || !contentSphere || !threeRef) return
+  const { center, radius } = contentSphere
+  // 同时受垂直与水平视场限制:手机竖屏时不能只按高度取景,否则球会被左右裁掉。
+  const vFov = (camera.fov * Math.PI) / 180
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * Math.max(0.1, camera.aspect))
+  const fitFov = Math.min(vFov, hFov)
+  const distance = (radius / Math.sin(fitFov / 2)) * (focused ? 1.08 : 1.15)
+  const direction = new threeRef.Vector3(1, 0.65, 1.15).normalize()
+  camera.position.copy(center).addScaledVector(direction, distance)
+  camera.lookAt(center)
+  controls?.update()
+  camera.updateMatrixWorld()
+  layoutLabels(threeRef)
+  if (renderer && scene) renderer.render(scene, camera)
+}
+
+watch(() => props.focused, (focused) => applyCameraFit(Boolean(focused)))
+
 async function boot(): Promise<void> {
   const el = host.value
   if (!el) return
@@ -626,6 +647,7 @@ async function boot(): Promise<void> {
     const THREE = await import('three')
     const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js')
     if (disposed) return
+    threeRef = THREE
     scene = new THREE.Scene()
     scene.background = null
     camera = new THREE.PerspectiveCamera(45, el.clientWidth / Math.max(1, el.clientHeight), 0.1, 200)
@@ -647,6 +669,7 @@ async function boot(): Promise<void> {
     light.position.set(4, 8, 6)
     scene.add(light)
     labelEntries = []
+    contentSphere = null
     // 3D 坐标轴由渲染器统一生成;旧缓存里模型自带的 axis 不再重复画。
     const geometryShapes = props.spec.shapes.filter((shape) => shape.kind !== 'axis')
     const unit = sceneUnit(geometryShapes)
@@ -702,6 +725,7 @@ async function boot(): Promise<void> {
       const sphere = bounds.getBoundingSphere(new THREE.Sphere())
       const radius = Math.max(1, sphere.radius)
       const center = sphere.center
+      contentSphere = { center: center.clone(), radius }
       camera.far = Math.max(200, radius * 20)
       camera.updateProjectionMatrix()
       controls = new OrbitControls(camera, renderer.domElement)
@@ -711,12 +735,7 @@ async function boot(): Promise<void> {
         // 标签位置全程冻结:只在初次布局时排一次,旋转不再重算。
         renderer?.render(scene!, camera!)
       })
-      camera.position.set(
-        center.x + radius * 2.0,
-        center.y + radius * 1.4,
-        center.z + radius * 2.3,
-      )
-      camera.lookAt(center)
+      applyCameraFit(Boolean(props.focused))
     } else {
       controls = new OrbitControls(camera, renderer.domElement)
       controls.update()
@@ -736,6 +755,7 @@ async function boot(): Promise<void> {
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
+      if (contentSphere) applyCameraFit(Boolean(props.focused))
       camera.updateMatrixWorld()
       layoutLabels(THREE)
       renderer.render(scene!, camera)
@@ -749,6 +769,8 @@ async function boot(): Promise<void> {
 function dispose(): void {
   disposed = true
   labelEntries = []
+  contentSphere = null
+  threeRef = null
   observer?.disconnect()
   observer = null
   controls?.dispose()
@@ -831,6 +853,11 @@ onBeforeUnmount(dispose)
 
   .diagram-3d {
     height: 340px;
+  }
+
+  .diagram-3d--focused {
+    height: 100%;
+    min-height: 0;
   }
 }
 
