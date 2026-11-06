@@ -2570,7 +2570,7 @@ onBeforeUnmount(() => {
       </aside>
 
       <div
-        v-if="searchOpen"
+        v-if="searchOpen && !focusDiagram"
         class="split-divider"
         :class="{ dragging: splitResizing }"
         role="separator"
@@ -2582,7 +2582,8 @@ onBeforeUnmount(() => {
         @keydown.right.prevent="nudgeSplit(0.02)"
       ></div>
       <aside
-        v-if="searchOpen"
+        v-if="searchOpen || searchWasOpen"
+        v-show="searchOpen && !focusDiagram"
         class="search-pane"
         :style="{ width: `${splitRatio * 100}%` }"
       >
