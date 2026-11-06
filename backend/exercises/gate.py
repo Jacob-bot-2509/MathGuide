@@ -17,6 +17,7 @@ MAX_REPLACEMENT_RATIO = 0.02
 
 PROOF_MARKERS = frozenset({"证明见解析", "证毕", "qed", "proof", "证明成立"})
 _WS_RE = re.compile(r"\s+")
+_MATH_SPACE_RE = re.compile(r"\s*([=+\-*/^<>≤≥≠])\s*")
 _DISPLAY_MATH_RE = re.compile(r"\$\$[\s\S]*?\$\$")
 _ESCAPED_BRACE_RE = re.compile(r"\\[{}]")
 
@@ -47,6 +48,15 @@ def normalize(text: str) -> str:
     return value
 
 
+def normalize_boundary(text: str) -> str:
+    """保留词间空格,只压掉数学运算符两侧空白,供边界匹配使用。"""
+    value = text.lower()
+    for token in ("\\(", "\\)", "\\[", "\\]", "$"):
+        value = value.replace(token, "")
+    value = _MATH_SPACE_RE.sub(r"\1", value)
+    return _WS_RE.sub(" ", value).strip()
+
+
 def latex_balanced(text: str) -> bool:
     """检查常见 LaTeX 定界符与花括号是否成对。"""
     if text.count("$$") % 2:
@@ -75,7 +85,7 @@ def ocr_ok(text: str) -> bool:
 
 def _contains_answer(answer: str, solution: str) -> bool:
     target = normalize(answer)
-    haystack = normalize(solution)
+    haystack = normalize_boundary(solution)
     if not target:
         return False
     parts = [part for part in re.split(r"[,;，；]", target) if part]
@@ -84,11 +94,10 @@ def _contains_answer(answer: str, solution: str) -> bool:
             pattern = rf"(?<![0-9]){re.escape(part)}(?![0-9])"
             if not re.search(pattern, haystack):
                 return False
-        elif part.isascii() and part.isalnum():
-            pattern = rf"(?<![a-z0-9]){re.escape(part)}(?![a-z0-9])"
-            if not re.search(pattern, haystack):
-                return False
-        elif part not in haystack:
+            continue
+        prefix = r"(?<![a-z0-9])" if part[0].isascii() and part[0].isalnum() else ""
+        suffix = r"(?![a-z0-9])" if part[-1].isascii() and part[-1].isalnum() else ""
+        if not re.search(prefix + re.escape(part) + suffix, haystack):
             return False
     return True
 

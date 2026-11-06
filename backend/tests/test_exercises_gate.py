@@ -120,6 +120,42 @@ def test_answer_missing_from_solution_is_rejected():
     assert "answer_not_in_solution" in result.reasons
 
 
+def test_expression_answer_is_not_matched_inside_larger_expression():
+    exercise = make(content={
+        "en": {
+            "question": "Compute the exact value of the following integral.",
+            "answer": "x=2",
+            "solution": (
+                "The algebra simplifies to x=20 after substitution, therefore "
+                "the final value reported by the computation is 20."
+            ),
+        }
+    })
+
+    result = gate_exercise(exercise)
+
+    assert result.accepted is False
+    assert "answer_not_in_solution" in result.reasons
+
+
+def test_expression_answer_matches_before_punctuation():
+    exercise = make(content={
+        "en": {
+            "question": "Compute the exact value of the following integral.",
+            "answer": "x=2",
+            "solution": (
+                "The algebra simplifies to x=2; therefore the final value "
+                "reported by the computation is 2."
+            ),
+        }
+    })
+
+    result = gate_exercise(exercise)
+
+    assert result.accepted is True
+    assert result.reasons == ()
+
+
 def test_proof_with_conclusion_marker_and_long_solution_passes():
     exercise = make(
         type="proof",
