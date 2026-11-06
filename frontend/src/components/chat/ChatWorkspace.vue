@@ -19,6 +19,7 @@
  * 问题分类由前端关键词预判,后端路由做最终裁决。
  */
 import { computed, defineAsyncComponent, markRaw, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch } from 'vue'
+import type { CSSProperties } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
@@ -74,6 +75,11 @@ import { splitStableBlocks } from '@/utils/mathBlocks'
 import {
   clampDiagramSplit as clampDiagramSplitValue,
   DIAGRAM_SPLIT_DEFAULT,
+  isDoubleTap,
+  moveFocusPanel,
+  resizeFocusPanel,
+  type FocusPanel,
+  type TapPoint,
 } from '@/utils/diagramFocus'
 
 const props = withDefaults(defineProps<{ workspace?: Workspace }>(), { workspace: 'learn' })
@@ -258,9 +264,44 @@ const diagramSplitResizing = ref(false)
 const searchWasOpen = ref(false)
 const narrowQuery = window.matchMedia('(max-width: 899px)')
 const isNarrow = ref(narrowQuery.matches)
-const focusPaneStyle = computed(() => ({
-  width: `${diagramSplitRatio.value * 100}%`,
-}))
+const focusPanel = ref<FocusPanel>({ x: 0, w: 90, h: 82, fullscreen: false })
+const lastTap = ref<TapPoint | null>(null)
+const touchPointers = new Set<number>()
+let focusGesture: {
+  pointers: Map<number, { x: number; y: number }>
+  startX: number
+  startY: number
+  startW: number
+  startH: number
+  startPanelX: number
+  startDistance: number
+  fullscreen: boolean
+  sawMulti: boolean
+} | null = null
+const viewport = (): { width: number; height: number } => ({
+  width: window.innerWidth,
+  height: window.innerHeight,
+})
+const focusPaneStyle = computed<CSSProperties>(() => {
+  if (!isNarrow.value) return { width: `${diagramSplitRatio.value * 100}%` }
+  if (focusPanel.value.fullscreen) {
+    return {
+      left: '0',
+      top: '0',
+      width: '100vw',
+      height: '100vh',
+      transform: 'none',
+      borderRadius: '0',
+    }
+  }
+  return {
+    left: `calc(50% + ${focusPanel.value.x}px)`,
+    top: '50%',
+    width: `${focusPanel.value.w}vw`,
+    height: `${focusPanel.value.h}vh`,
+    transform: 'translate(-50%, -50%)',
+  }
+})
 
 function loadDiagramSplit(): number {
   try {
@@ -328,6 +369,8 @@ function openDiagramFocus(block: DiagramBlock, msgId: number): void {
   }
   searchWasOpen.value = searchOpen.value
   if (searchOpen.value) searchOpen.value = false
+  if (isNarrow.value) focusPanel.value = { x: 0, w: 90, h: 82, fullscreen: false }
+  lastTap.value = null
   focusDiagram.value = block
   nextTick(() => focusCloseEl.value?.focus())
 }
@@ -363,6 +406,136 @@ function onFocusKeydown(event: KeyboardEvent): void {
 
 function onNarrowChange(event: MediaQueryListEvent): void {
   isNarrow.value = event.matches
+  if (event.matches) {
+    focusPanel.value = { x: 0, w: 90, h: 82, fullscreen: false }
+  }
+}
+
+function onDiagramPointerDown(event: PointerEvent): void {
+  if (event.pointerType === 'touch') touchPointers.add(event.pointerId)
+}
+
+function onDiagramPointerCancel(event: PointerEvent): void {
+  touchPointers.delete(event.pointerId)
+  lastTap.value = null
+}
+
+function onDiagramPointerUp(
+  event: PointerEvent,
+  block: DiagramBlock,
+  msgId: number,
+): void {
+  if (event.pointerType !== 'touch') return
+  const multi = touchPointers.size > 1
+  touchPointers.delete(event.pointerId)
+  if (multi || focusDiagram.value || !isNarrow.value) {
+    lastTap.value = null
+    return
+  }
+  const tap: TapPoint = {
+    time: performance.now(),
+    x: event.clientX,
+    y: event.clientY,
+  }
+  if (isDoubleTap(lastTap.value, tap)) {
+    lastTap.value = null
+    openDiagramFocus(block, msgId)
+  } else {
+    lastTap.value = tap
+  }
+}
+
+function focusDistance(points: Map<number, { x: number; y: number }>): number {
+  const values = [...points.values()]
+  if (values.length < 2) return 0
+  return Math.hypot(values[0].x - values[1].x, values[0].y - values[1].y)
+}
+
+function onFocusPointerDown(event: PointerEvent): void {
+  if (!isNarrow.value) return
+  event.preventDefault()
+  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+  if (!focusGesture) {
+    focusGesture = {
+      pointers: new Map(),
+      startX: event.clientX,
+      startY: event.clientY,
+      startW: focusPanel.value.w,
+      startH: focusPanel.value.h,
+      startPanelX: focusPanel.value.x,
+      startDistance: 0,
+      fullscreen: focusPanel.value.fullscreen,
+      sawMulti: false,
+    }
+  }
+  focusGesture.pointers.set(event.pointerId, {
+    x: event.clientX,
+    y: event.clientY,
+  })
+  if (focusGesture.pointers.size === 1) {
+    focusGesture.startX = event.clientX
+    focusGesture.startY = event.clientY
+    focusGesture.startPanelX = focusPanel.value.x
+  } else if (focusGesture.pointers.size === 2) {
+    focusGesture.sawMulti = true
+    focusGesture.startDistance = focusDistance(focusGesture.pointers)
+    focusGesture.startW = focusPanel.value.w
+    focusGesture.startH = focusPanel.value.h
+  }
+}
+
+function onFocusPointerMove(event: PointerEvent): void {
+  if (!focusGesture || !focusGesture.pointers.has(event.pointerId)) return
+  focusGesture.pointers.set(event.pointerId, {
+    x: event.clientX,
+    y: event.clientY,
+  })
+  if (focusGesture.pointers.size >= 2) {
+    if (focusGesture.startDistance <= 0) return
+    const scale = focusDistance(focusGesture.pointers) / focusGesture.startDistance
+    focusPanel.value = resizeFocusPanel({
+      x: focusGesture.startPanelX,
+      w: focusGesture.startW,
+      h: focusGesture.startH,
+      fullscreen: false,
+    }, scale, viewport())
+    return
+  }
+  if (focusPanel.value.fullscreen) return
+  const dx = event.clientX - focusGesture.startX
+  focusPanel.value = moveFocusPanel({
+    ...focusPanel.value,
+    x: focusGesture.startPanelX,
+  }, dx, viewport())
+}
+
+function onFocusPointerUp(event: PointerEvent): void {
+  if (!focusGesture) return
+  const gesture = focusGesture
+  const point = gesture.pointers.get(event.pointerId)
+  gesture.pointers.delete(event.pointerId)
+  if (gesture.pointers.size === 1) {
+    const remaining = [...gesture.pointers.values()][0]
+    gesture.startX = remaining.x
+    gesture.startY = remaining.y
+    gesture.startPanelX = focusPanel.value.x
+    gesture.startW = focusPanel.value.w
+    gesture.startH = focusPanel.value.h
+    gesture.sawMulti = true
+  }
+  if (gesture.pointers.size === 0) {
+    focusGesture = null
+    if (gesture.fullscreen && !gesture.sawMulti && point
+      && event.clientY - gesture.startY > 60) {
+      closeDiagramFocus()
+    }
+  }
+}
+
+function onFocusPointerCancel(event: PointerEvent): void {
+  if (!focusGesture) return
+  focusGesture.pointers.delete(event.pointerId)
+  if (focusGesture.pointers.size === 0) focusGesture = null
 }
 
 /** 模型动作到达:确保右侧阅读器存在,再跳页/高亮/批注。
@@ -2069,7 +2242,11 @@ onBeforeUnmount(() => {
                   <div
                     v-else-if="block.diagram"
                     class="diagram-embed"
+                    @click.stop
                     @dblclick.stop="openDiagramFocus(block.diagram, m.id)"
+                    @pointerdown="onDiagramPointerDown"
+                    @pointerup="onDiagramPointerUp($event, block.diagram, m.id)"
+                    @pointercancel="onDiagramPointerCancel"
                   >
                     <Teleport
                       to="#mg-diagram-focus-stage"
@@ -2316,13 +2493,27 @@ onBeforeUnmount(() => {
         @keydown.left.prevent="nudgeDiagramSplit(-0.02)"
         @keydown.right.prevent="nudgeDiagramSplit(0.02)"
       ></div>
+      <div
+        v-if="focusDiagram && isNarrow"
+        class="diagram-focus-backdrop"
+        @click="closeDiagramFocus"
+      ></div>
       <aside
         v-show="focusDiagram"
         class="diagram-focus-pane"
-        :class="{ 'diagram-focus-pane--narrow': isNarrow }"
+        :class="{
+          'diagram-focus-pane--narrow': isNarrow,
+          'diagram-focus-pane--fullscreen': isNarrow && focusPanel.fullscreen,
+        }"
         :style="focusPaneStyle"
       >
-        <header class="diagram-focus-head">
+        <header
+          class="diagram-focus-head"
+          @pointerdown.stop="onFocusPointerDown"
+          @pointermove.stop="onFocusPointerMove"
+          @pointerup.stop="onFocusPointerUp"
+          @pointercancel.stop="onFocusPointerCancel"
+        >
           <span class="diagram-focus-title">{{ focusDiagram?.spec.title }}</span>
           <button
             ref="focusCloseEl"
@@ -2464,6 +2655,31 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+.diagram-focus-pane--narrow {
+  position: fixed;
+  z-index: 45;
+  border: 1px solid var(--line-bright);
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+.diagram-focus-pane--fullscreen {
+  border: 0;
+  border-radius: 0;
+}
+
+.diagram-focus-pane--fullscreen .diagram-focus-head {
+  padding-top: calc(8px + env(safe-area-inset-top));
+}
+
+.diagram-focus-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  background: rgba(3, 6, 12, 0.62);
+  backdrop-filter: blur(2px);
+}
+
 .diagram-focus-head {
   flex: none;
   display: flex;
@@ -2473,6 +2689,8 @@ onBeforeUnmount(() => {
   padding: 8px 12px;
   color: var(--text);
   border-bottom: 1px solid var(--line);
+  touch-action: none;
+  cursor: grab;
 }
 
 .diagram-focus-title {
