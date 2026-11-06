@@ -120,6 +120,96 @@ def test_answer_missing_from_solution_is_rejected():
     assert "answer_not_in_solution" in result.reasons
 
 
+def test_latex_sizing_commands_are_ignored_when_matching_answer():
+    exercise = make(content={
+        "en": {
+            "question": "Compute the exact value of the following integral.",
+            "answer": r"\left(\frac{1}{2}\right)",
+            "solution": (
+                r"The integral evaluates to (\frac{1}{2}) after substitution, "
+                "so the final value is one half."
+            ),
+        }
+    })
+
+    result = gate_exercise(exercise)
+
+    assert result.accepted is True
+    assert result.reasons == ()
+
+
+def test_digit_letter_spacing_is_ignored_when_matching_answer():
+    exercise = make(content={
+        "en": {
+            "question": "Find the general term of the following sequence.",
+            "answer": "a_n=3n-1",
+            "solution": (
+                "The sequence is arithmetic with common difference 3, so its "
+                "general term is a_n = 3 n - 1 for every positive index."
+            ),
+        }
+    })
+
+    result = gate_exercise(exercise)
+
+    assert result.accepted is True
+    assert result.reasons == ()
+
+
+def test_alternative_answers_split_on_or():
+    exercise = make(content={
+        "en": {
+            "question": "Find all points satisfying the stated geometric condition.",
+            "answer": r"E(8,-2) \text{ or } (2,-8)",
+            "solution": (
+                "The construction yields E(8,-2) or (2,-8); both points satisfy "
+                "the stated geometric condition after the reflection."
+            ),
+        }
+    })
+
+    result = gate_exercise(exercise)
+
+    assert result.accepted is True
+    assert result.reasons == ()
+
+
+def test_spaced_digits_in_bold_answer_are_ignored():
+    exercise = make(content={
+        "en": {
+            "question": "Compute the exact value of the following product.",
+            "answer": "109890",
+            "solution": (
+                r"The product is equal to $\mathbf{1 0 9 8 9 0}$, so the final "
+                "value is obtained after subtraction."
+            ),
+        }
+    })
+
+    result = gate_exercise(exercise)
+
+    assert result.accepted is True
+    assert result.reasons == ()
+
+
+def test_thousands_separator_is_ignored_when_matching_answer():
+    exercise = make(content={
+        "en": {
+            "question": "Compute the exact value of the following product.",
+            "answer": "109890",
+            "solution": (
+                "Multiplying the factors gives 109,890, therefore the final "
+                "value reported by the computation is 109,890."
+            ),
+        }
+    })
+
+    result = gate_exercise(exercise)
+
+    assert result.accepted is True
+    assert result.reasons == ()
+
+
 def test_expression_answer_is_not_matched_inside_larger_expression():
     exercise = make(content={
         "en": {

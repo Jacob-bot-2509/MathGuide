@@ -102,3 +102,36 @@ def build_source(
         path=path,
         manifest_path=manifest_path,
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    from .fetch import fetch_source
+
+    parser = argparse.ArgumentParser(description="构建习题 JSONL 与 manifest")
+    parser.add_argument("--source", choices=("all",) + tuple(SOURCES), default="all")
+    parser.add_argument("--limit", type=int, default=2000, help="每个来源的最大抽样题数")
+    parser.add_argument("--seed", type=int, default=20261106)
+    parser.add_argument("--cache", default="/tmp/exercise_source_audit")
+    parser.add_argument("--output", default="data/exercises/final")
+    args = parser.parse_args(argv)
+    if args.limit <= 0:
+        parser.error("--limit 必须为正整数")
+
+    names = tuple(SOURCES) if args.source == "all" else (args.source,)
+    for name in names:
+        rows = fetch_source(name, args.limit, args.seed, Path(args.cache))
+        report = build_source(name, rows, Path(args.output))
+        print(json.dumps({
+            "source": report.source,
+            "parsed": report.parsed,
+            "accepted": report.accepted,
+            "duplicates": report.duplicates,
+            "rejected": report.rejected,
+            "path": str(report.path),
+        }, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

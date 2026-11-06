@@ -20,6 +20,16 @@ _WS_RE = re.compile(r"\s+")
 _MATH_SPACE_RE = re.compile(r"\s*([=+\-*/^<>≤≥≠])\s*")
 _DISPLAY_MATH_RE = re.compile(r"\$\$[\s\S]*?\$\$")
 _ESCAPED_BRACE_RE = re.compile(r"\\[{}]")
+_SIZING_RE = re.compile(r"\\(?:left|right|big|Big|bigg|Bigg)\b")
+_SPACING_RE = re.compile(r"\\[,;! ]|\\quad\b|\\qquad\b")
+_FRAC_RE = re.compile(r"\\[dt]frac\b")
+_RELATION_RE = (
+    (re.compile(r"\\(?:leq|le)\b"), "<="),
+    (re.compile(r"\\(?:geq|ge)\b"), ">="),
+    (re.compile(r"\\(?:neq|ne)\b"), "!="),
+)
+_WRAP_RE = re.compile(r"\\(?:mathrm|text)\{([^{}]*)\}")
+_THOUSANDS_RE = re.compile(r"(?<=\d),(?=\d{3}(?:\D|$))")
 
 
 @dataclass(frozen=True)
@@ -40,19 +50,29 @@ class GateResult:
         }
 
 
-def normalize(text: str) -> str:
-    """比较答案/过程时忽略大小写、空白与数学定界符。"""
-    value = _WS_RE.sub("", text.lower())
+def _clean_math(text: str) -> str:
+    """消除排版差异:定界符、\\left/\\right、间距、分数命令、千分位。"""
+    value = text.lower()
     for token in ("\\(", "\\)", "\\[", "\\]", "$"):
         value = value.replace(token, "")
+    value = _SIZING_RE.sub("", value)
+    value = _SPACING_RE.sub("", value)
+    value = _FRAC_RE.sub(r"\\frac", value)
+    for pattern, replacement in _RELATION_RE:
+        value = pattern.sub(replacement, value)
+    value = _WRAP_RE.sub(r"\1", value)
+    value = _THOUSANDS_RE.sub("", value)
     return value
+
+
+def normalize(text: str) -> str:
+    """比较答案/过程时忽略大小写、空白与数学排版差异。"""
+    return _WS_RE.sub("", _clean_math(text))
 
 
 def normalize_boundary(text: str) -> str:
     """保留词间空格,只压掉数学运算符两侧空白,供边界匹配使用。"""
-    value = text.lower()
-    for token in ("\\(", "\\)", "\\[", "\\]", "$"):
-        value = value.replace(token, "")
+    value = _clean_math(text)
     value = _MATH_SPACE_RE.sub(r"\1", value)
     return _WS_RE.sub(" ", value).strip()
 
@@ -83,23 +103,22 @@ def ocr_ok(text: str) -> bool:
     return text.count("�") / len(text) <= MAX_REPLACEMENT_RATIO
 
 
+def _answer_pattern(part: str) -> str:
+    body = r"\s*".join(re.escape(char) for char in part)
+    if part.isascii() and part.isdigit():
+        return rf"(?<![0-9]){body}(?![0-9])"
+    prefix = r"(?<![a-z0-9])" if part[0].isascii() and part[0].isalnum() else ""
+    suffix = r"(?![a-z0-9])" if part[-1].isascii() and part[-1].isalnum() else ""
+    return prefix + body + suffix
+
+
 def _contains_answer(answer: str, solution: str) -> bool:
     target = normalize(answer)
     haystack = normalize_boundary(solution)
     if not target:
         return False
-    parts = [part for part in re.split(r"[,;，；]", target) if part]
-    for part in parts:
-        if part.isascii() and part.isdigit():
-            pattern = rf"(?<![0-9]){re.escape(part)}(?![0-9])"
-            if not re.search(pattern, haystack):
-                return False
-            continue
-        prefix = r"(?<![a-z0-9])" if part[0].isascii() and part[0].isalnum() else ""
-        suffix = r"(?![a-z0-9])" if part[-1].isascii() and part[-1].isalnum() else ""
-        if not re.search(prefix + re.escape(part) + suffix, haystack):
-            return False
-    return True
+    parts = [part for part in re.split(r"[,;，；\n]|\bor\b|或", target) if part]
+    return all(re.search(_answer_pattern(part), haystack) for part in parts)
 
 
 def answer_in_solution(exercise: Exercise, solution: str) -> bool:
