@@ -2524,7 +2524,8 @@ onBeforeUnmount(() => {
         aria-orientation="vertical"
         tabindex="0"
         @pointerdown="startDiagramSplitDrag"
-        @dblclick="resetDiagramSplit"
+        @click.stop
+        @dblclick.stop="resetDiagramSplit"
         @keydown.left.prevent="nudgeDiagramSplit(0.02)"
         @keydown.right.prevent="nudgeDiagramSplit(-0.02)"
       ></div>
