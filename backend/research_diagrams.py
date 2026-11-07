@@ -1451,6 +1451,60 @@ def prepare_diagram(raw: object) -> dict | None:
 
 
 
+def build_data_plot(table_id: str, x: str, y: str,
+                    fit_result: dict) -> dict | None:
+    """用回归服务返回的真实点/拟合曲线构建 plot2d;模型不参与数值。"""
+    if not isinstance(fit_result, dict):
+        return None
+    raw_points = fit_result.get("points")
+    if not isinstance(raw_points, list) or not raw_points:
+        return None
+    points: list[list[float]] = []
+    for index, item in enumerate(raw_points[:200]):
+        if not isinstance(item, dict):
+            continue
+        x_value = _num(item.get("x"))
+        if x_value is None:
+            x_value = _num(item.get("row"))
+        y_value = _num(item.get("actual"))
+        if x_value is None or y_value is None:
+            continue
+        points.append([x_value, y_value])
+    if not points:
+        return None
+
+    shapes: list[dict] = [
+        {"kind": "axis", "from": [0, 0], "to": [1, 0], "label": str(x)[:40]},
+        {"kind": "axis", "from": [0, 0], "to": [0, 1], "label": str(y)[:40]},
+    ]
+    shapes.extend({"kind": "point", "x": point[0], "y": point[1]}
+                  for point in points)
+
+    raw_curve = fit_result.get("fitCurve")
+    curve: list[list[float]] = []
+    if isinstance(raw_curve, list):
+        for item in raw_curve[:200]:
+            if not isinstance(item, dict):
+                continue
+            x_value = _num(item.get("x"))
+            y_value = _num(item.get("y"))
+            if x_value is not None and y_value is not None:
+                curve.append([x_value, y_value])
+    if len(curve) >= 2:
+        shapes.append({"kind": "curve", "points": curve, "color": "#4dd6ff"})
+
+    equation = str(fit_result.get("equation") or "").strip()
+    title = f"{str(y)[:40]} ~ {str(x)[:40]}"
+    if equation:
+        title = f"{title}: {equation[:120]}"
+    return prepare_diagram({
+        "type": "plot2d",
+        "title": title[:200],
+        "shapes": shapes,
+        "annotations": [],
+    })
+
+
 def _shape(raw: object) -> dict | None:
     if not isinstance(raw, dict):
         return None

@@ -37,6 +37,23 @@ def test_research_mode_requires_data_grounding(monkeypatch):
     assert "数据点" in seen["system"] or "data points" in seen["system"].lower()
 
 
+def test_data_plot_uses_fit_points_not_model_values():
+    fit = {
+        "points": [
+            {"row": 0, "actual": 1.0, "fitted": 1.1, "residual": -0.1},
+            {"row": 1, "actual": 2.0, "fitted": 2.1, "residual": -0.1},
+        ],
+        "fitCurve": [{"x": 0, "y": 1.0}, {"x": 3, "y": 4.0}],
+    }
+    spec = rd.build_data_plot("t1", "X", "Y", fit)
+    assert spec["type"] == "plot2d"
+    points = [s for s in spec["shapes"] if s["kind"] == "point"]
+    assert len(points) == 2
+    assert points[0]["x"] == 0
+    assert points[0]["y"] == 1.0
+    assert any(s["kind"] == "curve" for s in spec["shapes"])
+
+
 def test_marker_split_across_chunks():
     stream = MarkerStream("r1")
     assert stream.feed("前[[MG_DIA") == "前"
