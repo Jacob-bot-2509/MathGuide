@@ -2314,8 +2314,6 @@ async def plan_endpoint(request: Request) -> JSONResponse:
                 table_row.get("columns") or [],
                 {key: value for key, value in regression.items()
                  if key != "tableUpdatedAt"})
-            if len(spec["x"]) != 1:
-                raise ValueError("unsupported")
             fit_result = await _run_analysis({
                 "columns": table_row.get("columns") or [],
                 "rows": research_tables._resolved_analysis_rows(
@@ -2330,7 +2328,8 @@ async def plan_endpoint(request: Request) -> JSONResponse:
         except analysis_client.AnalysisError as exc:
             status = 400 if exc.code in {"empty", "insufficient_n", "singular", "bad_column", "unsupported"} else 503
             raise HTTPException(status, exc.code) from exc
-        diagram = build_data_plot(table_id, spec["x"][0], spec["y"], fit_result)
+        x_label = spec["x"][0] if len(spec["x"]) == 1 else "观测序号"
+        diagram = build_data_plot(table_id, x_label, spec["y"], fit_result)
         if diagram is None:
             raise HTTPException(422, "invalid_plot")
         return JSONResponse({"diagram": diagram}, headers={"Cache-Control": "no-store"})

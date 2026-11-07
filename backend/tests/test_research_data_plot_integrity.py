@@ -58,19 +58,27 @@ def test_plan_recomputes_from_current_table_and_names_axes(monkeypatch):
     assert any(s["kind"] == "point" and s["x"] == 5 and s["y"] == 10 for s in diagram["shapes"])
 
 
-def test_plan_rejects_multiple_x_without_inventing_scatter_axis(monkeypatch):
+def test_multiple_x_uses_observation_index_without_mislabeling(monkeypatch):
     monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "integrity-test"})
     monkeypatch.setattr(rd, "_get_table", lambda uid, tid: {
         "columns": [{"key": "X", "type": "number"}, {"key": "Z", "type": "number"},
                     {"key": "Y", "type": "number"}],
         "rows": [["1", "2", "3"]], "formulas": {},
     })
+
+    async def compute(payload, timeout=30):
+        return {"points": [{"row": 4, "actual": 3}, {"row": 7, "actual": 6}]}
+
+    monkeypatch.setattr(rd, "_run_analysis", compute)
     app = Starlette(routes=[Route("/api/research/diagrams/plan", rd.plan_endpoint, methods=["POST"])])
     response = TestClient(app).post("/api/research/diagrams/plan", json={
         "question": "plot", "tableId": "t", "mode": "research",
         "regression": {"x": ["X", "Z"], "y": "Y", "model": "ols"},
     })
-    assert response.status_code == 400
+    assert response.status_code == 200
+    diagram = response.json()["diagram"]
+    assert "观测序号" in diagram["title"]
+    assert any(s["kind"] == "point" and s["x"] == 4 and s["y"] == 3 for s in diagram["shapes"])
 
 
 def test_plan_rejects_client_supplied_regression_points(monkeypatch):
