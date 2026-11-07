@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 from collections import Counter
 from collections.abc import Iterable
@@ -13,6 +14,17 @@ from .taxonomy import CATEGORY_KEYS, CROSS_TOPIC_IDS
 DEFAULT_TIERS: tuple[str, ...] = ("safe",)
 _ALLOWED_TIERS = frozenset({"safe", "research"})
 LANGUAGES = ("zh", "en", "both")
+
+
+def tiers_from_env(value: str | None = None) -> tuple[str, ...]:
+    """读取 MG_EXERCISE_TIERS;未知层与 blocked 忽略,空值回退 safe。"""
+    raw = os.environ.get("MG_EXERCISE_TIERS", "safe") if value is None else value
+    tiers = tuple(
+        tier
+        for tier in dict.fromkeys(part.strip() for part in raw.split(","))
+        if tier in _ALLOWED_TIERS
+    )
+    return tiers or DEFAULT_TIERS
 
 
 def load_jsonl(path: Path) -> tuple[Exercise, ...]:

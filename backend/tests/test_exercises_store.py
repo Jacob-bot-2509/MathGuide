@@ -6,7 +6,7 @@ import json
 import pytest
 
 from exercises import schema
-from exercises.store import ExerciseStore, load_jsonl
+from exercises.store import ExerciseStore, load_jsonl, tiers_from_env
 
 
 def make(
@@ -66,6 +66,19 @@ def test_load_jsonl_skips_blank_lines_and_reports_bad_line(tmp_path):
     path.write_text("{bad json}\n", encoding="utf-8")
     with pytest.raises(schema.SchemaError, match="第 1 行"):
         load_jsonl(path)
+
+
+def test_tiers_from_env_defaults_to_safe():
+    assert tiers_from_env("") == ("safe",)
+    assert tiers_from_env("unknown") == ("safe",)
+    assert tiers_from_env("safe,research") == ("safe", "research")
+    assert tiers_from_env("research,blocked") == ("research",)
+
+
+def test_tiers_from_env_reads_environment(monkeypatch):
+    monkeypatch.setenv("MG_EXERCISE_TIERS", "safe,research")
+
+    assert tiers_from_env() == ("safe", "research")
 
 
 def test_store_filters_blocked_sources_even_when_requested():
