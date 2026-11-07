@@ -73,6 +73,25 @@ def pick(role: str) -> str:
     return role if resolve(role) is not None else "main"
 
 
+# 始终思考的模型族:这类模型拒绝 enable_thinking=false(智谱返回 400 / 1210,
+# 提示改用 low/high/max),只能用 reasoning_effort 把思考压到最低。
+_ALWAYS_THINKING = ("glm-5.3",)
+
+
+def _thinking_param(model: str, thinking: bool) -> dict:
+    """思考开关的下发口径。
+
+    thinking=True  → 不传参数,用平台默认。
+    thinking=False → 普通模型传 enable_thinking=false;
+                     始终思考的模型传 reasoning_effort=low。
+    """
+    if thinking:
+        return {}
+    if any(tag in model.lower() for tag in _ALWAYS_THINKING):
+        return {"reasoning_effort": "low"}
+    return {"enable_thinking": False}
+
+
 async def _stream_once(base: str, key: str, model: str, system: str, user: str,
                        history: list[dict] | None = None,
                        max_tokens: int | None = None,
@@ -89,10 +108,7 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
     }
     if max_tokens:
         payload["max_tokens"] = max_tokens
-    if not thinking:
-        # 阿里云百炼与智谱 OpenAI 兼容端点均接受该字段(实测),关闭后
-        # 综合题首字从 88s 降到 0.5s;未定义该字段的兼容端点通常直接忽略
-        payload["enable_thinking"] = False
+    payload.update(_thinking_param(model, thinking))
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     # trust_env=False 强制直连:阿里云/智谱 API 国内直连可达,走系统代理
     # (Clash 类工具)反而被中间人证书拦截(实测 SSL CERTIFICATE_VERIFY_FAILED);
