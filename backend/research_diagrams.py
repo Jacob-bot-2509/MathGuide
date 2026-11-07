@@ -1791,6 +1791,20 @@ def diagram_event(diagram: dict, request_id: str, anchor_id: str,
     return "data: " + payload + "\n\n"
 
 
+_PLAN_SYSTEM_RESEARCH = (
+    "你是 MathGuide 的科研图解规划器。只把【论文片段】【数据表】【计算结果】"
+    "中真实出现的对象、关系或数值画出来。\n"
+    "科研图服务于方法流程、模型结构、数据关系或实验设计,不要套用教学步骤模板。\n"
+    "硬规则:\n"
+    "1. 数据点必须来自数据表或服务端的确定性计算结果;禁止编造、估读、"
+    "手写拟合系数或把示例数值当成真实数据。\n"
+    "2. 散点、拟合线、残差图由服务端用回归结果确定性构建;你只表达 dataPlot 意图,"
+    "不要自己写散点坐标或拟合系数。\n"
+    "3. 资料不足、没有数据表、没有计算结果时,不要画图;正文说明资料不足。\n"
+    "4. 只画这一段真正需要的图,不画装饰性坐标轴,不把论文结论画成空泛关系网。\n"
+    "5. 只输出一个 JSON 对象,不要解释,不要 Markdown 代码块。"
+)
+
 _PLAN_SYSTEM = (
     "你是 MathGuide 的图解规划器。用户正在听讲解,你需要把【标记前最新一段】"
     "所讲的内容画成一张静态图解,帮助学生看懂这一步。\n"
@@ -1877,7 +1891,9 @@ def _load_json(text: str) -> dict | None:
 async def plan_diagram(question: str, before: str, excerpts: list[dict],
                        kind: str, role: str = "main",
                        strict: bool | None = None,
-                       local_hint: bool = False) -> dict | None:
+                       local_hint: bool = False,
+                       mode: str = "learn",
+                       table_context: str = "") -> dict | None:
     """根据用户问题与当前段落生成一张图解;失败返回 None。
 
     strict=True:kind 是硬性要求(用户明确说了表示方式)。
@@ -1930,6 +1946,8 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
         f"当前回答(标记前最新段落):{latest}",
         "资料:",
     ]
+    if table_context:
+        context.insert(0, f"数据表/计算结果(只可引用真实数值):{_text(table_context, 4000)}")
     for item in (excerpts or [])[:6]:
         section = _text(item.get("section"), 120)
         body = _text(item.get("text") or item.get("snippet"), 900)
@@ -1938,8 +1956,9 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
     try:
         async with _planner_gate():
             parts: list[str] = []
+            system = _PLAN_SYSTEM_RESEARCH if mode == "research" else _PLAN_SYSTEM
             async for delta in llm.stream_chat(
-                    _PLAN_SYSTEM, "\n".join(context), role=role,
+                    system, "\n".join(context), role=role,
                     fallback=True, max_tokens=1800, thinking=False):
                 parts.append(delta)
                 if sum(len(part) for part in parts) >= 12000:
@@ -2136,7 +2155,9 @@ async def plan_geogebra(question: str, before: str, role: str = "main") -> dict 
 
 
 async def plan_diagram_auto(question: str, before: str, excerpts: list[dict],
-                            kind: str, role: str = "main", **kwargs) -> dict | None:
+                            kind: str, role: str = "main",
+                            mode: str = "learn",
+                            table_context: str = "", **kwargs) -> dict | None:
     """按内容领域与 MG_DIAGRAM_ENGINE 选择引擎;失败自动回退旧规划器。"""
     if (linear_algebra.looks_linear(question)
             and (wants_visual(question) or not is_relation_question(question))):
@@ -2157,7 +2178,9 @@ async def plan_diagram_auto(question: str, before: str, excerpts: list[dict],
         if diagram is not None:
             return diagram
         diagram_metrics.record("plan", False, "geo_fallback")
-    return await plan_diagram(question, before, excerpts, kind, role=role, **kwargs)
+    return await plan_diagram(
+        question, before, excerpts, kind, role=role,
+        mode=mode, table_context=table_context, **kwargs)
 
 
 _diagram_limiter = SlidingWindowLimiter(12, 60.0)

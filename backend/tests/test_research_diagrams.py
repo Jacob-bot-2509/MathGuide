@@ -20,6 +20,23 @@ def _marker(kind: str = "relation") -> str:
     return f"[[MG_DIAGRAM:{kind}]]"
 
 
+def test_research_mode_requires_data_grounding(monkeypatch):
+    seen = {}
+
+    async def fake_stream(system, context, **kwargs):
+        seen["system"] = system
+        seen["context"] = context
+        yield '{"type":"flow","nodes":[{"id":"a","label":"方法"}],"edges":[]}'
+
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role=None: True)
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(rd.plan_diagram(
+        "画出实验流程", "先取样，再测量", [], "flow", mode="research"))
+    assert result is not None
+    assert "科研" in seen["system"] or "research" in seen["system"].lower()
+    assert "数据点" in seen["system"] or "data points" in seen["system"].lower()
+
+
 def test_marker_split_across_chunks():
     stream = MarkerStream("r1")
     assert stream.feed("前[[MG_DIA") == "前"
