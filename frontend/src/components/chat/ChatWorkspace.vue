@@ -134,6 +134,7 @@ type RegressionSpec = {
 const tableContext = ref<{
   id: string; title: string; regression?: RegressionSpec
 } | null>(null)
+const researchDiagrams = ref(false)
 
 function onPaperChange(paper: { docId: string; title: string } | null): void {
   currentPaper.value = paper
@@ -1283,6 +1284,7 @@ function send(text?: string, cmd?: string) {
       : undefined,
     tableId: isResearch.value ? tableContext.value?.id : undefined,
     tableRegression: isResearch.value ? tableContext.value?.regression : undefined,
+    diagrams: isResearch.value ? researchDiagrams.value : undefined,
   })
 }
 
@@ -2465,6 +2467,13 @@ onBeforeUnmount(() => {
           @paste="onPaste"
         ></textarea>
         <!-- 生成中变为「停止生成」:可中断长回答,已生成内容保留 -->
+        <button
+          v-if="isResearch"
+          class="diagram-toggle"
+          :class="{ on: researchDiagrams }"
+          :title="t('chat.diagramToggleHint')"
+          @click="researchDiagrams = !researchDiagrams"
+        >{{ t('chat.diagramToggle') }}</button>
         <button class="send" :class="{ 'is-stop': busy }" @click="busy ? stopGenerating() : send()">
           {{ busy ? t('learn.stop') : t('learn.send') }}
         </button>
@@ -3436,6 +3445,23 @@ onBeforeUnmount(() => {
 
 .input::placeholder {
   color: var(--text-dim);
+}
+
+.diagram-toggle {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  padding: 11px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.diagram-toggle.on {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+  background: color-mix(in srgb, var(--cyan) 12%, transparent);
 }
 
 .send {

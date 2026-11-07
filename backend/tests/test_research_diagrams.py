@@ -37,6 +37,13 @@ def test_research_mode_requires_data_grounding(monkeypatch):
     assert "数据点" in seen["system"] or "data points" in seen["system"].lower()
 
 
+def test_research_diagram_switch_defaults_off():
+    import chat
+    assert chat._diagram_requested({}) is False
+    assert chat._diagram_requested({"diagrams": False}) is False
+    assert chat._diagram_requested({"diagrams": True}) is True
+
+
 def test_plan_endpoint_accepts_table_id(monkeypatch):
     import research_diagrams as rd
     from starlette.applications import Starlette

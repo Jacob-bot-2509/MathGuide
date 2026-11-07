@@ -505,6 +505,11 @@ def _record(rec: dict, *, cmd: str, prompt_len: int, reply_len: int,
     )
 
 
+def _diagram_requested(body: dict) -> bool:
+    """研究综述图解必须显式开启;缺省不插图。"""
+    return isinstance(body, dict) and body.get("diagrams") is True
+
+
 def _regression_summary(result: dict, stale: bool) -> str:
     """把服务端回归结果压成一行上下文;模型只引用,不重算。"""
     parts = [
@@ -528,7 +533,8 @@ def _regression_summary(result: dict, stale: bool) -> str:
 
 
 async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: bool,
-                        ck: str | None = None, extra: str = ""):
+                        ck: str | None = None, extra: str = "",
+                        diagrams: bool = False, request_id: str = ""):
     """研究型 LLM 综合:正文流式 + 引用区(后端拼装,不经过模型);
     模型失败自动降级为来源列表;ck 非空时全文入库缓存供重复问题秒回"""
     full: list[str] = []
@@ -555,6 +561,20 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
         full.append(citations)
         async for frame in _frames(citations, pace=False):
             yield frame
+    if diagrams:
+        text = "".join(full)
+        try:
+            diagram = await research_diagrams.plan_diagram(
+                question, text, [], "", mode="research", table_context=extra)
+            if diagram:
+                anchor = len(text.encode("utf-16-le")) // 2
+                frame = research_diagrams.diagram_event(
+                    diagram, request_id or secrets.token_hex(8),
+                    f"research-{secrets.token_hex(4)}", anchor)
+                if frame:
+                    yield frame
+        except Exception as exc:  # noqa: BLE001 图解失败不影响综述
+            print(f"[chat] 研究综述图解失败(忽略): {exc}")
     if ck:
         _RESEARCH_ANSWER[ck] = (time.monotonic(), "".join(full))
         _RESEARCH_ANSWER.move_to_end(ck)
@@ -1671,7 +1691,9 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         if (outcome.any_hit or table_context) and rag.llm.is_configured():
             meta["role"] = "deep"
             return _sse(_gen_research(
-                question, outcome, zh, ck=ck, extra=table_context))
+                question, outcome, zh, ck=ck, extra=table_context,
+                diagrams=_diagram_requested(body),
+                request_id=secrets.token_hex(8)))
         return _stream_text(_research_reply(outcome, zh))
 
     # 追问的检索词带上上一轮用户问题;只影响检索,不改发给模型的 prompt

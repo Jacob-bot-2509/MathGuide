@@ -41,6 +41,8 @@ export interface ChatRequest {
     degree?: number
     tableUpdatedAt?: number
   }
+  /** 研究综述显式生成图解;缺省 false */
+  diagrams?: boolean
 }
 
 /** 流式回调(OpenAI 兼容 SSE 的通用形态) */

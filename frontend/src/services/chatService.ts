@@ -31,6 +31,8 @@ export interface ChatMeta {
   tableId?: string
   /** 用户刚跑过的回归规格;后端按当前表重算 */
   tableRegression?: ChatRequest['tableRegression']
+  /** 研究综述显式生成图解 */
+  diagrams?: boolean
 }
 
 function authHeaders(): Record<string, string> {
@@ -141,6 +143,7 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
     paperId: meta?.paperId,
     tableId: meta?.tableId,
     tableRegression: meta?.tableRegression,
+    diagrams: meta?.diagrams,
   }
 
   postSSE(
