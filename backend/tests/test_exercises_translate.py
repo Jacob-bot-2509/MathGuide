@@ -1,0 +1,145 @@
+"""双语翻译流水线:公式占位、数字校验、译文写回。"""
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from exercises import schema
+from exercises.translate import (
+    TranslationError,
+    extract_math,
+    restore_math,
+    translate_exercise,
+    translate_exercise_async,
+    validate_translation,
+)
+
+
+def make_exercise():
+    data = {
+        "id": "translate:1",
+        "source": {
+            "name": "Test",
+            "tier": "research",
+            "license": "MIT",
+            "url": "https://example.com/source",
+            "attribution": "Test Source",
+        },
+        "original_language": "en",
+        "content": {
+            "en": {
+                "question": "Compute the value of $x+1$ when $x=1$.",
+                "answer": "2",
+                "solution": "Substitute $x=1$ into $x+1$ to get $2$. Therefore the answer is 2.",
+            }
+        },
+        "type": "compute",
+        "difficulty": 2,
+        "difficulty_source": "source",
+        "primary_topic": "analysis",
+        "topics": ["analysis"],
+        "cross_topics": [],
+        "tag_source": "rule",
+    }
+    return schema.parse_exercise(data)
+
+
+def fake_translator(text: str, source: str, target: str) -> str:
+    return ("中文翻译 " if target == "zh" else "English translation ") + text
+
+
+def test_extract_and_restore_math_round_trip():
+    text = "Solve $x+1$ and $$y=2$$ with \\(z\\) and \\[w\\]."
+    template, placeholders = extract_math(text)
+
+    assert "[[M1]]" in template
+    assert len(placeholders) == 4
+    assert "$x+1$" in placeholders
+    assert "$$y=2$$" in placeholders
+    assert restore_math(template, placeholders) == text
+
+
+def test_validate_rejects_missing_placeholder():
+    template, placeholders = extract_math("Compute $x+1$.")
+    check = validate_translation(
+        "Compute [[M1]].",
+        "计算 x+1。",
+        placeholders,
+        "zh",
+    )
+
+    assert check.ok is False
+    assert any("placeholder" in reason for reason in check.reasons)
+
+
+def test_validate_rejects_changed_number():
+    _, placeholders = extract_math("Compute $x+1$ when x=2.")
+    check = validate_translation(
+        "Compute [[M1]] when x=2.",
+        "计算 [[M1]] 当 x=3。",
+        placeholders,
+        "zh",
+    )
+
+    assert check.ok is False
+    assert any("number" in reason for reason in check.reasons)
+
+
+def test_validate_allows_math_only_answer_without_target_language():
+    check = validate_translation(
+        r"\frac{1}{4}",
+        r"\frac{1}{4}",
+        (),
+        "zh",
+    )
+
+    assert check.ok is True
+
+
+def test_translate_exercise_adds_machine_translation():
+    exercise = make_exercise()
+
+    translated = translate_exercise(exercise, "zh", fake_translator, model="fake-model")
+
+    assert translated.available_languages == ("en", "zh")
+    assert translated.content["zh"].translation.status == "machine"
+    assert translated.content["zh"].translation.reviewed is False
+    assert "[[M1]]" not in translated.content["zh"].question
+    assert "$x+1$" in translated.content["zh"].question
+
+
+def test_translate_exercise_rejects_bad_translation():
+    exercise = make_exercise()
+
+    def broken(text: str, source: str, target: str) -> str:
+        return "中文翻译"
+
+    with pytest.raises(TranslationError) as excinfo:
+        translate_exercise(exercise, "zh", broken, model="fake")
+
+    assert any("placeholder" in reason for reason in excinfo.value.reasons)
+
+
+def test_translate_exercise_does_not_mutate_original():
+    exercise = make_exercise()
+
+    translate_exercise(exercise, "zh", fake_translator, model="fake")
+
+    assert exercise.available_languages == ("en",)
+    assert "zh" not in exercise.content
+
+
+def test_translate_exercise_async_adds_machine_translation():
+    exercise = make_exercise()
+
+    async def fake(text: str, source: str, target: str) -> str:
+        return ("中文翻译 " if target == "zh" else "English translation ") + text
+
+    translated = asyncio.run(
+        translate_exercise_async(exercise, "zh", fake, model="fake-async")
+    )
+
+    assert translated.available_languages == ("en", "zh")
+    assert translated.content["zh"].translation.status == "machine"
+    assert translated.content["zh"].translation.model == "fake-async"
