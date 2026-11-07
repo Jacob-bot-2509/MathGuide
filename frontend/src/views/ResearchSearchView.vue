@@ -9,13 +9,17 @@ import { useRoute, useRouter } from 'vue-router'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import {
+  accessAction, accessLabelKey, canOpenInReader,
+  type FullTextCandidate, type FullTextResult,
+} from '@/utils/fulltextAccess'
+import {
   createTempPaper,
   deletePaperHistory,
   importTempPaper,
   listPaperHistory,
   listPaperTrash,
   relatedLiterature,
-  resolveLiteratureOa,
+  resolveFullText,
   restorePaperHistory,
   searchLiterature,
   type HistoryItem,
@@ -75,6 +79,7 @@ const peerOnly = ref(true)
 const includePreprints = ref(false)
 const oaOnly = ref(false)
 const resolvingOa = ref('')
+const fullTextResults = ref<Record<string, FullTextResult>>({})
 const advancedOpen = ref(false)
 const litItems = ref<LiteratureItem[]>([])
 const litLoading = ref(false)
@@ -311,20 +316,37 @@ async function reloadDocs(): Promise<void> {
 defineExpose({ locateForQuestion, reloadDocs, applyPaperActions, openDocForActions })
 
 /** 检索结果一律在右栏打开:有可读 PDF 走阅读器,否则显示站内元数据摘要。
- *  不再 `window.open` 外部网站,避免离开工作区。 */
+ *  是否可下载由服务端 fulltext 解析结果决定,前端不再维护第二份白名单。 */
 async function openSearchItem(item: LiteratureItem): Promise<void> {
   const url = readerUrl(item)
   if (url) {
     await openPdfInReader(item, url)
     return
   }
+  if (item.doi || item.title) {
+    await findFreeCopy(item)
+    return
+  }
   previewItem.value = item
 }
 
-/** 选择站内阅读器能安全下载的 PDF 地址(优先原始 PDF,其次 OA 地址)。 */
-function readerUrl(item: LiteratureItem): string {
-  return [item.pdfUrl, item.oaUrl].find((url) => !!url && pdfReaderAllowed(url)) || ''
+function fullTextKey(item: LiteratureItem): string {
+  return item.doi || item.title || item.pdfUrl
 }
+
+function fullTextFor(item: LiteratureItem): FullTextResult | null {
+  return fullTextResults.value[fullTextKey(item)] || null
+}
+
+/** 已确认可站内下载的地址;未解析时保留原始 PDF 链接,最终仍由服务端校验。 */
+function readerUrl(item: LiteratureItem): string {
+  const result = fullTextFor(item)
+  if (result && canOpenInReader(result) && result.best) return result.best.url
+  return item.pdfUrl || ''
+}
+
+const previewFullText = computed<FullTextResult | null>(() =>
+  previewItem.value ? fullTextFor(previewItem.value) : null)
 
 function showPreview(item: LiteratureItem, message?: string): void {
   previewItem.value = item
@@ -337,24 +359,42 @@ function openFreeCopy(item: LiteratureItem): void {
     void openPdfInReader(item, url)
     return
   }
-  previewItem.value = item
+  void findFreeCopy(item)
 }
 
-/** 按 DOI 查 Unpaywall/OpenAlex;找到合法 OA 地址后仍在右栏打开 */
+/** 按 DOI/标题解析合法全文;只有 oa_pdf 才自动进阅读器。 */
 async function findFreeCopy(item: LiteratureItem): Promise<void> {
-  if (!item.doi || resolvingOa.value === item.doi) return
-  resolvingOa.value = item.doi
+  const key = fullTextKey(item)
+  if (!key || resolvingOa.value === key) return
+  resolvingOa.value = key
   try {
-    const res = await resolveLiteratureOa(item.doi)
-    if (res.error) {
-      showToast(t('search.oaFail'))
-    } else if (res.isOa && res.oaUrl) {
-      item.oaUrl = res.oaUrl
-      item.oaStatus = res.oaStatus
-      if (res.license) item.license = res.license
-      await openPdfInReader(item, res.oaUrl)
-    } else {
-      showToast(t('search.noFree'))
+    const res = await resolveFullText(
+      item.doi ? { doi: item.doi } : { title: item.title })
+    fullTextResults.value = { ...fullTextResults.value, [key]: res }
+    if (res.best && res.best.license) item.license = res.best.license
+    if (canOpenInReader(res) && res.best) {
+      await openPdfInReader(item, res.best.url)
+      return
+    }
+    previewItem.value = item
+    if (res.status === 'unknown') showToast(t('search.oaFail'))
+  } catch {
+    showToast(t('search.oaFail'))
+  } finally {
+    resolvingOa.value = ''
+  }
+}
+
+async function chooseCandidate(item: LiteratureItem, candidate: FullTextCandidate): Promise<void> {
+  const key = fullTextKey(item)
+  resolvingOa.value = key
+  try {
+    const res = await resolveFullText(
+      candidate.doi ? { doi: candidate.doi } : { title: candidate.title || item.title })
+    fullTextResults.value = { ...fullTextResults.value, [key]: res }
+    previewItem.value = item
+    if (canOpenInReader(res) && res.best) {
+      await openPdfInReader(item, res.best.url)
     }
   } catch {
     showToast(t('search.oaFail'))
@@ -363,19 +403,11 @@ async function findFreeCopy(item: LiteratureItem): Promise<void> {
   }
 }
 
-function pdfReaderAllowed(url: string): boolean {
-  try {
-    const parsed = new URL(url)
-    const host = parsed.hostname.toLowerCase()
-    return parsed.protocol === 'https:' && (
-      host === 'arxiv.org' || host.endsWith('.arxiv.org') ||
-      host === 'europepmc.org' || host.endsWith('.europepmc.org') ||
-      host === 'ebi.ac.uk' || host.endsWith('.ebi.ac.uk') ||
-      host === 'ncbi.nlm.nih.gov' || host.endsWith('.ncbi.nlm.nih.gov')
-    )
-  } catch {
-    return false
-  }
+/** 外部链接只由用户显式点击;不自动跳出工作区。 */
+function openExternalUrl(result: FullTextResult): void {
+  const url = result.best?.url
+  if (!url) return
+  window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 function tempMeta(item: LiteratureItem) {
@@ -396,7 +428,7 @@ function tempMeta(item: LiteratureItem) {
 }
 
 /** 外部论文:先临时入库,再在右栏阅读;已入库直接读本地文件。
- *  非白名单 PDF 不再外跳,右栏显示摘要并提示无法站内打开全文。 */
+ *  非白名单 PDF 由服务端拒绝,前端只负责展示原因。 */
 async function openExternalPaper(item: LiteratureItem): Promise<void> {
   if (!item.pdfUrl || openingPdf.value) return
   await openPdfInReader(item, item.pdfUrl)
@@ -404,7 +436,7 @@ async function openExternalPaper(item: LiteratureItem): Promise<void> {
 
 async function openPdfInReader(item: LiteratureItem, url: string): Promise<void> {
   if (openingPdf.value) return
-  if (!pdfReaderAllowed(url)) {
+  if (!url) {
     showPreview(item, t('search.pdfReaderUnavailable'))
     return
   }
@@ -994,6 +1026,10 @@ onMounted(async () => {
               v-if="item.oaStatus && !['unknown', 'closed'].includes(item.oaStatus)"
               class="lit-badge oa"
             >{{ t('search.freeFullText') }}</span>
+            <span
+              v-if="fullTextResults[fullTextKey(item)]"
+              class="lit-badge oa"
+            >{{ t(accessLabelKey(fullTextResults[fullTextKey(item)])) }}</span>
           </p>
           <p v-if="item.abstract" class="lit-abstract">{{ item.abstract }}</p>
           <p class="lit-foot">
@@ -1011,11 +1047,15 @@ onMounted(async () => {
               @click="openFreeCopy(item)"
             >{{ t('search.freeFullText') }}</button>
             <button
-              v-else-if="item.doi && !item.pdfUrl"
+              v-else-if="(item.doi || item.title) && !item.pdfUrl"
               class="lit-pdf"
-              :disabled="resolvingOa === item.doi"
+              :disabled="resolvingOa === fullTextKey(item)"
               @click="findFreeCopy(item)"
-            >{{ resolvingOa === item.doi ? t('search.oaSearching') : t('search.findFree') }}</button>
+            >{{ resolvingOa === fullTextKey(item)
+              ? t('search.oaSearching')
+              : (fullTextResults[fullTextKey(item)]
+                ? t(accessLabelKey(fullTextResults[fullTextKey(item)]))
+                : t('search.findFree')) }}</button>
             <button
               v-if="item.pdfUrl"
               class="lit-pdf"
@@ -1065,6 +1105,7 @@ onMounted(async () => {
         <p v-if="previewItem.abstract" class="lp-abstract">{{ previewItem.abstract }}</p>
         <p v-else class="lp-empty">{{ t('search.previewNoAbstract') }}</p>
         <p v-if="previewItem.doi" class="lp-doi">DOI · {{ previewItem.doi }}</p>
+        <p v-if="previewFullText?.reason" class="lp-empty">{{ previewFullText.reason }}</p>
         <div class="lp-actions">
           <button
             v-if="readerUrl(previewItem)"
@@ -1072,12 +1113,42 @@ onMounted(async () => {
             :disabled="openingPdf === readerUrl(previewItem)"
             @click="openSearchItem(previewItem)"
           >{{ t('search.readInApp') }}</button>
+          <template v-else-if="previewFullText">
+            <button
+              v-if="accessAction(previewFullText) === 'external'"
+              class="lit-pdf"
+              @click="openExternalUrl(previewFullText)"
+            >{{ t('search.openExternal') }}</button>
+            <button
+              v-else-if="accessAction(previewFullText) === 'upload'"
+              class="lit-pdf"
+              @click="pickFile"
+            >{{ t('search.uploadOwnCopy') }}</button>
+            <button
+              v-else-if="accessAction(previewFullText) === 'retry'"
+              class="lit-pdf"
+              :disabled="resolvingOa === fullTextKey(previewItem)"
+              @click="findFreeCopy(previewItem)"
+            >{{ t('search.retryResolve') }}</button>
+            <div
+              v-else-if="accessAction(previewFullText) === 'choose'"
+              class="lp-candidates"
+            >
+              <span class="tech-label">{{ t('search.choosePaper') }}</span>
+              <button
+                v-for="candidate in previewFullText.candidates"
+                :key="candidate.doi || candidate.url"
+                class="lit-pdf"
+                @click="chooseCandidate(previewItem, candidate)"
+              >{{ candidate.title || candidate.doi }}</button>
+            </div>
+          </template>
           <button
-            v-else-if="previewItem.doi"
+            v-else-if="previewItem.doi || previewItem.title"
             class="lit-pdf"
-            :disabled="resolvingOa === previewItem.doi"
+            :disabled="resolvingOa === fullTextKey(previewItem)"
             @click="findFreeCopy(previewItem)"
-          >{{ resolvingOa === previewItem.doi ? t('search.oaSearching') : t('search.findFree') }}</button>
+          >{{ resolvingOa === fullTextKey(previewItem) ? t('search.oaSearching') : t('search.findFree') }}</button>
         </div>
       </div>
     </section>
@@ -2037,5 +2108,16 @@ onMounted(async () => {
 
 .lp-actions .lit-pdf {
   padding: 4px 12px;
+}
+
+.lp-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.lp-candidates .lit-pdf {
+  text-align: left;
 }
 </style>

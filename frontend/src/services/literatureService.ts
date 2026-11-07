@@ -1,6 +1,7 @@
 /** 外部文献发现:Crossref / arXiv / Europe PMC / OpenAlex / Semantic Scholar */
 import { del, get, post } from '@/api/http'
 import { getToken } from '@/stores/user'
+import type { FullTextResult } from '@/utils/fulltextAccess'
 
 function authHeaders(): Record<string, string> {
   const token = getToken()
@@ -154,6 +155,20 @@ export async function resolveLiteratureOa(doi: string): Promise<LiteratureOaResu
   return get<LiteratureOaResult>(
     `/api/research/literature/oa?doi=${encodeURIComponent(doi)}`,
     authHeaders())
+}
+
+/** 按 DOI/arXiv/PMID/PMCID/标题解析合法全文;服务端决定是否可站内下载 */
+export async function resolveFullText(input: {
+  doi?: string; arxivId?: string; pmid?: string; pmcid?: string; title?: string;
+}): Promise<FullTextResult> {
+  const params = new URLSearchParams()
+  Object.entries(input).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  return get<FullTextResult>(
+    `/api/research/fulltext?${params.toString()}`,
+    authHeaders(),
+  )
 }
 
 export async function relatedLiterature(

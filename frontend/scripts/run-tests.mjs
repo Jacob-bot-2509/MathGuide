@@ -30,6 +30,12 @@ const CASES = [
     artifact: '.table-chart-test.cjs',
   },
   {
+    name: '合法全文访问状态',
+    bundle: 'npx esbuild scripts/fulltext-access-test.ts --bundle --format=cjs --platform=node --outfile=.fulltext-access-test.cjs',
+    run: 'node .fulltext-access-test.cjs',
+    artifact: '.fulltext-access-test.cjs',
+  },
+  {
     name: '语音数学编译器',
     bundle: 'npx esbuild scripts/speech-math-test.ts --bundle --format=cjs --outfile=.speech-math-test.cjs',
     run: 'node .speech-math-test.cjs',
