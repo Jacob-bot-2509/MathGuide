@@ -11,6 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from chat import _rate_check, require_auth
+from exercises.schema import SchemaError
 from exercises.store import ExerciseStore, tiers_from_env
 from exercises.taxonomy import CATEGORY_KEYS
 from http_utils import read_json_object
@@ -32,10 +33,23 @@ TOPIC_LABELS = {
 }
 
 
+_STORE_CACHE: dict[str, tuple[tuple[int, int], ExerciseStore]] = {}
+
+
 def _store() -> ExerciseStore:
     tiers = tiers_from_env()
     if BILINGUAL_FILE.is_file():
-        return ExerciseStore.from_jsonl([BILINGUAL_FILE], tiers=tiers)
+        stamp = (BILINGUAL_FILE.stat().st_mtime_ns, BILINGUAL_FILE.stat().st_size)
+        cached = _STORE_CACHE.get("bilingual")
+        if cached and cached[0] == stamp:
+            return cached[1]
+        try:
+            store = ExerciseStore.from_jsonl([BILINGUAL_FILE], tiers=tiers)
+        except SchemaError:
+            # 翻译进程正在写最后一行时可能读到半行;退回完整单语库。
+            return ExerciseStore.from_directory(DATA_DIR, tiers=tiers)
+        _STORE_CACHE["bilingual"] = (stamp, store)
+        return store
     return ExerciseStore.from_directory(DATA_DIR, tiers=tiers)
 
 
