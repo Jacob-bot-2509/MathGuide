@@ -156,6 +156,7 @@ routes = [
     Route("/api/research/tables/{table_id}/suggest-topic", research_tables.suggest_topic, methods=["POST"]),
     Route("/api/research/tables/{table_id}/match-formulas", research_tables.match_formulas, methods=["POST"]),
     Route("/api/research/tables/{table_id}/stats", research_tables.stats_table, methods=["POST"]),
+    Route("/api/research/tables/{table_id}/regression", research_tables.regression_table, methods=["POST"]),
     Route("/api/research/tables/{table_id}/export", research_tables.export_table),
     Route("/api/research/report", research_report.export_report, methods=["POST"]),
     Route("/api/research/tables/{table_id}/print", research_tables.print_table, methods=["POST"]),

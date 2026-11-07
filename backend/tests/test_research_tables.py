@@ -96,6 +96,38 @@ def test_exponent_guard():
     assert "指数" in result["errors"][0]["error"]
 
 
+def test_regression_endpoint_returns_worker_result(monkeypatch, tables):
+    import research_tables as rt
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-reg"})
+    monkeypatch.setattr(rt, "_get_table", lambda uid, tid: {"id": tid, "title": "T"})
+
+    async def fake_run(payload, timeout=30.0):
+        assert payload["spec"]["model"] == "ols"
+        return {"model": "ols", "n": 3, "points": [], "coefficients": []}
+
+    monkeypatch.setattr(rt, "_run_analysis", fake_run)
+    app = Starlette(routes=[Route(
+        "/api/research/tables/{table_id}/regression",
+        rt.regression_table, methods=["POST"])])
+    body = {
+        "columns": [
+            {"key": "X", "label": "x", "type": "number"},
+            {"key": "Y", "label": "y", "type": "number"},
+        ],
+        "rows": [["1", "2"], ["2", "3"], ["3", "4"]],
+        "formulas": {},
+        "regression": {"x": ["X"], "y": "Y", "model": "ols"},
+    }
+    res = TestClient(app).post(
+        "/api/research/tables/t1/regression", json=body)
+    assert res.status_code == 200
+    assert res.json()["model"] == "ols"
+
+
 def test_match_formula_candidates_scores_and_validates():
     table = {
         "columns": [

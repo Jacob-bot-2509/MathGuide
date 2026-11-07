@@ -27,6 +27,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 import research_corpus as rc
+import analysis_client
 from auth import require_auth
 from http_utils import read_json_object
 from rag import llm as llm_mod
@@ -41,6 +42,7 @@ MAX_CELL_CHARS = 200
 MAX_FORMULA_CHARS = 500
 
 OUTPUT_QUANT = Decimal("0.0001")
+_run_analysis = analysis_client.run_analysis
 _topic_limiter = SlidingWindowLimiter(12, 3600)
 
 _REF_RE = re.compile(
@@ -1660,6 +1662,89 @@ async def stats_table(request: Request) -> JSONResponse:
                   if isinstance(raw_labels, list) else [])
     result = await asyncio.to_thread(
         analyze, columns, rows, formulas, row_labels)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+def _validate_regression_spec(columns: list[dict], raw: object) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("bad_spec")
+    allowed = {"x", "y", "model", "degree", "options"}
+    if set(raw) - allowed:
+        raise ValueError("bad_spec")
+    model = str(raw.get("model") or "").strip().lower()
+    if model not in {"ols", "poly"}:
+        raise ValueError("unsupported")
+    options = raw.get("options") or {}
+    if isinstance(options, dict) and options.get("intercept") is False:
+        raise ValueError("unsupported")
+    x = raw.get("x")
+    y = str(raw.get("y") or "").strip().upper()
+    if (not isinstance(x, list) or not 1 <= len(x) <= 8
+            or any(not isinstance(item, str) or not item.strip() for item in x)):
+        raise ValueError("bad_spec")
+    x_keys = [item.strip().upper() for item in x]
+    if len(set(x_keys)) != len(x_keys):
+        raise ValueError("bad_spec")
+    known = {str(col.get("key") or "").upper() for col in columns}
+    if not y or any(key not in known for key in x_keys + [y]):
+        raise ValueError("bad_column")
+    degree = 0
+    if model == "poly":
+        if len(x_keys) != 1:
+            raise ValueError("unsupported")
+        try:
+            degree = int(raw.get("degree") or 2)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("unsupported") from exc
+        if degree not in (2, 3, 4):
+            raise ValueError("unsupported")
+    return {"x": x_keys, "y": y, "model": model, "degree": degree}
+
+
+def _resolved_analysis_rows(columns: list[dict], rows: list[list[str]],
+                            formulas: dict[str, str]) -> list[list[str]]:
+    """把计算列展开后再交给 worker;worker 不依赖主服务的公式引擎。"""
+    if not formulas:
+        return rows
+    computed = compute(columns, rows, formulas)["computed"]
+    out: list[list[str]] = []
+    for row_index, row in enumerate(rows):
+        resolved = list(row)
+        for col_index, col in enumerate(columns):
+            key = str(col.get("key") or "").upper()
+            if key in formulas:
+                values = computed.get(key) or []
+                resolved[col_index] = values[row_index] if row_index < len(values) else ""
+        out.append(resolved)
+    return out
+
+
+async def regression_table(request: Request) -> JSONResponse:
+    """对当前表草稿跑确定性的 OLS/多元线性/多项式回归;结果不落库。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    table_id = str(request.path_params.get("table_id") or "")
+    if await asyncio.to_thread(_get_table, uid, table_id) is None:
+        raise HTTPException(404, "not found")
+    body = await read_json_object(request)
+    try:
+        (columns, rows, formulas, _row_labels, _merges,
+         _col_widths, _row_heights, _row_sources) = _validate_table_payload(body)
+        spec = _validate_regression_spec(columns, body.get("regression"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    payload = {
+        "columns": columns,
+        "rows": _resolved_analysis_rows(columns, rows, formulas),
+        "formulas": {},
+        "spec": spec,
+    }
+    try:
+        result = await _run_analysis(payload, timeout=30.0)
+    except analysis_client.AnalysisError as exc:
+        raise HTTPException(503, exc.code) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 

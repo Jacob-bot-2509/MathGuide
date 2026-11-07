@@ -123,6 +123,40 @@ export interface TableStatsResult {
   columns?: TableColumn[]
 }
 
+export interface RegressionCoefficient {
+  term: string
+  estimate: number | null
+  se: number | null
+  t: number | null
+  p: number | null
+  ciLow: number | null
+  ciHigh: number | null
+}
+
+export interface RegressionPoint {
+  row: number
+  x?: number
+  actual: number
+  fitted: number
+  residual: number
+}
+
+export interface RegressionResult {
+  model: 'ols' | 'poly'
+  degree?: number
+  n: number
+  missing: number
+  equation: string
+  coefficients: RegressionCoefficient[]
+  r2: number | null
+  adjR2: number | null
+  f: number | null
+  pF: number | null
+  points: RegressionPoint[]
+  fitCurve: { x: number; y: number }[]
+  warnings: string[]
+}
+
 export interface ExtractedFormula {
   id: string
   target: string
@@ -318,6 +352,19 @@ export async function statsResearchTable(
 ): Promise<TableStatsResult> {
   return post<TableStatsResult>(
     `/api/research/tables/${encodeURIComponent(tableId)}/stats`, payload, authHeaders())
+}
+
+/** 对当前表草稿跑 OLS/多元线性/多项式回归;不落库 */
+export async function regressResearchTable(
+  tableId: string,
+  payload: TablePayload,
+  spec: { x: string[]; y: string; model: 'ols' | 'poly'; degree?: number },
+): Promise<RegressionResult> {
+  return post<RegressionResult>(
+    `/api/research/tables/${encodeURIComponent(tableId)}/regression`,
+    { ...payload, regression: spec },
+    authHeaders(),
+  )
 }
 
 /** 保存草稿并让本机 WPS/Excel 打开,打印选项沿用该程序 */
