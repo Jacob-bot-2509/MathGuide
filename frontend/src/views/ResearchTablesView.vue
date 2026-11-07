@@ -11,6 +11,7 @@ import { showToast } from '@/utils/toast'
 import FormulaImportDialog from '@/components/chat/FormulaImportDialog.vue'
 import FormulaMatchDialog from '@/components/research/FormulaMatchDialog.vue'
 import TableChart from '@/components/research/TableChart.vue'
+import RegressionChart from '@/components/research/RegressionChart.vue'
 import {
   createResearchTable,
   computeResearchTable,
@@ -20,10 +21,12 @@ import {
   importResearchTable,
   listResearchTables,
   printResearchTable,
+  regressResearchTable,
   saveResearchTable,
   statsResearchTable,
   suggestTableTopic,
   type FormulaCandidate,
+  type RegressionResult,
   type ResearchTable,
   type TableColumn,
   type TableError,
@@ -118,7 +121,7 @@ async function commitRename(item: TableSummary): Promise<void> {
 
 /* ---------- 统计与图表 ---------- */
 const analysisOpen = ref(false)
-const analysisTab = ref<'stats' | 'chart'>('stats')
+const analysisTab = ref<'stats' | 'chart' | 'regression'>('stats')
 const analysisLoading = ref(false)
 const analysis = ref<TableStatsResult | null>(null)
 const analysisKey = ref('')
@@ -129,6 +132,24 @@ const chartRef = ref<{
   downloadSvg: (name?: string) => void
   downloadPng: (name?: string) => Promise<void>
 } | null>(null)
+const regressionY = ref('')
+const regressionX = ref<string[]>([])
+const regressionModel = ref<'ols' | 'poly'>('ols')
+const regressionDegree = ref(2)
+const regression = ref<RegressionResult | null>(null)
+const regressionLoading = ref(false)
+const regressionError = ref('')
+const regressionKey = ref('')
+const regressionChartRef = ref<{
+  downloadSvg: (name?: string) => void
+  downloadPng: (name?: string) => Promise<void>
+} | null>(null)
+
+const numericColumns = vueComputed(() =>
+  table.value ? table.value.columns.filter(
+    (column) => column.type === 'number' || column.type === 'computed') : [])
+const regressionStale = vueComputed(() =>
+  !!regression.value && regressionKey.value !== JSON.stringify(payload()))
 
 const numericSeries = vueComputed(() => analysis.value?.series ?? [])
 const chartSeries = vueComputed(() => {
@@ -427,6 +448,9 @@ async function openTable(id: string): Promise<void> {
     computed.value = {}
     errors.value = []
     dirty.value = false
+    regression.value = null
+    regressionKey.value = ''
+    regressionError.value = ''
     await nextTick()
     suppressWatch = false
     if (Object.keys(value.formulas).length) await onCompute(true)
@@ -744,11 +768,58 @@ async function refreshAnalysis(): Promise<void> {
   }
 }
 
-async function openAnalysis(tab: 'stats' | 'chart'): Promise<void> {
+async function openAnalysis(tab: 'stats' | 'chart' | 'regression'): Promise<void> {
   analysisTab.value = tab
   analysisOpen.value = true
+  if (tab === 'regression') {
+    if (!regressionY.value) regressionY.value = numericColumns.value[0]?.key || ''
+    if (!regressionX.value.length) {
+      const first = numericColumns.value.find((column) => column.key !== regressionY.value)
+      if (first) regressionX.value = [first.key]
+    }
+    return
+  }
   if (!analysis.value || analysisKey.value !== JSON.stringify(payload())) {
     await refreshAnalysis()
+  }
+}
+
+function toggleRegressionX(key: string): void {
+  regressionX.value = regressionX.value.includes(key)
+    ? regressionX.value.filter((item) => item !== key)
+    : [...regressionX.value, key]
+}
+
+async function runRegression(): Promise<void> {
+  if (!table.value || regressionLoading.value) return
+  const x = [...regressionX.value]
+  if (!regressionY.value || !x.length) {
+    showToast(t('tables.regressionSelect'))
+    return
+  }
+  if (regressionModel.value === 'poly' && x.length !== 1) {
+    showToast(t('tables.regressionPolyOneX'))
+    return
+  }
+  const id = table.value.id
+  regressionLoading.value = true
+  regressionError.value = ''
+  try {
+    const result = await regressResearchTable(id, payload(), {
+      x,
+      y: regressionY.value,
+      model: regressionModel.value,
+      degree: regressionModel.value === 'poly' ? regressionDegree.value : undefined,
+    })
+    if (!table.value || table.value.id !== id) return
+    regression.value = result
+    regressionKey.value = JSON.stringify(payload())
+  } catch (err) {
+    regression.value = null
+    regressionError.value = err instanceof Error ? err.message : t('tables.regressionFail')
+    showToast(regressionError.value)
+  } finally {
+    regressionLoading.value = false
   }
 }
 
@@ -1434,6 +1505,11 @@ onBeforeUnmount(() => {
               :class="{ on: analysisTab === 'chart' }"
               @click="openAnalysis('chart')"
             >{{ t('tables.chart') }}</button>
+            <button
+              class="analysis-tab"
+              :class="{ on: analysisTab === 'regression' }"
+              @click="openAnalysis('regression')"
+            >{{ t('tables.regression') }}</button>
             <span class="analysis-spacer"></span>
             <button class="mini" :disabled="analysisLoading" @click="refreshAnalysis">
               {{ analysisLoading ? t('tables.computing') : t('tables.refresh') }}
@@ -1487,7 +1563,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
 
-          <template v-else>
+          <template v-else-if="analysisTab === 'chart'">
             <div v-if="!numericSeries.length" class="analysis-empty">
               {{ t('tables.noNumeric') }}
             </div>
@@ -1532,6 +1608,121 @@ onBeforeUnmount(() => {
                 :chart-type="chartType"
                 :x-values="chartXValues"
               />
+            </template>
+          </template>
+
+          <template v-else>
+            <div v-if="!numericColumns.length" class="analysis-empty">
+              {{ t('tables.noNumeric') }}
+            </div>
+            <template v-else>
+              <div class="chart-controls regression-controls">
+                <label class="ctl">
+                  <span>{{ t('tables.regressionY') }}</span>
+                  <select v-model="regressionY">
+                    <option
+                      v-for="column in numericColumns"
+                      :key="column.key"
+                      :value="column.key"
+                    >{{ column.key }} · {{ column.label }}</option>
+                  </select>
+                </label>
+                <div class="y-picks">
+                  <span>{{ t('tables.regressionX') }}</span>
+                  <button
+                    v-for="column in numericColumns"
+                    :key="column.key"
+                    class="y-pick"
+                    :class="{ on: regressionX.includes(column.key) }"
+                    @click="toggleRegressionX(column.key)"
+                  >{{ column.key }} · {{ column.label }}</button>
+                </div>
+                <label class="ctl">
+                  <span>{{ t('tables.regressionModel') }}</span>
+                  <select v-model="regressionModel">
+                    <option value="ols">{{ t('tables.regressionOls') }}</option>
+                    <option value="poly">{{ t('tables.regressionPoly') }}</option>
+                  </select>
+                </label>
+                <label v-if="regressionModel === 'poly'" class="ctl">
+                  <span>{{ t('tables.regressionDegree') }}</span>
+                  <select v-model.number="regressionDegree">
+                    <option :value="2">2</option>
+                    <option :value="3">3</option>
+                    <option :value="4">4</option>
+                  </select>
+                </label>
+                <div class="chart-actions">
+                  <button class="mini" :disabled="regressionLoading" @click="runRegression">
+                    {{ regressionLoading ? t('tables.computing') : t('tables.regressionRun') }}
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="regressionError" class="analysis-empty">{{ regressionError }}</div>
+              <div v-else-if="!regression" class="analysis-empty">
+                {{ t('tables.regressionHint') }}
+              </div>
+              <template v-else>
+                <div v-if="regressionStale" class="analysis-stale">
+                  {{ t('tables.regressionStale') }}
+                </div>
+                <div class="regression-summary">
+                  <p class="regression-equation">{{ regression.equation }}</p>
+                  <p class="hint">
+                    n={{ regression.n }} · missing={{ regression.missing }}
+                    · R²={{ regression.r2 ?? '—' }}
+                    · adj R²={{ regression.adjR2 ?? '—' }}
+                    · F={{ regression.f ?? '—' }} · p={{ regression.pF ?? '—' }}
+                  </p>
+                  <p v-for="warning in regression.warnings" :key="warning" class="hint">
+                    {{ warning }}
+                  </p>
+                </div>
+                <div class="stats-wrap">
+                  <table class="stats-table regression-table">
+                    <thead>
+                      <tr>
+                        <th>term</th>
+                        <th>estimate</th>
+                        <th>SE</th>
+                        <th>t</th>
+                        <th>p</th>
+                        <th>95% CI</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="item in regression.coefficients" :key="item.term">
+                        <td class="stat-label">{{ item.term }}</td>
+                        <td>{{ item.estimate ?? '—' }}</td>
+                        <td>{{ item.se ?? '—' }}</td>
+                        <td>{{ item.t ?? '—' }}</td>
+                        <td>{{ item.p ?? '—' }}</td>
+                        <td>
+                          [{{ item.ciLow ?? '—' }}, {{ item.ciHigh ?? '—' }}]
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="chart-actions">
+                  <button class="mini" @click="regressionChartRef?.downloadSvg(`${table.title || 'regression'}.svg`)">SVG</button>
+                  <button class="mini" @click="regressionChartRef?.downloadPng(`${table.title || 'regression'}.png`)">PNG</button>
+                </div>
+                <RegressionChart
+                  ref="regressionChartRef"
+                  :result="regression"
+                  :x-label="regressionX.join(', ')"
+                  :y-label="regressionY"
+                  mode="fit"
+                />
+                <RegressionChart
+                  :result="regression"
+                  :x-label="regressionX.join(', ')"
+                  :y-label="regressionY"
+                  mode="residual"
+                />
+              </template>
             </template>
           </template>
         </section>
@@ -2380,6 +2571,31 @@ onBeforeUnmount(() => {
   place-items: center;
   color: var(--text-dim);
   font-size: 13px;
+}
+
+.analysis-stale {
+  color: #f6c85f;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.regression-controls {
+  flex-wrap: wrap;
+}
+
+.regression-summary {
+  margin: 10px 0;
+}
+
+.regression-equation {
+  font-family: var(--font-tech);
+  font-size: 13px;
+  color: var(--cyan);
+  word-break: break-all;
+}
+
+.regression-table {
+  margin-top: 8px;
 }
 
 @media (max-width: 760px) {

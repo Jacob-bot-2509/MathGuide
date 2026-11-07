@@ -36,6 +36,12 @@ const CASES = [
     artifact: '.fulltext-access-test.cjs',
   },
   {
+    name: '回归图表数据',
+    bundle: 'npx esbuild scripts/regression-chart-test.ts --bundle --format=cjs --platform=node --outfile=.regression-chart-test.cjs',
+    run: 'node .regression-chart-test.cjs',
+    artifact: '.regression-chart-test.cjs',
+  },
+  {
     name: '语音数学编译器',
     bundle: 'npx esbuild scripts/speech-math-test.ts --bundle --format=cjs --outfile=.speech-math-test.cjs',
     run: 'node .speech-math-test.cjs',
