@@ -32,3 +32,6 @@ backend/tools/.last_sync
 
 # 编辑器/编码代理本地配置(Serena,勿入库)
 .serena/
+
+# 独立分析 worker 的本地虚拟环境
+backend/.venv-analysis/
