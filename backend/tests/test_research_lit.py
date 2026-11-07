@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 import research_lit as rl
 
 
@@ -56,6 +58,19 @@ def test_dblp_parses_hit_list():
     assert items[0]["title"] == "Graph Neural Networks."
     assert items[0]["doi"] == "10.1234/gnn"
     assert items[0]["sources"] == ["dblp"]
+
+
+def test_dblp_bot_challenge_is_reported():
+    class Response:
+        status_code = 202
+        headers = {"content-type": "text/html; charset=utf-8"}
+
+    class Client:
+        async def get(self, url, params=None, timeout=None):
+            return Response()
+
+    with pytest.raises(RuntimeError, match="bot"):
+        asyncio.run(rl._dblp(Client(), "graph neural networks", 5, None))
 
 
 def test_search_endpoint_merges_providers(monkeypatch):

@@ -118,4 +118,25 @@ function harness(overrides = {}) {
   assert.equal(env.regressionSpecUsed.value.y, 'Y', 'chart label must describe returned result')
   assert.notEqual(snapshot.table.rows[0][0], env.table.value.rows[0][0])
 }
-console.log('研究表格保存及回归竞态自测: 7/7 通过')
+{
+  const { env, api } = harness({ regressResearchTable: async () => { throw Error('singular') } })
+  await api.runRegression()
+  assert.equal(env.regressionError.value, 'tables.regressionError.singular')
+}
+{
+  const httpSource = readFileSync(new URL('../src/api/http.ts', import.meta.url), 'utf8')
+  const httpAst = ts.createSourceFile('http.ts', httpSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const httpBodies = ['httpError', 'post'].map((name) => {
+    const node = httpAst.statements.find((s) => ts.isFunctionDeclaration(s) && s.name?.text === name)
+    assert.ok(node, `Missing ${name}`)
+    return node.getText(httpAst).replace(/^export /, '')
+  }).join('\n')
+  const httpJs = ts.transpileModule(httpBodies, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  const createPost = new Function('fetch', `const BASE_URL = ''; ${httpJs}; return post`)
+  for (const body of ['singular', JSON.stringify({ detail: 'singular' })]) {
+    const post = createPost(async () => new Response(body, { status: 400 }))
+    await assert.rejects(post('/regression', {}, {}, true), (err) => err.status === 400 && err.message === 'singular')
+    await assert.rejects(post('/other', {}), (err) => err.status === 400 && err.message === 'HTTP 400')
+  }
+}
+console.log('研究表格保存、回归竞态及错误反馈自测: 9/9 通过')

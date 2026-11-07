@@ -1746,7 +1746,8 @@ async def regression_table(request: Request) -> JSONResponse:
     try:
         result = await _run_analysis(payload, timeout=30.0)
     except analysis_client.AnalysisError as exc:
-        raise HTTPException(503, exc.code) from exc
+        status = 400 if exc.code in {"empty", "insufficient_n", "singular", "bad_column", "unsupported"} else 503
+        raise HTTPException(status, exc.code) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

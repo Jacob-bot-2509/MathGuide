@@ -364,6 +364,7 @@ export async function regressResearchTable(
     `/api/research/tables/${encodeURIComponent(tableId)}/regression`,
     { ...payload, regression: spec },
     authHeaders(),
+    true,
   )
 }
 

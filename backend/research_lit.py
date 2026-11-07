@@ -260,6 +260,11 @@ async def _dblp(client: httpx.AsyncClient, query: str, limit: int,
         timeout=TIMEOUT,
     )
     if res.status_code != 200:
+        headers = getattr(res, "headers", {}) or {}
+        content_type = str(headers.get("content-type") or "").lower()
+        if res.status_code == 202 or "text/html" in content_type:
+            # DBLP 的 Anubis 反爬会返回 202 + HTML;不绕过挑战,交给其他 CS 来源。
+            raise RuntimeError("bot challenge")
         return []
     data = res.json() if callable(getattr(res, "json", None)) else {}
     hits = (((data or {}).get("result") or {}).get("hits") or {}).get("hit") or []
@@ -1137,6 +1142,8 @@ def _provider_warning(name: str, exc: Exception) -> str:
         return f"{name}: HTTP {code}"
     if isinstance(exc, (asyncio.TimeoutError, httpx.TimeoutException)):
         return f"{name}: timeout"
+    if isinstance(exc, RuntimeError) and str(exc):
+        return f"{name}: {str(exc)[:80]}"
     return f"{name}: {type(exc).__name__}"
 
 

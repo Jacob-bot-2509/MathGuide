@@ -848,8 +848,11 @@ async function runRegression(): Promise<void> {
     regressionSpecUsed.value = spec
     regressionKey.value = requestKey
   } catch (err) {
+    if (!table.value || table.value.id !== id) return
     regression.value = null
-    regressionError.value = err instanceof Error ? err.message : t('tables.regressionFail')
+    const code = err instanceof Error ? err.message : ''
+    const known = ['empty', 'insufficient_n', 'singular', 'bad_column', 'unsupported', 'unavailable']
+    regressionError.value = known.includes(code) ? t(`tables.regressionError.${code}`) : t('tables.regressionFail')
     showToast(regressionError.value)
   } finally {
     regressionLoading.value = false

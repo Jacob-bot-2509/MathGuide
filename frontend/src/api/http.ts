@@ -31,14 +31,27 @@ export async function get<T>(path: string, headers?: Record<string, string>): Pr
   return (await res.json()) as T
 }
 
-export async function post<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
+export async function post<T>(
+  path: string, body: unknown, headers?: Record<string, string>, readErrorDetail = false,
+): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(headers ?? {}) },
     body: JSON.stringify(body),
     credentials: 'include',
   })
-  if (!res.ok) throw httpError(res)
+  if (!res.ok) {
+    const error = httpError(res)
+    if (readErrorDetail) {
+      try {
+        const raw = (await res.text()).trim()
+        let detail: unknown = raw
+        try { detail = (JSON.parse(raw) as { detail?: unknown }).detail } catch { /* plain text */ }
+        if (typeof detail === 'string' && detail.length <= 100) error.message = detail
+      } catch { /* keep HTTP status */ }
+    }
+    throw error
+  }
   return (await res.json()) as T
 }
 
