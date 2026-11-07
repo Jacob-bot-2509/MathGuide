@@ -97,6 +97,90 @@ def test_validate_allows_math_only_answer_without_target_language():
     assert check.ok is True
 
 
+def test_validate_allows_latex_only_solution():
+    source = (
+        r"\begin{align*} f(f(f(f(512)))) &=f(f(f(-8)))\\ &=f(64)\\ "
+        r"&=f(-4)\\ &=\boxed{16}. \end{align*}"
+    )
+    check = validate_translation(source, source, (), "zh")
+
+    assert check.ok is True
+
+
+def test_validate_allows_unit_only_answer():
+    check = validate_translation(r"25 \text{ ft}", r"25 \text{ ft}", (), "zh")
+
+    assert check.ok is True
+
+
+def test_validate_treats_chinese_numerals_as_same_number():
+    _, placeholders = extract_math("How many 3-digit numbers have a triple final digit?")
+    check = validate_translation(
+        "How many 3-digit numbers have a triple final digit?",
+        "有多少个三位数，其首位数字是末位数字的三倍？",
+        placeholders,
+        "zh",
+    )
+
+    assert check.ok is True
+
+
+def test_validate_allows_explanatory_extra_numbers():
+    _, placeholders = extract_math(
+        "There is a total of 20 quarters stacked in four piles."
+    )
+    check = validate_translation(
+        "There is a total of 20 quarters stacked in four piles.",
+        "共有20个25美分硬币堆成四堆。",
+        placeholders,
+        "zh",
+    )
+
+    assert check.ok is True
+
+
+def test_validate_still_rejects_lost_number():
+    _, placeholders = extract_math("There are 20 quarters in the pile.")
+    check = validate_translation(
+        "There are 20 quarters in the pile.",
+        "这堆里有25枚硬币。",
+        placeholders,
+        "zh",
+    )
+
+    assert check.ok is False
+    assert "number_mismatch" in check.reasons
+
+
+def test_validate_allows_shorter_chinese_translation():
+    _, placeholders = extract_math(
+        "Two different 2-digit numbers are randomly chosen and multiplied "
+        "together. What is the probability that the resulting product is even?"
+    )
+    check = validate_translation(
+        "Two different 2-digit numbers are randomly chosen and multiplied "
+        "together. What is the probability that the resulting product is even?",
+        "随机选择两个不同的两位数并将它们相乘。所得乘积为偶数的概率是多少？",
+        placeholders,
+        "zh",
+    )
+
+    assert check.ok is True
+
+
+def test_validate_rejects_untranslated_prose():
+    _, placeholders = extract_math("Compute the value of x when x=2.")
+    check = validate_translation(
+        "Compute the value of [[M1]] when x=2.",
+        "Compute the value of [[M1]] when x=2.",
+        placeholders,
+        "zh",
+    )
+
+    assert check.ok is False
+    assert "target_language_mismatch" in check.reasons
+
+
 def test_translate_exercise_adds_machine_translation():
     exercise = make_exercise()
 

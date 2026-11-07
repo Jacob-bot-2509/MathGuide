@@ -20,6 +20,22 @@ _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 _CJK_RE = re.compile(r"[㐀-鿿]")
 _LATIN_RE = re.compile(r"[A-Za-z]{2,}")
 _COMMAND_RE = re.compile(r"\\[A-Za-z]+")
+# \begin{align*} / \end{align*} 的环境名不是正文;不去掉会被当成英文单词。
+_ENV_RE = re.compile(r"\\(?:begin|end)\{[^}]*\}")
+
+# 数字等价:只拒绝「源文数字丢失」,译文多出的释义数字不算改数;中文数词按等值
+# 归一,否则 3-digit→三位数 会被误判。只收集后接量词/单位的中文数词,避免把
+# 「一些」「一般」当成 1。
+_CJK_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+_CJK_UNITS = {"十": 10, "百": 100, "千": 1000, "万": 10000, "亿": 100000000}
+_CJK_CLASSIFIERS = "个位种次名片堆倍成分之条张只本组对类步项元米秒年天度角边形维页章节题人户"
+_CJK_NUM_RE = re.compile(
+    r"[零〇一二两三四五六七八九十百千万亿]+(?=[" + _CJK_CLASSIFIERS + "])"
+)
+_FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
 
 
 @dataclass(frozen=True)
@@ -52,14 +68,37 @@ def restore_math(template: str, placeholders: Sequence[str]) -> str:
     return value
 
 
+def _cjk_value(token: str) -> int:
+    """把中文数词（十二、二十三、一百零五、一万二千）转成整数。"""
+    total = 0
+    section = 0
+    number = 0
+    for char in token:
+        if char in _CJK_DIGITS:
+            number = _CJK_DIGITS[char]
+        else:
+            unit = _CJK_UNITS[char]
+            if unit >= 10000:
+                section = (section + number) * unit
+                total += section
+                section = 0
+            else:
+                section += (number or 1) * unit
+            number = 0
+    return total + section + number
+
+
 def _numbers(text: str) -> Counter[str]:
-    without_placeholders = _PLACEHOLDER_RE.sub("", text)
-    return Counter(_NUMBER_RE.findall(without_placeholders))
+    """抽出文本中的数值;占位符里的公式不参与,全角数字与中文数词按等价值归一。"""
+    value = _PLACEHOLDER_RE.sub("", text).translate(_FULLWIDTH_DIGITS)
+    value = _CJK_NUM_RE.sub(lambda match: str(_cjk_value(match.group(0))), value)
+    return Counter(_NUMBER_RE.findall(value))
 
 
 def _prose(text: str) -> str:
-    """去掉占位符、LaTeX 命令与花括号,只留下自然语言。"""
+    """去掉占位符、LaTeX 环境/命令与花括号,只留下自然语言。"""
     value = _PLACEHOLDER_RE.sub("", text)
+    value = _ENV_RE.sub("", value)
     value = _COMMAND_RE.sub("", value)
     return value.replace("{", "").replace("}", "")
 
@@ -75,11 +114,15 @@ def validate_translation(
     actual = Counter(_PLACEHOLDER_RE.findall(translated))
     if expected != actual:
         reasons.append("placeholder_mismatch")
-    if _numbers(source) != _numbers(translated):
+    # 只查「源文数字丢失」:译文补充释义数字(quarter→25 美分)不算改数,
+    # 但源文里的数一个都不能少,20 被改成 25 会因 20 缺失而拒绝。
+    if _numbers(source) - _numbers(translated):
         reasons.append("number_mismatch")
 
     source_prose = _prose(source)
-    has_words = bool(_LATIN_RE.search(source_prose) or _CJK_RE.search(source_prose))
+    # 至少两个英文单词或任意中文才算有正文:纯 LaTeX、单位标签(25 \text{ ft})
+    # 不需要翻译,也不应因「没有目标语言」被拒。
+    has_words = len(_LATIN_RE.findall(source_prose)) >= 2 or bool(_CJK_RE.search(source_prose))
     translated_prose = _prose(translated)
     if has_words:
         if target_lang == "zh" and not _CJK_RE.search(translated_prose):
@@ -87,8 +130,9 @@ def validate_translation(
         if target_lang == "en" and not _LATIN_RE.search(translated_prose):
             reasons.append("target_language_mismatch")
 
-    source_len = max(len(source), 1)
-    ratio = len(translated) / source_len
+    # 中文没有词间空格,按原始字符数比会系统性偏短;去掉空白再比。
+    source_len = max(len(re.sub(r"\s+", "", source)), 1)
+    ratio = len(re.sub(r"\s+", "", translated)) / source_len
     if source_len >= 10 and (ratio < 0.25 or ratio > 4.0):
         reasons.append("length_ratio_out_of_range")
     return TranslationCheck(ok=not reasons, reasons=tuple(reasons))
