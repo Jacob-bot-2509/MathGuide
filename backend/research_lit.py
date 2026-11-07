@@ -1177,6 +1177,15 @@ async def oa_lookup(request: Request) -> JSONResponse:
             timeout=TIMEOUT, follow_redirects=True,
             headers={"User-Agent": "MathGuide/1.14 (research oa resolver)"}) as client:
         result = await oa_resolver.resolve_doi(client, doi)
+    oa_url = str(result.get("oaUrl") or "")
+    if result.get("isOa") and oa_url:
+        result["status"] = (
+            "oa_pdf" if research_urls.is_safe_pdf_url(oa_url)
+            else "oa_landing")
+    elif result.get("error"):
+        result["status"] = "unknown"
+    else:
+        result["status"] = "no_legal_copy"
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 

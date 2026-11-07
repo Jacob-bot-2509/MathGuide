@@ -8,9 +8,14 @@ from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 import httpx
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 import research_oa as oa
 import research_urls as urls
+from auth import require_auth
+from rate_limit import SlidingWindowLimiter
 
 STATUSES = {
     "oa_pdf", "oa_landing", "preprint", "institutional",
@@ -29,6 +34,7 @@ _SOURCE_PRIORITY = {
 }
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _ARXIV = "{http://arxiv.org/schemas/atom}"
+_limiter = SlidingWindowLimiter(12, 60.0)
 
 
 def normalize_identifiers(*, doi: str = "", arxiv_id: str = "",
@@ -309,3 +315,26 @@ async def resolve(client: httpx.AsyncClient, *, doi: str = "",
         "candidates": [],
         "reason": "; ".join(source_errors)[:300],
     }
+
+
+async def fulltext_lookup(request: Request) -> JSONResponse:
+    """按标识符解析合法全文;只返回候选,不下载、不代理。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    params = request.query_params
+    doi = (params.get("doi") or "").strip()[:100]
+    arxiv_id = (params.get("arxivId") or "").strip()[:100]
+    pmid = (params.get("pmid") or "").strip()[:100]
+    pmcid = (params.get("pmcid") or "").strip()[:100]
+    title = (params.get("title") or "").strip()[:300]
+    if not any((doi, arxiv_id, pmid, pmcid, title)):
+        raise HTTPException(400, "缺少 doi、arxivId、pmid、pmcid 或 title")
+    if not _limiter.allow(uid):
+        raise HTTPException(429, "检索过于频繁,请稍后再试")
+    async with httpx.AsyncClient(
+            timeout=8.0, follow_redirects=True,
+            headers={"User-Agent": "MathGuide/1.18 (research fulltext)"}) as client:
+        result = await resolve(
+            client, doi=doi, arxiv_id=arxiv_id, pmid=pmid,
+            pmcid=pmcid, title=title)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})

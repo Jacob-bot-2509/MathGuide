@@ -51,6 +51,7 @@ import rag
 import recommendation
 import research_corpus
 import research_diagrams
+import research_fulltext
 import research_compare
 import research_tables
 import research_lit
@@ -134,6 +135,7 @@ routes = [
     Route("/api/research/literature", research_lit.search),
     Route("/api/research/literature/related", research_lit.related),
     Route("/api/research/literature/oa", research_lit.oa_lookup),
+    Route("/api/research/fulltext", research_fulltext.fulltext_lookup),
     Route("/api/research/venues", research_lit.venues_lookup),
     Route("/api/research/sources", research_lit.sources_info),
     Route("/api/research/literature/compare", research_compare.compare, methods=["POST"]),

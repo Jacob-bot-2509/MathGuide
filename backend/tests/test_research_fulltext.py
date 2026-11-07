@@ -106,3 +106,26 @@ def test_doi_closed_but_arxiv_pdf_still_returns_oa_pdf(monkeypatch):
     assert result["status"] == "oa_pdf"
     assert result["best"]["source"] == "arxiv"
     assert {item["type"] for item in result["matchedIdentifiers"]} == {"doi", "arxiv"}
+
+
+def test_fulltext_endpoint_returns_status(monkeypatch):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    async def fake_resolve(client, **kwargs):
+        return {
+            "status": "oa_pdf",
+            "identifier": {"type": "doi", "value": "10.1/x"},
+            "matchedIdentifiers": [{"type": "doi", "value": "10.1/x"}],
+            "best": {"url": "https://arxiv.org/pdf/1", "serverDownloadable": True},
+            "alternatives": [], "candidates": [], "reason": "",
+        }
+
+    monkeypatch.setattr(rf, "resolve", fake_resolve)
+    monkeypatch.setattr(rf, "require_auth", lambda request: {"uid": "u"})
+    app = Starlette(routes=[Route("/api/research/fulltext", rf.fulltext_lookup)])
+    client = TestClient(app)
+    res = client.get("/api/research/fulltext?doi=10.1/x")
+    assert res.status_code == 200
+    assert res.json()["status"] == "oa_pdf"
