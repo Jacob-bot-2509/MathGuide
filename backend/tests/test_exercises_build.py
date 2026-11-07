@@ -78,6 +78,16 @@ def test_build_math_writes_jsonl_manifest_and_dedupes(tmp_path):
     assert manifest["duplicates"] == 1
 
 
+def test_build_applies_cross_topic_tags(tmp_path):
+    row = math_row("Find the least squares solution of the overdetermined system.")
+
+    report = build_source("math", {"algebra": [row]}, tmp_path)
+    loaded = load_jsonl(tmp_path / "math.jsonl")
+
+    assert report.accepted == 1
+    assert "least-squares" in loaded[0].cross_topics
+
+
 def test_build_olympiadbench_reports_image_rejection(tmp_path):
     rows = {
         "OE_MM_maths_zh_CEE": [

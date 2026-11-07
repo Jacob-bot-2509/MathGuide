@@ -12,6 +12,7 @@ from . import schema
 from .dedupe import dedupe
 from .importers import math_dataset, numinamath, olympiadbench
 from .importers.common import ImportSkip
+from .tagging import apply_tags
 
 SOURCES = {
     "math": (math_dataset, math_dataset.SOURCE),
@@ -62,6 +63,7 @@ def build_source(
     _, source_meta = SOURCES[source]
 
     items, rejected = _parse_rows(source, rows_by_config)
+    items = [apply_tags(item) for item in items]
     result = dedupe(items)
     kept = list(result.kept)
     duplicates = len(items) - len(kept)
