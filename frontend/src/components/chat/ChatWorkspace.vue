@@ -956,6 +956,8 @@ async function requestDiagram(
       question: prompt,
       answer: msg.content,
       paperId,
+      tableId: isResearch.value ? tableContext.value?.id : undefined,
+      mode: isResearch.value ? 'research' : 'learn',
     })
     if (!spec) {
       if (!silent) showToast(t('diagram.fail'))

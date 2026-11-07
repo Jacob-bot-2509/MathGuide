@@ -15,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 
 import research_corpus as rc
+import research_tables
 from auth import require_auth
 from http_utils import read_json_object
 from rag import llm
@@ -2238,6 +2239,7 @@ async def plan_diagram_auto(question: str, before: str, excerpts: list[dict],
 
 
 _diagram_limiter = SlidingWindowLimiter(12, 60.0)
+_get_table = research_tables._get_table
 
 
 async def metrics_endpoint(request: Request):
@@ -2280,6 +2282,31 @@ async def plan_endpoint(request: Request) -> JSONResponse:
                 excerpts = (ctx or {}).get("chunks") or []
         except Exception:  # noqa: BLE001 论文不可用时只依据回答
             excerpts = []
-    diagram = await plan_diagram(question, answer, excerpts, kind)
+    table_id = _text(body.get("tableId"), 64)
+    table_context = ""
+    if table_id:
+        try:
+            table = await asyncio.to_thread(_get_table, uid, table_id)
+            if table:
+                table_context = research_tables.context_text(table)
+        except Exception:  # noqa: BLE001 表格不可用时只依据回答
+            table_context = ""
+    mode = "research" if table_id or body.get("mode") == "research" else "learn"
+    regression = body.get("regression")
+    if table_id and isinstance(regression, dict):
+        diagram = build_data_plot(
+            table_id,
+            _text(regression.get("xLabel"), 40) or "x",
+            _text(regression.get("yLabel"), 40) or "y",
+            regression,
+        )
+        if diagram is not None:
+            return JSONResponse({"diagram": diagram}, headers={"Cache-Control": "no-store"})
+    if table_context or mode == "research":
+        diagram = await plan_diagram(
+            question, answer, excerpts, kind,
+            mode=mode, table_context=table_context)
+    else:
+        diagram = await plan_diagram(question, answer, excerpts, kind)
     return JSONResponse({"diagram": diagram}, headers={"Cache-Control": "no-store"})
 

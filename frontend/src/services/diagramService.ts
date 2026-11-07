@@ -10,6 +10,8 @@ export interface PlanDiagramInput {
   question: string
   answer: string
   paperId?: string
+  tableId?: string
+  mode?: 'learn' | 'research'
   kind?: string
 }
 
@@ -25,6 +27,8 @@ export async function planDiagram(input: PlanDiagramInput): Promise<DiagramSpec 
       question: input.question,
       answer: input.answer,
       paperId: input.paperId || undefined,
+      tableId: input.tableId || undefined,
+      mode: input.mode,
       kind: input.kind || undefined,
     },
     authHeaders(),

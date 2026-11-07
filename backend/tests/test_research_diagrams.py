@@ -37,6 +37,36 @@ def test_research_mode_requires_data_grounding(monkeypatch):
     assert "数据点" in seen["system"] or "data points" in seen["system"].lower()
 
 
+def test_plan_endpoint_accepts_table_id(monkeypatch):
+    import research_diagrams as rd
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    seen = {}
+    monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "u"})
+    monkeypatch.setattr(rd, "_get_table", lambda uid, tid: {
+        "columns": [{"key": "X", "label": "x"}],
+        "rows": [["1"]], "formulas": {},
+    }, raising=False)
+
+    async def fake_plan(question, answer, excerpts, kind, **kwargs):
+        seen["table_context"] = kwargs.get("table_context")
+        seen["mode"] = kwargs.get("mode")
+        return {"type": "flow", "nodes": [{"id": "a", "label": "A"}], "edges": []}
+
+    monkeypatch.setattr(rd, "plan_diagram", fake_plan)
+    app = Starlette(routes=[Route(
+        "/api/research/diagrams/plan", rd.plan_endpoint, methods=["POST"])])
+    res = TestClient(app).post("/api/research/diagrams/plan", json={
+        "question": "画出实验流程", "answer": "先取样，再测量",
+        "tableId": "t1", "mode": "research",
+    })
+    assert res.status_code == 200
+    assert "X" in seen["table_context"]
+    assert seen["mode"] == "research"
+
+
 def test_data_plot_uses_fit_points_not_model_values():
     fit = {
         "points": [
