@@ -128,6 +128,33 @@ def test_regression_endpoint_returns_worker_result(monkeypatch, tables):
     assert res.json()["model"] == "ols"
 
 
+def test_context_text_includes_regression_summary_only_when_passed():
+    table = {
+        "title": "T",
+        "columns": [{"key": "X", "label": "x", "type": "number"},
+                    {"key": "Y", "label": "y", "type": "number"}],
+        "rows": [["1", "2"], ["2", "3"]],
+        "formulas": {},
+        "rowLabels": [],
+    }
+    plain = rt.context_text(table)
+    with_reg = rt.context_text(table, "回归: Y=1+0.5X, R²=0.9")
+    assert "回归" not in plain
+    assert "回归: Y=1+0.5X" in with_reg
+
+
+def test_regression_summary_flags_changed_table():
+    import chat
+    result = {
+        "model": "ols", "n": 5, "equation": "Y=1+0.5X", "r2": 0.9,
+        "coefficients": [{"term": "X", "estimate": 0.5, "p": 0.01}],
+        "warnings": [],
+    }
+    summary = chat._regression_summary(result, stale=True)
+    assert "table_changed" in summary
+    assert "Y=1+0.5X" in summary
+
+
 def test_match_formula_candidates_scores_and_validates():
     table = {
         "columns": [

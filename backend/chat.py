@@ -23,6 +23,7 @@ sources 是研究型提问的检索范围(平台名白名单在 rag/research)。
   未配置 LLM 则知识库直答,知识库未命中再按「数学题 / 闲聊」分流。
 """
 import asyncio
+import hashlib
 import json
 import random
 import re
@@ -41,6 +42,7 @@ import research_corpus
 import diagram_metrics
 import research_diagrams
 import research_tables
+import analysis_client
 import usage
 from auth import require_auth
 from http_utils import read_json_object
@@ -501,6 +503,28 @@ def _record(rec: dict, *, cmd: str, prompt_len: int, reply_len: int,
         ts=time.time(),
         workspace=workspace,
     )
+
+
+def _regression_summary(result: dict, stale: bool) -> str:
+    """把服务端回归结果压成一行上下文;模型只引用,不重算。"""
+    parts = [
+        f"model={result.get('model') or 'ols'}",
+        f"n={result.get('n') or 0}",
+        f"equation={result.get('equation') or ''}",
+        f"R²={result.get('r2') if result.get('r2') is not None else '—'}",
+    ]
+    coefficients = result.get("coefficients") or []
+    coef_text = "；".join(
+        f"{item.get('term')} estimate={item.get('estimate')} "
+        f"p={item.get('p') if item.get('p') is not None else '—'}"
+        for item in coefficients[:6] if isinstance(item, dict))
+    if coef_text:
+        parts.append(coef_text)
+    warnings = [str(item) for item in (result.get("warnings") or []) if item]
+    if warnings:
+        parts.append("warnings=" + ",".join(warnings))
+    prefix = "table_changed: " if stale else ""
+    return prefix + "; ".join(parts)[:2000]
 
 
 async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: bool,
@@ -1422,16 +1446,55 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # 表格是用户自己的数据,原文进上下文,数值仍由服务端计算,模型只解读。
     table_context = ""
     table_stamp = ""
+    table_row: dict | None = None
     raw_table = body.get("tableId")
     if workspace == "research" and isinstance(raw_table, str) and raw_table:
         candidate = raw_table[:64]
         try:
             table = await asyncio.to_thread(research_tables._get_table, uid, candidate)
             if table:
+                table_row = table
                 table_context = research_tables.context_text(table)
                 table_stamp = f"{candidate}:{int(table.get('updatedAt') or 0)}"
         except Exception as exc:  # noqa: BLE001 表格校验失败不影响普通对话
             print(f"[chat] 数据表上下文读取失败(忽略): {exc}")
+
+    raw_regression = body.get("tableRegression")
+    if (workspace == "research" and table_row is not None
+            and isinstance(raw_regression, dict)):
+        spec_hash = hashlib.sha256(json.dumps(
+            raw_regression, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        table_stamp = f"{table_stamp}:reg:{spec_hash}"
+        try:
+            spec = research_tables._validate_regression_spec(
+                table_row.get("columns") or [],
+                {key: value for key, value in raw_regression.items()
+                 if key != "tableUpdatedAt"})
+            payload = {
+                "columns": table_row.get("columns") or [],
+                "rows": research_tables._resolved_analysis_rows(
+                    table_row.get("columns") or [],
+                    table_row.get("rows") or [],
+                    table_row.get("formulas") or {}),
+                "formulas": {},
+                "spec": spec,
+            }
+            result = await analysis_client.run_analysis(payload, timeout=30.0)
+            try:
+                stale = (
+                    raw_regression.get("tableUpdatedAt") is not None
+                    and int(raw_regression.get("tableUpdatedAt"))
+                    != int(table_row.get("updatedAt") or 0)
+                )
+            except (TypeError, ValueError):
+                stale = True
+            table_context = research_tables.context_text(
+                table_row, _regression_summary(result, stale))
+        except Exception as exc:  # noqa: BLE001 回归失败不阻断聊天
+            print(f"[chat] 聊天回归重算失败(忽略): {exc}")
+            table_context = research_tables.context_text(
+                table_row, "回归结果不可用(计算服务未安装或失败),不要自行估算。")
 
     # 前端新会话会以空 prompt 触发欢迎问候;两区文案按工作区区分
     if not prompt:

@@ -7,7 +7,7 @@ import { parse } from '@vue/compiler-sfc'
 const source = readFileSync(new URL('../src/views/ResearchTablesView.vue', import.meta.url), 'utf8')
 const script = parse(source).descriptor.scriptSetup.content
 const ast = ts.createSourceFile('view.ts', script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-const names = ['payload', 'openTable', 'saveNow', 'scheduleSave', 'onCompute', 'onExport']
+const names = ['payload', 'openTable', 'saveNow', 'scheduleSave', 'onCompute', 'onExport', 'currentRegressionSpec', 'runRegression']
 const bodies = names.map((name) => {
   const node = ast.statements.find((s) => ts.isFunctionDeclaration(s) && s.name?.text === name)
   assert.ok(node, `Missing ${name}`)
@@ -17,10 +17,12 @@ const js = ts.transpileModule(bodies, { compilerOptions: { target: ts.ScriptTarg
 const factory = new Function('env', `
   const { table, activeProject, dirty, saving, computing, printing, switching, computed, errors,
     getResearchTable, saveResearchTable, computeResearchTable, downloadResearchTable,
-    normalize, nextTick, showToast, t, setTimeout, clearTimeout } = env;
+    normalize, nextTick, showToast, t, setTimeout, clearTimeout,
+    regressionX, regressionY, regressionModel, regressionDegree, regressionLoading, regressionError,
+    regression, regressionKey, regressionSpecUsed, regressResearchTable } = env;
   let saveTimer = null, suppressWatch = false;
   ${js}
-  return { openTable, saveNow, onCompute, onExport };
+  return { openTable, saveNow, onCompute, onExport, runRegression };
 `)
 const ref = (value) => ({ value })
 const makeTable = (id, cell = 'original') => ({
@@ -37,6 +39,10 @@ function harness(overrides = {}) {
     table: ref(makeTable('A')), activeProject: ref(''), dirty: ref(true),
     saving: ref(false), computing: ref(false), printing: ref(false), switching: ref(false),
     computed: ref({}), errors: ref([]),
+    regressionX: ref(['X']), regressionY: ref('Y'), regressionModel: ref('ols'),
+    regressionDegree: ref(2), regressionLoading: ref(false), regressionError: ref(''),
+    regression: ref(null), regressionKey: ref(''), regressionSpecUsed: ref(null),
+    regressResearchTable: async () => ({}),
     getResearchTable: async (id) => makeTable(id),
     saveResearchTable: async (id) => ({ updatedAt: 1 }),
     computeResearchTable: async (id, value) => ({ table: { id, ...value }, computed: {}, errors: [] }),
@@ -98,4 +104,18 @@ function harness(overrides = {}) {
   await api.saveNow(true)
   assert.equal(saved.projectId, null, 'filtering must not assign an unassigned table to a project')
 }
-console.log('研究表格保存竞态自测: 6/6 通过')
+{
+  const request = deferred()
+  const { env, api } = harness({ regressResearchTable: () => request.promise })
+  const pending = api.runRegression()
+  env.table.value.rows[0][0] = 'changed while computing'
+  env.regressionY.value = 'Z'
+  request.resolve({ equation: 'Y = X' })
+  await pending
+  const snapshot = JSON.parse(env.regressionKey.value)
+  assert.equal(snapshot.table.rows[0][0], 'original', 'request snapshot must not include later edits')
+  assert.equal(snapshot.spec.y, 'Y', 'request snapshot must keep original variables')
+  assert.equal(env.regressionSpecUsed.value.y, 'Y', 'chart label must describe returned result')
+  assert.notEqual(snapshot.table.rows[0][0], env.table.value.rows[0][0])
+}
+console.log('研究表格保存及回归竞态自测: 7/7 通过')

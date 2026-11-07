@@ -124,7 +124,16 @@ const importPromptOpen = ref(false)
 const importPromptBusy = ref(false)
 let importPromptResolve: ((proceed: boolean) => void) | null = null
 /** 从数据表页带过来的表:作为对话上下文,随消息发送 tableId */
-const tableContext = ref<{ id: string; title: string } | null>(null)
+type RegressionSpec = {
+  x: string[]
+  y: string
+  model: 'ols' | 'poly'
+  degree?: number
+  tableUpdatedAt?: number
+}
+const tableContext = ref<{
+  id: string; title: string; regression?: RegressionSpec
+} | null>(null)
 
 function onPaperChange(paper: { docId: string; title: string } | null): void {
   currentPaper.value = paper
@@ -173,7 +182,19 @@ async function loadTableContext(): Promise<void> {
   if (!tableId || !isResearch.value) return
   try {
     const table = await getResearchTable(tableId)
-    tableContext.value = { id: table.id, title: table.title }
+    let regression: RegressionSpec | undefined
+    if (route.query.regression === '1') {
+      try {
+        const raw = sessionStorage.getItem(`mg-regression-${table.id}`)
+        if (raw) {
+          const parsed = JSON.parse(raw) as RegressionSpec
+          if (Array.isArray(parsed.x) && parsed.y && parsed.model) regression = parsed
+        }
+      } catch {
+        regression = undefined
+      }
+    }
+    tableContext.value = { id: table.id, title: table.title, regression }
   } catch {
     tableContext.value = null
   }
@@ -263,7 +284,7 @@ function onSplitAsk(prompt: string): void {
 /* ---------- 图解放大 ---------- */
 const DIAGRAM_SPLIT_KEY = 'mg-diagram-split'
 const focusDiagram = ref<DiagramBlock | null>(null)
-const focusOrigin = ref<{ msgId: number; scrollTop: number } | null>(null)
+const focusOrigin = ref<{ msgId: number; diagramId: string; scrollTop: number } | null>(null)
 const focusCloseEl = ref<HTMLButtonElement | null>(null)
 const diagramSplitRatio = ref(loadDiagramSplit())
 const diagramSplitResizing = ref(false)
@@ -373,6 +394,7 @@ function openDiagramFocus(block: DiagramBlock, msgId: number): void {
   if (focusDiagram.value?.id === block.id) return
   focusOrigin.value = {
     msgId,
+    diagramId: block.id,
     scrollTop: listEl.value?.scrollTop ?? 0,
   }
   searchWasOpen.value = searchOpen.value
@@ -386,6 +408,7 @@ function openDiagramFocus(block: DiagramBlock, msgId: number): void {
 
 function closeDiagramFocus(): void {
   if (!focusDiagram.value) return
+  const restoreFocus = !!document.activeElement?.closest('.diagram-focus-pane')
   focusDiagram.value = null
   lastTap.value = null
   touchPointers.clear()
@@ -398,10 +421,12 @@ function closeDiagramFocus(): void {
   nextTick(() => {
     if (origin && listEl.value) {
       listEl.value.scrollTop = origin.scrollTop
-      const message = listEl.value.querySelector(
-        `[data-msg-id="${origin.msgId}"]`,
-      )
-      message?.scrollIntoView({ block: 'nearest' })
+      if (restoreFocus) {
+        const message = listEl.value.querySelector(`[data-msg-id="${origin.msgId}"]`)
+        const diagram = [...(message?.querySelectorAll<HTMLElement>('.diagram-embed') ?? [])]
+          .find((el) => el.dataset.diagramId === origin.diagramId)
+        diagram?.focus({ preventScroll: true })
+      }
     }
   })
 }
@@ -1255,6 +1280,7 @@ function send(text?: string, cmd?: string) {
       ? (stagedPaper.value?.docId || currentPaper.value?.docId)
       : undefined,
     tableId: isResearch.value ? tableContext.value?.id : undefined,
+    tableRegression: isResearch.value ? tableContext.value?.regression : undefined,
   })
 }
 
@@ -2276,6 +2302,8 @@ onBeforeUnmount(() => {
                   <div
                     v-else-if="block.diagram"
                     class="diagram-embed"
+                    :data-diagram-id="block.diagram.id"
+                    tabindex="-1"
                     @click.stop
                     @dblclick.stop="openDiagramFocus(block.diagram, m.id)"
                     @pointerdown="onDiagramPointerDown"
@@ -2535,6 +2563,7 @@ onBeforeUnmount(() => {
         @click="closeDiagramFocus"
       ></div>
       <aside
+        ref="focusPaneEl"
         v-show="focusDiagram"
         class="diagram-focus-pane"
         :class="{
@@ -2563,6 +2592,18 @@ onBeforeUnmount(() => {
             @click="closeDiagramFocus"
           >×</button>
         </header>
+        <div
+          v-for="side in ['left', 'right']"
+          v-show="isNarrow && !focusPanel.fullscreen"
+          :key="side"
+          class="diagram-focus-edge"
+          :class="`diagram-focus-edge--${side}`"
+          aria-hidden="true"
+          @pointerdown.stop="onFocusPointerDown"
+          @pointermove.stop="onFocusPointerMove"
+          @pointerup.stop="onFocusPointerUp"
+          @pointercancel.stop="onFocusPointerCancel"
+        ></div>
         <div
           id="mg-diagram-focus-stage"
           class="diagram-focus-stage"
@@ -2709,6 +2750,18 @@ onBeforeUnmount(() => {
   --line-bright: rgba(96, 165, 250, 0.45);
   --cyan: #4dd6ff;
 }
+
+.diagram-focus-edge {
+  position: absolute;
+  top: 44px;
+  bottom: 0;
+  width: 14px;
+  z-index: 1;
+  touch-action: none;
+}
+
+.diagram-focus-edge--left { left: 0; }
+.diagram-focus-edge--right { right: 0; }
 
 .diagram-focus-pane--narrow {
   position: fixed;

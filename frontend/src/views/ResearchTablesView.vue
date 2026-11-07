@@ -140,6 +140,13 @@ const regression = ref<RegressionResult | null>(null)
 const regressionLoading = ref(false)
 const regressionError = ref('')
 const regressionKey = ref('')
+type RegressionSpec = {
+  x: string[]
+  y: string
+  model: 'ols' | 'poly'
+  degree?: number
+}
+const regressionSpecUsed = ref<RegressionSpec | null>(null)
 const regressionChartRef = ref<{
   downloadSvg: (name?: string) => void
   downloadPng: (name?: string) => Promise<void>
@@ -149,7 +156,7 @@ const numericColumns = vueComputed(() =>
   table.value ? table.value.columns.filter(
     (column) => column.type === 'number' || column.type === 'computed') : [])
 const regressionStale = vueComputed(() =>
-  !!regression.value && regressionKey.value !== JSON.stringify(payload()))
+  !!regression.value && regressionKey.value !== JSON.stringify({ table: payload(), spec: currentRegressionSpec() }))
 
 const numericSeries = vueComputed(() => analysis.value?.series ?? [])
 const chartSeries = vueComputed(() => {
@@ -723,7 +730,25 @@ async function openFormulaDialog(): Promise<void> {
 async function onChat(): Promise<void> {
   if (!table.value) return
   if (dirty.value && !(await saveNow(true))) return
-  await router.push({ path: '/research', query: { tableId: table.value.id } })
+  const key = `mg-regression-${table.value.id}`
+  if (regression.value && !regressionStale.value) {
+    sessionStorage.setItem(key, JSON.stringify({
+      x: [...regressionX.value],
+      y: regressionY.value,
+      model: regressionModel.value,
+      degree: regressionModel.value === 'poly' ? regressionDegree.value : undefined,
+      tableUpdatedAt: table.value.updatedAt,
+    }))
+  } else {
+    sessionStorage.removeItem(key)
+  }
+  await router.push({
+    path: '/research',
+    query: {
+      tableId: table.value.id,
+      ...(regression.value && !regressionStale.value ? { regression: '1' } : {}),
+    },
+  })
 }
 
 function openSource(): void {
@@ -790,6 +815,15 @@ function toggleRegressionX(key: string): void {
     : [...regressionX.value, key]
 }
 
+function currentRegressionSpec(): RegressionSpec {
+  return {
+    x: [...regressionX.value],
+    y: regressionY.value,
+    model: regressionModel.value,
+    degree: regressionModel.value === 'poly' ? regressionDegree.value : undefined,
+  }
+}
+
 async function runRegression(): Promise<void> {
   if (!table.value || regressionLoading.value) return
   const x = [...regressionX.value]
@@ -802,18 +836,17 @@ async function runRegression(): Promise<void> {
     return
   }
   const id = table.value.id
+  const data = payload()
+  const spec = currentRegressionSpec()
+  const requestKey = JSON.stringify({ table: data, spec })
   regressionLoading.value = true
   regressionError.value = ''
   try {
-    const result = await regressResearchTable(id, payload(), {
-      x,
-      y: regressionY.value,
-      model: regressionModel.value,
-      degree: regressionModel.value === 'poly' ? regressionDegree.value : undefined,
-    })
+    const result = await regressResearchTable(id, data, spec)
     if (!table.value || table.value.id !== id) return
     regression.value = result
-    regressionKey.value = JSON.stringify(payload())
+    regressionSpecUsed.value = spec
+    regressionKey.value = requestKey
   } catch (err) {
     regression.value = null
     regressionError.value = err instanceof Error ? err.message : t('tables.regressionFail')
@@ -1712,14 +1745,14 @@ onBeforeUnmount(() => {
                 <RegressionChart
                   ref="regressionChartRef"
                   :result="regression"
-                  :x-label="regressionX.join(', ')"
-                  :y-label="regressionY"
+                  :x-label="regressionSpecUsed?.x.join(', ') ?? ''"
+                  :y-label="regressionSpecUsed?.y ?? ''"
                   mode="fit"
                 />
                 <RegressionChart
                   :result="regression"
-                  :x-label="regressionX.join(', ')"
-                  :y-label="regressionY"
+                  :x-label="regressionSpecUsed?.x.join(', ') ?? ''"
+                  :y-label="regressionSpecUsed?.y ?? ''"
                   mode="residual"
                 />
               </template>

@@ -29,6 +29,8 @@ export interface ChatMeta {
   paperId?: string
   /** 当前数据表:后端把表结构与数据带入上下文 */
   tableId?: string
+  /** 用户刚跑过的回归规格;后端按当前表重算 */
+  tableRegression?: ChatRequest['tableRegression']
 }
 
 function authHeaders(): Record<string, string> {
@@ -138,6 +140,7 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
     partial: meta?.partial,
     paperId: meta?.paperId,
     tableId: meta?.tableId,
+    tableRegression: meta?.tableRegression,
   }
 
   postSSE(

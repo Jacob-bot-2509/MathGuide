@@ -33,6 +33,14 @@ export interface ChatRequest {
   paperId?: string
   /** 当前数据表:作为用户原始数据带入对话上下文 */
   tableId?: string
+  /** 用户刚跑过的回归规格;服务端按当前表重算 */
+  tableRegression?: {
+    x: string[]
+    y: string
+    model: 'ols' | 'poly'
+    degree?: number
+    tableUpdatedAt?: number
+  }
 }
 
 /** 流式回调(OpenAI 兼容 SSE 的通用形态) */

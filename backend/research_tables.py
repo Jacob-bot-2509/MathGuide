@@ -556,7 +556,8 @@ def analyze(columns: list[dict], rows: list[list[str]],
         }
 
 
-def context_text(table: dict, max_rows: int = 40) -> str:
+def context_text(table: dict, regression_summary: str = "",
+                 max_rows: int = 40) -> str:
     """把数据表压缩成对话上下文:结构、公式、前若干行与计算结果。"""
     columns = table.get("columns") if isinstance(table.get("columns"), list) else []
     rows = table.get("rows") if isinstance(table.get("rows"), list) else []
@@ -607,6 +608,9 @@ def context_text(table: dict, max_rows: int = 40) -> str:
     errors = result.get("errors") or []
     if errors:
         lines.append(f"计算错误:{len(errors)} 个单元格,数值结果以能算出的单元格为准。")
+    if regression_summary:
+        lines.append("回归结果(服务端计算,直接引用,不要自行重算):"
+                     + regression_summary[:2000])
     lines.append("以上数据来自用户本项目的数据表,引用数值时必须与表内一致,"
                  "不得改写、编造或用外部资料替代。")
     return "\n".join(lines)[:12000]
