@@ -46,6 +46,18 @@ def test_computer_sources_route_by_field():
     assert rs.SPECS["dblp"].domains == ("computer",)
 
 
+def test_sources_info_exposes_capabilities(monkeypatch):
+    monkeypatch.setattr(rl, "require_auth", lambda request: {"uid": "u"})
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+    app = Starlette(routes=[Route("/api/research/sources", rl.sources_info)])
+    body = TestClient(app).get("/api/research/sources").json()
+    dblp = next(item for item in body["sources"] if item["id"] == "dblp")
+    assert dblp["capabilities"]["metadata"] is True
+    assert dblp["capabilities"]["download"] is False
+
+
 def test_venue_normalization_and_tier():
     assert rv.normalize_issn("0028-0836") == "00280836"
     assert rv.normalize_issn("bad") == ""

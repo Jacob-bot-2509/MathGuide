@@ -20,6 +20,19 @@ Temporary documents stay out of the reviewed library until imported.
 """
 
 
+def test_temp_paper_rejects_publisher_host(monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rp, "require_auth", lambda request: {"uid": "u"})
+    app = Starlette(routes=[Route(
+        "/api/research/papers/temp", rp.create_temp, methods=["POST"])])
+    client = TestClient(app)
+    res = client.post("/api/research/papers/temp", json={
+        "url": "https://link.springer.com/content/pdf/1.pdf",
+    })
+    assert res.status_code == 400
+
+
 @pytest.fixture()
 def corpus(tmp_path, monkeypatch):
     monkeypatch.setattr(rc, "DATA_DIR", tmp_path / "research")

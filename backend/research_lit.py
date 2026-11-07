@@ -1242,6 +1242,12 @@ async def sources_info(request: Request) -> JSONResponse:
             "keyEnv": key_env,
             "keyConfigured": bool(os.getenv(key_env, "").strip()) if key_env else True,
             "keyRequired": spec.key_required,
+            "capabilities": {
+                "metadata": True,
+                "oa": spec.fulltext in ("pdf", "oa"),
+                "download": spec.fulltext in ("pdf", "oa"),
+                "linkOut": True,
+            },
         })
     return JSONResponse({
         "sources": sources,
