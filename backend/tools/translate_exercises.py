@@ -100,23 +100,41 @@ async def run(args: argparse.Namespace) -> int:
     failure_details: list[dict[str, object]] = []
     target_counts: Counter[str] = Counter()
     translated_count = 0
+    rate_limited = 0
 
     async def one(exercise: schema.Exercise, target: str):
+        nonlocal rate_limited
         async with semaphore:
-            try:
-                translated = await translate_exercise_async(
-                    exercise, target, translator, model=model,
-                )
-            except TranslationError as exc:
-                failures[",".join(exc.reasons)] += 1
-                failure_details.append({"id": exercise.id, "reasons": list(exc.reasons)})
-                return exercise, None, target
-            except Exception as exc:  # noqa: BLE001
-                reason = f"llm:{type(exc).__name__}"
-                failures[reason] += 1
-                failure_details.append({"id": exercise.id, "reasons": [reason]})
-                return exercise, None, target
-            return exercise, translated, target
+            for attempt in range(args.retries):
+                try:
+                    translated = await translate_exercise_async(
+                        exercise, target, translator, model=model,
+                    )
+                except TranslationError as exc:
+                    failures[",".join(exc.reasons)] += 1
+                    failure_details.append({"id": exercise.id, "reasons": list(exc.reasons)})
+                    return exercise, None, target
+                except Exception as exc:  # noqa: BLE001
+                    status = getattr(getattr(exc, "response", None), "status_code", None)
+                    if status == 429 and attempt < args.retries - 1:
+                        rate_limited += 1
+                        wait = min(1800, args.retry_base * (2 ** attempt))
+                        print(
+                            f"[translate] 429 on {exercise.id}; retry {attempt + 1}/{args.retries} "
+                            f"in {wait}s",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    reason = f"llm:{type(exc).__name__}"
+                    if status is not None:
+                        reason += f":{status}"
+                    failures[reason] += 1
+                    failure_details.append({"id": exercise.id, "reasons": [reason]})
+                    return exercise, None, target
+                return exercise, translated, target
+            return exercise, None, target
 
     with output.open("w", encoding="utf-8", newline="\n") as handle:
         for line in existing_lines:
@@ -146,6 +164,7 @@ async def run(args: argparse.Namespace) -> int:
         "translated": translated_count,
         "already_done": len(existing_lines),
         "failed": sum(failures.values()),
+        "rate_limited_retries": rate_limited,
         "targets": dict(sorted(target_counts.items())),
         "failures": dict(sorted(failures.items())),
         "failure_details": failure_details,
@@ -168,6 +187,8 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=3)
     parser.add_argument("--role", default="main")
     parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument("--retries", type=int, default=7)
+    parser.add_argument("--retry-base", type=int, default=60)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if args.limit <= 0:
