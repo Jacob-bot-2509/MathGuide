@@ -45,6 +45,7 @@ import config
 import diagnosis
 import doc
 import docgen
+import exercise_docgen
 import graph_api
 import profile
 import rag
@@ -172,6 +173,8 @@ routes = [
     Route("/api/doc/outline", docgen.outline, methods=["POST"]),
     Route("/api/doc/generate", docgen.generate, methods=["POST"]),
     Route("/api/doc/render", docgen.render, methods=["POST"]),
+    Route("/api/doc/exercise/plan", exercise_docgen.plan, methods=["POST"]),
+    Route("/api/doc/exercise", exercise_docgen.generate, methods=["POST"]),
     Route("/api/stats", stats),
 ]
 

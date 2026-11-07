@@ -85,6 +85,41 @@ export function generateDocument(
   return post<GeneratedDocument>('/api/doc/generate', { request, outline, lang }, authHeaders())
 }
 
+export interface ExercisePlanRequest {
+  topics: string[]
+  crossTopics?: string[]
+  types?: string[]
+  difficulty?: [number, number]
+  count: number
+  lang: 'zh' | 'en' | 'both'
+  allowPartial?: boolean
+  seed?: number
+}
+
+export interface ExercisePlan {
+  available: { zh: number; en: number; both: number }
+  selected: number
+  missing: number
+  gaps: string[]
+}
+
+export interface ExerciseDocument {
+  document: StructuredDocument
+  selected: number
+  missing: number
+  gaps: string[]
+}
+
+export function planExercises(body: ExercisePlanRequest): Promise<ExercisePlan> {
+  return post<ExercisePlan>('/api/doc/exercise/plan', body, authHeaders())
+}
+
+export function generateExercises(
+  body: ExercisePlanRequest & { mode: 'questions' | 'answers' | 'solutions' | 'combined' },
+): Promise<ExerciseDocument> {
+  return post<ExerciseDocument>('/api/doc/exercise', body, authHeaders())
+}
+
 export function renderDocument(
   document: StructuredDocument,
   lang: 'zh' | 'en',
