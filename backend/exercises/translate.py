@@ -20,6 +20,9 @@ _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 _CJK_RE = re.compile(r"[㐀-鿿]")
 _LATIN_RE = re.compile(r"[A-Za-z]{2,}")
 _COMMAND_RE = re.compile(r"\\[A-Za-z]+")
+# 连续三个以上、只用空格分隔的英文单词才像句子。公式清洗后剩下的变量名
+# (mn_max、ge^-16)不算,避免把纯 LaTeX 当成未翻译的正文。
+_PROSE_RUN_RE = re.compile(r"[A-Za-z]{2,}(?:\s+[A-Za-z]{2,}){2,}")
 # \begin{align*} / \end{align*} 的环境名不是正文;不去掉会被当成英文单词。
 _ENV_RE = re.compile(r"\\(?:begin|end)\{[^}]*\}")
 
@@ -91,6 +94,8 @@ def _cjk_value(token: str) -> int:
 def _numbers(text: str) -> Counter[str]:
     """抽出文本中的数值;占位符里的公式不参与,全角数字与中文数词按等价值归一。"""
     value = _PLACEHOLDER_RE.sub("", text).translate(_FULLWIDTH_DIGITS)
+    # Markdown/编号列表的 "1." "2)" 是序号不是题面数据,译文常改写成中文序号。
+    value = re.sub(r"(?m)^\s*\d+[.)]\s+", " ", value)
     value = _CJK_NUM_RE.sub(lambda match: str(_cjk_value(match.group(0))), value)
     return Counter(_NUMBER_RE.findall(value))
 
@@ -120,9 +125,8 @@ def validate_translation(
         reasons.append("number_mismatch")
 
     source_prose = _prose(source)
-    # 至少两个英文单词或任意中文才算有正文:纯 LaTeX、单位标签(25 \text{ ft})
-    # 不需要翻译,也不应因「没有目标语言」被拒。
-    has_words = len(_LATIN_RE.findall(source_prose)) >= 2 or bool(_CJK_RE.search(source_prose))
+    # 连续三个空格分隔的英文单词、或任意中文,才算有需要翻译的正文。
+    has_words = bool(_PROSE_RUN_RE.search(source_prose) or _CJK_RE.search(source_prose))
     translated_prose = _prose(translated)
     if has_words:
         if target_lang == "zh" and not _CJK_RE.search(translated_prose):

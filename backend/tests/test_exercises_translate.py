@@ -212,6 +212,27 @@ def test_validate_treats_base_numerals_as_numbers():
     assert check.ok is True
 
 
+def test_validate_ignores_variable_names_in_math_only_field():
+    source = (
+        r"\frac{m}{n}_{\text{max}} = g(e^{-\frac{1}{6}}) = "
+        r"3e^{-\frac{1}{6}}"
+    )
+    check = validate_translation(source, source, (), "zh")
+
+    assert check.ok is True
+
+
+def test_validate_ignores_ordered_list_markers():
+    check = validate_translation(
+        "Steps:\n1. Add the numbers.",
+        "步骤：\n将数字相加。",
+        (),
+        "zh",
+    )
+
+    assert check.ok is True
+
+
 def test_translate_exercise_adds_machine_translation():
     exercise = make_exercise()
 
