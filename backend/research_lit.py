@@ -37,6 +37,7 @@ from starlette.responses import JSONResponse
 import research_corpus as rc
 import research_oa as oa_resolver
 import research_sources as rs
+import research_urls
 import research_venues as rv
 from auth import require_auth
 from http_utils import read_json_object
@@ -1467,23 +1468,10 @@ async def related(request: Request) -> JSONResponse:
 # ---------- 打开开放获取 PDF ----------
 
 # 只允许从开放获取来源下载,避免把任意 URL 变成服务端请求(SSRF)
-_PDF_HOSTS = (
-    "arxiv.org",
-    "europepmc.org",
-    "ebi.ac.uk",
-    "ncbi.nlm.nih.gov",
-)
 
 
 def _pdf_url_allowed(url: str) -> bool:
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return False
-    host = (parsed.hostname or "").lower()
-    if parsed.scheme != "https" or not host:
-        return False
-    return any(host == suffix or host.endswith("." + suffix) for suffix in _PDF_HOSTS)
+    return research_urls.is_safe_pdf_url(url)
 
 
 async def _download_pdf(client: httpx.AsyncClient, url: str) -> bytes:
