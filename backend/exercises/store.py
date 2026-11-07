@@ -77,6 +77,11 @@ class ExerciseStore:
         base = Path(directory)
         return cls.from_jsonl(sorted(base.glob("*.jsonl")), tiers=tiers)
 
+    @classmethod
+    def from_env(cls, directory: Path) -> ExerciseStore:
+        """按 MG_EXERCISE_TIERS 加载;默认 safe,实验环境可加 research。"""
+        return cls.from_directory(directory, tiers=tiers_from_env())
+
     @property
     def exercises(self) -> tuple[Exercise, ...]:
         return self._exercises

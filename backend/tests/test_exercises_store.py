@@ -81,6 +81,19 @@ def test_tiers_from_env_reads_environment(monkeypatch):
     assert tiers_from_env() == ("safe", "research")
 
 
+def test_store_from_env_loads_configured_tiers(tmp_path, monkeypatch):
+    (tmp_path / "items.jsonl").write_text(
+        json.dumps(make("store:env-safe", tier="safe").to_dict(), ensure_ascii=False) + "\n"
+        + json.dumps(make("store:env-research", tier="research").to_dict(), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MG_EXERCISE_TIERS", "research")
+
+    store = ExerciseStore.from_env(tmp_path)
+
+    assert [item.id for item in store.exercises] == ["store:env-research"]
+
+
 def test_store_filters_blocked_sources_even_when_requested():
     safe = make("store:safe", tier="safe")
     blocked = make("store:blocked", tier="blocked")
