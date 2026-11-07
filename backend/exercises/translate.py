@@ -31,7 +31,7 @@ _CJK_DIGITS = {
     "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
 }
 _CJK_UNITS = {"十": 10, "百": 100, "千": 1000, "万": 10000, "亿": 100000000}
-_CJK_CLASSIFIERS = "个位种次名片堆倍成分之条张只本组对类步项元米秒年天度角边形维页章节题人户"
+_CJK_CLASSIFIERS = "个位种次名片堆倍成分之条张只本组对类步项元米秒年天度角边形维页章节题人户进"
 _CJK_NUM_RE = re.compile(
     r"[零〇一二两三四五六七八九十百千万亿]+(?=[" + _CJK_CLASSIFIERS + "])"
 )
@@ -130,10 +130,14 @@ def validate_translation(
         if target_lang == "en" and not _LATIN_RE.search(translated_prose):
             reasons.append("target_language_mismatch")
 
-    # 中文没有词间空格,按原始字符数比会系统性偏短;去掉空白再比。
-    source_len = max(len(re.sub(r"\s+", "", source)), 1)
-    ratio = len(re.sub(r"\s+", "", translated)) / source_len
-    if source_len >= 10 and (ratio < 0.25 or ratio > 4.0):
+    # 长度比只看正文:LaTeX 命令、公式、占位符不计长度。中文没有词间空格,
+    # 按原始字符数比会系统性偏短;去掉空白再比,阈值也按正文定。
+    source_len = max(len(re.sub(r"\s+", "", source_prose)), 1)
+    translated_len = len(re.sub(r"\s+", "", translated_prose))
+    ratio = translated_len / source_len
+    # 中文译文篇幅天然只有英文原文的 0.2~0.4,下限按目标语言区分。
+    lower = 0.15 if target_lang == "zh" else 0.25
+    if source_len >= 10 and (ratio < lower or ratio > 4.0):
         reasons.append("length_ratio_out_of_range")
     return TranslationCheck(ok=not reasons, reasons=tuple(reasons))
 

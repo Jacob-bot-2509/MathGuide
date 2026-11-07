@@ -181,6 +181,37 @@ def test_validate_rejects_untranslated_prose():
     assert "target_language_mismatch" in check.reasons
 
 
+def test_validate_allows_compact_chinese_question():
+    source = (
+        "What is the sum, in degrees, of the measures of the interior angles "
+        "in the convex hexagon shown?"
+    )
+    check = validate_translation(source, "如图所示的凸六边形的内角和是多少度？", (), "zh")
+
+    assert check.ok is True
+
+
+def test_validate_ignores_latex_wrapper_in_length_ratio():
+    check = validate_translation(r"\text{circle}", "圆", (), "zh")
+
+    assert check.ok is True
+
+
+def test_validate_treats_base_numerals_as_numbers():
+    source = (
+        "When the base 10 integer 269 is converted to base 5, what is the "
+        "sum of the digits?"
+    )
+    check = validate_translation(
+        source,
+        "当十进制整数 269 转换为五进制时，其各位数字之和是多少？",
+        (),
+        "zh",
+    )
+
+    assert check.ok is True
+
+
 def test_translate_exercise_adds_machine_translation():
     exercise = make_exercise()
 
