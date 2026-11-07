@@ -1,0 +1,86 @@
+{
+  "kuttler-vector": {
+    "n": 50,
+    "complete_confirmed_lower_bound": 4,
+    "accepted_exercise_numbers": [
+      21,
+      56,
+      60,
+      62
+    ],
+    "reviewed_answer_items": 17,
+    "notes": {
+      "21": "Explicit identification of function values with R^n coordinates; short but complete.",
+      "23": "Notation mismatch l/k and x_k in summation; hold.",
+      "56": "Complete short contradiction proof; length heuristic false negative.",
+      "59": "Depends on previous exercise context not in extracted statement; hold.",
+      "60": "Subspace over Q and irrationality establish basis; inherited axioms understood.",
+      "61": "Answer duplicates the previous exercise and is unrelated; reject.",
+      "62": "Explicit scalar-multiplication counterexample; complete.",
+      "68": "Arithmetic error 5-1=5 propagates to wrong final coefficient; reject.",
+      "71": "Only matrix product/result, no inverse derivation; hold.",
+      "87": "Only bases and dimensions, no working; reject under full-process bar.",
+      "88": "Only kernel/image final result; reject.",
+      "91": "Matrices described but linearity proof omitted; hold.",
+      "92": "Full-looking proof has y_1 versus y_i transcription issue; hold for source correction.",
+      "95": "Matrix product/result without construction; hold.",
+      "101": "u/v variable mismatch in supplied explanation; hold for normalization review.",
+      "102": "Only final projection matrix; reject.",
+      "105": "Statement calls a three-component vector an R^2 vector; hold."
+    }
+  },
+  "kuttler-spectral": {
+    "n": 10,
+    "complete_confirmed_lower_bound": 1,
+    "accepted_exercise_numbers": [
+      66
+    ],
+    "reviewed_answer_items": 10,
+    "notes": {
+      "56": "Gives eigenvectors and verification, but not full computation.",
+      "57": "Eigenpairs and U only; no derivation.",
+      "58": "Final eigenpairs only; no full computation.",
+      "59": "Final eigenpairs only; no full computation.",
+      "60": "Final diagonalization data only.",
+      "61": "Final diagonalization data only.",
+      "62": "Final diagonalization data only.",
+      "63": "Final diagonalization data only.",
+      "66": "Both implications proved using symmetry and spectral theorem.",
+      "79": "Proof references matrix A defined in Exercise 78; hold pending context packaging."
+    }
+  },
+  "diffyqs": {
+    "note": "Reviewed all process-positive candidates in vector-space/Fourier/Laplace/matrix-exponential/ODE groups; not all short-answer negatives. Counts below are conservative manually confirmed lower bounds.",
+    "complete_confirmed_lower_bounds": {
+      "vector-space": 0,
+      "fourier-series": 0,
+      "laplace-transform": 0,
+      "matrix-exponential": 0,
+      "ode-system": 1
+    },
+    "accepted_ids": {
+      "ode-system": [
+        "linsystems_section-18-8"
+      ]
+    },
+    "note2": "Length >=200 badly overcounts LaTeX matrices as worked solutions; ODE 3.3.102 provides an explicit nonzero linear dependence relation. Problem 3.1.106 explicitly leaves explanation to reader."
+  },
+  "HF": {
+    "false_positive": {
+      "dataset": "NuminaMath",
+      "id": "default/train/120033",
+      "keyword_topic": "vector-space",
+      "reason": "Topological/graph subspace, not a linear vector space; solution contaminated by translation instruction, not executed."
+    },
+    "semantic_vector_space_matches": {
+      "MATH": 1,
+      "NuminaMath": 2
+    },
+    "semantic_generating_function_extra": {
+      "dataset": "NuminaMath",
+      "id": "default/train/740097",
+      "reason": "Coefficient-of-product problem is a generating-function application missed by literal phrase filter; lacks complete derivation/final answer under phase0 rules."
+    },
+    "note": "These are NOT cleared new unique problems; they may already be in existing 6861-item library. All HF items remain provenance/license hold."
+  }
+}
