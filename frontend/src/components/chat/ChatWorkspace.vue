@@ -959,6 +959,7 @@ async function requestDiagram(
       paperId,
       tableId: isResearch.value ? tableContext.value?.id : undefined,
       mode: isResearch.value ? 'research' : 'learn',
+      regression: isResearch.value ? tableContext.value?.regression : undefined,
     })
     if (!spec) {
       if (!silent) showToast(t('diagram.fail'))
@@ -1026,12 +1027,14 @@ function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?:
       const inner = (meta as {
         mg_meta?: {
           research?: boolean
+          tableChanged?: boolean
           paperImported?: {
             docId: string; title?: string; status?: string; reason?: string
           }
         }
       }).mg_meta
       if (inner?.research) reply.research = true
+      if (inner?.tableChanged) showToast(t('chat.tableChanged'))
       if (inner?.paperImported) markPaperImported(inner.paperImported)
       const diagram = parseDiagramEvent(meta)
       if (diagram) {

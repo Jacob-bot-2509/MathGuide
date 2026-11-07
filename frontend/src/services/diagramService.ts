@@ -12,6 +12,13 @@ export interface PlanDiagramInput {
   paperId?: string
   tableId?: string
   mode?: 'learn' | 'research'
+  regression?: {
+    x: string[]
+    y: string
+    model: 'ols' | 'poly'
+    degree?: number
+    tableUpdatedAt?: number
+  }
   kind?: string
 }
 
@@ -29,6 +36,7 @@ export async function planDiagram(input: PlanDiagramInput): Promise<DiagramSpec 
       paperId: input.paperId || undefined,
       tableId: input.tableId || undefined,
       mode: input.mode,
+      regression: input.regression,
       kind: input.kind || undefined,
     },
     authHeaders(),

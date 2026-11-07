@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 
 import research_corpus as rc
 import research_tables
+import analysis_client
 from auth import require_auth
 from http_utils import read_json_object
 from rag import llm
@@ -1461,18 +1462,21 @@ def build_data_plot(table_id: str, x: str, y: str,
     if not isinstance(raw_points, list) or not raw_points:
         return None
     points: list[list[float]] = []
-    for index, item in enumerate(raw_points[:200]):
+    for item in raw_points:
         if not isinstance(item, dict):
             continue
-        x_value = _num(item.get("x"))
-        if x_value is None:
-            x_value = _num(item.get("row"))
+        x_value = _num(item.get("x") if "x" in item else item.get("row"))
         y_value = _num(item.get("actual"))
         if x_value is None or y_value is None:
-            continue
+            return None
         points.append([x_value, y_value])
     if not points:
         return None
+    total_points = len(points)
+    max_points = _MAX_SHAPES - 3
+    if total_points > max_points:
+        points = [points[i * (total_points - 1) // (max_points - 1)]
+                  for i in range(max_points)]
 
     shapes: list[dict] = [
         {"kind": "axis", "from": [0, 0], "to": [1, 0], "label": str(x)[:40]},
@@ -1489,13 +1493,17 @@ def build_data_plot(table_id: str, x: str, y: str,
                 continue
             x_value = _num(item.get("x"))
             y_value = _num(item.get("y"))
-            if x_value is not None and y_value is not None:
-                curve.append([x_value, y_value])
+            if x_value is None or y_value is None:
+                curve.clear()
+                break
+            curve.append([x_value, y_value])
     if len(curve) >= 2:
         shapes.append({"kind": "curve", "points": curve, "color": "#4dd6ff"})
 
     equation = str(fit_result.get("equation") or "").strip()
     title = f"{str(y)[:40]} ~ {str(x)[:40]}"
+    if total_points > len(points):
+        title += f" (显示 {len(points)}/{total_points} 点)"
     if equation:
         title = f"{title}: {equation[:120]}"
     return prepare_diagram({
@@ -2240,6 +2248,7 @@ async def plan_diagram_auto(question: str, before: str, excerpts: list[dict],
 
 _diagram_limiter = SlidingWindowLimiter(12, 60.0)
 _get_table = research_tables._get_table
+_run_analysis = analysis_client.run_analysis
 
 
 async def metrics_endpoint(request: Request):
@@ -2284,28 +2293,57 @@ async def plan_endpoint(request: Request) -> JSONResponse:
             excerpts = []
     table_id = _text(body.get("tableId"), 64)
     table_context = ""
+    table_row: dict | None = None
     if table_id:
         try:
             table = await asyncio.to_thread(_get_table, uid, table_id)
             if table:
+                table_row = table
                 table_context = research_tables.context_text(table)
         except Exception:  # noqa: BLE001 表格不可用时只依据回答
             table_context = ""
     mode = "research" if table_id or body.get("mode") == "research" else "learn"
     regression = body.get("regression")
-    if table_id and isinstance(regression, dict):
-        diagram = build_data_plot(
-            table_id,
-            _text(regression.get("xLabel"), 40) or "x",
-            _text(regression.get("yLabel"), 40) or "y",
-            regression,
-        )
-        if diagram is not None:
-            return JSONResponse({"diagram": diagram}, headers={"Cache-Control": "no-store"})
+    if regression is not None:
+        if not isinstance(regression, dict) or not table_id:
+            raise HTTPException(400, "bad_spec")
+        if table_row is None:
+            raise HTTPException(404, "not found")
+        try:
+            spec = research_tables._validate_regression_spec(
+                table_row.get("columns") or [],
+                {key: value for key, value in regression.items()
+                 if key != "tableUpdatedAt"})
+            if len(spec["x"]) != 1:
+                raise ValueError("unsupported")
+            fit_result = await _run_analysis({
+                "columns": table_row.get("columns") or [],
+                "rows": research_tables._resolved_analysis_rows(
+                    table_row.get("columns") or [],
+                    table_row.get("rows") or [],
+                    table_row.get("formulas") or {}),
+                "formulas": {},
+                "spec": spec,
+            })
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except analysis_client.AnalysisError as exc:
+            status = 400 if exc.code in {"empty", "insufficient_n", "singular", "bad_column", "unsupported"} else 503
+            raise HTTPException(status, exc.code) from exc
+        diagram = build_data_plot(table_id, spec["x"][0], spec["y"], fit_result)
+        if diagram is None:
+            raise HTTPException(422, "invalid_plot")
+        return JSONResponse({"diagram": diagram}, headers={"Cache-Control": "no-store"})
     if table_context or mode == "research":
         diagram = await plan_diagram(
             question, answer, excerpts, kind,
             mode=mode, table_context=table_context)
+        if table_id and diagram is not None:
+            shapes = diagram.get("shapes") if isinstance(diagram.get("shapes"), list) else []
+            if any(shape.get("kind") in {"point", "curve"} for shape in shapes
+                   if isinstance(shape, dict)):
+                # 科研区数据图必须来自服务端回归结果,不接受模型手写点/曲线。
+                diagram = None
     else:
         diagram = await plan_diagram(question, answer, excerpts, kind)
     return JSONResponse({"diagram": diagram}, headers={"Cache-Control": "no-store"})

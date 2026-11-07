@@ -73,7 +73,7 @@ export async function createTempPaper(
   metadata?: TempPaperMeta,
 ): Promise<TempPaperResult> {
   return post<TempPaperResult>(
-    '/api/research/papers/temp', { url, metadata }, authHeaders())
+    '/api/research/papers/temp', { url, metadata }, authHeaders(), true)
 }
 
 export interface ImportPaperResult {

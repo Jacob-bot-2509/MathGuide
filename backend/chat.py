@@ -1480,7 +1480,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             print(f"[chat] 数据表上下文读取失败(忽略): {exc}")
 
     raw_regression = body.get("tableRegression")
-    if (workspace == "research" and table_row is not None
+    if (workspace == "research" and prompt and table_row is not None
             and isinstance(raw_regression, dict)):
         spec_hash = hashlib.sha256(json.dumps(
             raw_regression, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -1509,6 +1509,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                 )
             except (TypeError, ValueError):
                 stale = True
+            if stale:
+                meta["tableChanged"] = True
             table_context = research_tables.context_text(
                 table_row, _regression_summary(result, stale))
         except Exception as exc:  # noqa: BLE001 回归失败不阻断聊天
@@ -1662,7 +1664,9 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         # 搜索范围(前端勾选的平台;缺省/空 = 全平台);非法名白名单校验在 deep_search 内
         scope = _clean_scope(body.get("sources"))
         ck = _research_cache_key(question, scope,
-                                 f"{uid}|{research_corpus.corpus_stamp(uid)}|{paper_id}|{table_stamp}")
+                                 f"{uid}|{research_corpus.corpus_stamp(uid)}|"
+                                 f"{paper_id}|{table_stamp}|"
+                                 f"diagrams={_diagram_requested(body)}")
         cached = _RESEARCH_ANSWER.get(ck)
         if cached and time.monotonic() - cached[0] < _RESEARCH_TTL:
             _RESEARCH_ANSWER.move_to_end(ck)  # 命中即刷新 LRU 顺序

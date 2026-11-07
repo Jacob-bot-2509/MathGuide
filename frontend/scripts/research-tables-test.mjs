@@ -19,7 +19,7 @@ const factory = new Function('env', `
     getResearchTable, saveResearchTable, computeResearchTable, downloadResearchTable,
     normalize, nextTick, showToast, t, setTimeout, clearTimeout,
     regressionX, regressionY, regressionModel, regressionDegree, regressionLoading, regressionError,
-    regression, regressionKey, regressionSpecUsed, regressResearchTable } = env;
+    regression, regressionKey, regressionSpecUsed, regressionUpdatedAt, regressResearchTable } = env;
   let saveTimer = null, suppressWatch = false;
   ${js}
   return { openTable, saveNow, onCompute, onExport, runRegression };
@@ -42,6 +42,7 @@ function harness(overrides = {}) {
     regressionX: ref(['X']), regressionY: ref('Y'), regressionModel: ref('ols'),
     regressionDegree: ref(2), regressionLoading: ref(false), regressionError: ref(''),
     regression: ref(null), regressionKey: ref(''), regressionSpecUsed: ref(null),
+    regressionUpdatedAt: ref(undefined),
     regressResearchTable: async () => ({}),
     getResearchTable: async (id) => makeTable(id),
     saveResearchTable: async (id) => ({ updatedAt: 1 }),

@@ -45,6 +45,8 @@ python -m venv .venv-analysis
 
 `analysis_capabilities.available_packs()` 只探测已安装包,不会自动安装;缺失的包在接口里返回 `false`。
 
+隔离边界:worker 用独立 venv、无 shell、结构化 JSON、30s 超时;POSIX 下另加 CPU/地址空间 rlimit。Windows 没有等价的轻量 job object 封装,网络隔离未做;worker 只接受固定的回归/能力请求,不执行用户代码。若部署环境要求强隔离,把 worker 放进容器或专用低权限账户,并显式断网。
+
 ## 目录
 
 ```

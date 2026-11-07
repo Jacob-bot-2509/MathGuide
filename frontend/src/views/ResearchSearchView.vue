@@ -407,6 +407,12 @@ async function chooseCandidate(item: LiteratureItem, candidate: FullTextCandidat
 function openExternalUrl(result: FullTextResult): void {
   const url = result.best?.url
   if (!url) return
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return
+  } catch {
+    return
+  }
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 

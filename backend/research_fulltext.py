@@ -1,8 +1,11 @@
 """合法全文解析:把标识符变成开放获取候选,不代理付费墙内容。"""
 from __future__ import annotations
 
+import asyncio
 import difflib
 import re
+import time
+from copy import deepcopy
 from typing import Iterable
 from urllib.parse import urlparse
 from xml.etree import ElementTree
@@ -35,6 +38,28 @@ _SOURCE_PRIORITY = {
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _ARXIV = "{http://arxiv.org/schemas/atom}"
 _limiter = SlidingWindowLimiter(12, 60.0)
+_CACHE: dict[str, tuple[float, dict]] = {}
+_CACHE_TTL = 86400.0
+_NEGATIVE_TTL = 3600.0
+_CACHE_MAX = 512
+
+
+def _safe_url(url: object) -> str:
+    text = str(url or "").strip()
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return ""
+    if (parsed.scheme != "https" or not parsed.hostname
+            or parsed.username or parsed.password
+            or any(c.isspace() or ord(c) < 32 for c in text)):
+        return ""
+    return text[:1000]
+
+
+def _looks_like_pdf(url: str) -> bool:
+    path = urlparse(str(url or "")).path.lower().rstrip("/")
+    return path.endswith(".pdf") or path.endswith("/pdf") or "/pdf/" in path
 
 
 def normalize_identifiers(*, doi: str = "", arxiv_id: str = "",
@@ -54,7 +79,7 @@ def make_candidate(url: str, *, kind: str, source: str,
                    license: str = "", server_downloadable: bool = False,
                    is_preprint: bool = False) -> dict:
     return {
-        "url": str(url or ""),
+        "url": _safe_url(url),
         "kind": kind,
         "source": source,
         "hostType": host_type,
@@ -111,17 +136,18 @@ async def _doi_candidates(client: httpx.AsyncClient, doi: str,
     url = str(result.get("oaUrl") or "")
     if not url:
         return []
-    path = urlparse(url).path.lower()
+    host = (urlparse(url).hostname or "").lower()
     source = str(result.get("resolver") or "openalex")
     return [make_candidate(
         url,
-        kind="pdf" if path.endswith(".pdf") else "landing",
+        kind="pdf" if _looks_like_pdf(url) else "landing",
         source=source,
         host_type=str(result.get("oaSource") or ""),
         version=str(result.get("version") or ""),
         license=str(result.get("license") or ""),
         server_downloadable=False,
-        is_preprint=source in {"arxiv", "biorxiv", "chemrxiv"},
+        is_preprint=("arxiv.org" in host or "biorxiv.org" in host
+                     or "medrxiv.org" in host),
     )]
 
 
@@ -231,10 +257,9 @@ async def _pmc_candidates(client: httpx.AsyncClient, pmid: str,
             url = str(link.get("url") or "")
             if not url:
                 continue
-            style = str(link.get("documentStyle") or "").lower()
             candidate = make_candidate(
                 url,
-                kind="pdf" if ("pdf" in style or urlparse(url).path.lower().endswith(".pdf")) else "landing",
+                kind="pdf" if _looks_like_pdf(url) else "landing",
                 source="europepmc",
                 host_type="repository",
                 version="publishedVersion",
@@ -254,11 +279,41 @@ def _matched_identifiers(ids: dict[str, str]) -> list[dict]:
     ]
 
 
+def _cache_key(ids: dict[str, str]) -> str:
+    return "|".join(f"{key}={ids[key]}" for key in sorted(ids) if ids[key])
+
+
+def _cache_get(key: str) -> dict | None:
+    cached = _CACHE.get(key)
+    if not cached:
+        return None
+    age = time.monotonic() - cached[0]
+    ttl = _NEGATIVE_TTL if cached[1].get("status") == "no_legal_copy" else _CACHE_TTL
+    if age > ttl:
+        _CACHE.pop(key, None)
+        return None
+    return deepcopy(cached[1])
+
+
+def _cache_put(key: str, result: dict) -> None:
+    if not key or result.get("status") == "ambiguous":
+        return
+    _CACHE[key] = (time.monotonic(), deepcopy(result))
+    if len(_CACHE) > _CACHE_MAX:
+        oldest = min(_CACHE, key=lambda item: _CACHE[item][0])
+        _CACHE.pop(oldest, None)
+
+
 async def resolve(client: httpx.AsyncClient, *, doi: str = "",
                   arxiv_id: str = "", pmid: str = "", pmcid: str = "",
                   title: str = "") -> dict:
     ids = normalize_identifiers(
         doi=doi, arxiv_id=arxiv_id, pmid=pmid, pmcid=pmcid, title=title)
+    cache_key = _cache_key(ids)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        cached["cached"] = True
+        return cached
     candidates: list[dict] = []
     source_errors: list[str] = []
     if ids["doi"]:
@@ -293,6 +348,14 @@ async def resolve(client: httpx.AsyncClient, *, doi: str = "",
                 "reason": "标题命中多个候选或相似度不足",
             }
         candidates = accepted
+        if len(accepted) == 1:
+            matched_doi = str(accepted[0].get("doi") or "").strip()
+            if matched_doi:
+                candidates += await _doi_candidates(
+                    client, matched_doi, source_errors)
+                if matched_doi.startswith("10.48550/arxiv."):
+                    candidates += await _arxiv_candidates(
+                        client, matched_doi.split("arxiv.", 1)[1])
 
     candidates = dedupe_candidates(candidates)
     _mark_downloadable(candidates)
@@ -306,7 +369,7 @@ async def resolve(client: httpx.AsyncClient, *, doi: str = "",
     identifier = matched[0] if matched else (
         {"type": "doi", "value": candidates[0].get("doi", "")}
         if candidates and candidates[0].get("doi") else None)
-    return {
+    result = {
         "status": status,
         "identifier": identifier,
         "matchedIdentifiers": matched,
@@ -315,6 +378,8 @@ async def resolve(client: httpx.AsyncClient, *, doi: str = "",
         "candidates": [],
         "reason": "; ".join(source_errors)[:300],
     }
+    _cache_put(cache_key, result)
+    return result
 
 
 async def fulltext_lookup(request: Request) -> JSONResponse:

@@ -64,6 +64,67 @@ def test_title_similarity_threshold():
         "Attention Is All You Need", "A Survey of Databases") < 0.5
 
 
+def test_title_match_continues_to_doi_pdf(monkeypatch):
+    async def fake_title(client, title, limit=5):
+        candidate = rf.make_candidate(
+            "https://doi.org/10.1/x", kind="landing", source="crossref")
+        candidate["title"] = "Attention Is All You Need"
+        candidate["doi"] = "10.1/x"
+        candidate["similarity"] = 0.99
+        return [candidate]
+
+    async def fake_doi(client, doi, errors):
+        return [rf.make_candidate(
+            "https://arxiv.org/pdf/2410.12345", kind="pdf", source="arxiv",
+            server_downloadable=True)]
+
+    monkeypatch.setattr(rf, "_title_candidates", fake_title)
+    monkeypatch.setattr(rf, "_doi_candidates", fake_doi)
+    result = asyncio.run(rf.resolve(object(), title="Attention Is All You Need"))
+    assert result["status"] == "oa_pdf"
+    assert result["best"]["source"] == "arxiv"
+
+
+def test_make_candidate_rejects_non_https_url():
+    candidate = rf.make_candidate(
+        "javascript:alert(1)", kind="landing", source="crossref")
+    assert candidate["url"] == ""
+
+
+def test_arxiv_pdf_path_without_suffix_is_classified_pdf(monkeypatch):
+    async def fake_resolve(client, doi):
+        return {
+            "isOa": True, "oaUrl": "https://arxiv.org/pdf/2410.12345",
+            "resolver": "openalex", "oaSource": "repository",
+            "version": "submittedVersion", "license": "", "error": False,
+        }
+
+    monkeypatch.setattr(rf.oa, "resolve_doi", fake_resolve)
+    rf._CACHE.clear()
+    result = asyncio.run(rf.resolve(object(), doi="10.1/x"))
+    assert result["best"]["kind"] == "pdf"
+    assert result["status"] == "oa_pdf"
+
+
+def test_resolve_caches_doi_lookup(monkeypatch):
+    calls = 0
+
+    async def fake_doi(client, doi, errors):
+        nonlocal calls
+        calls += 1
+        return [rf.make_candidate(
+            "https://arxiv.org/pdf/1", kind="pdf", source="arxiv",
+            server_downloadable=True)]
+
+    monkeypatch.setattr(rf, "_doi_candidates", fake_doi)
+    rf._CACHE.clear()
+    first = asyncio.run(rf.resolve(object(), doi="10.1/x"))
+    second = asyncio.run(rf.resolve(object(), doi="10.1/x"))
+    assert first["status"] == second["status"] == "oa_pdf"
+    assert calls == 1
+    rf._CACHE.clear()
+
+
 def test_title_candidates_are_ambiguous_when_two_close_matches():
     class Response:
         status_code = 200

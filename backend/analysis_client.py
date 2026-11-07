@@ -8,6 +8,15 @@ import secrets
 from pathlib import Path
 
 
+def _posix_limits() -> None:
+    if os.name != "posix":
+        return
+    import resource
+    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,
+                                            512 * 1024 * 1024))
+    resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+
+
 class AnalysisError(Exception):
     def __init__(self, code: str, message: str = ""):
         super().__init__(message or code)
@@ -43,6 +52,7 @@ async def _run_worker(op: str, payload: dict, timeout: float = 30.0) -> dict:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(Path(__file__).resolve().parent),
+            **({"preexec_fn": _posix_limits} if os.name == "posix" else {}),
         )
     except OSError as exc:
         raise AnalysisError("unavailable", "analysis worker not installed") from exc
@@ -55,6 +65,10 @@ async def _run_worker(op: str, payload: dict, timeout: float = 30.0) -> dict:
         proc.kill()
         await proc.wait()
         raise AnalysisError("unavailable", "analysis timeout") from exc
+    except BaseException:
+        proc.kill()
+        await proc.wait()
+        raise
     if proc.returncode != 0:
         detail = (err or b"").decode("utf-8", "replace")[-300:]
         raise AnalysisError("unavailable", detail or "analysis worker failed")

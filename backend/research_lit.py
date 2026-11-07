@@ -1252,7 +1252,7 @@ async def sources_info(request: Request) -> JSONResponse:
             "capabilities": {
                 "metadata": True,
                 "oa": spec.fulltext in ("pdf", "oa"),
-                "download": spec.fulltext in ("pdf", "oa"),
+                "download": spec.fulltext == "pdf" or spec.id in {"arxiv", "europepmc"},
                 "linkOut": True,
             },
         })
@@ -1502,6 +1502,8 @@ async def _download_pdf(client: httpx.AsyncClient, url: str) -> bytes:
     for _ in range(3):
         if not _pdf_url_allowed(url):
             raise ValueError("不允许的 PDF 地址")
+        if not await research_urls.resolves_to_public_host(url):
+            raise ValueError("PDF 地址解析到非公网地址")
         async with client.stream("GET", url, follow_redirects=False) as res:
             if res.status_code in (301, 302, 303, 307, 308):
                 url = urljoin(url, res.headers.get("location") or "")

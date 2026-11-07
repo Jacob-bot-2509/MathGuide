@@ -140,6 +140,7 @@ const regression = ref<RegressionResult | null>(null)
 const regressionLoading = ref(false)
 const regressionError = ref('')
 const regressionKey = ref('')
+const regressionUpdatedAt = ref<number | undefined>(undefined)
 type RegressionSpec = {
   x: string[]
   y: string
@@ -457,6 +458,7 @@ async function openTable(id: string): Promise<void> {
     dirty.value = false
     regression.value = null
     regressionKey.value = ''
+    regressionUpdatedAt.value = undefined
     regressionError.value = ''
     await nextTick()
     suppressWatch = false
@@ -731,13 +733,13 @@ async function onChat(): Promise<void> {
   if (!table.value) return
   if (dirty.value && !(await saveNow(true))) return
   const key = `mg-regression-${table.value.id}`
-  if (regression.value && !regressionStale.value) {
+  if (regression.value) {
     sessionStorage.setItem(key, JSON.stringify({
       x: [...regressionX.value],
       y: regressionY.value,
       model: regressionModel.value,
       degree: regressionModel.value === 'poly' ? regressionDegree.value : undefined,
-      tableUpdatedAt: table.value.updatedAt,
+      tableUpdatedAt: regressionUpdatedAt.value,
     }))
   } else {
     sessionStorage.removeItem(key)
@@ -746,7 +748,7 @@ async function onChat(): Promise<void> {
     path: '/research',
     query: {
       tableId: table.value.id,
-      ...(regression.value && !regressionStale.value ? { regression: '1' } : {}),
+      ...(regression.value ? { regression: '1' } : {}),
     },
   })
 }
@@ -836,6 +838,7 @@ async function runRegression(): Promise<void> {
     return
   }
   const id = table.value.id
+  const tableUpdatedAt = table.value.updatedAt
   const data = payload()
   const spec = currentRegressionSpec()
   const requestKey = JSON.stringify({ table: data, spec })
@@ -846,6 +849,7 @@ async function runRegression(): Promise<void> {
     if (!table.value || table.value.id !== id) return
     regression.value = result
     regressionSpecUsed.value = spec
+    regressionUpdatedAt.value = tableUpdatedAt
     regressionKey.value = requestKey
   } catch (err) {
     if (!table.value || table.value.id !== id) return

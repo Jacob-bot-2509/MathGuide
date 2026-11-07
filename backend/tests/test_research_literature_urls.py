@@ -1,4 +1,8 @@
 """Literature providers must not supply executable browser links."""
+import asyncio
+import socket
+
+import httpx
 import pytest
 import research_lit as rl
 import research_urls as ru
@@ -35,3 +39,26 @@ def test_trusted_pdf_host_allows_subdomains_only_for_known_hosts():
     assert ru.is_trusted_pdf_host("https://pmc.ncbi.nlm.nih.gov/articles/PMC1/pdf")
     assert not ru.is_trusted_pdf_host("https://link.springer.com/content/pdf/1.pdf")
     assert not ru.is_trusted_pdf_host("https://evil-arxiv.org/a.pdf")
+
+
+def test_dns_resolving_to_private_ip_is_rejected(monkeypatch):
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "",
+                                  ("127.0.0.1", 443))])
+    assert not asyncio.run(
+        ru.resolves_to_public_host("https://example.org/a.pdf"))
+
+
+def test_download_rejects_html_body(monkeypatch):
+    async def public(url):
+        return True
+
+    monkeypatch.setattr(rl.research_urls, "resolves_to_public_host", public)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, content=b"<html>login</html>"))
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            await rl._download_pdf(client, "https://arxiv.org/pdf/1")
+    with pytest.raises(ValueError, match="不是 PDF"):
+        asyncio.run(run())

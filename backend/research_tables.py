@@ -44,6 +44,7 @@ MAX_FORMULA_CHARS = 500
 OUTPUT_QUANT = Decimal("0.0001")
 _run_analysis = analysis_client.run_analysis
 _run_capabilities = analysis_client.run_capabilities
+_analysis_limiter = SlidingWindowLimiter(10, 60.0)
 _topic_limiter = SlidingWindowLimiter(12, 3600)
 
 _REF_RE = re.compile(
@@ -944,6 +945,8 @@ def _validate_table_payload(
         if unit:
             item["unit"] = unit
         clean_cols.append(item)
+    if len({col["key"] for col in clean_cols}) != len(clean_cols):
+        raise ValueError("列 key 重复")
     clean_rows: list[list[str]] = []
     for row in rows:
         if not isinstance(row, list):
@@ -1715,6 +1718,7 @@ def _resolved_analysis_rows(columns: list[dict], rows: list[list[str]],
     out: list[list[str]] = []
     for row_index, row in enumerate(rows):
         resolved = list(row)
+        resolved.extend([""] * (len(columns) - len(resolved)))
         for col_index, col in enumerate(columns):
             key = str(col.get("key") or "").upper()
             if key in formulas:
@@ -1726,7 +1730,10 @@ def _resolved_analysis_rows(columns: list[dict], rows: list[list[str]],
 
 async def analysis_capabilities(request: Request) -> JSONResponse:
     """学科包能力:只报告 worker 里实际可导入的包,缺失不报错。"""
-    require_auth(request)
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    if not _analysis_limiter.allow(uid):
+        raise HTTPException(429, "分析请求过于频繁,请稍后再试")
     try:
         packs = await _run_capabilities()
     except analysis_client.AnalysisError:
@@ -1740,6 +1747,8 @@ async def regression_table(request: Request) -> JSONResponse:
     rec = require_auth(request)
     uid = str(rec.get("uid") or "")
     table_id = str(request.path_params.get("table_id") or "")
+    if not _analysis_limiter.allow(uid):
+        raise HTTPException(429, "分析请求过于频繁,请稍后再试")
     if await asyncio.to_thread(_get_table, uid, table_id) is None:
         raise HTTPException(404, "not found")
     body = await read_json_object(request)

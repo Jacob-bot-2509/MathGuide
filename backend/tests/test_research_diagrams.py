@@ -74,6 +74,71 @@ def test_plan_endpoint_accepts_table_id(monkeypatch):
     assert seen["mode"] == "research"
 
 
+def test_plan_endpoint_builds_data_plot_from_regression_spec(monkeypatch):
+    import research_diagrams as rd
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "u"})
+    monkeypatch.setattr(rd, "_get_table", lambda uid, tid: {
+        "columns": [{"key": "X", "type": "number"},
+                    {"key": "Y", "type": "number"}],
+        "rows": [["1", "2"], ["2", "3"], ["3", "4"]],
+        "formulas": {},
+    }, raising=False)
+
+    async def fake_run(payload, timeout=30.0):
+        return {
+            "points": [
+                {"row": 0, "x": 1, "actual": 2, "fitted": 2.1, "residual": -0.1},
+                {"row": 1, "x": 2, "actual": 3, "fitted": 3.0, "residual": 0.0},
+            ],
+            "fitCurve": [{"x": 1, "y": 2.1}, {"x": 2, "y": 3.0}],
+            "equation": "Y = 1 + X",
+        }
+
+    monkeypatch.setattr(rd, "_run_analysis", fake_run)
+    app = Starlette(routes=[Route(
+        "/api/research/diagrams/plan", rd.plan_endpoint, methods=["POST"])])
+    res = TestClient(app).post("/api/research/diagrams/plan", json={
+        "question": "画出拟合",
+        "answer": "拟合结果",
+        "tableId": "t1",
+        "regression": {"x": ["X"], "y": "Y", "model": "ols"},
+    })
+    assert res.status_code == 200
+    assert res.json()["diagram"]["type"] == "plot2d"
+
+
+def test_plan_endpoint_rejects_model_written_table_points(monkeypatch):
+    import research_diagrams as rd
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "u"})
+    monkeypatch.setattr(rd, "_get_table", lambda uid, tid: {
+        "columns": [{"key": "X", "type": "number"}],
+        "rows": [["1"]], "formulas": {},
+    }, raising=False)
+
+    async def fake_plan(question, answer, excerpts, kind, **kwargs):
+        return {"type": "plot2d", "shapes": [
+            {"kind": "point", "x": 1, "y": 9},
+            {"kind": "axis", "from": [0, 0], "to": [1, 0], "label": "x"},
+        ]}
+
+    monkeypatch.setattr(rd, "plan_diagram", fake_plan)
+    app = Starlette(routes=[Route(
+        "/api/research/diagrams/plan", rd.plan_endpoint, methods=["POST"])])
+    res = TestClient(app).post("/api/research/diagrams/plan", json={
+        "question": "画图", "answer": "解释", "tableId": "t1",
+    })
+    assert res.status_code == 200
+    assert res.json()["diagram"] is None
+
+
 def test_data_plot_uses_fit_points_not_model_values():
     fit = {
         "points": [
