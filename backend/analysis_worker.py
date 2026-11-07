@@ -23,6 +23,9 @@ def handle_request(request: Any) -> dict:
     op = request.get("op")
     if op == "ping":
         return {"id": request_id, "ok": True, "result": {"pong": True}}
+    if op == "capabilities":
+        from analysis_capabilities import available_packs
+        return {"id": request_id, "ok": True, "result": available_packs()}
     if op == "regression":
         from analysis_regression import fit_regression
 

@@ -43,6 +43,7 @@ MAX_FORMULA_CHARS = 500
 
 OUTPUT_QUANT = Decimal("0.0001")
 _run_analysis = analysis_client.run_analysis
+_run_capabilities = analysis_client.run_capabilities
 _topic_limiter = SlidingWindowLimiter(12, 3600)
 
 _REF_RE = re.compile(
@@ -1721,6 +1722,17 @@ def _resolved_analysis_rows(columns: list[dict], rows: list[list[str]],
                 resolved[col_index] = values[row_index] if row_index < len(values) else ""
         out.append(resolved)
     return out
+
+
+async def analysis_capabilities(request: Request) -> JSONResponse:
+    """学科包能力:只报告 worker 里实际可导入的包,缺失不报错。"""
+    require_auth(request)
+    try:
+        packs = await _run_capabilities()
+    except analysis_client.AnalysisError:
+        packs = {"rdkit": False, "biopython": False,
+                 "astropy": False, "networkx": False}
+    return JSONResponse({"packs": packs}, headers={"Cache-Control": "no-store"})
 
 
 async def regression_table(request: Request) -> JSONResponse:

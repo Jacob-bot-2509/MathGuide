@@ -26,6 +26,25 @@ Windows 下也可用仓库根目录 `dev.bat` 一键启动前后端(脚本按自
 ../.venv/Scripts/python.exe -m pytest
 ```
 
+## 回归计算 worker(可选)
+
+回归计算不装在主服务 venv。需要时单独建环境:
+
+```bash
+python -m venv .venv-analysis
+.venv-analysis/Scripts/python.exe -m pip install -r requirements-analysis.txt
+# POSIX: .venv-analysis/bin/pip install -r requirements-analysis.txt
+```
+
+`MG_ANALYSIS_PYTHON` 可指向别的 Python 解释器；未设置时自动找 `backend/.venv-analysis`。
+学科包按需另装(不是默认依赖):
+
+```bash
+.venv-analysis/Scripts/python.exe -m pip install rdkit biopython astropy networkx
+```
+
+`analysis_capabilities.available_packs()` 只探测已安装包,不会自动安装;缺失的包在接口里返回 `false`。
+
 ## 目录
 
 ```

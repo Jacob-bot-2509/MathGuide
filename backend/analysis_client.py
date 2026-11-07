@@ -29,11 +29,11 @@ def analysis_python() -> str:
     return "python"
 
 
-async def run_analysis(payload: dict, timeout: float = 30.0) -> dict:
+async def _run_worker(op: str, payload: dict, timeout: float = 30.0) -> dict:
     worker = Path(__file__).resolve().with_name("analysis_worker.py")
     request = {
         "id": secrets.token_hex(8),
-        "op": "regression",
+        "op": op,
         "payload": payload,
     }
     try:
@@ -75,3 +75,11 @@ async def run_analysis(payload: dict, timeout: float = 30.0) -> dict:
     if not isinstance(result, dict):
         raise AnalysisError("unavailable", "analysis result is not an object")
     return result
+
+
+async def run_analysis(payload: dict, timeout: float = 30.0) -> dict:
+    return await _run_worker("regression", payload, timeout)
+
+
+async def run_capabilities() -> dict:
+    return await _run_worker("capabilities", {}, timeout=10.0)
