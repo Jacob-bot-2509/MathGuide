@@ -113,7 +113,7 @@ export interface LiteratureQuery {
   author?: string
   yearFrom?: number | null
   yearTo?: number | null
-  field?: 'general' | 'math' | 'physics' | 'chemistry' | 'biology'
+  field?: 'general' | 'math' | 'physics' | 'chemistry' | 'biology' | 'computer'
   includePreprints?: boolean
   peerReviewed?: boolean
   oaOnly?: boolean

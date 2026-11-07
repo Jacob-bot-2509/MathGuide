@@ -70,7 +70,7 @@ const searchMode = ref<SearchMode>(loadSearchMode())
 const authorFilter = ref('')
 const yearFrom = ref('')
 const yearTo = ref('')
-const litField = ref<'general' | 'math' | 'physics' | 'chemistry' | 'biology'>('general')
+const litField = ref<'general' | 'math' | 'physics' | 'chemistry' | 'biology' | 'computer'>('general')
 const peerOnly = ref(true)
 const includePreprints = ref(false)
 const oaOnly = ref(false)
@@ -842,6 +842,7 @@ onMounted(async () => {
             <option value="physics">{{ t('search.fieldPhysics') }}</option>
             <option value="chemistry">{{ t('search.fieldChemistry') }}</option>
             <option value="biology">{{ t('search.fieldBiology') }}</option>
+            <option value="computer">{{ t('search.fieldComputer') }}</option>
           </select>
           <label class="opt">
             <input v-model="peerOnly" type="checkbox" />

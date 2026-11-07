@@ -1,6 +1,8 @@
 """文献发现:聚合、去重与接口契约(不访问真实网络)。"""
 from __future__ import annotations
 
+import asyncio
+
 import research_lit as rl
 
 
@@ -24,6 +26,36 @@ def test_openalex_abstract_reconstruction():
 def test_doi_normalization():
     assert rl._doi("https://doi.org/10.1000/ABC") == "10.1000/abc"
     assert rl._doi("doi: 10.1000/xyz") == "10.1000/xyz"
+
+
+def test_dblp_parses_hit_list():
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"result": {"hits": {"hit": [
+                {"info": {
+                    "title": "Graph Neural Networks.",
+                    "authors": {"author": [{"text": "Ada"}, {"text": "Bo"}]},
+                    "venue": "NeurIPS",
+                    "year": "2024",
+                    "doi": "10.1234/gnn",
+                    "ee": "https://doi.org/10.1234/gnn",
+                    "url": "https://dblp.org/rec/conf/neurips/x",
+                }},
+            ]}}}
+
+    class Client:
+        async def get(self, url, params=None, timeout=None):
+            assert "dblp.org/search/publ/api" in url
+            return Response()
+
+    items = asyncio.run(rl._dblp(Client(), "graph neural networks", 5, None))
+    assert len(items) == 1
+    assert items[0]["title"] == "Graph Neural Networks."
+    assert items[0]["doi"] == "10.1234/gnn"
+    assert items[0]["sources"] == ["dblp"]
 
 
 def test_search_endpoint_merges_providers(monkeypatch):

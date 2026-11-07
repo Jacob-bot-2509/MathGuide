@@ -250,6 +250,53 @@ async def _crossref_doi(client: httpx.AsyncClient, doi: str) -> list[dict]:
     return [parsed] if parsed else []
 
 
+async def _dblp(client: httpx.AsyncClient, query: str, limit: int,
+                filters: dict | None = None) -> list[dict]:
+    """DBLP 只提供计算机文献元数据;不抓全文,不把 DBLP 当 OA 来源。"""
+    res = await client.get(
+        "https://dblp.org/search/publ/api",
+        params={"q": query, "format": "json", "h": max(1, min(limit, 30))},
+        timeout=TIMEOUT,
+    )
+    if res.status_code != 200:
+        return []
+    data = res.json() if callable(getattr(res, "json", None)) else {}
+    hits = (((data or {}).get("result") or {}).get("hits") or {}).get("hit") or []
+    if isinstance(hits, dict):
+        hits = [hits]
+    out: list[dict] = []
+    for hit in hits[:limit]:
+        info = (hit or {}).get("info") if isinstance(hit, dict) else None
+        if not isinstance(info, dict):
+            continue
+        title = _clean(info.get("title"), 300)
+        if not title:
+            continue
+        raw_authors = (info.get("authors") or {}).get("author") or []
+        if isinstance(raw_authors, dict):
+            raw_authors = [raw_authors]
+        authors = ", ".join(
+            _clean(a.get("text") if isinstance(a, dict) else str(a), 120)
+            for a in raw_authors if a
+        )[:300]
+        year = 0
+        try:
+            year = int(str(info.get("year") or "0")[:4])
+        except ValueError:
+            year = 0
+        doi = _doi(info.get("doi"))
+        url = info.get("ee") or info.get("url") or ""
+        out.append(_result(
+            title=title, authors=authors, year=year,
+            venue=_clean(info.get("venue"), 160),
+            doi=doi, url=url, pdfUrl="", abstract="",
+            sources=["dblp"], sourceTier="discovery",
+            peerReviewed=False, articleType="article",
+            landingUrl=url,
+        ))
+    return out
+
+
 def _arxiv_fields(entry) -> list[str]:
     out: list[str] = []
     for node in entry.findall(f"{_ATOM}category"):
@@ -1041,8 +1088,8 @@ def _enrich(results: list[dict], field: str) -> list[dict]:
 
 
 def _sort_results(results: list[dict], field: str) -> list[dict]:
-    """学科检索优先权威层级;general 仍以被引数/年份为主。"""
-    if field == "general":
+    """学科检索优先权威层级;general/computer 仍以被引数/年份为主。"""
+    if field in ("general", "computer"):
         return sorted(results, key=lambda x: (-x["citations"], -int(x["year"] or 0)))
     return sorted(results, key=lambda x: (
         -rv.rank(str(x.get("venueTier") or "")),
@@ -1296,6 +1343,7 @@ async def search(request: Request) -> JSONResponse:
         "openalex": _openalex,
         "semanticscholar": _semantic_scholar,
         "doaj": _doaj,
+        "dblp": _dblp,
     }
     cache_key = _search_key(
         query, field, limit, filters if has_filters else None,

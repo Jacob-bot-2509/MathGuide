@@ -38,6 +38,14 @@ def test_source_specs_route_by_field():
     assert "biorxiv" not in biology  # 预印本关闭
 
 
+def test_computer_sources_route_by_field():
+    ids = {s.id for s in rs.specs_for("computer", True)}
+    assert {"dblp", "crossref", "arxiv", "openalex", "semanticscholar"} <= ids
+    assert "pubmed" not in ids
+    assert "zbmath" not in ids
+    assert rs.SPECS["dblp"].domains == ("computer",)
+
+
 def test_venue_normalization_and_tier():
     assert rv.normalize_issn("0028-0836") == "00280836"
     assert rv.normalize_issn("bad") == ""

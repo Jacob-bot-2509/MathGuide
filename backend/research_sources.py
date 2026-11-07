@@ -23,11 +23,11 @@ class SourceSpec:
 SPECS: dict[str, SourceSpec] = {
     "crossref": SourceSpec(
         "crossref", "Crossref",
-        ("general", "math", "physics", "chemistry", "biology"),
+        ("general", "math", "physics", "chemistry", "biology", "computer"),
         "authority", True),
     "arxiv": SourceSpec(
         "arxiv", "arXiv",
-        ("general", "math", "physics", "chemistry", "biology"),
+        ("general", "math", "physics", "chemistry", "biology", "computer"),
         "preprint", False, fulltext="pdf"),
     "europepmc": SourceSpec(
         "europepmc", "Europe PMC",
@@ -52,12 +52,12 @@ SPECS: dict[str, SourceSpec] = {
         "authority", True),
     "openalex": SourceSpec(
         "openalex", "OpenAlex",
-        ("general", "math", "physics", "chemistry", "biology"),
+        ("general", "math", "physics", "chemistry", "biology", "computer"),
         "discovery", False, requires_key="MG_OPENALEX_API_KEY",
         key_required=True, fulltext="oa"),
     "semanticscholar": SourceSpec(
         "semanticscholar", "Semantic Scholar",
-        ("general", "math", "physics", "chemistry", "biology"),
+        ("general", "math", "physics", "chemistry", "biology", "computer"),
         "discovery", False, requires_key="MG_S2_API_KEY", fulltext="oa"),
     "biorxiv": SourceSpec(
         "biorxiv", "bioRxiv / medRxiv",
@@ -69,11 +69,15 @@ SPECS: dict[str, SourceSpec] = {
         "preprint", False, fulltext="landing"),
     "doaj": SourceSpec(
         "doaj", "DOAJ",
-        ("general", "math", "physics", "chemistry", "biology"),
+        ("general", "math", "physics", "chemistry", "biology", "computer"),
         "authority", True, fulltext="landing"),
+    "dblp": SourceSpec(
+        "dblp", "DBLP",
+        ("computer",),
+        "discovery", False, fulltext="landing"),
 }
 
-ALL_FIELDS = ("general", "math", "physics", "chemistry", "biology")
+ALL_FIELDS = ("general", "math", "physics", "chemistry", "biology", "computer")
 
 
 def specs_for(field: str, include_preprints: bool) -> list[SourceSpec]:
