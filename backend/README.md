@@ -86,6 +86,17 @@ backend/
   tools/       # 质检与运维:评测 / 自检 / key 校验 / 知识同步 / 用量报表
 ```
 
+## 存储与迁移(SQLite)
+
+- 库文件:`backend/data/mathguide.db`(WAL 模式,`busy_timeout=10s`)。
+- 表:`users`(手机号唯一索引)、`tokens`(SHA-256 键,uid 索引)、`usage`(uid/ts 索引)、`diagnoses`(uid+知识点索引)。
+- 旧数据:`users.json`、`tokens.json`、`usage.jsonl`、`usage.json`、`diagnoses.jsonl`
+  在首次建库时导入一次(`meta` 表记录迁移标记);旧文件保留作备份,不删除。
+- 容错:旧文件缺失或损坏时跳过并打印警告,不阻断启动;坏行/非法记录不进入库。
+- 并发:账号删除、令牌吊销、游客清理在单事务内完成;WAL 允许读写并行。
+- 备份/重置:停服务后复制或删除 `mathguide.db`(连同 `-wal`/`-shm`)即可。
+- 只读看板(可选):`pip install -r requirements-dashboard.txt && streamlit run tools/dashboard.py`。
+
 ## 知识库文档格式
 
 往 `knowledge/` 增加 `.md` / `.txt` 文件即自动进入知识库,**无需重启后端**
@@ -203,6 +214,9 @@ MG_ALIYUN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 MG_ALIYUN_API_KEY=sk-xxx            # 阿里云百炼(Qwen 系列)
 MG_ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 MG_ZHIPU_API_KEY=xxx                # 智谱开放平台(GLM 系列)
+# 可选:DeepSeek(OpenAI 兼容;base 默认 https://api.deepseek.com/v1)
+# MG_DEEPSEEK_API_KEY=sk-xxx
+# MG_ROLE_DEEP=deepseek:deepseek-chat
 MG_ROLE_MAIN=aliyun:qwen3.8-flash   # 主力:日常问答 / 改写 / 复核 / 摘要
 MG_ROLE_BACKUP=zhipu:glm-5.2        # 备胎:主力失败自动切换(异平台容灾)
 MG_ROLE_DEEP=aliyun:qwen3.8-max     # 深答:证明 / 竞赛 / 研究综合

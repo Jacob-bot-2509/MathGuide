@@ -222,10 +222,19 @@ def weak_report(uid: str, graph: KnowledgeGraph | None = None) -> dict:
     }
 
 
+def _scrub_legacy(uid: str) -> None:
+    """同步清理旧 diagnoses.jsonl 备份;写盘失败时抛 OSError(库尚未删除)。"""
+    entries = db.read_jsonl_lenient(PATH)
+    kept = [entry for entry in entries if entry.get("uid") != uid]
+    if len(kept) != len(entries):
+        db.write_jsonl(PATH, kept)
+
+
 def delete_user(uid: str) -> int:
-    """删除该账号全部诊断记录,返回删除条数。"""
+    """删除该账号全部诊断记录(含旧备份),返回删除条数。"""
     conn = _conn()
     try:
+        _scrub_legacy(uid)
         with conn:
             cur = conn.execute("DELETE FROM diagnoses WHERE uid = ?", (uid,))
             return cur.rowcount

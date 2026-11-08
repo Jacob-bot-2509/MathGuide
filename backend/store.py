@@ -277,14 +277,36 @@ def prune_inactive(days: float, exempt_uids: set[str] | None = None,
     return removed
 
 
+def _scrub_legacy_user(uid: str) -> None:
+    """注销时同步清理旧 JSON 备份,避免备份里继续留存该账号。
+
+    旧文件损坏时跳过(容错);写盘失败向上抛出,此时数据库尚未删除,
+    调用方可以重试,不会出现"账号已删但备份还留着"的状态。
+    """
+    users = db.read_json(USERS_PATH)
+    if isinstance(users, dict) and uid in users:
+        users.pop(uid, None)
+        db.write_json(USERS_PATH, users)
+    tokens = db.read_json(TOKENS_PATH)
+    if isinstance(tokens, dict):
+        kept = {key: value for key, value in tokens.items()
+                if _token_uid(value) != uid}
+        if len(kept) != len(tokens):
+            db.write_json(TOKENS_PATH, kept)
+
+
 def delete_user(uid: str) -> dict | None:
-    """删除账号及其全部 token(单事务);返回被删记录,不存在返回 None。"""
+    """删除账号及其全部 token(单事务);返回被删记录,不存在返回 None。
+
+    先清理旧 JSON 备份再删库:备份写失败时账号保持可重试。
+    """
     conn = _conn()
     try:
         row = conn.execute("SELECT doc FROM users WHERE uid = ?", (uid,)).fetchone()
         if row is None:
             return None
         rec = _rec_from_row(row)
+        _scrub_legacy_user(uid)
         with conn:
             conn.execute("DELETE FROM tokens WHERE uid = ?", (uid,))
             conn.execute("DELETE FROM users WHERE uid = ?", (uid,))

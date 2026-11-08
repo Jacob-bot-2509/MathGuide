@@ -291,7 +291,16 @@ def delete_user(uid: str, phone: str = "") -> int:
                                  [(item,) for item in victim_ids])
     finally:
         conn.close()
-    return len(victim_ids) + _delete_from_legacy_file(uid, phone)
+    removed = len(victim_ids) + _delete_from_legacy_file(uid, phone)
+    entries = db.read_jsonl_lenient(PATH)
+    kept = [
+        entry for entry in entries
+        if not (entry.get("uid") == uid or (phone and entry.get("phone") == phone))
+    ]
+    if len(kept) != len(entries):
+        db.write_jsonl(PATH, kept)
+        removed += len(entries) - len(kept)
+    return removed
 
 
 def summary() -> dict:

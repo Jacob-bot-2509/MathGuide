@@ -148,3 +148,40 @@ def read_json(path: Path) -> object | None:
     except (FileNotFoundError, json.JSONDecodeError):
         pass
     return None
+
+
+def read_jsonl_lenient(path: Path) -> list[dict]:
+    """读取旧 JSONL;坏行跳过,文件不可读时让 OSError 抛出(便于重试)。"""
+    try:
+        with path.open(encoding="utf-8") as handle:
+            entries: list[dict] = []
+            for raw in handle:
+                text = raw.strip()
+                if not text:
+                    continue
+                try:
+                    item = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    entries.append(item)
+            return entries
+    except FileNotFoundError:
+        return []
+
+
+def write_json(path: Path, data: object) -> None:
+    """原子写 JSON;先写临时文件再替换,失败时保留原文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def write_jsonl(path: Path, entries: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        for entry in entries:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    tmp.replace(path)

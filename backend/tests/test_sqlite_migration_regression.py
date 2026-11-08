@@ -47,6 +47,7 @@ def test_failed_jsonl_read_is_retried(tmp_path, monkeypatch, module, filename, r
         patch.setattr(Path, "open", fail_open)
         with pytest.raises(PermissionError):
             module.init()
+    # 读取失败不能标记迁移完成,下次启动需要重试
     assert db.get_meta(module.MIGRATION_KEY) is None
     module.init()
     assert len(module.for_user("u1")) == 1
@@ -105,9 +106,9 @@ def test_delete_cleans_all_legacy_files_and_keeps_other_user(legacy_data):
 
     assert set(json.loads(store.USERS_PATH.read_text(encoding="utf-8"))) == {"u2"}
     assert json.loads(store.TOKENS_PATH.read_text(encoding="utf-8")) == {"tok2": "u2"}
-    assert [row["uid"] for row in db.read_jsonl(usage.PATH)] == ["u2"]
+    assert [row["uid"] for row in db.read_jsonl_lenient(usage.PATH)] == ["u2"]
     assert [row["uid"] for row in json.loads(usage.LEGACY_PATH.read_text(encoding="utf-8"))] == ["u2"]
-    assert [row["uid"] for row in db.read_jsonl(diagnosis.PATH)] == ["u2"]
+    assert [row["uid"] for row in db.read_jsonl_lenient(diagnosis.PATH)] == ["u2"]
     assert store.find_user_by_phone("456")[0] == "u2"
     assert len(usage.for_user("u2")) == len(diagnosis.for_user("u2")) == 1
 
@@ -116,7 +117,7 @@ def test_backup_write_failure_leaves_account_retryable(legacy_data, monkeypatch)
     def fail_write(*args, **kwargs):
         raise OSError("disk full")
     with monkeypatch.context() as patch:
-        patch.setattr(db, "write_legacy", fail_write)
+        patch.setattr(db, "write_json", fail_write)
         with pytest.raises(OSError):
             store.delete_user("u1")
     assert store.find_user_by_phone("123")[0] == "u1"
@@ -126,13 +127,15 @@ def test_backup_write_failure_leaves_account_retryable(legacy_data, monkeypatch)
 
 
 @pytest.mark.parametrize("module,filename", [(usage, "usage.jsonl"), (diagnosis, "diagnoses.jsonl")])
-def test_corrupt_jsonl_does_not_mark_migration_complete(tmp_path, monkeypatch, module, filename):
+def test_corrupt_jsonl_line_is_skipped_and_migration_completes(tmp_path, monkeypatch, module, filename):
+    """容错迁移:坏行跳过,好记录入库,启动不因单个坏行失败。"""
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(module, "PATH", tmp_path / filename)
     monkeypatch.setattr(module, "_ready_key", None)
-    original = '{"uid":"u1"}\n{broken\n'
+    original = json.dumps({"uid": "u1", "pointId": "p1", "score": 3, "ts": 1.0}) + "\n{broken\n"
     module.PATH.write_text(original, encoding="utf-8")
-    with pytest.raises(ValueError):
-        module.init()
-    assert db.get_meta(module.MIGRATION_KEY) is None
+    module.init()
+    assert db.get_meta(module.MIGRATION_KEY) == "1"
+    # 旧文件保留原样(备份),好记录已入库
     assert module.PATH.read_text(encoding="utf-8") == original
+    assert len(module.for_user("u1")) == 1
