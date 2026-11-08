@@ -1,0 +1,1392 @@
+{
+  "audit_date": "2026-11-07 UTC+8",
+  "purpose": "Input fingerprints only; raw evidence is NOT proposed for repository submission. Live endpoints can change. Cached audit-result files are not source documents.",
+  "environment": {
+    "python": "3.13.5",
+    "requests": "2.34.2",
+    "beautifulsoup4": "4.15.0",
+    "pdftotext": "pdftotext version 25.03.0\nCopyright 2005-2025 The Poppler Developers - http://poppler.freedesktop.org\nCopyright 1996-2011, 2022 Glyph & Cog, LLC"
+  },
+  "files": [
+    {
+      "path": "active-colophon.html",
+      "bytes": 45657,
+      "sha256": "160714664ab00651a83943b92c4bf6b05816721c673b3480af4d14ab8b744424"
+    },
+    {
+      "path": "active-front.html",
+      "bytes": 150532,
+      "sha256": "9eeecebf564197b3b6da2a1e07baaa94e9e79666b4fadab7cabeac25761c1b8c"
+    },
+    {
+      "path": "active-license.html",
+      "bytes": 150977,
+      "sha256": "dfd97b7339094db632ff7c747ce9617d7c52e6d80dd589c52fa5fc47b4eefd6e"
+    },
+    {
+      "path": "active-multi-license.html",
+      "bytes": 107035,
+      "sha256": "4996c2ffb28d38a5de8ad210ebe969fab31f5948e175b69ae600f975b74ed6f0"
+    },
+    {
+      "path": "active-multi.html",
+      "bytes": 106595,
+      "sha256": "d2370c9abdce6ab8649c1f868ce392e9c0a2eac5c45c9c3b61ac8ebb7febbfbc"
+    },
+    {
+      "path": "active-single.html",
+      "bytes": 1070,
+      "sha256": "548fa90aab5b412e6e9fa14ceb53b98bd1de5031bcd5be271ba240419626f116"
+    },
+    {
+      "path": "active.html",
+      "bytes": 70725,
+      "sha256": "60c4f885e27a22da211ffb76f3e6bd1245ee3bc076e0e9dd3ae743cddb8dec5c"
+    },
+    {
+      "path": "analysis-shelf.html",
+      "bytes": 140326,
+      "sha256": "b286a907a59a0010308b260b58dd2c03f5d6ec53a22e7580a044f9e0df3f9196"
+    },
+    {
+      "path": "apex-answers.html",
+      "bytes": 1858929,
+      "sha256": "f51af4325cfd85720de259f36bced526bcb8a36659abe0b0e8dbeef0645d2fd3"
+    },
+    {
+      "path": "apex-colophon.txt",
+      "bytes": 120674,
+      "sha256": "799e1bb250de7fbf2132407d557c1507253eedce0a70709e8a10929c0dbee087"
+    },
+    {
+      "path": "apex-taylor.txt",
+      "bytes": 263153,
+      "sha256": "09a152cd24cd5d3c2c07ae66dfca2b4688e8e0002f74573e0c969fc8f45605df"
+    },
+    {
+      "path": "apex.html",
+      "bytes": 122252,
+      "sha256": "a83f8e96dd09baadf2d8ecbdd332d7183f3fff2cf967d5764c873f469e11e78d"
+    },
+    {
+      "path": "book-cache/0e245699a7842d47eedc9dacce96c973ebcf10bb7f1a0a42a8f680a0c7256951.html",
+      "bytes": 149583,
+      "sha256": "b05d25b7d489ced9b737586ea565973ecdc59d611978cfa02455aab111a27c9b"
+    },
+    {
+      "path": "book-cache/23aea72f612902e851e3874d70d4dd98c4bc8c2492d4d5bbf33b18ddadca5557.html",
+      "bytes": 151479,
+      "sha256": "55ea1b3f1d78d36b96158f01091d4b89c2cb5fe96fade7c59323c6c65a0c7632"
+    },
+    {
+      "path": "book-cache/2f6dd89dfc1033f83255ed3b7d782f09d8470a08b983673124f9c72475797036.html",
+      "bytes": 250080,
+      "sha256": "1a43b4f1a07e0f88220e3f22a4d6c0bd457b447289a888026091b889f59c1219"
+    },
+    {
+      "path": "book-cache/3be536219e18b165b9ca361f6e0e6397b85cebf4ce5f362ddbb6803f4957d0a9.html",
+      "bytes": 162042,
+      "sha256": "b79377b3099c896cf5440ef65acf5b99626a845a92989bcb890b2378a07f949b"
+    },
+    {
+      "path": "book-cache/4a62b1254d79bbd48520142cb2fc68cce48b94e3cb3e49f23256ea8353d48589.html",
+      "bytes": 148138,
+      "sha256": "a568f34bb5ab42711646f1521cfafcb8c2428959e188638eec8386b57beeeafa"
+    },
+    {
+      "path": "book-cache/512f790aae5b1a126b34bdbfdb48f6f3566d4302cfab8693a6082aa9fc2b4900.html",
+      "bytes": 142779,
+      "sha256": "a06a56e06ec390dc84e5c6c30501783ac3d48b8768adf4c3e6019966d3fd8e47"
+    },
+    {
+      "path": "book-cache/82296029582fcc250fe63e8c82af0c60c86e26ce98698c84cdd9d29034e44793.html",
+      "bytes": 142647,
+      "sha256": "81a800e46db77eae9bd28ac7bb16dd057da5ab47004f5de58307ea85bb6acc60"
+    },
+    {
+      "path": "book-cache/87e3174663d7963b9b5ccd024bb49389284d1786b0eb011bc2ac7c67e8b6c037.html",
+      "bytes": 244325,
+      "sha256": "6713cc4ea2bc3d67daddfa00425ba2a6f846c4273a21b41eeda2979e3d47b4ad"
+    },
+    {
+      "path": "book-cache/897c03bebc9eef6028065b04c35b4d9e87299ced7843f8bf44ed575928601d84.html",
+      "bytes": 250109,
+      "sha256": "0e976e91e618901d430eeaaa74ad8ef9fb4f616fb0e4cc6e5491cc63949e28a4"
+    },
+    {
+      "path": "book-cache/9e871e552a11d7acc5f3c502b070b0ad3cd516d9495016c541704fd07c86ffc8.html",
+      "bytes": 122988,
+      "sha256": "97fb993d52178862f2639bb7faae34845a3afb446662967a22488deaeca13430"
+    },
+    {
+      "path": "book-cache/a09139975b7254c572053de7149059051b9e673616af98e0a30ff5428c211cdd.html",
+      "bytes": 170422,
+      "sha256": "3b024433a6e5c64a763d3cf5ea536f9f9f7580c8cc8fa69ba429158ef1152a1b"
+    },
+    {
+      "path": "book-cache/a9f90025126b8f3425b4012c6114418160487a2f5e4b4b14f054d9f43ac7d380.html",
+      "bytes": 250811,
+      "sha256": "d7237541dcdd5a92c6417150d76e5dcb38f161203a322ca010ec06c273fb05b9"
+    },
+    {
+      "path": "book-cache/ad2ef2fdfc05c8d1e76ccc878485ace552582a7a97cfcf36cc16d7ccd8d4687d.html",
+      "bytes": 122465,
+      "sha256": "98df9db92eae057c710d1768e81e40b2687e48ebd886a35c7850804373ea0c93"
+    },
+    {
+      "path": "book-cache/apex-selected-answers.html",
+      "bytes": 1858929,
+      "sha256": "f51af4325cfd85720de259f36bced526bcb8a36659abe0b0e8dbeef0645d2fd3"
+    },
+    {
+      "path": "book-cache/b0596c9d30769728ee748687891e6566963e79ae18c837b16b003d2ce34d159a.html",
+      "bytes": 298287,
+      "sha256": "ecfc5db2c2ca34e7a193f8f61886372b76189b5d158899b17ed241298569d3d4"
+    },
+    {
+      "path": "book-cache/bb9519a20fe0895d8b2de9653a43663da2cb2cd7c175405225368457895deef2.html",
+      "bytes": 371239,
+      "sha256": "12effc036d3daa4dfa11c16fb065caf81465452474b50609c88bf197f57e76d4"
+    },
+    {
+      "path": "book-cache/d2e25e99f310c210eeb9af517c50fd483f83fca09b3bbebdd287fedd644e0755.html",
+      "bytes": 263153,
+      "sha256": "09a152cd24cd5d3c2c07ae66dfca2b4688e8e0002f74573e0c969fc8f45605df"
+    },
+    {
+      "path": "book-cache/d44703a1438cdebd39ee5bf01d50c3073b84b710cc0846e4ffc462c56b798f62.html",
+      "bytes": 148192,
+      "sha256": "b0d3a2469fb330c3aa7c41ea91ac20c7f762847bf9e686b38e521d538e69aba8"
+    },
+    {
+      "path": "book-cache/dbbc978f9509ff3d1be50ff828335fcf45cc1d31de5700740e4b348c45ae45f8.html",
+      "bytes": 290370,
+      "sha256": "6cc6567c0dda57c0685661e942ee76a9701f535f6c3a89deb01c7735ac76c501"
+    },
+    {
+      "path": "book-cache/eb9627a7766682d9ecaef3d1ec6e6b80cc1313b875b8849c9522a05c31045819.html",
+      "bytes": 204224,
+      "sha256": "c7fd7d51f068a418d73f44b77179ab4e08234f3144b25e08819c2862c8a54b08"
+    },
+    {
+      "path": "ca.txt",
+      "bytes": 12221,
+      "sha256": "ec43a34ed8341e675ca45ebb7f0d7b32aea29f5742350a9b329560853f49d333"
+    },
+    {
+      "path": "chasnov-pdf.txt",
+      "bytes": 404731,
+      "sha256": "e52f8bba1ee7f00c6f06518c190050e79546fced0b67767a9e199e8e19b8a871"
+    },
+    {
+      "path": "chasnov.pdf",
+      "bytes": 1833510,
+      "sha256": "2559210e6dadda414473d78165d95fdd243234300ff9f84c02bd43ca5cb225c3"
+    },
+    {
+      "path": "cline-chapter.html",
+      "bytes": 144059,
+      "sha256": "29f24a5c026d0202072758df51febd10123273b65583b24c6770999f056939e6"
+    },
+    {
+      "path": "cline-exercises.html",
+      "bytes": 135912,
+      "sha256": "b893db32a49e796734df6f9edc79a8fb12d84bd3169a2cdffb71b975b1f202e7"
+    },
+    {
+      "path": "cline.html",
+      "bytes": 180032,
+      "sha256": "e00f772286d2b3d037afee4d2a894d87179080b5a516133bedf1f4417150e41c"
+    },
+    {
+      "path": "complex-diff.html",
+      "bytes": 31764,
+      "sha256": "186d34b552d755e56e3fbcf9394220d3f1982621b1e5bcf69770853fb30630f1"
+    },
+    {
+      "path": "complex-license.html",
+      "bytes": 8054,
+      "sha256": "dea8f4b733105745151ec984c75fe80bdc7904b7510febe0553ff0785a1c58c0"
+    },
+    {
+      "path": "complex-page.html",
+      "bytes": 9379,
+      "sha256": "b620507312c5e97566a3c6cfaf99144fefc18a0da7d941401dfa0f5f58fb0368"
+    },
+    {
+      "path": "complex-toc.html",
+      "bytes": 11228,
+      "sha256": "e6d65dad1f677a9ce218e3564345dad36d49fd5dc9cf4a87540e60b1c9afe50d"
+    },
+    {
+      "path": "complex-visual.html",
+      "bytes": 18827,
+      "sha256": "fe67bc52cad9f0ddd7f965c0f23c0cb6a370bd1709e39be51a8fddbe81b646b9"
+    },
+    {
+      "path": "dataset-results.json",
+      "bytes": 22946,
+      "sha256": "7750ee097903dc11414adb020b018a57070b2b1561a6046d4950a35a46219cd2"
+    },
+    {
+      "path": "diffy-convolution.html",
+      "bytes": 122465,
+      "sha256": "98df9db92eae057c710d1768e81e40b2687e48ebd886a35c7850804373ea0c93"
+    },
+    {
+      "path": "diffy-index.txt",
+      "bytes": 80812,
+      "sha256": "70ee4df9a0bd3f75e43782c64f38d8ada43126a757724d32b76be6b3ec0dcdb3"
+    },
+    {
+      "path": "diffyqs.html",
+      "bytes": 31966,
+      "sha256": "368f4632695179fdae375acf82e844fed161a142f1b6cea5ef23468d7aefac5a"
+    },
+    {
+      "path": "fcla-libre.html",
+      "bytes": 99121,
+      "sha256": "ef02fe410b02ae910379d2289c7efa1c38d04c97ffb3da76d4d049de5e46105a"
+    },
+    {
+      "path": "hefferon-alt.txt",
+      "bytes": 226,
+      "sha256": "80a265bed528211aa708dcd58f7a95db36eeb7f873c6fe4ddab0b3a1dc0973a4"
+    },
+    {
+      "path": "hefferon-book.html",
+      "bytes": 226,
+      "sha256": "80a265bed528211aa708dcd58f7a95db36eeb7f873c6fe4ddab0b3a1dc0973a4"
+    },
+    {
+      "path": "hefferon-copyright.html",
+      "bytes": 226,
+      "sha256": "80a265bed528211aa708dcd58f7a95db36eeb7f873c6fe4ddab0b3a1dc0973a4"
+    },
+    {
+      "path": "hefferon-official.html",
+      "bytes": 226,
+      "sha256": "80a265bed528211aa708dcd58f7a95db36eeb7f873c6fe4ddab0b3a1dc0973a4"
+    },
+    {
+      "path": "hefferon-solutions.html",
+      "bytes": 226,
+      "sha256": "80a265bed528211aa708dcd58f7a95db36eeb7f873c6fe4ddab0b3a1dc0973a4"
+    },
+    {
+      "path": "hefferon.html",
+      "bytes": 226,
+      "sha256": "80a265bed528211aa708dcd58f7a95db36eeb7f873c6fe4ddab0b3a1dc0973a4"
+    },
+    {
+      "path": "herman-book.html",
+      "bytes": 9386,
+      "sha256": "c688dfea8957da572527151cc77ca490a9467c54c054a79ffe79f68ebc06def8"
+    },
+    {
+      "path": "herman-complex.pdf",
+      "bytes": 1549806,
+      "sha256": "5f815490ac9aebd05eaa4ff131f1ee47b4143c9eb979234b4ab9b52dbb77f2d6"
+    },
+    {
+      "path": "herman-complex.txt",
+      "bytes": 327640,
+      "sha256": "b9604b0e77cd0860b37cff72cff4a3f1d06c3733f8ec10d2f27bb32817d5a25f"
+    },
+    {
+      "path": "herman-greens.pdf",
+      "bytes": 407280,
+      "sha256": "8c223ca58a1b7585e8298ef94f21599732818f2ec4471385f4664923b03eb45e"
+    },
+    {
+      "path": "herman-greens.txt",
+      "bytes": 269799,
+      "sha256": "fa95e31a562b6b56d653bb7a6dba6e98e5d57cfe4f27925ea143f979a20e563d"
+    },
+    {
+      "path": "herman-index.html",
+      "bytes": 3536,
+      "sha256": "a04adcec3ad3b69f27299e4a756dfb3a31a7b8201d4d1f644bef1a3aad89b145"
+    },
+    {
+      "path": "herman-pde2.html",
+      "bytes": 12532,
+      "sha256": "c752921f1673e14c9a5e5f5da6ae813c2f80f8544ca506061f6a508b2209543e"
+    },
+    {
+      "path": "herman-pdf.pdf",
+      "bytes": 5897887,
+      "sha256": "8202ce4aef7d60b76d1873c5f22e5e1f3d442b6b76b8e1fddbaaa61e07d603a5"
+    },
+    {
+      "path": "herman-pdf.txt",
+      "bytes": 1308784,
+      "sha256": "e836cc173f922c71f46ed810ad00017e3faa623fa33795d07ae4012e1e73b7e5"
+    },
+    {
+      "path": "herman-transforms.pdf",
+      "bytes": 569033,
+      "sha256": "53e94829455e3bcd6280635fd0b35bca7e62774e6cc0d424955b576878a097f9"
+    },
+    {
+      "path": "herman-transforms.txt",
+      "bytes": 348804,
+      "sha256": "48da68383ab9eb04a949150012803d5d4c06f8fe52bd3b7553321f9ec9ad9139"
+    },
+    {
+      "path": "herman.html",
+      "bytes": 1245,
+      "sha256": "dc1d54dab6ec8c00f70137927504e4f222c8395f10760b6beecfcfa94e08249f"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-0.json",
+      "bytes": 64151,
+      "sha256": "d3a790d067ab9a78e1173e9694d2abd2c575bebe062991fdfc3268f15db9de80"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-100.json",
+      "bytes": 63564,
+      "sha256": "46e46183e42b5b0327af2e8489ce2c3f5fc165ea1e4fd888a003fa8624a91cbe"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-1000.json",
+      "bytes": 63918,
+      "sha256": "070fa69b8d3fd4d5643d5ace9bf3a1db4cef6c9baf4a24739cb35b01a39d86cc"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-1100.json",
+      "bytes": 57773,
+      "sha256": "fc43f8636bcc105bd629efb142e3dc84292fa87c233274010e1d460026d19c6e"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-200.json",
+      "bytes": 65485,
+      "sha256": "bc4438580425b21c50b51b8df1f4b4b69dd51745be8e324026b98452361c98c0"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-300.json",
+      "bytes": 61289,
+      "sha256": "847328ca57898fd1cc62d6424ec7474129bcd78b681936a25acf3e7f57b9738b"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-400.json",
+      "bytes": 62118,
+      "sha256": "a19017f447f20b483110d3ad739b00aa762897701f34859a643c233eeea4138d"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-500.json",
+      "bytes": 69509,
+      "sha256": "aec785c64521e1cfcc48a78bc13a035ed87cde04ec628b9be9466eb9e246d94c"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-600.json",
+      "bytes": 66377,
+      "sha256": "27f5ecb9b2752a6c1ba3f31ed1b8ca411747b2fbda4c8c814ae4f82b517d4b59"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-700.json",
+      "bytes": 70295,
+      "sha256": "c0afea18be7ff16af1534f67c0c08a42dec0e924ace739ad5e29ed2308bdc3d8"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-800.json",
+      "bytes": 72717,
+      "sha256": "ecd642c83f7c567007a8ddcaf30fa5eac05bca191a9eab0d685fe2c9b40cb3ab"
+    },
+    {
+      "path": "hf-cache/MATH-algebra-test-900.json",
+      "bytes": 60303,
+      "sha256": "1ebccf196c38739c453f65dce172717bee9c4e0cda51e9ee1cd43e54f4825010"
+    },
+    {
+      "path": "hf-cache/MATH-counting_and_probability-test-0.json",
+      "bytes": 87567,
+      "sha256": "a011e9cde266e9d3c8064ab0730b1fd2bd92ccd0dadedec769f51abe208f4939"
+    },
+    {
+      "path": "hf-cache/MATH-counting_and_probability-test-100.json",
+      "bytes": 80490,
+      "sha256": "f44f5f77a099afa0be1269c0a17b2e06b7fca79faaa1054fa44bc3e55ff16828"
+    },
+    {
+      "path": "hf-cache/MATH-counting_and_probability-test-200.json",
+      "bytes": 76780,
+      "sha256": "7724f8224262f13a3d1fb37dfc1dbd4eed3cf16ac99467309c819ce3da2b8c82"
+    },
+    {
+      "path": "hf-cache/MATH-counting_and_probability-test-300.json",
+      "bytes": 93155,
+      "sha256": "7cffc11053032003039bcc4cca6d6446762507722a00c641bb7cfc107efd943f"
+    },
+    {
+      "path": "hf-cache/MATH-counting_and_probability-test-400.json",
+      "bytes": 66919,
+      "sha256": "b9858ef0b193ae8b9c492734b8701be1320128bc132be74862863aaefe855595"
+    },
+    {
+      "path": "hf-cache/MATH-geometry-test-0.json",
+      "bytes": 128729,
+      "sha256": "f811fb0991fbe4fba4bb14ae68bf488e69cf2d7ad714abe440d02950500b0bb1"
+    },
+    {
+      "path": "hf-cache/MATH-geometry-test-100.json",
+      "bytes": 109241,
+      "sha256": "9ed2f832d15e9b5356c2206c57348c0905806b5c6518c7880b44c4b35102cc1c"
+    },
+    {
+      "path": "hf-cache/MATH-geometry-test-200.json",
+      "bytes": 125513,
+      "sha256": "47955fb24b27e3448f03264b1bde31b0edc9adbd8c2372b6af2af590e4f6ab59"
+    },
+    {
+      "path": "hf-cache/MATH-geometry-test-300.json",
+      "bytes": 121378,
+      "sha256": "ec2da23f46e2fdac39249f80c5f891b367907512fba688efa391327844f08bf0"
+    },
+    {
+      "path": "hf-cache/MATH-geometry-test-400.json",
+      "bytes": 104404,
+      "sha256": "c01b84bd056958fb6d0d3f9d1178b1e514e5150bed44c0d5aa0fae02883f6d6b"
+    },
+    {
+      "path": "hf-cache/MATH-intermediate_algebra-test-0.json",
+      "bytes": 100437,
+      "sha256": "94cd52c907d1c3966c3f5942aa84179ed568434c6e23fef7c01202626b59a50c"
+    },
+    {
+      "path": "hf-cache/MATH-intermediate_algebra-test-100.json",
+      "bytes": 100920,
+      "sha256": "cf5df644797ba7c31e0ef06c833224120649a38c72c43fc8f439938c8e930375"
+    },
+    {
+      "path": "hf-cache/MATH-intermediate_algebra-test-200.json",
+      "bytes": 103179,
+      "sha256": "4976cb00688367d8727b17f900d94ea09400a379d56d518834df96b231633104"
+    },
+    {
+      "path": "hf-cache/MATH-intermediate_algebra-test-300.json",
+      "bytes": 116399,
+      "sha256": "8fb1e8db2dbd61468041d5a136fa7719590f4a4b7308791930af474e9f2b12c5"
+    },
+    {
+      "path": "hf-cache/MATH-intermediate_algebra-test-400.json",
+      "bytes": 105042,
+      "sha256": "6781088abfc8f6cc8a476ba8cc12d0c75e22ec9c8d44181e013af3aeca7614e0"
+    },
+    {
+      "path": "hf-cache/MATH-intermediate_algebra-test-500.json",
+      "bytes": 94565,
+      "sha256": "b43507c1d4602287feae190370f2fa5903073b48e5f31a500918e62d0a1e5ab9"
+    },
+    {
+      "path": "hf-cache/MATH-intermediate_algebra-test-600.json",
+      "bytes": 95792,
+      "sha256": "97524419d9b2067e6da208cca05cbdf98594a2b8bc9383b7330c9559c8b25681"
+    },
+    {
+      "path": "hf-cache/MATH-intermediate_algebra-test-700.json",
+      "bytes": 94003,
+      "sha256": "fa1fbaf4f93577a96d1f8883a05db27cd84a7b2a47e8b68eed2765bd840c4dd5"
+    },
+    {
+      "path": "hf-cache/MATH-intermediate_algebra-test-800.json",
+      "bytes": 100304,
+      "sha256": "cb2e9fea619edae0543a9f89658d786c2c3c1824816c7ce672cb104a3715cda8"
+    },
+    {
+      "path": "hf-cache/MATH-intermediate_algebra-test-900.json",
+      "bytes": 3199,
+      "sha256": "2eff593d8c054edb6025979419298ea0a958e71ef91f2a1f8749403627342921"
+    },
+    {
+      "path": "hf-cache/MATH-number_theory-test-0.json",
+      "bytes": 80655,
+      "sha256": "e629c492976c03d0ec21b0baaab78d1e7b56bce06e35eb23667b4bc5686ba499"
+    },
+    {
+      "path": "hf-cache/MATH-number_theory-test-100.json",
+      "bytes": 77243,
+      "sha256": "eb5aa00ffb09d31fae1e902d9825986901abb70b900543d9d7f930bda13957e7"
+    },
+    {
+      "path": "hf-cache/MATH-number_theory-test-200.json",
+      "bytes": 75326,
+      "sha256": "dedf11532798a5a00fe8fdb9bc881a706eb674311617269f4b614a941dcdac23"
+    },
+    {
+      "path": "hf-cache/MATH-number_theory-test-300.json",
+      "bytes": 70401,
+      "sha256": "da2433c06f407692c9809f3778dfde71c49bf6f8372c88c87c4cc6246edc5dcc"
+    },
+    {
+      "path": "hf-cache/MATH-number_theory-test-400.json",
+      "bytes": 74943,
+      "sha256": "cc93fd905e49e66f937cb78aae4985443e1bcf7ea4a2bddf86186aeccb87daa0"
+    },
+    {
+      "path": "hf-cache/MATH-number_theory-test-500.json",
+      "bytes": 29785,
+      "sha256": "0233ee75eb2dcbe88c39ba9267d08b551a74e27b2b9e7d04fd2a8a9be0bfd9bd"
+    },
+    {
+      "path": "hf-cache/MATH-prealgebra-test-0.json",
+      "bytes": 68047,
+      "sha256": "11d488ff65dbd097533b6f592c55fcc0835df70de2dec8e4418285c95064f24a"
+    },
+    {
+      "path": "hf-cache/MATH-prealgebra-test-100.json",
+      "bytes": 72434,
+      "sha256": "62a362489e2a02c532e6afdd08ca9eb7b9948303edf4b56699f5af428738144a"
+    },
+    {
+      "path": "hf-cache/MATH-prealgebra-test-200.json",
+      "bytes": 73460,
+      "sha256": "3d02d5590cdb8a0bc9c8302f0db28df94a0bcdcfd3717d26a086a4961831cabe"
+    },
+    {
+      "path": "hf-cache/MATH-prealgebra-test-300.json",
+      "bytes": 67284,
+      "sha256": "5e99f6570e42b11cd2220e3efb60cbdf902a7be524281f8d640514bc09de639f"
+    },
+    {
+      "path": "hf-cache/MATH-prealgebra-test-400.json",
+      "bytes": 66570,
+      "sha256": "97def0288de785cc118f3cf7908a0addf73751184f36439a27dcefdbe822a05a"
+    },
+    {
+      "path": "hf-cache/MATH-prealgebra-test-500.json",
+      "bytes": 77037,
+      "sha256": "b33bac39bc1dad9d39d825f59a57454f488b12f9caf2dc2a38af2a24f49edafe"
+    },
+    {
+      "path": "hf-cache/MATH-prealgebra-test-600.json",
+      "bytes": 64790,
+      "sha256": "8230f8425fdaa03c176d677e663319fdd43a2fb691bed15b8a4f15cd0be270a0"
+    },
+    {
+      "path": "hf-cache/MATH-prealgebra-test-700.json",
+      "bytes": 65214,
+      "sha256": "2f009f1417c179ac562c831ebbd8d133a3ac1c01c9339fa0afe9cf39ef9b997a"
+    },
+    {
+      "path": "hf-cache/MATH-prealgebra-test-800.json",
+      "bytes": 50625,
+      "sha256": "a7ae48a077a598a767d2014e685f69426fc613882e8a83b87ea8444dcb975d2d"
+    },
+    {
+      "path": "hf-cache/MATH-precalculus-test-0.json",
+      "bytes": 123541,
+      "sha256": "2cc251fe2d25f5190509534898ce1faaf7ecaf69eca21b8cc8fa3bd3706291dd"
+    },
+    {
+      "path": "hf-cache/MATH-precalculus-test-100.json",
+      "bytes": 109414,
+      "sha256": "d1fe8ea88ca981807c650a1a913b240e2e3a6c79f7624efda42639f2d06df9b2"
+    },
+    {
+      "path": "hf-cache/MATH-precalculus-test-200.json",
+      "bytes": 110245,
+      "sha256": "45aef61f50626cb13acfdec10562549c6c753e3915e31d3d1aaa1b7e3f38e63e"
+    },
+    {
+      "path": "hf-cache/MATH-precalculus-test-300.json",
+      "bytes": 114171,
+      "sha256": "da4ef8cbca7e37ce1e0575959cef7bef7801103bc7e1ea944cf82600e3ccf3a9"
+    },
+    {
+      "path": "hf-cache/MATH-precalculus-test-400.json",
+      "bytes": 127584,
+      "sha256": "81509d644ac6ced2930e6be6f464688264d0ef165844454d52071a4f616d073e"
+    },
+    {
+      "path": "hf-cache/MATH-precalculus-test-500.json",
+      "bytes": 61327,
+      "sha256": "11bf3c2030aec770a97ceb34cda3406c188aaca4bab470373f39d1b871e59949"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-0.json",
+      "bytes": 216726,
+      "sha256": "628048dc67abbf87504730798f6d56c20c1db91f5322d545b4bef91da9cf9488"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-10000.json",
+      "bytes": 194833,
+      "sha256": "35152dd7813cc06f3fc174c3f1631bcccf5ab06a394439f5a285b2e7e456a890"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-100000.json",
+      "bytes": 153024,
+      "sha256": "821a9ad64c073d5928c43b853ef3c7a6834ebf8fd27e1c3066cb25abd8d256cc"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-110000.json",
+      "bytes": 167640,
+      "sha256": "64c40f46edc2514db93b09398dc3a92a42d60201ea8d2ce99c9dd1b4147baf00"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-120000.json",
+      "bytes": 127185,
+      "sha256": "75d661d76019981f21cb349609453833628bb87902f957b915f8f40763f69500"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-130000.json",
+      "bytes": 162299,
+      "sha256": "e1e555471e71156f28494f3ee161bb4090911b63dd92b1a86d08d046e02d648a"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-140000.json",
+      "bytes": 153937,
+      "sha256": "584e0835eaf831093deb233179d7d3b4c904d39a8a4a126d7f9764b799916da4"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-150000.json",
+      "bytes": 142512,
+      "sha256": "24373e6f6a7cdf1edf2796fe18ceed25ed9d881c30fda91cda18509ef9f6ebf2"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-160000.json",
+      "bytes": 84549,
+      "sha256": "9aa1c2c79ca79ab798fe813812ad508992a5af08245c5e59eb5bddb294f1a365"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-170000.json",
+      "bytes": 261131,
+      "sha256": "8747f62a6095f5dd94aaf8a1cd8b2c55a1e3db5a09ab7b2dc17436963a018a38"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-180000.json",
+      "bytes": 166452,
+      "sha256": "aab8f814def9cf251ff310d6696a5fa676f03628b456d1119216170c34654af7"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-190000.json",
+      "bytes": 129879,
+      "sha256": "1e0273b8acab3055f7da1cd69b68c812511ac2f500cc6b861d2a57b7e1fa1069"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-20000.json",
+      "bytes": 158598,
+      "sha256": "3eb1faed32bd926c5a91b0e5872e451c88e23c7951039d1ad7de7984125f1180"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-200000.json",
+      "bytes": 227260,
+      "sha256": "1d2972472e360288e75ff9d2009f54b919741cf0cb6b1d6e937506eb57b11222"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-210000.json",
+      "bytes": 230153,
+      "sha256": "3b25c964e90986798aafd53e1872bf135612296670b5f8de5930fa0cdb68fbeb"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-220000.json",
+      "bytes": 208350,
+      "sha256": "286587cf7909e4b77749c9416d8a76363378f7877f8ec8e389a26a5cfcf01637"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-230000.json",
+      "bytes": 188641,
+      "sha256": "e8391d75b1dbc0c42f12cf575d2d361700418da995104d41b5477b5f6b468d9a"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-240000.json",
+      "bytes": 328445,
+      "sha256": "eee65de54f16851304b15d62f2a34eb21ac1222fb80c3c688515620537a11698"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-250000.json",
+      "bytes": 161317,
+      "sha256": "8ce08987e9a5bb5c4afe8ac09757023eb0eeb3e24ab6b79bfba53446f76b4fd3"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-260000.json",
+      "bytes": 294738,
+      "sha256": "377befa461cd91ae30042c099e0d174e74d7d23718ecf1a6c02cd5c4d3727cef"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-270000.json",
+      "bytes": 214594,
+      "sha256": "a178aadee8a58fdbb814a89310f57b710b31a93a5a4eef5b1e73345bd0a6f52b"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-280000.json",
+      "bytes": 249651,
+      "sha256": "7a9e77ce3dca972ded6d87da5ef18aa8f8111790619293fe0a27be2364d57496"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-290000.json",
+      "bytes": 159062,
+      "sha256": "74f08486a858a6c4f4057e47d8ad082879f48af76e617f571fb000d76a230777"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-30000.json",
+      "bytes": 154357,
+      "sha256": "5b438e501adb5f16e4f595c5272b63702f1856fb316e25c1463a48e011ee7591"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-300000.json",
+      "bytes": 155434,
+      "sha256": "98889b77ba86da842f32e9643ca84531ba0689ad41c128bd34327bf6811bef79"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-310000.json",
+      "bytes": 155674,
+      "sha256": "b2dbf9ca7013db9a872ec12a5a0c0e899fdd0f05d9f6b4a9db16b7bbbc0251fe"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-320000.json",
+      "bytes": 150458,
+      "sha256": "5eddc70bd526dcb407dd819fa1c9282c066ae2b36f1abd7cc04b277ea2409837"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-330000.json",
+      "bytes": 144733,
+      "sha256": "fed4424c6f702421a778236cfdb4d4e5816d0076380a1db36f15aa246001a654"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-340000.json",
+      "bytes": 153612,
+      "sha256": "3f4c9ef46452303f4d30ff30311ab0468332c886478ec02b4590266f52e05a49"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-350000.json",
+      "bytes": 147105,
+      "sha256": "fdb33f6d440cd473ab1500e945ffb6ce79c768e8782f6af1583164a4182ccaa1"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-360000.json",
+      "bytes": 153277,
+      "sha256": "f919e051b0d33f840f3989d669e5011717060792bac6c02d27b900b5472d9932"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-370000.json",
+      "bytes": 154082,
+      "sha256": "a5950f6dc82b7cc712265b8f89d165cd067f265d8fd287315e91420c083c7727"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-380000.json",
+      "bytes": 149505,
+      "sha256": "8dc5cc271db50927ecda007b5c0f32972b1db9e1f56158b5d378c69427d978aa"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-390000.json",
+      "bytes": 139542,
+      "sha256": "868a67674f5a4f5951dacca53276d27053529bc700e2ad4b8d326b6d25da0b2b"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-40000.json",
+      "bytes": 76959,
+      "sha256": "a3852a66e10c693d1cb980d27ede432edb09be8c481f277611db88dd9e7e9bfa"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-400000.json",
+      "bytes": 154531,
+      "sha256": "6952a2048169afecf4d17e532a9697b5da63d0c4cae9b6f99a778190daeda0fb"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-410000.json",
+      "bytes": 163987,
+      "sha256": "6b242856e4551b176b25232c288da662a99dc69385dda1650f22379c248615ae"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-420000.json",
+      "bytes": 149014,
+      "sha256": "2c4956c694a8e1fc072ac67d176fd89631462927e534b8c13627d68b5cad1f9f"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-430000.json",
+      "bytes": 154271,
+      "sha256": "a5337f4ce2c4a9bdd6ed7f3274b0b221942de249efdf105264e59e49d0a115aa"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-440000.json",
+      "bytes": 154856,
+      "sha256": "ce41161baf320bafc6af2cf26573c48c8e9a920701f162919e3a938dbff1d4fc"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-450000.json",
+      "bytes": 149156,
+      "sha256": "80c3e5265fca626f9c179f78236d18f513d1ec001cfe68c0fc50f60b2cdeab1b"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-460000.json",
+      "bytes": 151659,
+      "sha256": "b48138e65f05aac07ea06fdf2f6381c1ccd263d91a73213626f2626d9a6ff4f1"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-470000.json",
+      "bytes": 154253,
+      "sha256": "7b0b4bb560c86e3f784229948b348e5494b9fec2e2ecc804d948ce6f6a4960d2"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-480000.json",
+      "bytes": 153989,
+      "sha256": "02a20070f95461a881defeaa0e99646a2f56368929954f038bb782d3fc070069"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-490000.json",
+      "bytes": 152383,
+      "sha256": "48be7d00f88de336b4bdb59f738f76c648bf50b23f1dc67ad0b9462f6ea0e55d"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-50000.json",
+      "bytes": 115429,
+      "sha256": "1e30c5af9ff2466a5f15e80c921f81199a9666e56cacd736f565b7cecb1c5b80"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-500000.json",
+      "bytes": 136149,
+      "sha256": "1c3a21a15f9fb47a64cb858e44f4eb9d1f4c0c508a7e2e720680cf74c563c361"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-510000.json",
+      "bytes": 153897,
+      "sha256": "5a33fa32f4b947d53b19bfb062ec73c78ff71a9d8e9be0e28180492e6c2e8a42"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-520000.json",
+      "bytes": 159401,
+      "sha256": "02dfb1f3c84b99833e8a18713667b2d792023e2a586ef00cff981886b75ea339"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-530000.json",
+      "bytes": 155675,
+      "sha256": "09f13aee1e5ec8bc8675f31232c08eb2d3e149ea729d01e10e4461b01a42dc41"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-540000.json",
+      "bytes": 145397,
+      "sha256": "631a525990bbd0c77939d67b48524b7ed6c1897c6d60ea310a453da7a5e99860"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-550000.json",
+      "bytes": 141066,
+      "sha256": "f7f21baf44c8e326a24b6efce978d9acde1144ba4a580d589674cf0afac28d2c"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-560000.json",
+      "bytes": 150215,
+      "sha256": "9c504b7916491f97f093e4bca641abfd7f2da9eb9b4579238c36a25eb0c7118c"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-570000.json",
+      "bytes": 140652,
+      "sha256": "012e17c475d3531afc779f4f302d86e67d2be7fe6857c8248ce1a660eab7afbd"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-580000.json",
+      "bytes": 142585,
+      "sha256": "8cc60b1f7542e2ec99af29fac7aea2f1d5aea7755099b9845a38351360251b50"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-590000.json",
+      "bytes": 136248,
+      "sha256": "ae2dd84bf1d4ab8c2c2d01a2f2a1e27fa6b5e320625599c0a55174cbb63b9a02"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-60000.json",
+      "bytes": 179844,
+      "sha256": "cbf92d53c533e91d200af5e7adad17e713ed28a16e7acbe4a14ad0de1d4453ae"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-600000.json",
+      "bytes": 147018,
+      "sha256": "3c37671de4896ed3e29526d3f42c73c110d37927077bbe28774aa89193e475bd"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-610000.json",
+      "bytes": 137231,
+      "sha256": "5e4984f2dc5136669a0aaa96d0339681651a8a8fc13856e95612833da13bb059"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-620000.json",
+      "bytes": 143015,
+      "sha256": "b7e3863e435e35609acbcf2c891280dce4b35e6128b5f32bbf9d3018132130c3"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-630000.json",
+      "bytes": 144002,
+      "sha256": "60ba405750a107a4db51a635d335d18dad6bbeff8ac5776de346cea9487c1974"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-640000.json",
+      "bytes": 131993,
+      "sha256": "3910dd01da2004d3856e2856d9317189cf054fb388a759fff1660e9468e2b0ff"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-650000.json",
+      "bytes": 140309,
+      "sha256": "0879993e0bc49cd03de38e3581170ef3aff9f2e2cbb06f1b31d5a58ead1e8da4"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-660000.json",
+      "bytes": 143540,
+      "sha256": "2ecdc20e4136a04200a0dc196fb8e1a7163b450b9faa080aaefa9becec27e6dd"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-670000.json",
+      "bytes": 139911,
+      "sha256": "30bee613731a14b909e34fdbc7063409b8a28e6ca7ddc7d0dd6512806ac08fed"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-680000.json",
+      "bytes": 133984,
+      "sha256": "cc48a6fa3710e3bf498e08d43bdd3333c991d8b7c234a486bc55a8c5aec6abec"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-690000.json",
+      "bytes": 147772,
+      "sha256": "237eb0ce8e0dc7e8d69cd5e1a3a7508fdc94c077ec30d06a6b93740eb8feffa6"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-70000.json",
+      "bytes": 101406,
+      "sha256": "47eca7146cd902475ed69cbbe110d2796c06e0913d3d27051b1f1dbb92c531bf"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-700000.json",
+      "bytes": 132735,
+      "sha256": "febc5209721f849065cd5e2db1c949e55236d7d9f1878fea5b9f717d7bb6185c"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-710000.json",
+      "bytes": 109949,
+      "sha256": "e4ceadd07cd48d75b9c239854b3a593916ae82dc3fa01785925ddc77f27a509a"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-720000.json",
+      "bytes": 187623,
+      "sha256": "8612085b372776301c42c4122736a57cfc4c47a3d29e5a2e3e9a9689cc97bd86"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-730000.json",
+      "bytes": 173338,
+      "sha256": "85c074c9da2197a1b2e74a97e55a76a884caf9b599a9343e805ad216227166b3"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-740000.json",
+      "bytes": 110472,
+      "sha256": "cd8aed93e4f75c0d6e6abe74d03f11c73d77008baf0c720a57344dbcc204c173"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-750000.json",
+      "bytes": 122247,
+      "sha256": "ef70c29feb75ffd26d7b1db59a8961b07dd0d7f47c0343caa465a8aa8eba3bc8"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-760000.json",
+      "bytes": 123524,
+      "sha256": "04d181aa4ec92b3b12c30eb699b8887811f1ba195f83ddb778d0eb78c1deab25"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-770000.json",
+      "bytes": 128586,
+      "sha256": "16e4e447c83feed92023209f2a3b9cef90b49b8fc81cf5aa6c2db3d79036cab4"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-780000.json",
+      "bytes": 126282,
+      "sha256": "88cfd9eab25d2b887427b9dfeaf499255922defedfd17af903f8d820ec8edde6"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-790000.json",
+      "bytes": 128224,
+      "sha256": "754cb016e9baf6f91e14af5e95d9c52f1999a84349b8777bc0f08aff2c9596de"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-80000.json",
+      "bytes": 173131,
+      "sha256": "8f4d8b905aee63a53387e6e043337b714a34f08ae7017ef6f24614d7f973478a"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-800000.json",
+      "bytes": 131810,
+      "sha256": "26e5619708bf2eed9aba6ca096496d0ebae720cde495015223f6a27c48afd6a8"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-810000.json",
+      "bytes": 131100,
+      "sha256": "9963b39f86ffcb50d186bbfc33c128e556e3000ae1413f6afa03a1b554f6c116"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-820000.json",
+      "bytes": 136108,
+      "sha256": "1447402e223a9e35bf0a75da37297958b13acb5f01ed1e00bc5e41879c7560a3"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-830000.json",
+      "bytes": 128269,
+      "sha256": "97842b40ad7e8e712c1c09fbdf5ed17ed15c9f2c77730c2ec9693134de4df039"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-840000.json",
+      "bytes": 124703,
+      "sha256": "78a61e494f30a2383cfe15c1eae4b3143c46115921b7eee7d524dce7f63ce9ee"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-850000.json",
+      "bytes": 132740,
+      "sha256": "ccfef30577e155f4569a533aae6843516e9e0528e2b53d31101b6158c1bfc78d"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-860000.json",
+      "bytes": 127653,
+      "sha256": "b5d1879b1bdca11f55f48db374d0c0890d4b72de29d5871224f983230caf6904"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-870000.json",
+      "bytes": 131299,
+      "sha256": "84039118376109810f4da1e8a87a46552a1e301273f1361c0119e91e85e27760"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-880000.json",
+      "bytes": 118838,
+      "sha256": "7200b1ce3390e25e2922eb8ddd13257ed67014d8000667366df720ec79425fd3"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-890000.json",
+      "bytes": 126677,
+      "sha256": "962237acdec9a6aed910fe02dea9e86e40671fe2c6ed742181dd3157f9bd9ed4"
+    },
+    {
+      "path": "hf-cache/NuminaMath-default-train-90000.json",
+      "bytes": 184340,
+      "sha256": "be39f47b1986ee8b76c33492376506346192e1dfac185fff61163bb4aba757ef"
+    },
+    {
+      "path": "hf-math.txt",
+      "bytes": 1168,
+      "sha256": "b15fabe5ce368c71441b73c215d1c3e074d1fff081eb6847bffff03ccdbd5e74"
+    },
+    {
+      "path": "hf-numina.txt",
+      "bytes": 116,
+      "sha256": "b96986af71ba76b97d2c47ae0915f7e0fa8f667052d90cbea51cc712823a1157"
+    },
+    {
+      "path": "kuttler-exercises.html",
+      "bytes": 224304,
+      "sha256": "567aaa00b11b0f0b912d64f495f49669b0286bff918c55ace0ed647c4736d58f"
+    },
+    {
+      "path": "kuttler-spectral-ex.html",
+      "bytes": 226575,
+      "sha256": "e5103327c9959ec9f5df1f143e862f5c8cdb4678e6de746b794970711e0bf0fe"
+    },
+    {
+      "path": "kuttler-spectral.html",
+      "bytes": 131939,
+      "sha256": "7f38785d64d2cabc5438e4c1e4393edb503fed494adad2c8ed1a1c27b06d80d1"
+    },
+    {
+      "path": "kuttler-vector.html",
+      "bytes": 135578,
+      "sha256": "752afff27b832eb99b95bc28b6b25c32b4e36a3ddf2a1611a186dd0080950219"
+    },
+    {
+      "path": "lebl-ra-html.html",
+      "bytes": 676,
+      "sha256": "a680299120972f0a1114aef68455b10758183b774136d0bd7eea8ba5ef7bab7b"
+    },
+    {
+      "path": "lebl-ra-index.html",
+      "bytes": 316,
+      "sha256": "f1fa24d827f6c9503d28d878cd166499ff7fa07ac31ab0f5a7b125cb11d75c10"
+    },
+    {
+      "path": "lebl-ra-toc.html",
+      "bytes": 82683,
+      "sha256": "bf877f77b41e92a2a27ae8be364e34f0b4c488c5e3663098c4018212a198ebe8"
+    },
+    {
+      "path": "lebl-ra.html",
+      "bytes": 28686,
+      "sha256": "6b043b506fff66b574a0137aba2eed7faeb14b9079719c40703db5fe5873acc5"
+    },
+    {
+      "path": "libre-kuttler.html",
+      "bytes": 156733,
+      "sha256": "5c22ac0444ac892f1627889329a4b2fcadd3047090778c660d994e402758d253"
+    },
+    {
+      "path": "libre-linear.html",
+      "bytes": 140450,
+      "sha256": "dda916834dbd852457c3b8dbc5a8b62e76110695d1a0e7248d0e6f388cd08b5c"
+    },
+    {
+      "path": "math-card.txt",
+      "bytes": 3926,
+      "sha256": "2372e22a154ca3ed5865378e270b32d8ed5b615c4592fad42630a731a950bcc0"
+    },
+    {
+      "path": "math-size.txt",
+      "bytes": 4544,
+      "sha256": "ee87c0184cecdd19a49603d54598121b4528a18e5aa036a81c7e1d94ab0fac75"
+    },
+    {
+      "path": "ntic-book.html",
+      "bytes": 970,
+      "sha256": "60328064152f43ec5524ebadc69fdcffa581ca846a3051bdae082114dc3d1127"
+    },
+    {
+      "path": "ntic-front.html",
+      "bytes": 124323,
+      "sha256": "cecfdee8dab8aa99ca1dde050eb7c63225f9b53aadb252f8e96d60d31f362975"
+    },
+    {
+      "path": "ntic-license.html",
+      "bytes": 124722,
+      "sha256": "a4b8f8fb81ecf9958e461d1299628d26e67676353008a0907439f51e22a8702c"
+    },
+    {
+      "path": "ntic-pnt.html",
+      "bytes": 150074,
+      "sha256": "c925b086619df57d9b6a31de5f96ac6a969f781d29118ca4eb2474e64d180436"
+    },
+    {
+      "path": "ntic-zeta.html",
+      "bytes": 137493,
+      "sha256": "d7aca01f60206f414926a8d4f5f95a6f92e0beb72a3cacbd966ed8b6e145ab2e"
+    },
+    {
+      "path": "ntic.html",
+      "bytes": 4979,
+      "sha256": "5074ead3b70fe30f81af249f71d5753ae493d7cf9229c79eee83d55fdff04023"
+    },
+    {
+      "path": "numina-card.txt",
+      "bytes": 5017,
+      "sha256": "fb1d9e6e0d8ad71e47fd1ef5671ee4ca522536aa0a5b8c907c0fbc7e3cd7e6b2"
+    },
+    {
+      "path": "numina-search.txt",
+      "bytes": 29,
+      "sha256": "b858dcadeb37aa87e47175192abda1b1de3a63841e349179593a98403fe62cf4"
+    },
+    {
+      "path": "openstax-preface.html",
+      "bytes": 251066,
+      "sha256": "ea01cb365d22097fb218a535b654c325781d341b21646053cb300c643c4961d0"
+    },
+    {
+      "path": "openstax.html",
+      "bytes": 12343,
+      "sha256": "122a7b58174184305f56c8c5c86c995abd6060bc1920fae9a3cec195c07fcf18"
+    },
+    {
+      "path": "pdf-cache/0eba2b4d014abd20de196e11958ff21f0651b87971ba0d4da639b7972a714239.pdf",
+      "bytes": 407280,
+      "sha256": "8c223ca58a1b7585e8298ef94f21599732818f2ec4471385f4664923b03eb45e"
+    },
+    {
+      "path": "pdf-cache/0eba2b4d014abd20de196e11958ff21f0651b87971ba0d4da639b7972a714239.txt",
+      "bytes": 269799,
+      "sha256": "fa95e31a562b6b56d653bb7a6dba6e98e5d57cfe4f27925ea143f979a20e563d"
+    },
+    {
+      "path": "pdf-cache/677568358ab71a9781269b35a60d840cc72944dc79127ffb41c75315df532f0e.pdf",
+      "bytes": 569033,
+      "sha256": "53e94829455e3bcd6280635fd0b35bca7e62774e6cc0d424955b576878a097f9"
+    },
+    {
+      "path": "pdf-cache/677568358ab71a9781269b35a60d840cc72944dc79127ffb41c75315df532f0e.txt",
+      "bytes": 348804,
+      "sha256": "48da68383ab9eb04a949150012803d5d4c06f8fe52bd3b7553321f9ec9ad9139"
+    },
+    {
+      "path": "pdf-cache/8cfbe186e42d62a2885f8919ae9b2b42a8b84cacd85928dea60ea935bd5884bf.pdf",
+      "bytes": 1549806,
+      "sha256": "5f815490ac9aebd05eaa4ff131f1ee47b4143c9eb979234b4ab9b52dbb77f2d6"
+    },
+    {
+      "path": "pdf-cache/8cfbe186e42d62a2885f8919ae9b2b42a8b84cacd85928dea60ea935bd5884bf.txt",
+      "bytes": 327640,
+      "sha256": "b9604b0e77cd0860b37cff72cff4a3f1d06c3733f8ec10d2f27bb32817d5a25f"
+    },
+    {
+      "path": "pdf-cache/c884b367c740534cab720aa63443f9ec1d4c4ecc8fc64f7b0ad618520df4abaf.pdf",
+      "bytes": 633386,
+      "sha256": "de04de11069d465f7215e1d4bfe64798d8856febaa594ff640aa52f3b1cb5930"
+    },
+    {
+      "path": "pdf-cache/c884b367c740534cab720aa63443f9ec1d4c4ecc8fc64f7b0ad618520df4abaf.txt",
+      "bytes": 172738,
+      "sha256": "c5f53bb9d7f08015d3a093322770ed85428e3ba8e77e085a6fa99f9032db3a49"
+    },
+    {
+      "path": "pdf-cache/cline-exercises.html",
+      "bytes": 135912,
+      "sha256": "a797dd9da0411edf9f8dbefe02dccdf7f5a77aa464ebe41050be4c7b470ac71e"
+    },
+    {
+      "path": "pdf-results.json",
+      "bytes": 14030,
+      "sha256": "40cf3f4cec8c85a3e1af77fdc5e5f31916c719043c55345e786c33ef7e5456bb"
+    },
+    {
+      "path": "prob-book.pdf",
+      "bytes": 2993135,
+      "sha256": "763eab9894983ddfd6cd7f84685548d1515a9326a2d9fd015474534460551a5e"
+    },
+    {
+      "path": "prob-ch10.tex",
+      "bytes": 79560,
+      "sha256": "35cc6b720096e7002dae1a14a9115567d952038370270a4d09dd0f1de50d2293"
+    },
+    {
+      "path": "prob-ch11.tex",
+      "bytes": 166626,
+      "sha256": "372b330bc4457c820852305cc4624d5f6103a874dd36babf793a391ae3221c3e"
+    },
+    {
+      "path": "prob-home.html",
+      "bytes": 687,
+      "sha256": "d15474fab24c73f8c54ce6e3c182c0a9aa4f455a72f92976f2158251d983051d"
+    },
+    {
+      "path": "prob-landing.html",
+      "bytes": 6143,
+      "sha256": "653470fa1835a7a0d97b6d33a5006fbabb657f7c78a141cfdfd9a4f20db16f29"
+    },
+    {
+      "path": "prob-pdf.txt",
+      "bytes": 1345428,
+      "sha256": "bc8df530bb34694a9ae143daf1d9ee8cf3d330e078d3e8d8b2815d190597453d"
+    },
+    {
+      "path": "probability-results.json",
+      "bytes": 29155,
+      "sha256": "abdce7c1ec5073978e988f99066f06ee5991ddc7ae9dfedb96c2b66cd4d09701"
+    },
+    {
+      "path": "probability.html",
+      "bytes": 547,
+      "sha256": "954cdd57653b1b860ef917426c3d8207f4721b932b561dc7258aea07d8f6c8e7"
+    },
+    {
+      "path": "stein-pdf.txt",
+      "bytes": 355448,
+      "sha256": "9bc01f2c20526868d810f9e4e9ab340ad360f2b9b8a2b1382c6d9bb771aa4f69"
+    },
+    {
+      "path": "stein.pdf",
+      "bytes": 2771146,
+      "sha256": "7edaf4fbab6e738f7ef7298a620a05afbac35fe9b24c2cbd1ace51013d9f436f"
+    },
+    {
+      "path": "supp-cache/0594a36fa69f44a5a52f284082f5027c510f8ff8003b46cd6f27a9d831df3bd8.html",
+      "bytes": 285127,
+      "sha256": "ee7f94331df25ec8addfdaa3cb8c0ab2f2ec3ae27a384fe129ca103a1048856b"
+    },
+    {
+      "path": "supp-cache/08abb0df3099e9a937fc97b8ae379af808e76bc4f6642206e110f135f1a80f5d.html",
+      "bytes": 224304,
+      "sha256": "050de7ef633bf6faf11c8c55d50a01fd04eaebc06bca353e7ee8625d2106c231"
+    },
+    {
+      "path": "supp-cache/2def5353fcd10598fe170f2b44052d4d73698afcfbbcfcd678602247e6303493.html",
+      "bytes": 284528,
+      "sha256": "2a625c04c3ca54284126cb456ace0a57d32e57b09da63b5be783d4d0cc42865f"
+    },
+    {
+      "path": "supp-cache/3aaa6184fd198cd63b3d997f00cf29d5e111ed6aba5735160489cd252aaaec79.html",
+      "bytes": 163777,
+      "sha256": "4e62d734f62114ecc01d11a4f630ed61ccc49b8354b85afef97dc85e614368f6"
+    },
+    {
+      "path": "supp-cache/3fdd2aee568200b5dce9b249b55c2ca52fe61433feff8d3695cc2ba98387ce4e.html",
+      "bytes": 251605,
+      "sha256": "8a94d836953b80fb59978555e9507b59af0ffdbbae526d2dea57c753163aa1ba"
+    },
+    {
+      "path": "supp-cache/49def95a0b21aad45ecc35205a1d206d04ed9ff8eb3c2cd08f65aa9661ebc89d.html",
+      "bytes": 134392,
+      "sha256": "1e46751ce4f2c10385a1d188c089c198957f4ad8bc9c85008dae7982c14a1682"
+    },
+    {
+      "path": "supp-cache/4fee154eb01bed43b91b58e5717a70c7a60690ee8627e486a0dbde2be48480eb.html",
+      "bytes": 248387,
+      "sha256": "88170c2344a721bf2fdb5cd89f574cb2a8ed6feb7e5ffe8940a256259007c962"
+    },
+    {
+      "path": "supp-cache/7a6f98194b73332a6f39f71ca6123ec3e1cb3e9956aa81feba74cce1060ee4a4.html",
+      "bytes": 226575,
+      "sha256": "917a6cb3ef1c1a4e02067f7227941d44b85ea291eb34bdc5447c03f2a0d1fdf7"
+    },
+    {
+      "path": "supp-cache/9cc747c42206eaaad2751f29a32846d7b5edc5f3447476849390540d1e5db72a.html",
+      "bytes": 538014,
+      "sha256": "28884c9e264ccb583aea4f88099a6d2a1c1a72e3e82650a8486b7bd28cefcd6a"
+    },
+    {
+      "path": "supp-cache/a62c325e92c3d679dd276861944d82f16130fa79a2d522b4ad388af151e1d32a.html",
+      "bytes": 327233,
+      "sha256": "4eb74ab0a57a97d6bef0b0a13dc55efd22759dc603d4616893a50129aa7c205e"
+    },
+    {
+      "path": "supp-cache/ab1df45b19fe53586f0ee2149a4c0f665d0d4948245eb8f167f1b2f5e9328c9a.html",
+      "bytes": 131687,
+      "sha256": "c80984052a7ca755e3507bb5e85e73fc71fd28e45dc35578190b25e288b5a869"
+    },
+    {
+      "path": "supp-cache/ac207a3648fc3e0a06d376629f1310ada44405ed6f749479cdda003185ab8557.html",
+      "bytes": 298717,
+      "sha256": "f662057fd074391da6ada1cd120a2fcc8448a66b685d8e4d8e52499d742f8eb5"
+    },
+    {
+      "path": "supp-cache/b4211f896b7a7d8b7b46411efbccbc80385726ae612de38dbf06993e3c1be22b.html",
+      "bytes": 273747,
+      "sha256": "504926e3e106853592b9c226c957ad87263dbad8d5b702c16fcef0f67effdf66"
+    },
+    {
+      "path": "supp-cache/c28e434964d20cf5857484532583dd1ccce39ecf0628e05376e2b1bd7a190bd8.html",
+      "bytes": 132960,
+      "sha256": "81f6f0c94e2adde3b1c13767b5ddaf7bddf21e62ccb521e01d06dbfe46d2e1ea"
+    },
+    {
+      "path": "supp-cache/c79fc9a63106577a28fbf51cef05729db8221f9475dfdf32406fa5a5e0794079.html",
+      "bytes": 244977,
+      "sha256": "378bc248f1b13e0b7bd8a22c3d33204a975968b70ed0fc7ce75f4cb66102a3b6"
+    },
+    {
+      "path": "supp-cache/dd58c5a0db1516b982b4374e16b512397927f6701aa49ae07a4a7af3a5d4c06b.html",
+      "bytes": 227600,
+      "sha256": "8df3a5c652f376ec4ebae7be02447ea7ec3c0e8ddb2d3b1535fde90fe73b8439"
+    },
+    {
+      "path": "supp-cache/fae8b55fc625de4c95cb032d4882664ab073fe0b1aa8bd82753101573ce6893e.html",
+      "bytes": 283747,
+      "sha256": "62ffca8326556f417b1004f78646a1c4583b41dde31612696e617bb4eab3b68d"
+    },
+    {
+      "path": "supplement-results.json",
+      "bytes": 406090,
+      "sha256": "d906cd2a21285f79401d0da2c0e478c2a2bdc39c56b465ffe6448181ca8f4d4a"
+    },
+    {
+      "path": "textbook-results.json",
+      "bytes": 429878,
+      "sha256": "1637ffb53b022f2130dd8f4cd33000a4574b94567e61f78614daa6dafc7369a8"
+    },
+    {
+      "path": "trench-analysis.html",
+      "bytes": 31521,
+      "sha256": "fe662c4ba9fc14d78ea6e9538c4fcf116f8bf06471a3b6dd8a2e67959cba90a2"
+    },
+    {
+      "path": "trench.txt",
+      "bytes": 33916,
+      "sha256": "1b2549839aac7e025e0ae540b08b5f65908f78363a9930e712fb0563427e9b9c"
+    },
+    {
+      "path": "wilf-pdf.html",
+      "bytes": 118,
+      "sha256": "58bf2215b395dcac74c009aa98701854e43cbe54a1cd3a95fee6a647ca9910d4"
+    },
+    {
+      "path": "wilf.html",
+      "bytes": 118,
+      "sha256": "58bf2215b395dcac74c009aa98701854e43cbe54a1cd3a95fee6a647ca9910d4"
+    }
+  ]
+}

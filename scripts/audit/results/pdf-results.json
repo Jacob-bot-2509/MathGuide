@@ -1,0 +1,391 @@
+{
+  "fourier-transform": {
+    "source": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Transforms.pdf",
+    "chapter_problem_blocks": 34,
+    "curated_pool": 8,
+    "n": 8,
+    "counts": {
+      "statement": 8,
+      "answer": 0,
+      "process": 0,
+      "triple": 0,
+      "figure_reference": 1
+    },
+    "items": [
+      {
+        "id": 6,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Transforms.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "d95d7483772b5983cfb8e11b0b086b9ee90b2bc21f0c2b3d0ff22de01f4b0f1f"
+      },
+      {
+        "id": 7,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Transforms.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "0f0e67980dde5cb7fb5062ee0fc4e406670467de3125b699bdd278ae05495e95"
+      },
+      {
+        "id": 8,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Transforms.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "2890260a15e07ce4f293cfa214cbec30223f27f272111615b9d039b3f5e7d440"
+      },
+      {
+        "id": 9,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Transforms.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "53057aeb51a651b65d232fec602a570230f2cdcc72c34acbe3d99f81a84de60f"
+      },
+      {
+        "id": 10,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Transforms.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": true,
+        "sha256": "3f0eae761cb824b35cac1f336d01270dd25c145569b70211bf1bd2134545737f"
+      },
+      {
+        "id": 30,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Transforms.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "b84f7dabee97e09f1627d285cc31a8f10e9eb2cb62cb84a5381caeea7870d23e"
+      },
+      {
+        "id": 31,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Transforms.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "c2c75a66e65e2bd1b27f9a5a8de4dca490a7b090cbabd862ac9e44db7e9f8edf"
+      },
+      {
+        "id": 34,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Transforms.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "5377db38eb7e5e1cbbc2e8ca7b30589a7d78362f0335d6cbc7d3fe11bdc106e7"
+      }
+    ]
+  },
+  "green-function": {
+    "source": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+    "chapter_problem_blocks": 26,
+    "curated_pool": 12,
+    "n": 12,
+    "counts": {
+      "statement": 12,
+      "answer": 0,
+      "process": 0,
+      "triple": 0,
+      "figure_reference": 2
+    },
+    "items": [
+      {
+        "id": 1,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "5c3035e28a1243202aca6408d3b5003dac514940aafbde479bf6ca382b6c8785"
+      },
+      {
+        "id": 2,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "ea6797014e32ece835955679a7375d01faffa0022fec317aa19255bc379c678a"
+      },
+      {
+        "id": 3,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "a3b78c6f1ace4964cdd28a2e91d9a6ee66f6de4e3153fc018e05b74e4d424fae"
+      },
+      {
+        "id": 4,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "598c5ba6ec3eb540664d532a5b9935a69971bcb198a045faf29cd6cd6f64f956"
+      },
+      {
+        "id": 5,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "79d85ad241a96f27bbf113ba82d23b02a7f671d2ecf2956038aa199cb4d26470"
+      },
+      {
+        "id": 9,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "bf59a5453e951cdd51444eaba53eb1f76efba4c4dba1e0d273911b77984ff57e"
+      },
+      {
+        "id": 10,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "408368e5948f5ab06fcbad79dc75cb92b32ccba66149da550a215728fd949fea"
+      },
+      {
+        "id": 13,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "320c73bb9441a4ea4500c1f1495c79f997794ab40fb3fcc112ec50c10e3206dd"
+      },
+      {
+        "id": 14,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "8bf54f403df018da25f9dfd19f1433594b348c3dbecb85b6650dcc267ff7186b"
+      },
+      {
+        "id": 15,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": true,
+        "sha256": "dcc276ec7bd75459a06389f4b8fd3011bb5b7c21daa30f978c17315d37d32cf2"
+      },
+      {
+        "id": 16,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": true,
+        "sha256": "c7313ea9ecb4ec6da8c031c13b1262a24b7ac897a262ddf21bd4656334a25afe"
+      },
+      {
+        "id": 24,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Greens.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "985d4f02d287d64cca8bd6bfcc18d8907ae31c6287298ae5bd843977d4b7c94e"
+      }
+    ]
+  },
+  "cauchy-riemann": {
+    "source": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Complex.pdf",
+    "chapter_problem_blocks": 30,
+    "curated_pool": 3,
+    "n": 3,
+    "counts": {
+      "statement": 3,
+      "answer": 0,
+      "process": 0,
+      "triple": 0,
+      "figure_reference": 0
+    },
+    "items": [
+      {
+        "id": 11,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Complex.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "c921d98e2852cc2e92bce192cfb7f2e0fc8824d5b6169aac6de80ab2979fc0cf"
+      },
+      {
+        "id": 14,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Complex.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "5190089089cb472e7578ef3000ea8147519d17be3e6cc215aa0b9c5b7133970d"
+      },
+      {
+        "id": 27,
+        "url": "https://people.uncw.edu/hermanr/pde2/PDE2notes/Complex.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "d6a0cdd28e9a93b543e729cd5798e8756fb38d3e018b2d25759e32aa8489eca5"
+      }
+    ]
+  },
+  "parseval": {
+    "source": "https://people.uncw.edu/hermanr/pde1/PDE1notes/Fourier.pdf",
+    "chapter_problem_blocks": 21,
+    "curated_pool": 3,
+    "n": 3,
+    "counts": {
+      "statement": 3,
+      "answer": 0,
+      "process": 0,
+      "triple": 0,
+      "figure_reference": 1
+    },
+    "items": [
+      {
+        "id": 3,
+        "url": "https://people.uncw.edu/hermanr/pde1/PDE1notes/Fourier.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "f732fd289ce8983bbbffd7998b2ac09574e9c035a75022ef900003f577d4f333"
+      },
+      {
+        "id": 4,
+        "url": "https://people.uncw.edu/hermanr/pde1/PDE1notes/Fourier.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": true,
+        "sha256": "56d89626b36e62151b47eb2bb985388c34df77201c8858c5d1bc09858b246d11"
+      },
+      {
+        "id": 5,
+        "url": "https://people.uncw.edu/hermanr/pde1/PDE1notes/Fourier.pdf",
+        "statement": true,
+        "answer": false,
+        "process": false,
+        "triple": false,
+        "figure_reference": false,
+        "sha256": "c2576148f4e6f48d9d6491ef79c1fb705a1a59e0fd597d0e3f152161df4e5f67"
+      }
+    ]
+  },
+  "variational": {
+    "source": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+    "curated_pool": 11,
+    "n": 11,
+    "counts": {
+      "statement": 11,
+      "answer": 0,
+      "process": 0,
+      "triple": 0
+    },
+    "figure_note": "Problem 8 has an actual figure; other drawing requirements not image-counted",
+    "items": [
+      {
+        "id": 1,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "28fe6c6d46b6c0d6ea34a3365b44cffba2e0d15e30d0ad20c23434fa5028a6b8"
+      },
+      {
+        "id": 2,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "6f0e86568944665bb6107d0f3a6e1dc5e76e7072a12164396e89781ee47c8390"
+      },
+      {
+        "id": 3,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "505f1774e8f1c4b4a545ac947326a124995b5fedf68bec833ad29dac6018632b"
+      },
+      {
+        "id": 4,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "df697a72f0af08a898dc98fe385a641b7b15c56dbf37753124b54e598c4d6deb"
+      },
+      {
+        "id": 5,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "19c55a1f6c823622f944d59ac88df540640e7dd8b22940f7ca5f0248a472cde6"
+      },
+      {
+        "id": 6,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "dc4ef298d0d036ef7cc295306ded07a628c057785c6bdf09834cd6d73b5c60f9"
+      },
+      {
+        "id": 7,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "3dedba4ff33f0e7b3babf4f5720da93d3d523735285a687510f79e6780961f8a"
+      },
+      {
+        "id": 8,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "a7c9ec901869f708f0685449a8f2526d9ca382325b11df97a604dfcf4bb93c2d"
+      },
+      {
+        "id": 9,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "8f96140e5d9b62fc0169e80d1bd3924157b7f26ad394ba48bd0a2dd1374e7cf5"
+      },
+      {
+        "id": 10,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "9e757363bd9ccd2779d642a7b537a9a7036c92658696e4654da426612b4eecdd"
+      },
+      {
+        "id": 11,
+        "url": "https://phys.libretexts.org/Bookshelves/Classical_Mechanics/Variational_Principles_in_Classical_Mechanics_(Cline)/05%3A_Calculus_of_Variations/5.E%3A_Calculus_of_Variations_(Exercises)",
+        "sha256": "8dc9517abab2482d4cb7a4d50ac18824eab1b0250814fefd0e9267c076c4b177"
+      }
+    ]
+  }
+}
