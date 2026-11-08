@@ -1280,11 +1280,11 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
                 if not found_project:
                     raise ValueError("研究项目不存在")
             exists = conn.execute(
-                "SELECT id, status, deleted_at, purge_after, size FROM docs WHERE id = ?", (doc_id,)).fetchone()
+                "SELECT id, status, deleted_at, purge_after, size, mime, name, pages FROM docs WHERE id = ?", (doc_id,)).fetchone()
             if not exists and doi:
                 # 同一篇论文的另一个 PDF(排版/压缩不同,内容哈希不同)按 DOI 去重
                 exists = conn.execute(
-                    "SELECT id, status, deleted_at, purge_after, size FROM docs WHERE doi = ? LIMIT 1",
+                    "SELECT id, status, deleted_at, purge_after, size, mime, name, pages FROM docs WHERE doi = ? LIMIT 1",
                     (doi,)).fetchone()
             if exists:
                 doc_id = str(exists[0])
@@ -1336,7 +1336,8 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
                          doc_id))
                 conn.commit()
                 return {"docId": doc_id, "duplicate": True, "doi": doi,
-                        "status": current, "pages": len(pages)}
+                        "status": current, "pages": int(exists[7] or 0),
+                        "kind": "pdf" if exists[5] == "application/pdf" or str(exists[6]).lower().endswith(".pdf") else "text"}
             evicted: list[str] = []
             if status == "temp":
                 used = conn.execute(
@@ -1441,7 +1442,8 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
             _indexes.pop(uid, None)
         return {"docId": doc_id, "duplicate": False, "pages": len(pages),
                 "sections": len(sections), "chunks": len(chunks),
-                "status": status, "title": meta["title"], "doi": doi}
+                "status": status, "title": meta["title"], "doi": doi,
+                "kind": "pdf" if kind == "pdf" else "text"}
 
 
 def _delete(uid: str, doc_id: str, *, expired_before: float | None = None) -> bool:

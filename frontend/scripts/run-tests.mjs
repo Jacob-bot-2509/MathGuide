@@ -42,6 +42,12 @@ const CASES = [
     artifact: '.regression-chart-test.cjs',
   },
   {
+    name: '相关论文按钮接线',
+    bundle: 'node --check scripts/research-related-test.mjs',
+    run: 'node scripts/research-related-test.mjs',
+    artifact: '.research-related-test.cjs',
+  },
+  {
     name: '语音数学编译器',
     bundle: 'npx esbuild scripts/speech-math-test.ts --bundle --format=cjs --outfile=.speech-math-test.cjs',
     run: 'node .speech-math-test.cjs',

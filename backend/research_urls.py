@@ -68,8 +68,17 @@ def is_safe_pdf_url(url: str) -> bool:
     return not is_forbidden_host(host) and is_trusted_pdf_host(url)
 
 
+def is_safe_page_url(url: str) -> bool:
+    """开放获取落地页:同样只允许可信来源与 https。"""
+    return is_safe_pdf_url(url)
+
+
 async def resolves_to_public_host(url: str) -> bool:
-    """下载前解析 DNS,拒绝私有/回环/保留地址,降低 DNS rebinding 风险。"""
+    """下载前解析 DNS,拒绝私有/回环/保留地址,降低 DNS rebinding 风险。
+
+    只校验 IPv4:本机代理常把 AAAA 映射到 2001:2::/48 一类保留段,
+    而 PDF 下载客户端绑定 IPv4;混入这些假 IPv6 会把正常论文全部误杀。
+    """
     if not is_https_url(url):
         return False
     try:
@@ -80,9 +89,11 @@ async def resolves_to_public_host(url: str) -> bool:
         return False
     try:
         infos = await asyncio.to_thread(
-            socket.getaddrinfo, host, 443, type=socket.SOCK_STREAM)
+            socket.getaddrinfo, host, 443, socket.AF_INET,
+            socket.SOCK_STREAM)
     except OSError:
         return False
-    if not infos:
+    ipv4 = [info for info in infos if info[0] == socket.AF_INET]
+    if not ipv4:
         return False
-    return not any(is_forbidden_host(info[4][0]) for info in infos)
+    return not any(is_forbidden_host(info[4][0]) for info in ipv4)

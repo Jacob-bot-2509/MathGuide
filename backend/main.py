@@ -123,6 +123,7 @@ routes = [
     Route("/api/research/docs/{doc_id}/annotations", research_corpus.save_annotation, methods=["POST"]),
     Route("/api/research/docs/{doc_id}/annotations/{annotation_id}", research_corpus.delete_annotation, methods=["DELETE"]),
     Route("/api/research/papers/temp", research_papers.create_temp, methods=["POST"]),
+    Route("/api/research/papers/temp-page", research_papers.create_temp_page, methods=["POST"]),
     Route("/api/research/papers/import", research_papers.import_paper, methods=["POST"]),
     Route("/api/research/papers/{doc_id}/locate", research_papers.locate, methods=["POST"]),
     Route("/api/research/papers/{doc_id}/explain-region", research_papers.explain_region, methods=["POST"]),

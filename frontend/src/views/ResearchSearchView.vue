@@ -9,10 +9,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import {
-  accessAction, accessLabelKey, canOpenInReader,
+  accessAction, accessLabelKey, canOpenInReader, externalPageUrl,
+  pageReaderUrl, safeHttpUrl,
   type FullTextCandidate, type FullTextResult,
 } from '@/utils/fulltextAccess'
 import {
+  createTempPage,
   createTempPaper,
   deletePaperHistory,
   importTempPaper,
@@ -229,12 +231,16 @@ async function searchExternal(qArg?: string): Promise<void> {
 async function findRelated(doc: ResearchDoc): Promise<void> {
   const seq = ++litSeq
   litLoading.value = true
+  // 结果区只在「全网文献」模式渲染;从文内模式点击时必须先切过去。
+  if (searchMode.value !== 'web') setSearchMode('web')
+  litIdentifier.value = null
   try {
     const res = await relatedLiterature({ doi: doc.doi, title: doc.title || doc.name })
     if (seq !== litSeq) return
     litItems.value = res.results
     litWarnings.value = res.warnings
     litSearched.value = true
+    await nextTick()
     document.querySelector('.lit')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   } catch (err) {
     if (seq !== litSeq) return
@@ -320,11 +326,12 @@ defineExpose({ locateForQuestion, reloadDocs, applyPaperActions, openDocForActio
 async function openSearchItem(item: LiteratureItem): Promise<void> {
   const url = readerUrl(item)
   if (url) {
-    await openPdfInReader(item, url)
+    await openPdfInReader(item, url, true)
     return
   }
   if (item.doi || item.title) {
-    await findFreeCopy(item)
+    // 有开放获取页就直接在当前页打开;只有拿不到任何全文时才显示摘要。
+    await findFreeCopy(item, true)
     return
   }
   previewItem.value = item
@@ -356,14 +363,15 @@ function showPreview(item: LiteratureItem, message?: string): void {
 function openFreeCopy(item: LiteratureItem): void {
   const url = readerUrl(item)
   if (url) {
-    void openPdfInReader(item, url)
+    void openPdfInReader(item, url, true)
     return
   }
-  void findFreeCopy(item)
+  void findFreeCopy(item, true)
 }
 
-/** 按 DOI/标题解析合法全文;只有 oa_pdf 才自动进阅读器。 */
-async function findFreeCopy(item: LiteratureItem): Promise<void> {
+/** 按 DOI/标题解析合法全文;只有 oa_pdf 才自动进阅读器。
+ *  navigate=true 时,站内打不开就直接在当前页打开来源,不弹摘要。 */
+async function findFreeCopy(item: LiteratureItem, navigate = false): Promise<void> {
   const key = fullTextKey(item)
   if (!key || resolvingOa.value === key) return
   resolvingOa.value = key
@@ -373,7 +381,16 @@ async function findFreeCopy(item: LiteratureItem): Promise<void> {
     fullTextResults.value = { ...fullTextResults.value, [key]: res }
     if (res.best && res.best.license) item.license = res.best.license
     if (canOpenInReader(res) && res.best) {
-      await openPdfInReader(item, res.best.url)
+      await openPdfInReader(item, res.best.url, navigate)
+      return
+    }
+    const pageUrl = pageReaderUrl(res)
+    if (navigate && pageUrl) {
+      await openPageInReader(item, pageUrl)
+      return
+    }
+    if (navigate && res.best?.url) {
+      navigateTo(res.best.url)
       return
     }
     previewItem.value = item
@@ -403,17 +420,23 @@ async function chooseCandidate(item: LiteratureItem, candidate: FullTextCandidat
   }
 }
 
-/** 外部链接只由用户显式点击;不自动跳出工作区。 */
+function navigateTo(url: string | null | undefined): void {
+  const safe = safeHttpUrl(url)
+  if (safe) window.location.assign(safe)
+}
+
+/** 开放获取页只在用户显式点击后同标签跳转;不自动离开工作区。 */
 function openExternalUrl(result: FullTextResult): void {
-  const url = result.best?.url
-  if (!url) return
-  try {
-    const parsed = new URL(url)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return
-  } catch {
+  navigateTo(externalPageUrl(result))
+}
+
+function openPreviewExternal(item: LiteratureItem, result: FullTextResult): void {
+  const pageUrl = pageReaderUrl(result)
+  if (pageUrl) {
+    void openPageInReader(item, pageUrl)
     return
   }
-  window.open(url, '_blank', 'noopener,noreferrer')
+  openExternalUrl(result)
 }
 
 function tempMeta(item: LiteratureItem) {
@@ -437,10 +460,14 @@ function tempMeta(item: LiteratureItem) {
  *  非白名单 PDF 由服务端拒绝,前端只负责展示原因。 */
 async function openExternalPaper(item: LiteratureItem): Promise<void> {
   if (!item.pdfUrl || openingPdf.value) return
-  await openPdfInReader(item, item.pdfUrl)
+  await openPdfInReader(item, item.pdfUrl, true)
 }
 
-async function openPdfInReader(item: LiteratureItem, url: string): Promise<void> {
+async function openPdfInReader(
+  item: LiteratureItem,
+  url: string,
+  navigateOnFail = false,
+): Promise<void> {
   if (openingPdf.value) return
   if (!url) {
     showPreview(item, t('search.pdfReaderUnavailable'))
@@ -449,7 +476,7 @@ async function openPdfInReader(item: LiteratureItem, url: string): Promise<void>
   if (item.imported && item.docId) {
     previewItem.value = null
     viewer.value = {
-      docId: item.docId, title: item.title, kind: 'pdf',
+      docId: item.docId, title: item.title, kind: item.readerKind || 'pdf',
       projectId: activeProject.value || null,
     }
     return
@@ -457,7 +484,7 @@ async function openPdfInReader(item: LiteratureItem, url: string): Promise<void>
   if (item.tempDocId) {
     previewItem.value = null
     viewer.value = {
-      docId: item.tempDocId, title: item.title, kind: 'pdf',
+      docId: item.tempDocId, title: item.title, kind: item.readerKind || 'pdf',
       projectId: activeProject.value || null,
     }
     return
@@ -466,15 +493,48 @@ async function openPdfInReader(item: LiteratureItem, url: string): Promise<void>
   try {
     const res = await createTempPaper(url, tempMeta(item))
     item.tempDocId = res.docId
+    item.readerKind = res.kind || 'pdf'
     previewItem.value = null
     viewer.value = {
       docId: res.docId,
       title: item.title || res.title || 'PDF',
-      kind: 'pdf',
+      kind: item.readerKind,
       projectId: activeProject.value || null,
     }
   } catch (err) {
-    showPreview(item, err instanceof Error && err.message ? err.message : t('search.pdfFail'))
+    const message = err instanceof Error && err.message
+      ? err.message
+      : t('search.pdfFail')
+    if (navigateOnFail && safeHttpUrl(url)) {
+      showToast(message)
+      navigateTo(url)
+      return
+    }
+    showPreview(item, message)
+  } finally {
+    openingPdf.value = ''
+  }
+}
+
+/** 开放获取落地页抓成临时文本论文,在站内阅读器打开。
+ *  抓取失败时才退回当前页打开,不显示摘要层。 */
+async function openPageInReader(item: LiteratureItem, url: string): Promise<void> {
+  if (openingPdf.value) return
+  openingPdf.value = url
+  try {
+    const res = await createTempPage(url, tempMeta(item))
+    item.tempDocId = res.docId
+    item.readerKind = res.kind || 'text'
+    previewItem.value = null
+    viewer.value = {
+      docId: res.docId,
+      title: item.title || res.title || 'HTML',
+      kind: item.readerKind,
+      projectId: activeProject.value || null,
+    }
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('search.pdfFail'))
+    navigateTo(url)
   } finally {
     openingPdf.value = ''
   }
@@ -494,6 +554,7 @@ async function importPaper(item: LiteratureItem): Promise<void> {
       const temp = await createTempPaper(item.pdfUrl, tempMeta(item))
       docId = temp.docId
       item.tempDocId = docId
+      item.readerKind = temp.kind || 'pdf'
     }
     let keep = true
     try {
@@ -1123,8 +1184,8 @@ onMounted(async () => {
             <button
               v-if="accessAction(previewFullText) === 'external'"
               class="lit-pdf"
-              @click="openExternalUrl(previewFullText)"
-            >{{ t('search.openExternal') }}</button>
+              @click="openPreviewExternal(previewItem, previewFullText)"
+            >{{ t('search.readInApp') }}</button>
             <button
               v-else-if="accessAction(previewFullText) === 'upload'"
               class="lit-pdf"

@@ -33,6 +33,20 @@ def test_temp_paper_rejects_publisher_host(monkeypatch):
     assert res.status_code == 400
 
 
+def test_temp_page_rejects_untrusted_host(monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rp, "require_auth", lambda request: {"uid": "u"})
+    app = Starlette(routes=[Route(
+        "/api/research/papers/temp-page", rp.create_temp_page,
+        methods=["POST"])])
+    client = TestClient(app)
+    res = client.post("/api/research/papers/temp-page", json={
+        "url": "https://evil.example/paper",
+    })
+    assert res.status_code == 400
+
+
 @pytest.fixture()
 def corpus(tmp_path, monkeypatch):
     monkeypatch.setattr(rc, "DATA_DIR", tmp_path / "research")

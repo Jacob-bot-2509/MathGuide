@@ -67,3 +67,27 @@ export function accessAction(result: FullTextResult): FullTextAction {
 export function accessLabelKey(result: FullTextResult): string {
   return LABELS[result.status] || LABELS.unknown
 }
+
+/** 只放行可安全导航的 http/https 绝对地址。 */
+export function safeHttpUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+  } catch {
+    return null
+  }
+  return url
+}
+
+/** 允许同标签跳转的开放获取页。 */
+export function externalPageUrl(result: FullTextResult): string | null {
+  return safeHttpUrl(result.best?.url)
+}
+
+/** 可在站内抓成正文阅读的 OA 落地页;PDF 链接不走这条。 */
+export function pageReaderUrl(result: FullTextResult): string | null {
+  if (result.status !== 'oa_landing') return null
+  if (result.best?.kind === 'pdf') return null
+  return safeHttpUrl(result.best?.url)
+}

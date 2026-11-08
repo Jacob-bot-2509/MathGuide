@@ -25,6 +25,45 @@ def _pdf_name(url: str) -> str:
     return name[:200]
 
 
+def _page_name(url: str) -> str:
+    path = urlparse(url).path
+    name = path.rsplit("/", 1)[-1] or "paper.html"
+    if not name.lower().endswith((".html", ".htm")):
+        name = f"{name}.html"
+    return name[:200]
+
+
+async def create_temp_page(request: Request) -> JSONResponse:
+    """把开放获取落地页抓成临时文本论文,交给站内阅读器。"""
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    body = await read_json_object(request)
+    url = str(body.get("url") or "").strip()
+    if not lit._page_url_allowed(url):
+        raise HTTPException(400, "该论文没有可用的开放获取页面")
+    metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else None
+    rc._rate(rc._upload_limiter, uid)
+    try:
+        parsed = urlparse(url)
+        if parsed.hostname in ("arxiv.org", "www.arxiv.org") and parsed.path.startswith("/abs/"):
+            pdf_url = f"https://arxiv.org/pdf/{parsed.path[5:]}"
+            data = await lit.download_allowed_pdf(pdf_url)
+            name, mime = _pdf_name(pdf_url), "application/pdf"
+        else:
+            data = await lit.download_allowed_page(url)
+            name, mime = _page_name(url), "text/html"
+        result = await asyncio.to_thread(
+            rc._ingest, uid, name, data, mime,
+            None, status="temp", origin_url=url, analyze=False,
+            metadata=metadata)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"下载网页失败: {type(exc).__name__}") from exc
+    return JSONResponse(result,
+                        headers={"Cache-Control": "no-store"})
+
+
 async def create_temp(request: Request) -> JSONResponse:
     rec = require_auth(request)
     uid = str(rec.get("uid") or "")

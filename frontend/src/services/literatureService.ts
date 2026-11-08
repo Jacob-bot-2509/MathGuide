@@ -21,6 +21,7 @@ export interface LiteratureItem {
   sources: string[]
   docId?: string
   tempDocId?: string
+  readerKind?: 'pdf' | 'text'
   imported?: boolean
   issn?: string
   publisher?: string
@@ -51,6 +52,7 @@ export interface TempPaperResult {
   pages: number
   title?: string
   doi?: string
+  kind?: 'pdf' | 'text'
 }
 
 export interface TempPaperMeta {
@@ -74,6 +76,15 @@ export async function createTempPaper(
 ): Promise<TempPaperResult> {
   return post<TempPaperResult>(
     '/api/research/papers/temp', { url, metadata }, authHeaders(), true)
+}
+
+/** 把开放获取落地页抓成临时文本论文,站内阅读 */
+export async function createTempPage(
+  url: string,
+  metadata?: TempPaperMeta,
+): Promise<TempPaperResult> {
+  return post<TempPaperResult>(
+    '/api/research/papers/temp-page', { url, metadata }, authHeaders(), true)
 }
 
 export interface ImportPaperResult {

@@ -1496,6 +1496,10 @@ def _pdf_url_allowed(url: str) -> bool:
     return research_urls.is_safe_pdf_url(url)
 
 
+def _page_url_allowed(url: str) -> bool:
+    return research_urls.is_safe_page_url(url)
+
+
 async def _download_pdf(client: httpx.AsyncClient, url: str) -> bytes:
     from urllib.parse import urljoin
 
@@ -1530,8 +1534,55 @@ async def download_allowed_pdf(url: str) -> bytes:
     async with httpx.AsyncClient(
         timeout=30, follow_redirects=False,
         headers={"User-Agent": "MathGuide/1.11 (open access PDF)"},
+        transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
     ) as client:
         return await _download_pdf(client, url)
+
+
+MAX_PAGE_BYTES = 4 * 1024 * 1024
+
+
+async def _download_page(client: httpx.AsyncClient, url: str) -> bytes:
+    """下载开放获取落地页 HTML;只接受文本响应,限制大小与跳转次数。"""
+    from urllib.parse import urljoin
+
+    for _ in range(3):
+        if not _page_url_allowed(url):
+            raise ValueError("不允许的网页地址")
+        if not await research_urls.resolves_to_public_host(url):
+            raise ValueError("页面地址解析到非公网地址")
+        async with client.stream("GET", url, follow_redirects=False) as res:
+            if res.status_code in (301, 302, 303, 307, 308):
+                url = urljoin(url, res.headers.get("location") or "")
+                continue
+            res.raise_for_status()
+            ctype = (res.headers.get("content-type") or "").lower()
+            if "html" not in ctype and not ctype.startswith("text/"):
+                raise ValueError("该链接不是网页")
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in res.aiter_bytes():
+                total += len(chunk)
+                if total > MAX_PAGE_BYTES:
+                    raise ValueError("网页超过大小上限")
+                chunks.append(chunk)
+            data = b"".join(chunks)
+        if not data.strip():
+            raise ValueError("网页内容为空")
+        return data
+    raise ValueError("重定向次数过多")
+
+
+async def download_allowed_page(url: str) -> bytes:
+    """供临时入库复用:抓取开放获取落地页,返回 HTML 字节。"""
+    if not _page_url_allowed(url):
+        raise ValueError("该论文没有可用的开放获取页面")
+    async with httpx.AsyncClient(
+        timeout=30, follow_redirects=False,
+        headers={"User-Agent": "MathGuide/1.11 (open access page)"},
+        transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
+    ) as client:
+        return await _download_page(client, url)
 
 
 def _save_pdf(uid: str, data: bytes) -> Path:
@@ -1566,6 +1617,8 @@ async def open_pdf(request: Request) -> JSONResponse:
         async with httpx.AsyncClient(
             timeout=30, follow_redirects=False,
             headers={"User-Agent": "MathGuide/1.10 (open access PDF)"},
+            # 与 resolves_to_public_host 的 IPv4 校验保持一致,避免选用代理假 IPv6。
+            transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
         ) as client:
             data = await _download_pdf(client, url)
     except ValueError as exc:
