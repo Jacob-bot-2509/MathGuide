@@ -1,0 +1,1017 @@
+{
+  "seed": 20261107,
+  "rows_scanned": {
+    "MATH": 5000,
+    "NuminaMath": 9000
+  },
+  "excluded": {
+    "MATH": 0,
+    "NuminaMath": 300
+  },
+  "source_counts": {
+    "": 5000,
+    "olympiads": 2000,
+    "amc_aime": 100,
+    "aops_forum": 600,
+    "metamath": 200,
+    "cn_k12": 2600,
+    "orca_math": 1600,
+    "cn_contest": 300,
+    "number_theory": 100,
+    "synthetic_math": 1500
+  },
+  "errors": [],
+  "topics": {
+    "orthogonal-transform": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "vector-space": {
+      "MATH": {
+        "pool_matches": 1,
+        "n": 1,
+        "counts": {
+          "statement": 1,
+          "answer_strict": 0,
+          "answer": 1,
+          "process": 1,
+          "triple_strict": 0,
+          "triple": 1,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": [
+          {
+            "statement": true,
+            "answer_strict": false,
+            "answer": true,
+            "process": true,
+            "triple_strict": false,
+            "triple": true,
+            "chinese": false,
+            "figure_marker": false,
+            "id": "precalculus/test/239",
+            "sha256": "af0c1c3c7b970355d983d33a155147aec578fc267483fa54183e4c8bda439aa1",
+            "source": ""
+          }
+        ]
+      },
+      "NuminaMath": {
+        "pool_matches": 3,
+        "n": 3,
+        "counts": {
+          "statement": 3,
+          "answer_strict": 2,
+          "answer": 2,
+          "process": 3,
+          "triple_strict": 2,
+          "triple": 2,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": [
+          {
+            "statement": true,
+            "answer_strict": true,
+            "answer": true,
+            "process": true,
+            "triple_strict": true,
+            "triple": true,
+            "chinese": false,
+            "figure_marker": false,
+            "id": "default/train/430057",
+            "sha256": "9188eeb2b6f5390bd5fe24701dc253bfd4271a074fc7f145f539888b8416de62",
+            "source": "cn_k12"
+          },
+          {
+            "statement": true,
+            "answer_strict": false,
+            "answer": false,
+            "process": true,
+            "triple_strict": false,
+            "triple": false,
+            "chinese": false,
+            "figure_marker": false,
+            "id": "default/train/120033",
+            "sha256": "d27793bf493811d38926751dbe92d8bf44a4d5a1df6f0cc0650c20dcca795e36",
+            "source": "olympiads"
+          },
+          {
+            "statement": true,
+            "answer_strict": true,
+            "answer": true,
+            "process": true,
+            "triple_strict": true,
+            "triple": true,
+            "chinese": false,
+            "figure_marker": false,
+            "id": "default/train/260081",
+            "sha256": "dd8fed76e1eaa767d6002fb41b399d06dad217eb8327cb718ac231fe9cbde48f",
+            "source": "aops_forum"
+          }
+        ]
+      }
+    },
+    "inner-product": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "fourier-series": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "fourier-transform": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "laplace-transform": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "taylor": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "power-series": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 2,
+        "n": 2,
+        "counts": {
+          "statement": 2,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 2,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": [
+          {
+            "statement": true,
+            "answer_strict": false,
+            "answer": false,
+            "process": true,
+            "triple_strict": false,
+            "triple": false,
+            "chinese": false,
+            "figure_marker": false,
+            "id": "default/train/260002",
+            "sha256": "8b7ee3f296567afe7653de52012da098c500d7f5b9d4fb7da0f230686c99d2d0",
+            "source": "aops_forum"
+          },
+          {
+            "statement": true,
+            "answer_strict": false,
+            "answer": false,
+            "process": true,
+            "triple_strict": false,
+            "triple": false,
+            "chinese": false,
+            "figure_marker": false,
+            "id": "default/train/740097",
+            "sha256": "37cb27e8343bd76efd767a5c4db201d3455e62545ad36a564a11eba171508044",
+            "source": "number_theory"
+          }
+        ]
+      }
+    },
+    "cauchy-riemann": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "green-theorem": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "divergence-theorem": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "stokes-theorem": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "line-surface-integral": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "jacobian": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "implicit-function": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "quadric-surface": {
+      "MATH": {
+        "pool_matches": 1,
+        "n": 1,
+        "counts": {
+          "statement": 1,
+          "answer_strict": 0,
+          "answer": 1,
+          "process": 1,
+          "triple_strict": 0,
+          "triple": 1,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": [
+          {
+            "statement": true,
+            "answer_strict": false,
+            "answer": true,
+            "process": true,
+            "triple_strict": false,
+            "triple": true,
+            "chinese": false,
+            "figure_marker": false,
+            "id": "intermediate_algebra/test/372",
+            "sha256": "7d6cd3a2b3dcbaeaddfeb49d860bacf22dc1e33c79b74a23547d7fa1f21a2b36",
+            "source": ""
+          }
+        ]
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "norm": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "convolution": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "generating-function": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "markov-chain": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "matrix-exponential": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "ode-system": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "prime-number-theorem": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "riemann-zeta": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "analytic-number-theory": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "variational": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "green-function": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    },
+    "parseval": {
+      "MATH": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      },
+      "NuminaMath": {
+        "pool_matches": 0,
+        "n": 0,
+        "counts": {
+          "statement": 0,
+          "answer_strict": 0,
+          "answer": 0,
+          "process": 0,
+          "triple_strict": 0,
+          "triple": 0,
+          "chinese": 0,
+          "figure_marker": 0
+        },
+        "items": []
+      }
+    }
+  }
+}

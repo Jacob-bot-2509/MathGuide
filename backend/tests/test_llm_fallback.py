@@ -127,3 +127,9 @@ def test_explicit_thinking_override_wins(monkeypatch):
     asyncio.run(_collect(llm.stream_chat("s", "u", role="deep", thinking=False)))
 
     assert seen == {"d": False}
+
+
+def test_thinking_param_uses_reasoning_effort_for_always_thinking_model():
+    assert llm._thinking_param("glm-5.3", False) == {"reasoning_effort": "low"}
+    assert llm._thinking_param("glm-5.2", False) == {"enable_thinking": False}
+    assert llm._thinking_param("glm-5.3", True) == {}
