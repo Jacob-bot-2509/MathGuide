@@ -18,6 +18,7 @@ MathGuide 后端(RAG 检索增强生成骨架)
     GET  /api/recommendation                 学习路径推荐(需 token)
     GET  /api/graph                          知识图谱节点/边/掌握度(需 token)
     GET  /api/profile                        学习画像聚合(需 token)
+    GET  /api/profile/analysis               掌握度分析快照(需 token)
 
 知识库:knowledge/*.md → rag 切片索引 → 检索 → LLM(未配置则直答)。
 """
@@ -47,6 +48,7 @@ import doc
 import docgen
 import exercise_docgen
 import graph_api
+import learning_analysis
 import profile
 import rag
 import recommendation
@@ -170,7 +172,9 @@ routes = [
     Route("/api/diagnosis/report", diagnosis.weak_points),
     Route("/api/recommendation", recommendation.recommend_points),
     Route("/api/graph", graph_api.graph_data),
+    Route("/api/graph/export", graph_api.graph_export),
     Route("/api/profile", profile.learning_profile),
+    Route("/api/profile/analysis", learning_analysis.analysis_endpoint),
     Route("/api/speech/math", chat.speech_to_math, methods=["POST"]),
     Route("/api/doc/export", doc.export_pdf, methods=["POST"]),
     Route("/api/doc/questions", docgen.questions, methods=["POST"]),

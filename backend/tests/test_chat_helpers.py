@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 
 import pytest
 from starlette.exceptions import HTTPException
 
 import chat
+import learning_analysis
+from knowledge_graph import KnowledgeGraph, KnowledgePoint
 from rate_limit import SlidingWindowLimiter
 
 
@@ -803,3 +806,90 @@ def test_intuition_cached_and_refresh(monkeypatch):
     third = client.post("/api/chat/intuition", json={**body, "refresh": True})
     assert third.status_code == 200
     assert len(calls) == 2  # 换个说法:强制重写
+
+
+# ---------- 学习分析指令 ----------
+
+def _analysis_snapshot() -> dict:
+    points = {
+        "a": KnowledgePoint("a", "点a", "第一章", 1, ()),
+        "b": KnowledgePoint("b", "点b", "第一章", 5, ("a",)),
+    }
+    graph = KnowledgeGraph(points)
+    now = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
+    at = now.isoformat(timespec="seconds")
+    return learning_analysis.build_snapshot(
+        "u", graph=graph,
+        latest_map={"a": {"pointId": "a", "score": 4, "at": at}},
+        now=now)
+
+
+def test_learning_analysis_command_skips_rag_and_returns_snapshot(monkeypatch):
+    snapshot = _analysis_snapshot()
+    monkeypatch.setattr(chat.learning_analysis, "build_snapshot", lambda uid: snapshot)
+    monkeypatch.setattr(chat.rag.llm, "is_configured", lambda: False)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("学习分析不能进入 RAG 检索")
+
+    monkeypatch.setattr(chat.rag, "search", forbidden)
+
+    resp = asyncio.run(chat._route_chat(
+        "分析我的学习进度", "学习分析", {}, {"uid": "u"},
+        {"role": "main", "research": False}, "learn"))
+    text = _joined(resp)
+
+    assert "覆盖度" in text
+    assert "点b" in text
+    assert "cmd://point/b" in text
+
+
+def test_learning_analysis_command_injects_snapshot_into_system_prompt(monkeypatch):
+    snapshot = _analysis_snapshot()
+    captured: dict = {}
+
+    async def fake_stream(system, user, role="main", **kwargs):
+        captured["system"] = system
+        captured["user"] = user
+        yield "你的覆盖度是 50%。"
+
+    monkeypatch.setattr(chat.learning_analysis, "build_snapshot", lambda uid: snapshot)
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(chat.rag.llm, "is_configured", lambda: True)
+    monkeypatch.setattr(chat.rag, "search", lambda *args, **kwargs: [])
+
+    resp = asyncio.run(chat._route_chat(
+        "分析我的学习进度", "学习分析", {}, {"uid": "u"},
+        {"role": "main", "research": False}, "learn"))
+    text = _joined(resp)
+
+    assert "覆盖度" in captured["system"]
+    assert '"diagnosed": 1' in captured["system"]
+    assert "覆盖度是 50%" in text
+    assert "cmd://point/b" in text
+
+
+def test_learning_analysis_intent_detection():
+    assert chat._is_learning_analysis_request("分析我的学习进度")
+    assert chat._is_learning_analysis_request("我的掌握情况怎么样")
+    assert chat._is_learning_analysis_request("看看我的知识图谱进度")
+    assert chat._is_learning_analysis_request("我的积分学得怎么样")
+    assert chat._is_learning_analysis_request("analyze my learning progress")
+    assert not chat._is_learning_analysis_request("什么是知识图谱")
+    assert not chat._is_learning_analysis_request("推荐我下一步学什么")
+    assert not chat._is_learning_analysis_request("")
+
+
+def test_learning_analysis_natural_language_request(monkeypatch):
+    snapshot = _analysis_snapshot()
+    monkeypatch.setattr(chat.learning_analysis, "build_snapshot", lambda uid: snapshot)
+    monkeypatch.setattr(chat.rag.llm, "is_configured", lambda: False)
+    monkeypatch.setattr(chat.rag, "search", lambda *args, **kwargs: [])
+
+    resp = asyncio.run(chat._route_chat(
+        "分析我的学习进度", None, {}, {"uid": "u"},
+        {"role": "main", "research": False}, "learn"))
+    text = _joined(resp)
+
+    assert "覆盖度" in text
+    assert "cmd://point/b" in text

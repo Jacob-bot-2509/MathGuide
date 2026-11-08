@@ -24,6 +24,7 @@ def client(temp_store, tmp_path, monkeypatch):
     app = Starlette(routes=[
         Route("/api/auth/register", auth.register, methods=["POST"]),
         Route("/api/graph", graph_api.graph_data),
+        Route("/api/graph/export", graph_api.graph_export),
     ])
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
@@ -77,3 +78,32 @@ def test_graph_marks_personal_mastery(client):
     assert by_id["set-map"]["status"] == "mastered"
     assert by_id["derivative-def"]["status"] == "weak"
     assert by_id["chain-rule"]["status"] == "new"
+
+
+def test_graph_export_is_standalone_html(client):
+    token, _ = _register(client)
+    res = client.get("/api/graph/export",
+                     headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"].startswith("text/html")
+    html = res.text
+    assert "vis-network" in html or "vis.Network" in html
+    assert "set-map" in html and "chain-rule" in html
+    assert len(html) > 100_000, "内联 vis 资源缺失,导出的 HTML 不是独立文件"
+
+
+def test_graph_export_requires_auth(client):
+    assert client.get("/api/graph/export").status_code == 401
+
+
+def test_graph_contains_networkx_layout(client):
+    token, _ = _register(client)
+    body = _get(client, token)
+    nodes = {node["id"]: node for node in body["nodes"]}
+    for node in nodes.values():
+        assert isinstance(node["x"], int)
+        assert isinstance(node["y"], int)
+        assert node["level"] >= 0
+    for node in nodes.values():
+        for prereq in node["prerequisites"]:
+            assert nodes[prereq]["x"] < node["x"]

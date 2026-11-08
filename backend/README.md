@@ -52,7 +52,8 @@ python -m venv .venv-analysis
 ```
 backend/
   main.py      # 应用入口 + 路由表 + CORS(默认只放行本机前端)+ UTF-8 输出修复
-  store.py     # JSON 持久化 + PBKDF2 密码哈希(旧格式登录时自动升级),token 24h 过期,账号删除级联 token
+  db.py        # SQLite 连接/建表/事务(WAL):users、tokens、usage、diagnoses 同库
+  store.py     # 用户与令牌(SQLite)+ PBKDF2 密码哈希,token 24h 过期,账号删除级联 token
   auth.py      # 注册 / 登录 / 登出 / 数据导出 / 注销 + require_auth(401) / require_admin(403) + 认证限流
   session_cache.py # 教材/摘要缓存,键 = (uid, sessionId),防止跨用户撞号
   http_utils.py    # JSON 请求体解析:2 MiB 上限(413)与 400 语义
@@ -63,10 +64,13 @@ backend/
   docgen.py    # 文档生成:问答导出/大纲/分节生成/PDF-Markdown-Word
   knowledge_graph/  # 知识点知识图谱:data/knowledge_points.csv(80 点,难度/前置)
                     # 加载时校验重复/缺失/自依赖/难度/无环,并计算核心度
-  diagnosis.py      # 掌握度诊断:LLM 评分或自评 → data/diagnoses.jsonl(按 uid)
+  diagnosis.py      # 掌握度诊断:LLM 评分或自评 → SQLite diagnoses 表(按 uid)
   recommendation.py # 学习路径推荐:前置门控 + 难度/核心度双策略
-  graph_api.py      # GET /api/graph:节点、依赖边、章节与个人掌握度
+  graph_layout.py   # NetworkX 分层布局(最长路径 + 重心排序,固定坐标)
+  graph_api.py      # GET /api/graph:节点、坐标、依赖边、章节与掌握度
+                    # GET /api/graph/export:Pyvis 独立 HTML 图谱
   profile.py        # GET /api/profile:诊断次数、掌握/薄弱、章节分布、最近记录
+  learning_analysis.py  # GET /api/profile/analysis:掌握度快照(覆盖/结构/瓶颈/待复核/下一步)
   rag/
     documents.py  # 知识文档加载与切片(markdown + frontmatter)
     index.py      # 检索索引:关键词 + bigram + 向量混合打分(闲聊噪声门限)
@@ -82,6 +86,17 @@ backend/
   data/        # 运行时生成:用户 / 令牌 / 用量数据(勿入库)
   tools/       # 质检与运维:评测 / 自检 / key 校验 / 知识同步 / 用量报表
 ```
+
+## 存储与迁移(SQLite)
+
+- 库文件:`backend/data/mathguide.db`(WAL 模式,`busy_timeout=10s`)。
+- 表:`users`(手机号唯一索引)、`tokens`(SHA-256 键,uid 索引)、`usage`(uid/ts 索引)、`diagnoses`(uid+知识点索引)。
+- 旧数据:`users.json`、`tokens.json`、`usage.jsonl`、`usage.json`、`diagnoses.jsonl`
+  在首次建库时导入一次(`meta` 表记录迁移标记);旧文件保留作备份,不删除。
+- 容错:缺失的旧文件按空处理;旧文件损坏或读取失败会阻止迁移,保留原文件供修复后重试。
+- 并发:账号删除、令牌吊销、游客清理在单事务内完成;WAL 允许读写并行。
+- 备份/重置:停服务后备份 `mathguide.db` 及其 `-wal`/`-shm` 和旧文件;删除数据库后旧文件会重新导入。
+- 只读看板(可选):`pip install -r requirements-dashboard.txt && streamlit run tools/dashboard.py`。
 
 ## 知识库文档格式
 
@@ -200,6 +215,9 @@ MG_ALIYUN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 MG_ALIYUN_API_KEY=sk-xxx            # 阿里云百炼(Qwen 系列)
 MG_ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 MG_ZHIPU_API_KEY=xxx                # 智谱开放平台(GLM 系列)
+# 可选:DeepSeek(OpenAI 兼容;base 默认 https://api.deepseek.com/v1)
+# MG_DEEPSEEK_API_KEY=sk-xxx
+# MG_ROLE_DEEP=deepseek:deepseek-chat
 MG_ROLE_MAIN=aliyun:qwen3.8-flash   # 主力:日常问答 / 改写 / 复核 / 摘要
 MG_ROLE_BACKUP=zhipu:glm-5.2        # 备胎:主力失败自动切换(异平台容灾)
 MG_ROLE_DEEP=aliyun:qwen3.8-max     # 深答:证明 / 竞赛 / 研究综合
@@ -273,8 +291,10 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/diagnosis` | 掌握度诊断:`{pointId, answer}` 走模型评分,或 `{pointId, selfRating}` 自评 |
 | GET | `/api/diagnosis/report` | 薄弱点报告(低于 3 分,按分数升序/核心度降序) |
 | GET | `/api/recommendation` | 学习路径推荐:`?strategy=difficulty|coreness&limit=5` |
-| GET | `/api/graph` | 知识图谱节点、依赖边、章节与当前账号掌握度 |
+| GET | `/api/graph` | 知识图谱节点、依赖边、章节、NetworkX 坐标与当前账号掌握度 |
+| GET | `/api/graph/export` | 导出可独立打开的 Pyvis HTML 图谱(vis 资源内联) |
 | GET | `/api/profile` | 学习画像:诊断次数、掌握/薄弱、章节分布与最近 10 条 |
+| GET | `/api/profile/analysis` | 学习分析快照:覆盖度、掌握结构、章节均衡、前置瓶颈、待复核与下一步 |
 | POST | `/api/speech/math` | 语音识别文本 → 数学符号转写(SSE) |
 | POST | `/api/doc/export` | 研究综述 → 结构化 → PDF 下载 |
 | POST | `/api/doc/questions` | 从当前会话提取问答对 → `{items}` |
@@ -320,13 +340,14 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
   否则所有请求会被当成同一个 IP。
 - **密码**:新账号用 PBKDF2-HMAC-SHA256(20 万轮);旧版单轮 SHA-256 记录在登录成功后
   自动升级,并全程用 `secrets.compare_digest` 比较。
-- **token 落盘**:`tokens.json` 只存 token 的 SHA-256(`sha256:` 前缀),不存明文;
-  旧明文键在启动时自动迁移,已签发 token 不需要重新登录。
+- **token 落盘**:SQLite `tokens` 表只存 token 的 SHA-256(`sha256:` 前缀),不存明文;
+  旧 `tokens.json` 在首次建库时导入一次并保留备份,可能含明文令牌,应限制文件访问;已签发 token 不需要重新登录。
 - **测评注册**:`MG_DEMO_MODE=0` 后开放注册关闭;配置 `MG_INVITE_CODES` 后,
   持邀请码的手机号仍可注册。固定验证码与游客登录保持关闭。
 - **认证限流**:`MG_AUTH_RATE_MAX` / `MG_AUTH_RATE_WINDOW` 可调;多人共用出口 IP 时调大。
 - **留存清理**:`MG_ACCOUNT_TTL_DAYS` 删除长期未登录账号(管理员白名单保留),
-  `MG_USAGE_TTL_DAYS` 清理过期用量;默认 `0` 关闭,启动时执行。
+  `MG_USAGE_TTL_DAYS` 清理过期用量;默认 `0` 关闭,启动时执行。清理会同步处理旧备份;
+  备份无法读取或修改时保留账号以便修复后重试。
 - **安全响应头**:API 统一加 `X-Content-Type-Options` / `Referrer-Policy` /
   `X-Frame-Options` / `Permissions-Policy`;HTTPS 或 `MG_ENABLE_HSTS=1` 时加 HSTS。
 - **前端 CSP 与反代**:见仓库 `deploy/Caddyfile` / `deploy/nginx.conf`;前端主题脚本已拆成
@@ -335,7 +356,7 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
   绝不能当作全局唯一键使用。
 - **账号数据**:`POST /api/account/export` 导出账号与用量元数据(不含口令/令牌);
   `POST /api/account/delete` 需要当前密码(验证码/第三方账号需输入 `DELETE`/`注销`),
-  删除账号、全部 token 与该账号用量记录。前端同时清理本机学习数据。
+  删除账号、全部 token、用量和诊断记录,并从迁移保留的旧文件中移除该账号;前端同时清理本机学习数据。
 
 ### 聊天流(SSE)
 
@@ -346,7 +367,7 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
   "history": [{"role": "user", "content": "…"}] }
 ```
 
-- `cmd` 与前端指令栏对应(概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围 / 待办清单);
+- `cmd` 与前端指令栏对应(学习分析 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围 / 待办清单);
   `history` 为最近几轮对话(≤16 条 × 400 字,后端校验),多轮上下文由后端组装;
 - `categoryKey` 为前端板块预判,**后端不消费**:四路裁决(研究/知识/框架/会话)由
   `rag/route.py` 依问句判定,板块只用于前端会话归并与归纳面板,字段作契约预留;
@@ -388,12 +409,17 @@ data: [DONE]
   缺失前置、自依赖、难度 1~5 与无环;核心度 = 传递后继数。当前覆盖高数上册 80 个知识点。
 - **掌握度诊断** `POST /api/diagnosis`:带 `answer` 时由模型按助教口径输出
   `{"score": 1~5, "comment": "..."}`(解析失败返回 503,不写脏数据);带 `selfRating`
-  时直接用自评。记录落 `data/diagnoses.jsonl`,只存 uid / 知识点 id / 分数 / 短评语 / 来源 / 时间。
+  时直接用自评。记录写入 SQLite `diagnoses` 表,只存 uid / 知识点 id / 分数 / 短评语 / 来源 / 时间。
 - **薄弱点** 分数 `< 3` 记为薄弱;`GET /api/diagnosis/report` 按分数升序、核心度降序返回。
 - **推荐** 前置知识点全部 `≥ 3` 才进入候选:未诊断 = 新学,已诊断但 `< 3` = 复习,
   已达标不推荐。`difficulty` 策略难度升序,`coreness` 策略核心度降序,同分按拓扑序。
 - **学习画像** `GET /api/profile` 聚合诊断次数、掌握/薄弱数、章节均分、薄弱前 5 与最近 10 条;
   提问历史仍保存在浏览器本地,随账号导出由前端合并。
+- **学习分析** `GET /api/profile/analysis` 由服务端计算快照(覆盖度、掌握结构、章节均衡、
+  前置瓶颈、待复核、下一步);待复核按艾宾浩斯遗忘曲线 `R(t,s)=exp(-t/tau(s))`,
+  `tau=30+15*(s-1)` 天,`R<0.6` 进入待复核;遗忘只影响复习优先级,不改写原始诊断分,
+  也不阻断前置。聊天指令「学习分析」把同一份快照交给模型解读,模型只叙述不补数,
+  回答末尾追加 `cmd://point/<id>` 图谱定位链接。
 - **50 题评测集** `evaluation/data/course-50.jsonl`(概念/计算/证明/选择/不可答):
 
 ```bash
@@ -410,10 +436,12 @@ data: [DONE]
 
 ## 用量统计(测试期成本可见)
 
-每次聊天流结束后自动记账到 `data/usage.jsonl`(**只记 uid**,不记手机号/昵称;
-字段:时间、指令、字符数、模型角色;内存保留最近 2000 条,磁盘追加写入、超过 2200 行时
-压实一次;兼容旧 `data/usage.json` 数组并在下次写入时迁移,旧文件保留作备份但会先清洗 phone/user)。
-服务启动时 `usage.migrate_identity()` 会把 JSONL 与 `usage.json` 备份里的 `phone`/`user` 都换成 uid 并删除 PII。
+每次聊天流结束后自动记账到 SQLite `usage` 表(**只记 uid**,不记手机号/昵称;
+字段:时间、指令、字符数、模型角色;写后裁到最近 2000 条)。
+旧 `data/usage.jsonl` / `usage.json` 在首次建库时导入一次,旧文件保留作备份;
+服务启动时 `usage.migrate_identity()` 清洗库中记录和旧 `usage.json` 的 `phone`/`user`,
+旧 `usage.jsonl` 仍可能包含个人信息,应限制访问。注销时会从旧文件清除该账号记录。
+迁移遇到损坏文件或读取失败会停止并保留原文件,修复后重启重试;导入与完成标记在同一事务中。
 PDF 导出只记调用次数,不把文件字节数混进「回复字数」:
 
 ```bash
@@ -438,7 +466,7 @@ cd ../frontend && npm test                   # 前端自测(编译器/SSE/MathTe
 ## 演示账号
 
 验证码登录演示码固定 `123456`(仅 `MG_DEMO_MODE=1` 且本机绑定时可用)。注册产生的数据
-落盘于 `data/`(users.json 存加盐口令摘要,tokens.json 存令牌);清空这两个文件即可重置演示环境。
+落盘于 `data/mathguide.db`(SQLite:用户、令牌、用量、诊断);删除该库后重启会重新导入仍保留的旧文件,不能单靠删除数据库清空历史数据。
 `tools/preflight.py` 在演示账号不存在时会自动注册,新 clone 也能直接自检。
 
 ## 质检工具(tools/)
@@ -458,6 +486,8 @@ python tools/research_backup.py --uid u-xxx --out backup.tar.gz    # 科研语�
 python tools/preflight.py      # 演示前自检:前后端健康 + 登录 + 抽查题端到端,全绿才可演示
 python tools/fetch_knowledge.py --source arxiv --limit 20   # 从 arXiv 拉论文摘要入库
 python tools/usage.py          # 用量报表:总调用 / 回复字数 / 按用户 / 按模型角色
+# 可选只读看板(不影响主服务):pip install -r requirements-dashboard.txt
+#   streamlit run tools/dashboard.py
 ```
 
 - **eval_recall**:新增文档后必须重跑,未命中项按报告补 keywords,目标封闭集 100% 命中;

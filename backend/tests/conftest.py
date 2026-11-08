@@ -15,8 +15,11 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import auth  # noqa: E402
+import db  # noqa: E402
 import diagram_alerts  # noqa: E402
 import diagram_metrics  # noqa: E402
+import diagnosis  # noqa: E402
+import research_corpus  # noqa: E402
 import research_diagrams  # noqa: E402
 import session_cache  # noqa: E402
 import store  # noqa: E402
@@ -43,27 +46,46 @@ def clean_global_state(monkeypatch):
 
 @pytest.fixture()
 def temp_store(tmp_path, monkeypatch):
-    """独立 users/tokens 文件与空内存表。"""
+    """独立 SQLite 库 + 旧 JSON 路径;每个测试一个全新库文件。"""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+    monkeypatch.setattr(db, "DB_PATH", data_dir / "mathguide.db")
     monkeypatch.setattr(store, "DATA_DIR", data_dir)
+    monkeypatch.setattr(store, "DB_PATH", data_dir / "mathguide.db")
     monkeypatch.setattr(store, "USERS_PATH", data_dir / "users.json")
     monkeypatch.setattr(store, "TOKENS_PATH", data_dir / "tokens.json")
-    store._users = {}
-    store._tokens = {}
-    store._phone_index = {}
+    # 同一临时库:usage/diagnosis 的旧文件路径也必须指向临时目录,
+    # 否则初始化会把 backend/data 里的真实旧数据导入测试库(计数被污染)
+    monkeypatch.setattr(usage, "PATH", data_dir / "usage.jsonl")
+    monkeypatch.setattr(usage, "LEGACY_PATH", data_dir / "usage.json")
+    monkeypatch.setattr(diagnosis, "PATH", data_dir / "diagnoses.jsonl")
+    monkeypatch.setattr(research_corpus, "DATA_DIR", data_dir / "research")
+    monkeypatch.setattr(store, "USERS_PATH", data_dir / "users.json")
+    monkeypatch.setattr(store, "TOKENS_PATH", data_dir / "tokens.json")
+    store.reset_for_tests()
+    usage.reset_for_tests()
+    diagnosis.reset_for_tests()
     yield store
-    store._users = {}
-    store._tokens = {}
-    store._phone_index = {}
+    store.reset_for_tests()
+    usage.reset_for_tests()
+    diagnosis.reset_for_tests()
 
 
 @pytest.fixture()
 def temp_usage(tmp_path, monkeypatch):
-    """独立 usage 文件与空内存缓存,避免测试碰 backend/data/usage.jsonl。"""
-    monkeypatch.setattr(usage, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(usage, "PATH", tmp_path / "usage.jsonl")
-    monkeypatch.setattr(usage, "LEGACY_PATH", tmp_path / "usage.json")
+    """独立 SQLite 库与旧 usage 文件路径,避免测试碰 backend/data。"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(db, "DB_PATH", data_dir / "mathguide.db")
+    monkeypatch.setattr(store, "DATA_DIR", data_dir)
+    monkeypatch.setattr(usage, "DATA_DIR", data_dir)
+    monkeypatch.setattr(usage, "PATH", data_dir / "usage.jsonl")
+    monkeypatch.setattr(usage, "LEGACY_PATH", data_dir / "usage.json")
+    monkeypatch.setattr(diagnosis, "PATH", data_dir / "diagnoses.jsonl")
+    store.reset_for_tests()
     usage.reset_for_tests()
+    diagnosis.reset_for_tests()
     yield usage
+    store.reset_for_tests()
     usage.reset_for_tests()
+    diagnosis.reset_for_tests()

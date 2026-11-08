@@ -59,20 +59,28 @@ def test_eviction_never_drops_the_current_key():
 
 # ---------- 登出:伪造 token 不触发全量写盘 ----------
 
-def test_revoke_unknown_token_does_not_write(temp_store, monkeypatch):
-    calls = []
-    monkeypatch.setattr(store, "_save", lambda path, data: calls.append(path))
+def test_revoke_unknown_token_does_not_change_store(temp_store):
+    temp_store.create_user({
+        "uid": "u-1", "phone": None, "password_hash": None,
+        "authMethod": "wechat", "nickname": "n", "avatar": "preset:sum",
+        "createdAt": "2026-01-01T00:00:00",
+    })
+    token = temp_store.issue_token("u-1")
+    before = temp_store.tokens_snapshot()
     assert store.revoke_token("bogus-token") is False
-    assert calls == [], "伪造 token 触发了 tokens.json 全量重写(写放大)"
+    assert temp_store.tokens_snapshot() == before, "伪造 token 改动了令牌表"
+    assert temp_store.resolve_token(token)["uid"] == "u-1"
 
 
-def test_revoke_known_token_writes_once(temp_store, monkeypatch):
-    calls = []
-    monkeypatch.setattr(store, "_save", lambda path, data: calls.append(path))
-    store._tokens[store._token_key("real-token")] = {"uid": "u-1", "issued": 0}
-    assert store.revoke_token("real-token") is True
-    assert len(calls) == 1
-    assert store._token_key("real-token") not in store._tokens
+def test_revoke_known_token_removes_one_row(temp_store):
+    temp_store.create_user({
+        "uid": "u-1", "phone": None, "password_hash": None,
+        "authMethod": "wechat", "nickname": "n", "avatar": "preset:sum",
+        "createdAt": "2026-01-01T00:00:00",
+    })
+    token = temp_store.issue_token("u-1")
+    assert temp_store.revoke_token(token) is True
+    assert temp_store.resolve_token(token) is None
 
 
 def test_logout_is_rate_limited(temp_store):
@@ -88,13 +96,13 @@ def test_logout_is_rate_limited(temp_store):
     assert 429 in codes, "伪造 token 刷登出没有被限流: %s" % codes
 
 
-# ---------- store:数据文件是合法 JSON 但不是对象 ----------
+# ---------- store:旧数据文件是合法 JSON 但不是对象 ----------
 
 @pytest.mark.parametrize("payload", ["[]", "null", "123", '"str"'])
-def test_load_non_dict_json_degrades_to_empty(tmp_path, payload):
-    path = tmp_path / "data.json"
-    path.write_text(payload, encoding="utf-8")
-    assert store._load(path) == {}
+def test_legacy_non_dict_json_blocks_migration(temp_store, payload):
+    temp_store.USERS_PATH.write_text(payload, encoding="utf-8")
+    with pytest.raises(ValueError):
+        temp_store.init()
 
 
 # ---------- 知识库:坏文件只跳过,不拖垮启动 ----------

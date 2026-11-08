@@ -11,7 +11,8 @@ from exercises import schema
 from exercises.store import ExerciseStore
 
 
-def make(exercise_id: str, *, topic="analysis", languages=("zh",), type_="compute", difficulty=2):
+def make(exercise_id: str, *, topic="analysis", languages=("zh",), type_="compute",
+         difficulty=2, cross_topics=()):
     content = {}
     for lang in languages:
         if lang == "zh":
@@ -39,7 +40,7 @@ def make(exercise_id: str, *, topic="analysis", languages=("zh",), type_="comput
         "difficulty_source": "rule",
         "primary_topic": topic,
         "topics": [topic],
-        "cross_topics": [],
+        "cross_topics": list(cross_topics),
         "tag_source": "rule",
     }
     return schema.parse_exercise(data)
@@ -52,6 +53,7 @@ def client(monkeypatch):
         make("doc:both", languages=("zh", "en")),
         make("doc:en", languages=("en",), topic="algebra"),
         make("doc:proof", languages=("zh",), type_="proof"),
+        make("doc:taylor", languages=("zh",), cross_topics=("taylor",)),
     ], tiers=("research",))
     monkeypatch.setattr(exercise_docgen, "_store", lambda: store)
     monkeypatch.setattr(exercise_docgen, "require_auth", lambda request: {"uid": "u-1"})
@@ -71,10 +73,10 @@ def test_plan_reports_available_counts_by_language(client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["available"]["zh"] == 3
+    assert data["available"]["zh"] == 4
     assert data["available"]["both"] == 1
-    assert data["selected"] == 3
-    assert data["missing"] == 7
+    assert data["selected"] == 4
+    assert data["missing"] == 6
 
 
 def test_generate_questions_mode_does_not_leak_answers(client):
@@ -145,3 +147,38 @@ def _text(document):
         for section in document["sections"]
         for paragraph in section.get("paragraphs", [])
     )
+
+
+def test_generate_uses_requirement_in_title_and_abstract(client):
+    response = client.post("/api/doc/exercise", json={
+        "topics": ["analysis"], "count": 1, "lang": "zh", "mode": "questions",
+        "requirement": "中值定理证明专项",
+    })
+
+    assert response.status_code == 200
+    document = response.json()["document"]
+    assert document["title"] == "中值定理证明专项"
+    assert "中值定理证明专项" in document["abstract"]
+
+
+def test_requirement_infers_type_and_difficulty(client):
+    response = client.post("/api/doc/exercise", json={
+        "topics": ["analysis"], "count": 1, "lang": "zh", "mode": "questions",
+        "requirement": "只要证明题，基础难度",
+    })
+
+    assert response.status_code == 200
+    filters = response.json()["document"]["exercise_meta"]["filters"]
+    assert filters["types"] == ["proof"]
+    assert filters["difficulty"] == [1, 2]
+
+
+def test_requirement_infers_cross_topic(client):
+    response = client.post("/api/doc/exercise", json={
+        "topics": ["analysis"], "count": 1, "lang": "zh", "mode": "questions",
+        "requirement": "泰勒展开专项",
+    })
+
+    assert response.status_code == 200
+    filters = response.json()["document"]["exercise_meta"]["filters"]
+    assert filters["cross_topics"] == ["taylor"]

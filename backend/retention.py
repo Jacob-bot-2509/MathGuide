@@ -11,6 +11,7 @@ import os
 from datetime import datetime
 
 import auth
+import diagnosis
 import research_corpus
 import session_cache
 import store
@@ -35,14 +36,17 @@ def run(now: datetime | None = None) -> dict[str, int]:
     if account_days > 0:
         users = store.users_snapshot()
         exempt = {uid for uid, rec in users.items() if auth.is_admin(rec)}
-        removed = store.prune_inactive(account_days, exempt, now=now)
-        for rec in removed:
+        def clean_user(rec):
+            nonlocal removed_usage
             uid = str(rec.get("uid") or "")
             phone = str(rec.get("phone") or "")
             if uid:
                 removed_usage += usage.delete_user(uid, phone)
-                session_cache.clear_user(uid)
+                diagnosis.delete_user(uid)
                 research_corpus.delete_user(uid)
+                session_cache.clear_user(uid)
+
+        removed = store.prune_inactive(account_days, exempt, now=now, before_delete=clean_user)
         removed_accounts = len(removed)
 
     if usage_days > 0:

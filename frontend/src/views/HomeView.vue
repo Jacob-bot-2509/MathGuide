@@ -31,15 +31,6 @@ const MODULES = [
     route: '/research',
     disabled: false,
   },
-  {
-    cls: 'card-graph',
-    icon: '◇',
-    titleKey: 'home.graphTitle',
-    descKey: 'home.graphDesc',
-    statusKey: 'home.open',
-    route: '/graph',
-    disabled: false,
-  },
 ]
 
 /** 两区聊天页在双域部署下跨子域跳转;单域部署仍走 SPA 路由 */
@@ -72,7 +63,6 @@ function open(m: (typeof MODULES)[number]) {
         <nav class="links">
           <a class="link" :href="hrefFor('/learn')">{{ t('home.learnTitle') }}</a>
           <a class="link" :href="hrefFor('/research')">{{ t('home.researchTitle') }}</a>
-          <RouterLink class="link" to="/graph">{{ t('home.graphTitle') }}</RouterLink>
         </nav>
         <button class="dots" :title="t('common.settings')" @click="router.push('/settings')">···</button>
         <button class="avatar-btn" :title="userState.info?.nickname" @click="router.push('/settings')">
@@ -278,7 +268,7 @@ function open(m: (typeof MODULES)[number]) {
 .modules {
   margin-top: 8vh;
   display: grid;
-  grid-template-columns: repeat(3, minmax(200px, 300px));
+  grid-template-columns: repeat(2, minmax(200px, 300px));
   gap: 30px;
 }
 
@@ -313,11 +303,6 @@ function open(m: (typeof MODULES)[number]) {
 .card-research {
   --card-accent: var(--magenta);
   --card-glow: var(--glow-magenta);
-}
-
-.card-graph {
-  --card-accent: var(--violet);
-  --card-glow: var(--glow-violet);
 }
 
 .card:hover {

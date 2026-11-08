@@ -1,110 +1,112 @@
-"""
-用量统计(演示/测试期成本可见):
-- record():每次聊天请求应答后写一条,追加到 data/usage.jsonl(内存只保留最近 2000 条);
-  新记录只存 uid,不存手机号/昵称,避免把身份信息混进成本日志;
-- migrate_identity():启动时把旧记录的 phone/user 字段迁移为 uid 并删除,旧数据不保留 PII;
-- for_user()/delete_user():账号导出/注销时读取或删除该账号的记录;
-- summary():按账号与模型角色汇总,供 /api/stats 接口与 tools/usage.py 报表共用;
-- 兼容旧格式 data/usage.json(JSON 数组):首次读取时加载,下一次写入时迁移为 JSONL,
-  旧文件保留作备份,不主动删除;
-- 客户端中途断开则本次不记账(记录在流结束后落盘)。
+"""用量统计(SQLite):每次调用记一条,只存 uid,不存手机号/昵称。
 
-为什么用 JSONL:旧实现每记一条都要读出整个数组、追加、再全量重写,
-记录越多写放大越严重;追加一行是 O(1)。文件行数允许比内存上限多
-_COMPACT_SLACK 行,超过后整体压实一次,避免每写一条都重写。
+- record():写入后把表裁到最近 _MAX_CALLS 条,避免无限增长；
+- for_user()/delete_user():账号导出/注销时读取或删除该账号记录；
+- summary():按账号与模型角色汇总,供 /api/stats 与 tools/usage.py 共用；
+- migrate_identity():旧记录里的 phone/user 换成 uid 并删除 PII；
+- 旧 usage.jsonl / usage.json 在首次建库时导入一次,文件保留作备份；
+- 客户端中途断开不记账(调用方在流结束后才调用 record)。
 """
+from __future__ import annotations
+
 import json
-import threading
 import time
 from pathlib import Path
+
+import db
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PATH = DATA_DIR / "usage.jsonl"
 LEGACY_PATH = DATA_DIR / "usage.json"
-_lock = threading.Lock()
 _MAX_CALLS = 2000
-_COMPACT_SLACK = 200
 
-# 进程内缓存:启动/首次访问时从磁盘装载,之后读写都走内存 + 追加
-_calls: list[dict] | None = None
-_loaded_key: str | None = None
-_file_lines = 0
-_needs_compact = False
+MIGRATION_KEY = "migrated:usage"
+_ready_key: str | None = None
+
+_FIELDS = ("ts", "cmd", "prompt_len", "reply_len", "role", "research", "workspace")
 
 
-def _read_all() -> tuple[list[dict], int, bool]:
-    """返回 (有效记录, 文件行数, 是否需要整体重写)。"""
-    if PATH.exists():
-        calls: list[dict] = []
-        lines = 0
-        dirty = False
-        try:
-            with PATH.open(encoding="utf-8") as fh:
-                for raw in fh:
-                    lines += 1
-                    text = raw.strip()
-                    if not text:
-                        continue
-                    try:
-                        entry = json.loads(text)
-                    except json.JSONDecodeError:
-                        dirty = True
-                        continue
-                    if isinstance(entry, dict):
-                        calls.append(entry)
-                    else:
-                        dirty = True
-        except OSError:
-            return [], 0, False
-        return calls, lines, dirty
-
-    if LEGACY_PATH.exists():
-        try:
-            data = json.loads(LEGACY_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return [], 0, False
-        if isinstance(data, list):
-            calls = [entry for entry in data if isinstance(entry, dict)]
-            return calls, len(data), True
-        return [], 0, True
-
-    return [], 0, False
+def _doc(entry: dict) -> str:
+    return json.dumps(entry, ensure_ascii=False)
 
 
-def _ensure_loaded() -> None:
-    global _calls, _loaded_key, _file_lines, _needs_compact
-    key = str(PATH)
-    if _calls is not None and _loaded_key == key:
+def _entry(row) -> dict:
+    try:
+        data = json.loads(row["doc"])
+    except (TypeError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("ts", row["ts"])
+    data.setdefault("uid", row["uid"])
+    return data
+
+
+def _doc_entry(row) -> dict:
+    """只读 doc 列的行(无 ts/uid 列)使用。"""
+    try:
+        data = json.loads(row["doc"])
+    except (TypeError, json.JSONDecodeError):
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def init() -> None:
+    """建库并一次性导入旧 JSONL/JSON;可重复调用。"""
+    global _ready_key
+    db.init()
+    key = f"{db.DB_PATH}"
+    if _ready_key == key and db.get_meta(MIGRATION_KEY) == "1":
         return
-    calls, lines, needs_compact = _read_all()
-    if len(calls) > _MAX_CALLS:
-        calls = calls[-_MAX_CALLS:]
-        needs_compact = True
-    _calls = calls
-    _loaded_key = key
-    _file_lines = lines
-    _needs_compact = needs_compact
+    with db.transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if not conn.execute("SELECT 1 FROM meta WHERE key = ? AND value = '1'", (MIGRATION_KEY,)).fetchone():
+            _import_legacy(conn)
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, '1')", (MIGRATION_KEY,))
+    _ready_key = key
 
 
-def _write_all_locked(entries: list[dict]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = PATH.with_suffix(PATH.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        for entry in entries:
-            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    tmp.replace(PATH)
+def _read_legacy_entries() -> list[dict]:
+    if PATH.exists():
+        return db.read_jsonl(PATH)
+    raw = db.read_json(LEGACY_PATH)
+    if raw is None and not LEGACY_PATH.exists():
+        return []
+    if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
+        raise ValueError(f"{LEGACY_PATH}: 用量文件必须是对象列表")
+    return raw
 
 
-def _append_locked(entry: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with PATH.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+def _import_legacy(conn) -> None:
+    if conn.execute("SELECT 1 FROM usage LIMIT 1").fetchone():
+        raise ValueError("用量表不为空,不能自动迁移旧数据")
+    for item in _read_legacy_entries():
+        uid = str(item.get("uid") or "")
+        ts = item.get("ts") if isinstance(item.get("ts"), (int, float)) else 0.0
+        conn.execute(
+            "INSERT INTO usage(uid, ts, doc) VALUES(?, ?, ?)",
+            (uid, float(ts), _doc(item)),
+        )
+
+
+def _conn():
+    init()
+    return db.connect()
+
+
+def _trim(conn) -> None:
+    """只保留最近 _MAX_CALLS 条;按 id 倒序取阈值,再删更早的行。"""
+    row = conn.execute(
+        "SELECT id FROM usage ORDER BY id DESC LIMIT 1 OFFSET ?",
+        (max(0, _MAX_CALLS - 1),),
+    ).fetchone()
+    if row is not None:
+        conn.execute("DELETE FROM usage WHERE id < ?", (row["id"],))
 
 
 def record(*, uid: str, cmd: str, prompt_len: int, reply_len: int,
            role: str, research: bool, ts: float, workspace: str = "learn") -> None:
-    """追加一条调用记录;只存 uid,不存手机号/昵称。
-    workspace 区分学习辅助与科学研究,旧调用方不传按 learn 记。"""
+    """写入一条调用记录;只存 uid,不存手机号/昵称。"""
     entry = {
         "ts": round(ts, 1),
         "uid": uid or "anonymous",
@@ -115,23 +117,21 @@ def record(*, uid: str, cmd: str, prompt_len: int, reply_len: int,
         "research": research,
         "workspace": workspace if workspace in ("learn", "research") else "learn",
     }
-    global _calls, _file_lines, _needs_compact
-    with _lock:
-        _ensure_loaded()
-        if _calls is None:  # 理论上不会发生;保证后续 append 有落点
-            _calls = []
-        calls = _calls
-        calls.append(entry)
-        if len(calls) > _MAX_CALLS:
-            del calls[:-_MAX_CALLS]
+    conn = _conn()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO usage(uid, ts, doc) VALUES(?, ?, ?)",
+                (entry["uid"], float(entry["ts"]), _doc(entry)),
+            )
+            _trim(conn)
+    finally:
+        conn.close()
 
-        if _needs_compact or _file_lines + 1 > _MAX_CALLS + _COMPACT_SLACK:
-            _write_all_locked(_calls)
-            _file_lines = len(_calls)
-            _needs_compact = False
-        else:
-            _append_locked(entry)
-            _file_lines += 1
+
+def _all_entries(conn) -> list[dict]:
+    rows = conn.execute("SELECT id, uid, ts, doc FROM usage ORDER BY id").fetchall()
+    return [_entry(row) for row in rows]
 
 
 def _sanitize_entry(entry: dict, phone_to_uid: dict[str, str]) -> bool:
@@ -145,14 +145,9 @@ def _sanitize_entry(entry: dict, phone_to_uid: dict[str, str]) -> bool:
     return True
 
 
-def _sanitize_legacy_locked(phone_to_uid: dict[str, str]) -> int:
-    """旧 usage.json 备份也含 phone/user:原地清洗,避免迁移后仍留一份 PII。"""
-    if not LEGACY_PATH.exists():
-        return 0
-    try:
-        raw = json.loads(LEGACY_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return 0
+def _sanitize_legacy_file(phone_to_uid: dict[str, str]) -> int:
+    """旧 usage.json 备份也含 phone/user:原地清洗,避免迁移后仍留 PII。"""
+    raw = db.read_json(LEGACY_PATH)
     if not isinstance(raw, list):
         return 0
     cleaned: list[dict] = []
@@ -174,36 +169,27 @@ def _sanitize_legacy_locked(phone_to_uid: dict[str, str]) -> int:
 
 
 def migrate_identity(phone_to_uid: dict[str, str]) -> int:
-    """把旧记录的 phone/user 迁移成 uid 并删除 PII 字段。
-
-    旧记录没有 uid,只有 phone(手机号)或 user(昵称)。启动时用当前
-    phone → uid 索引回填;找不到对应账号的记录归为 anonymous。返回改动条数。
-    旧 usage.json 备份也一并清洗,不能只洗 JSONL 而把 PII 留在备份里。
-    """
-    global _calls, _file_lines, _needs_compact
-    with _lock:
-        _ensure_loaded()
-        calls = _calls or []
-        changed = 0
-        for entry in calls:
-            if _sanitize_entry(entry, phone_to_uid):
-                changed += 1
-        if changed:
-            _write_all_locked(calls)
-            _file_lines = len(calls)
-            _needs_compact = False
-        changed += _sanitize_legacy_locked(phone_to_uid)
-        return changed
-
-
-def _prune_legacy_locked(cutoff: float) -> int:
-    """按 ts 清理旧 usage.json 备份;返回删除条数。"""
-    if not LEGACY_PATH.exists():
-        return 0
+    """把旧记录的 phone/user 迁移成 uid 并删除 PII;返回改动条数。"""
+    conn = _conn()
+    changed = 0
     try:
-        raw = json.loads(LEGACY_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return 0
+        rows = conn.execute("SELECT id, uid, ts, doc FROM usage").fetchall()
+        with conn:
+            for row in rows:
+                entry = _doc_entry(row)
+                if _sanitize_entry(entry, phone_to_uid):
+                    conn.execute(
+                        "UPDATE usage SET uid = ?, doc = ? WHERE id = ?",
+                        (str(entry.get("uid") or "anonymous"), _doc(entry), row["id"]),
+                    )
+                    changed += 1
+    finally:
+        conn.close()
+    return changed + _sanitize_legacy_file(phone_to_uid)
+
+
+def _prune_legacy_file(cutoff: float) -> int:
+    raw = db.read_json(LEGACY_PATH)
     if not isinstance(raw, list):
         return 0
     kept: list[object] = []
@@ -227,55 +213,44 @@ def prune_older_than(days: float, now: float | None = None) -> int:
     if days <= 0:
         return 0
     cutoff = (time.time() if now is None else now) - days * 86400
-    global _calls, _file_lines, _needs_compact
-    with _lock:
-        _ensure_loaded()
-        calls = _calls or []
-        kept = [
-            entry for entry in calls
-            if not (
-                isinstance(entry.get("ts"), (int, float))
-                and entry["ts"] < cutoff
-            )
-        ]
-        removed = len(calls) - len(kept)
-        if removed:
-            _calls = kept
-            _write_all_locked(kept)
-            _file_lines = len(kept)
-            _needs_compact = False
-        return removed + _prune_legacy_locked(cutoff)
+    conn = _conn()
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            backup_removed = _prune_legacy_file(cutoff)
+            db.remove_jsonl(PATH, lambda item: isinstance(item.get("ts"), (int, float))
+                            and item["ts"] < cutoff)
+            cur = conn.execute("DELETE FROM usage WHERE ts < ?", (cutoff,))
+            removed = cur.rowcount
+        return removed + backup_removed
+    finally:
+        conn.close()
 
 
 def for_user(uid: str, phone: str = "") -> list[dict]:
     """导出某账号的用量元数据;不返回旧记录里的 phone/user 字段。"""
-    with _lock:
-        _ensure_loaded()
-        calls = list(_calls or [])
-    fields = ("ts", "cmd", "prompt_len", "reply_len", "role", "research", "workspace")
+    conn = _conn()
+    try:
+        entries = _all_entries(conn)
+    finally:
+        conn.close()
     out: list[dict] = []
-    for entry in calls:
+    for entry in entries:
         if entry.get("uid") == uid or (phone and entry.get("phone") == phone):
-            out.append({key: entry.get(key) for key in fields})
+            out.append({key: entry.get(key) for key in _FIELDS})
     return out
 
 
-def _delete_from_legacy_locked(uid: str, phone: str) -> int:
-    """从旧 usage.json 备份中删除账号记录;返回删除条数。"""
-    if not LEGACY_PATH.exists():
+def _delete_from_legacy_file(uid: str, phone: str) -> int:
+    raw = db.read_json(LEGACY_PATH)
+    if raw is None and not LEGACY_PATH.exists():
         return 0
-    try:
-        raw = json.loads(LEGACY_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return 0
-    if not isinstance(raw, list):
-        return 0
+    if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
+        raise ValueError(f"{LEGACY_PATH}: 用量文件必须是对象列表")
     kept: list[object] = []
     removed = 0
     for item in raw:
-        if isinstance(item, dict) and (
-            item.get("uid") == uid or (phone and item.get("phone") == phone)
-        ):
+        if item.get("uid") == uid or (phone and item.get("phone") == phone):
             removed += 1
             continue
         kept.append(item)
@@ -289,38 +264,37 @@ def _delete_from_legacy_locked(uid: str, phone: str) -> int:
 
 def delete_user(uid: str, phone: str = "") -> int:
     """删除某账号的用量记录(含旧 phone 记录与 usage.json 备份);返回删除条数。"""
-    global _calls, _file_lines, _needs_compact
-    with _lock:
-        _ensure_loaded()
-        calls = _calls or []
-        kept = [
-            entry for entry in calls
-            if not (entry.get("uid") == uid or (phone and entry.get("phone") == phone))
-        ]
-        removed = len(calls) - len(kept)
-        if removed:
-            _calls = kept
-            _write_all_locked(kept)
-            _file_lines = len(kept)
-            _needs_compact = False
-        return removed + _delete_from_legacy_locked(uid, phone)
+    conn = _conn()
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            victim_ids = [
+                row["id"] for row in conn.execute("SELECT id, doc FROM usage").fetchall()
+                if (_doc_entry(row).get("uid") == uid
+                    or (phone and _doc_entry(row).get("phone") == phone))
+            ]
+            backup_removed = _delete_from_legacy_file(uid, phone)
+            db.remove_jsonl(PATH, lambda item: item.get("uid") == uid
+                            or (phone and item.get("phone") == phone))
+            conn.executemany("DELETE FROM usage WHERE id = ?", [(item,) for item in victim_ids])
+        return len(victim_ids) + backup_removed
+    finally:
+        conn.close()
 
 
 def summary() -> dict:
-    """汇总:总调用数 / 总字数 / 按账号 / 按模型角色"""
-    with _lock:
-        _ensure_loaded()
-        calls = list(_calls or [])
+    """汇总:总调用数 / 总字数 / 按账号 / 按模型角色。"""
+    conn = _conn()
+    try:
+        calls = _all_entries(conn)
+    finally:
+        conn.close()
     users: dict[str, dict] = {}
     roles: dict[str, int] = {}
     total_chars = 0
     for c in calls:
         key = str(c.get("uid") or "anonymous")
-        u = users.setdefault(key, {
-            "uid": key,
-            "calls": 0,
-            "chars": 0,
-        })
+        u = users.setdefault(key, {"uid": key, "calls": 0, "chars": 0})
         u["calls"] += 1
         u["chars"] += int(c.get("reply_len") or 0)
         role = c.get("role") or "main"
@@ -335,10 +309,7 @@ def summary() -> dict:
 
 
 def reset_for_tests() -> None:
-    """清空进程内缓存(测试切换临时路径时使用)。"""
-    global _calls, _loaded_key, _file_lines, _needs_compact
-    with _lock:
-        _calls = None
-        _loaded_key = None
-        _file_lines = 0
-        _needs_compact = False
+    """测试切换临时库时调用:清掉就绪标记并按 db.DB_PATH 重建。"""
+    global _ready_key
+    _ready_key = None
+    db.reset_for_tests()

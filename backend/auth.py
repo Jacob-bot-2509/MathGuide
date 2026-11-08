@@ -332,7 +332,17 @@ async def login(request: Request) -> JSONResponse:
             # 上限 0 = 禁止游客登录:直接拒绝。不要走 prune —— 被拒的请求
             # 不该产生写副作用(否则会顺手删掉现存的游客账号)
             raise HTTPException(429, "guest limit reached")
-        store.prune_guests(max_guests - 1)
+        def clean_guest(rec):
+            import diagnosis
+            import research_corpus
+
+            uid = str(rec.get("uid") or "")
+            usage.delete_user(uid, str(rec.get("phone") or ""))
+            diagnosis.delete_user(uid)
+            research_corpus.delete_user(uid)
+            session_cache.clear_user(uid)
+
+        store.prune_guests(max_guests - 1, before_delete=clean_guest)
         if store.guest_count() >= max_guests:
             raise HTTPException(429, "guest limit reached")
         raw_nickname = body.get("nickname", "")
@@ -435,12 +445,12 @@ async def delete_account(request: Request) -> JSONResponse:
     import diagnosis
 
     diagnosis.delete_user(uid)
-    store.delete_user(uid)
-    session_cache.clear_user(uid)
-    # 科研语料是服务端持久数据,注销时必须一起删,否则删号后论文仍留在磁盘
+    # ?????????,???????
     import research_corpus
 
     research_corpus.delete_user(uid)
+    store.delete_user(uid)
+    session_cache.clear_user(uid)
     response = JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
     response.delete_cookie(COOKIE_NAME, domain=_cookie_domain(), path="/")
     return response

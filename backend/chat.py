@@ -36,6 +36,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
 import config
+import learning_analysis
 import rag
 import research_actions
 import research_corpus
@@ -67,7 +68,7 @@ _DONE = "data: [DONE]\n\n"  # SSE 收尾标记(由 _sse 统一补,生成器不�
 WELCOME_ZH = (
     "**欢迎回到 MATHGUIDE · 学习辅助**\n\n"
     "我是 MG,你的高等数学学习与研究助手。直接提问即可,或用下方指令:"
-    "概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 待办清单。\n\n"
+    "学习分析 / 章节知识导航 / 问题记录 / 公式查询手册 / 待办清单。\n\n"
     "问题的**板块我会自动识别**,先给严谨的推导与结论;需要通俗解释时,"
     "点回答下的「换个直观说法」即可;"
     "中文、英文提问都可以。\n\n"
@@ -1447,6 +1448,63 @@ async def speech_to_math(request: Request) -> StreamingResponse:
     return _sse(gen())
 
 
+_ANALYSIS_TOPICS = (
+    "学习进度", "学习情况", "掌握情况", "学习分析", "知识图谱", "薄弱点",
+    "学得怎么样", "学得如何",
+)
+_ANALYSIS_EN = (
+    "my learning progress",
+    "analyze my learning",
+    "my progress",
+    "my mastery",
+    "my knowledge graph",
+)
+
+
+def _is_learning_analysis_request(question: str) -> bool:
+    """自然语言触发的学习分析:第一人称 + 学习进度语义,避免劫持普通提问。"""
+    text = (question or "").strip()
+    if not text:
+        return False
+    if "我的" in text and any(topic in text for topic in _ANALYSIS_TOPICS):
+        return True
+    lower = text.lower()
+    return any(marker in lower for marker in _ANALYSIS_EN)
+
+
+async def _gen_learning_analysis(uid: str, question: str, zh: bool):
+    """「学习分析」指令:服务端算快照,模型只解读;末尾补图谱定位链接。
+
+    数据为空或模型未配置时走确定性报告,保证指令永远可用、且不编数字。
+    """
+    snapshot = await asyncio.to_thread(learning_analysis.build_snapshot, uid)
+    text = ""
+    if snapshot.get("dataQuality") == "none" or not rag.llm.is_configured():
+        text = learning_analysis.fallback_report(snapshot, zh=zh)
+    else:
+        system = learning_analysis.system_prompt(snapshot, zh=zh)
+        user = question or ("分析我的学习进度" if zh else "Analyze my learning progress")
+        parts: list[str] = []
+        try:
+            async for delta in rag.llm.stream_chat(
+                    system, user, role="main", thinking=False):
+                parts.append(delta)
+                yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+        except Exception as exc:  # noqa: BLE001 分析失败降级为确定性报告
+            print(f"[chat] 学习分析模型失败,降级: {exc}")
+            text = learning_analysis.fallback_report(snapshot, zh=zh)
+            if parts:
+                text = "\n\n" + text
+
+    if text:
+        async for frame in _frames(text):
+            yield frame
+    footer = learning_analysis.footer_links(snapshot, zh=zh)
+    if footer:
+        async for frame in _frames(footer, pace=False):
+            yield frame
+
+
 async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta: dict,
                       workspace: str = "learn"):
     """业务路由(与安全外壳分离):欢迎语 / 附件 / 章节导航 / 研究 / LLM / 直答"""
@@ -1549,6 +1607,14 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # RAG:检索知识片段 → 路由 → LLM 或直答
     question = _strip_meta(prompt, cmd)
     zh = _is_chinese(question)
+
+    # 学习分析:指令或自然语言要求时,不检索知识库,直接解读服务端快照
+    analysis_request = cmd == "学习分析" or (
+        cmd is None and workspace == "learn"
+        and _is_learning_analysis_request(question))
+    if analysis_request:
+        meta["role"] = "main"
+        return _sse(_gen_learning_analysis(uid, question, zh))
 
     # 章节导航(教材正文随提示词携带):不检索知识库、不走研究路由
     if cmd in ("章节知识导航", "章节知识指引"):
