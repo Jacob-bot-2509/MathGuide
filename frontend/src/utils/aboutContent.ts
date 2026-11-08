@@ -6,8 +6,8 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.19.0'
-export const APP_STABLE_VERSION = 'v1.19.0'
+export const APP_VERSION = 'v1.20.0'
+export const APP_STABLE_VERSION = 'v1.20.0'
 export const APP_STABLE_DATE = '2026-11-08'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
@@ -51,6 +51,56 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '图解放大视图:桌面端左右分屏、移动端浮动窗口,支持双指缩放、拖动、键盘移动与全屏锁定;全屏后缩放不会缩回,点击放大区外关闭。',
+        en: 'Diagram focus view: a desktop split pane and a mobile floating window with pinch zoom, dragging, keyboard movement and fullscreen locking; fullscreen no longer shrinks on zoom, and clicking outside closes it.',
+      },
+      {
+        zh: '3D 图解视角保持:切换焦点不再重算相机,当前旋转与缩放保持不变;隐藏内核修复了全屏窗口被缩回的问题。',
+        en: '3D diagram camera preservation: switching focus no longer recomputes the camera, so the current rotation and zoom stay put; the hidden kernel also stops fullscreen windows from shrinking.',
+      },
+      {
+        zh: '科研图解:新增规划模式、数据表确定性数据图与手动绑定数据表;回归图表只接受服务端返回的回归数据,不在前端重算。',
+        en: 'Research diagrams: planning mode, deterministic data plots from tables and manual table binding; regression charts only accept server-side regression data and never recompute in the browser.',
+      },
+      {
+        zh: '科研分析:独立 analysis worker 运行 OLS 多元线性与多项式回归,数据表提供回归接口与图表,聊天按回归规格重算结果。',
+        en: 'Research analysis: an isolated analysis worker runs OLS multiple linear and polynomial regression, data tables expose regression APIs and charts, and chat recomputes results from the regression specification.',
+      },
+      {
+        zh: '合法全文与来源:支持 DOI、arXiv、标题等多标识符解析、全文状态与来源能力信息,新增计算机学科与 DBLP 来源;不绕过付费墙。',
+        en: 'Legal full text and sources: multi-identifier resolution for DOI, arXiv and titles, full-text status and source capability information, plus computer science and DBLP; paywalls are never bypassed.',
+      },
+      {
+        zh: '合并 v1.19.0 习题库:6,776 道中英双语习题、翻译校验与清理管线,以及题目、答案、解析、答案卡、合并卷五种文档模式。',
+        en: 'Merged the v1.19.0 exercise bank: 6,776 bilingual exercises, a translation validation and cleanup pipeline, and five document modes: questions, answers, solutions, answer key and combined.',
+      },
+    ],
+  },
+  {
+    version: 'v1.19.0',
+    date: '2026-11-08',
+    status: 'released',
+    items: [
+      {
+        zh: '习题题库:6,776 道中英双语题,覆盖 NuminaMath、MATH、OlympiadBench、CLP 与 Kuttler,全部通过题干、答案、完整过程质量门。',
+        en: 'Exercise bank: 6,776 bilingual items from NuminaMath, MATH, OlympiadBench, CLP and Kuttler, all passing the question, answer and full-solution quality gate.',
+      },
+      {
+        zh: '翻译管线:统一公式占位符,校验数字与 LaTeX 结构,支持断点续跑与 429 退避,并清理误译、提示词泄漏与中英混杂。',
+        en: 'Translation pipeline: unified formula placeholders, numeric and LaTeX structure checks, resumable runs with 429 backoff, and cleanup of mistranslations, prompt leakage and mixed languages.',
+      },
+      {
+        zh: '习题集文档生成:按板块、交叉主题、题型、难度、数量与语言筛选,输出 PDF、Markdown 或 Word。',
+        en: 'Exercise document generation: filter by topic, cross-topic, type, difficulty, count and language, then export PDF, Markdown or Word.',
+      },
+    ],
+  },
+  {
+    version: 'v1.18.0',
+    date: '2026-11-03',
+    status: 'released',
     items: [
       {
         zh: '高等代数几何表示:子空间、线性映射、行列式、方程组、特征方向、内积、二次型、双线性、酉/辛、仿射/射影与 SVD 全部由语义层确定性构图。',
