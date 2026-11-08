@@ -60,6 +60,15 @@ def test_extract_and_restore_math_round_trip():
     assert restore_math(template, placeholders) == text
 
 
+def test_extract_environment_block_as_single_placeholder():
+    text = r"Use \begin{equation*} x=1 \end{equation*} and $y=2$."
+    template, placeholders = extract_math(text)
+
+    assert template.count("[[M") == 2
+    assert placeholders[0] == r"\begin{equation*} x=1 \end{equation*}"
+    assert restore_math(template, placeholders) == text
+
+
 def test_validate_rejects_missing_placeholder():
     template, placeholders = extract_math("Compute $x+1$.")
     check = validate_translation(

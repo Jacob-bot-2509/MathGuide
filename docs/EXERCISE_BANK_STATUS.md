@@ -2,6 +2,8 @@
 
 - 更新：2026-11-08
 - 数据：`backend/data/exercises/bilingual/all.jsonl`（gitignored，需单独投放）
+- 来源级单语文件：`backend/data/exercises/staging/{kuttler,clp,clp2}.jsonl` 与对应 `.manifest.json`
+- 补题合并结果：`backend/data/exercises/supplement/all.jsonl`
 - 定位：供实验/内测临时使用的题库；**人工复验未完成**，不可用于正式评分或对外承诺正确率。
 
 ## 1. 规模
@@ -87,7 +89,7 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8000
 cd backend
 python tools/import_kuttler.py
 python tools/merge_supplement.py \
-  data/exercises/supplement/kuttler.jsonl \
+  data/exercises/staging/kuttler.jsonl \
   data/exercises/staging/clp.jsonl \
   data/exercises/staging/clp2.jsonl
 python tools/translate_exercises.py \

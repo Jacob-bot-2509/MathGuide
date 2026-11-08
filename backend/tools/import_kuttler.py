@@ -36,7 +36,7 @@ def fetch(url: str, cache_dir: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="导入 Kuttler 习题")
     parser.add_argument("--input", default="data/exercises/bilingual/input-all.jsonl")
-    parser.add_argument("--output", default="data/exercises/supplement/kuttler.jsonl")
+    parser.add_argument("--output", default="data/exercises/staging/kuttler.jsonl")
     parser.add_argument("--cache", default="data/exercises/cache")
     args = parser.parse_args()
 
@@ -50,6 +50,8 @@ def main() -> int:
         stats[prefix] = {"url": url, "accepted": len(parsed), "skipped": skipped}
 
     existing = list(load_jsonl(Path(args.input))) if Path(args.input).exists() else []
+    # 同源旧结果不参与去重;否则重跑导入会把已入库的 Kuttler 全判成重复。
+    existing = [item for item in existing if not item.id.startswith("kuttler:")]
     # 只把新题与现库比对;全量 dedupe 在 6800+ 题上会退化成 O(n²)。
     exact = {question_hash(item.content[item.original_language].question) for item in existing}
     grams = [
@@ -87,6 +89,27 @@ def main() -> int:
     }
     (output.parent / (output.stem + ".report.json")).write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    rejected: dict[str, int] = {}
+    for page in stats.values():
+        for reason, count in page["skipped"].items():
+            rejected[reason] = rejected.get(reason, 0) + count
+    manifest = {
+        "schema_version": 1,
+        "source": "kuttler",
+        "tier": kuttler.SOURCE.tier,
+        "license": kuttler.SOURCE.license,
+        "license_url": kuttler.SOURCE.url,
+        "license_scope": kuttler.SOURCE.license_scope,
+        "attribution": kuttler.SOURCE.attribution,
+        "parsed": len(items) + sum(rejected.values()),
+        "accepted": len(kept),
+        "duplicates": len(dropped),
+        "rejected": dict(sorted(rejected.items())),
+    }
+    (output.parent / (output.stem + ".manifest.json")).write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))

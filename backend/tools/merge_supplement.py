@@ -25,23 +25,28 @@ def main() -> int:
     args = parser.parse_args()
 
     existing = list(load_jsonl(Path(args.existing))) if Path(args.existing).exists() else []
+    input_items = []
+    for path in args.inputs:
+        input_items.extend(load_jsonl(Path(path)))
+    # 重跑合并时,同一批来源的旧副本不算重复,否则第二次会把整批补题丢掉。
+    prefixes = {item.id.split(":", 1)[0] for item in input_items}
+    existing = [item for item in existing if item.id.split(":", 1)[0] not in prefixes]
     exact = {question_hash(item.content[item.original_language].question) for item in existing}
     grams = [ngrams(item.content[item.original_language].question) for item in existing]
 
     kept = []
     dropped = []
-    for path in args.inputs:
-        for item in load_jsonl(Path(path)):
-            question = item.content[item.original_language].question
-            duplicate = question_hash(question) in exact or any(
-                jaccard(ngrams(question), gram) >= THRESHOLD for gram in grams
-            )
-            if duplicate:
-                dropped.append({"id": item.id, "source": item.source.name})
-                continue
-            kept.append(item)
-            exact.add(question_hash(question))
-            grams.append(ngrams(question))
+    for item in input_items:
+        question = item.content[item.original_language].question
+        duplicate = question_hash(question) in exact or any(
+            jaccard(ngrams(question), gram) >= THRESHOLD for gram in grams
+        )
+        if duplicate:
+            dropped.append({"id": item.id, "source": item.source.name})
+            continue
+        kept.append(item)
+        exact.add(question_hash(question))
+        grams.append(ngrams(question))
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

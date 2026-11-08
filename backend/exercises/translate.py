@@ -15,6 +15,8 @@ TranslatorAsync = Callable[[str, str, str], Awaitable[str]]
 _MATH_RE = re.compile(
     r"(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$[^$\n]+?\$)"
 )
+# CLP/教材常用 \begin{equation*}...\end{equation*} 包公式;不先摘出来会被当正文翻译。
+_ENV_BLOCK_RE = re.compile(r"(\\begin\{([A-Za-z*]+)\}[\s\S]+?\\end\{\2\})")
 _PLACEHOLDER_RE = re.compile(r"\[\[M\d+\]\]")
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 _CJK_RE = re.compile(r"[㐀-鿿]")
@@ -61,7 +63,8 @@ def extract_math(text: str) -> tuple[str, tuple[str, ...]]:
         placeholders.append(match.group(1))
         return f"[[M{len(placeholders)}]]"
 
-    return _MATH_RE.sub(replace, text), tuple(placeholders)
+    value = _ENV_BLOCK_RE.sub(replace, text)
+    return _MATH_RE.sub(replace, value), tuple(placeholders)
 
 
 def restore_math(template: str, placeholders: Sequence[str]) -> str:
