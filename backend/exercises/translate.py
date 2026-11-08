@@ -170,14 +170,74 @@ def validate_translation(
 
 
 def _prose_in_math(text: str) -> bool:
-    """中文题干被整段包在 $...$ 里时,公式占位会吞掉正文。
-
-    这类文本没法靠占位符翻译;强行输出会得到“英文版仍是中文”。
-    """
+    """中文题干被整段包在 $...$ 里时,公式占位会吞掉正文。"""
     template, _ = extract_math(text)
     if not _CJK_RE.search(text):
         return False
     return not _CJK_RE.search(_prose(template))
+
+
+def _mostly_cjk(text: str) -> bool:
+    cjk = len(_CJK_RE.findall(text))
+    return cjk >= 5 and cjk >= len(text) * 0.2
+
+
+def validate_prose_math(source: str, translated: str, target_lang: str) -> TranslationCheck:
+    """校验“正文包在公式里”的译文:数字和 LaTeX 命令不能丢,不能残留中文。"""
+    reasons: list[str] = []
+    if _numbers(source) - _numbers(translated):
+        reasons.append("number_mismatch")
+    missing_commands = Counter(_COMMAND_RE.findall(source)) - Counter(
+        _COMMAND_RE.findall(translated)
+    )
+    if missing_commands:
+        reasons.append("command_mismatch")
+    if not latex_balanced(translated):
+        reasons.append("unbalanced_latex")
+    if _LEAK_RE.search(translated):
+        reasons.append("prompt_leak")
+    if target_lang == "en":
+        if not _PROSE_RUN_RE.search(_prose(translated)):
+            reasons.append("target_language_mismatch")
+        if len(_CJK_RE.findall(translated)) >= 4:
+            reasons.append("residual_chinese")
+    source_len = max(len(re.sub(r"\s+", "", source)), 1)
+    ratio = len(re.sub(r"\s+", "", translated)) / source_len
+    if source_len >= 10 and (ratio < 0.5 or ratio > 3.0):
+        reasons.append("length_ratio_out_of_range")
+    return TranslationCheck(ok=not reasons, reasons=tuple(reasons))
+
+
+async def _translate_prose_math_async(text, source_lang, target_lang, translator):
+    translated = await translator(text, source_lang, target_lang)
+    if not isinstance(translated, str):
+        raise TranslationError(("translator_returned_non_string",))
+    check = validate_prose_math(text, translated, target_lang)
+    if not check.ok:
+        raise TranslationError(check.reasons)
+    return translated.strip()
+
+
+def _translate_prose_math(text, source_lang, target_lang, translator):
+    translated = translator(text, source_lang, target_lang)
+    if not isinstance(translated, str):
+        raise TranslationError(("translator_returned_non_string",))
+    check = validate_prose_math(text, translated, target_lang)
+    if not check.ok:
+        raise TranslationError(check.reasons)
+    return translated.strip()
+
+
+async def _translate_field_async(text, source_lang, target_lang, translator):
+    if target_lang == "en" and _prose_in_math(text):
+        return await _translate_prose_math_async(text, source_lang, target_lang, translator)
+    return await _translate_text_async(text, source_lang, target_lang, translator)
+
+
+def _translate_field(text, source_lang, target_lang, translator):
+    if target_lang == "en" and _prose_in_math(text):
+        return _translate_prose_math(text, source_lang, target_lang, translator)
+    return _translate_text(text, source_lang, target_lang, translator)
 
 
 def _answer_needs_translation(answer: str) -> bool:
@@ -265,20 +325,15 @@ def translate_exercise(
     """生成目标语言内容;失败抛 TranslationError,原对象不变。"""
     _check_target(exercise, target_lang)
     source = exercise.content[exercise.original_language]
-    if target_lang == "en" and any(
-        _prose_in_math(text)
-        for text in (source.question, source.answer, source.solution, *source.solution_steps)
-    ):
-        raise TranslationError(("prose_in_math",))
-    question = _translate_text(source.question, exercise.original_language, target_lang, translator)
+    question = _translate_field(source.question, exercise.original_language, target_lang, translator)
     answer = (
-        _translate_text(source.answer, exercise.original_language, target_lang, translator)
+        _translate_field(source.answer, exercise.original_language, target_lang, translator)
         if _answer_needs_translation(source.answer)
         else source.answer
     )
-    solution = _translate_text(source.solution, exercise.original_language, target_lang, translator)
+    solution = _translate_field(source.solution, exercise.original_language, target_lang, translator)
     steps = tuple(
-        _translate_text(step, exercise.original_language, target_lang, translator)
+        _translate_field(step, exercise.original_language, target_lang, translator)
         for step in source.solution_steps
     )
     return _apply_translation(exercise, target_lang, question, answer, solution, steps, model)
@@ -310,26 +365,21 @@ async def translate_exercise_async(
 ) -> schema.Exercise:
     _check_target(exercise, target_lang)
     source = exercise.content[exercise.original_language]
-    if target_lang == "en" and any(
-        _prose_in_math(text)
-        for text in (source.question, source.answer, source.solution, *source.solution_steps)
-    ):
-        raise TranslationError(("prose_in_math",))
-    question = await _translate_text_async(
+    question = await _translate_field_async(
         source.question, exercise.original_language, target_lang, translator
     )
     answer = (
-        await _translate_text_async(
+        await _translate_field_async(
             source.answer, exercise.original_language, target_lang, translator
         )
         if _answer_needs_translation(source.answer)
         else source.answer
     )
-    solution = await _translate_text_async(
+    solution = await _translate_field_async(
         source.solution, exercise.original_language, target_lang, translator
     )
     steps = tuple([
-        await _translate_text_async(
+        await _translate_field_async(
             step, exercise.original_language, target_lang, translator
         )
         for step in source.solution_steps

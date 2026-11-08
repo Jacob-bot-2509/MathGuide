@@ -8,10 +8,12 @@ import pytest
 from exercises import schema
 from exercises.translate import (
     TranslationError,
+    _prose_in_math,
     extract_math,
     restore_math,
     translate_exercise,
     translate_exercise_async,
+    validate_prose_math,
     validate_translation,
 )
 
@@ -284,6 +286,32 @@ def test_validate_rejects_stray_math_delimiter():
 
     assert check.ok is False
     assert "stray_math_delimiter" in check.reasons
+
+
+def test_prose_in_math_detects_chinese_wrapped_formula():
+    assert _prose_in_math(r"$已知函数 f(x)=x^2+1$")
+    assert not _prose_in_math("已知函数 $f(x)=x^2+1$")
+
+
+def test_prose_math_validation_accepts_english_translation():
+    source = r"$已知函数 f(x)=x^2+1$"
+    translated = r"Given the function $f(x)=x^2+1$."
+
+    assert validate_prose_math(source, translated, "en").ok is True
+
+
+def test_prose_math_validation_rejects_residual_chinese():
+    source = r"$已知函数 f(x)=x^2+1$"
+    translated = r"Given the function $已知函数$."
+
+    assert "residual_chinese" in validate_prose_math(source, translated, "en").reasons
+
+
+def test_prose_math_validation_rejects_missing_command():
+    source = r"$\frac{1}{2} 已知$"
+    translated = "Given the value 1/2."
+
+    assert "command_mismatch" in validate_prose_math(source, translated, "en").reasons
 
 
 def test_validate_rejects_unbalanced_latex():
