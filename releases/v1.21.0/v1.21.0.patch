@@ -1,0 +1,916 @@
+diff --git a/backend/main.py b/backend/main.py
+index 0da5a11..54b374a 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -123,6 +123,7 @@ routes = [
+     Route("/api/research/docs/{doc_id}/annotations", research_corpus.save_annotation, methods=["POST"]),
+     Route("/api/research/docs/{doc_id}/annotations/{annotation_id}", research_corpus.delete_annotation, methods=["DELETE"]),
+     Route("/api/research/papers/temp", research_papers.create_temp, methods=["POST"]),
++    Route("/api/research/papers/temp-page", research_papers.create_temp_page, methods=["POST"]),
+     Route("/api/research/papers/import", research_papers.import_paper, methods=["POST"]),
+     Route("/api/research/papers/{doc_id}/locate", research_papers.locate, methods=["POST"]),
+     Route("/api/research/papers/{doc_id}/explain-region", research_papers.explain_region, methods=["POST"]),
+diff --git a/backend/research_corpus.py b/backend/research_corpus.py
+index e1a62d0..8fb9b2d 100644
+--- a/backend/research_corpus.py
++++ b/backend/research_corpus.py
+@@ -1280,11 +1280,11 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
+                 if not found_project:
+                     raise ValueError("研究项目不存在")
+             exists = conn.execute(
+-                "SELECT id, status, deleted_at, purge_after, size FROM docs WHERE id = ?", (doc_id,)).fetchone()
++                "SELECT id, status, deleted_at, purge_after, size, mime, name, pages FROM docs WHERE id = ?", (doc_id,)).fetchone()
+             if not exists and doi:
+                 # 同一篇论文的另一个 PDF(排版/压缩不同,内容哈希不同)按 DOI 去重
+                 exists = conn.execute(
+-                    "SELECT id, status, deleted_at, purge_after, size FROM docs WHERE doi = ? LIMIT 1",
++                    "SELECT id, status, deleted_at, purge_after, size, mime, name, pages FROM docs WHERE doi = ? LIMIT 1",
+                     (doi,)).fetchone()
+             if exists:
+                 doc_id = str(exists[0])
+@@ -1336,7 +1336,8 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
+                          doc_id))
+                 conn.commit()
+                 return {"docId": doc_id, "duplicate": True, "doi": doi,
+-                        "status": current, "pages": len(pages)}
++                        "status": current, "pages": int(exists[7] or 0),
++                        "kind": "pdf" if exists[5] == "application/pdf" or str(exists[6]).lower().endswith(".pdf") else "text"}
+             evicted: list[str] = []
+             if status == "temp":
+                 used = conn.execute(
+@@ -1441,7 +1442,8 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
+             _indexes.pop(uid, None)
+         return {"docId": doc_id, "duplicate": False, "pages": len(pages),
+                 "sections": len(sections), "chunks": len(chunks),
+-                "status": status, "title": meta["title"], "doi": doi}
++                "status": status, "title": meta["title"], "doi": doi,
++                "kind": "pdf" if kind == "pdf" else "text"}
+ 
+ 
+ def _delete(uid: str, doc_id: str, *, expired_before: float | None = None) -> bool:
+diff --git a/backend/research_lit.py b/backend/research_lit.py
+index fca3f02..eed8e03 100644
+--- a/backend/research_lit.py
++++ b/backend/research_lit.py
+@@ -1496,6 +1496,10 @@ def _pdf_url_allowed(url: str) -> bool:
+     return research_urls.is_safe_pdf_url(url)
+ 
+ 
++def _page_url_allowed(url: str) -> bool:
++    return research_urls.is_safe_page_url(url)
++
++
+ async def _download_pdf(client: httpx.AsyncClient, url: str) -> bytes:
+     from urllib.parse import urljoin
+ 
+@@ -1530,10 +1534,57 @@ async def download_allowed_pdf(url: str) -> bytes:
+     async with httpx.AsyncClient(
+         timeout=30, follow_redirects=False,
+         headers={"User-Agent": "MathGuide/1.11 (open access PDF)"},
++        transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
+     ) as client:
+         return await _download_pdf(client, url)
+ 
+ 
++MAX_PAGE_BYTES = 4 * 1024 * 1024
++
++
++async def _download_page(client: httpx.AsyncClient, url: str) -> bytes:
++    """下载开放获取落地页 HTML;只接受文本响应,限制大小与跳转次数。"""
++    from urllib.parse import urljoin
++
++    for _ in range(3):
++        if not _page_url_allowed(url):
++            raise ValueError("不允许的网页地址")
++        if not await research_urls.resolves_to_public_host(url):
++            raise ValueError("页面地址解析到非公网地址")
++        async with client.stream("GET", url, follow_redirects=False) as res:
++            if res.status_code in (301, 302, 303, 307, 308):
++                url = urljoin(url, res.headers.get("location") or "")
++                continue
++            res.raise_for_status()
++            ctype = (res.headers.get("content-type") or "").lower()
++            if "html" not in ctype and not ctype.startswith("text/"):
++                raise ValueError("该链接不是网页")
++            chunks: list[bytes] = []
++            total = 0
++            async for chunk in res.aiter_bytes():
++                total += len(chunk)
++                if total > MAX_PAGE_BYTES:
++                    raise ValueError("网页超过大小上限")
++                chunks.append(chunk)
++            data = b"".join(chunks)
++        if not data.strip():
++            raise ValueError("网页内容为空")
++        return data
++    raise ValueError("重定向次数过多")
++
++
++async def download_allowed_page(url: str) -> bytes:
++    """供临时入库复用:抓取开放获取落地页,返回 HTML 字节。"""
++    if not _page_url_allowed(url):
++        raise ValueError("该论文没有可用的开放获取页面")
++    async with httpx.AsyncClient(
++        timeout=30, follow_redirects=False,
++        headers={"User-Agent": "MathGuide/1.11 (open access page)"},
++        transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
++    ) as client:
++        return await _download_page(client, url)
++
++
+ def _save_pdf(uid: str, data: bytes) -> Path:
+     folder = Path(rc.DATA_DIR) / "pdf" / rc._safe_uid(uid)
+     folder.mkdir(parents=True, exist_ok=True)
+@@ -1566,6 +1617,8 @@ async def open_pdf(request: Request) -> JSONResponse:
+         async with httpx.AsyncClient(
+             timeout=30, follow_redirects=False,
+             headers={"User-Agent": "MathGuide/1.10 (open access PDF)"},
++            # 与 resolves_to_public_host 的 IPv4 校验保持一致,避免选用代理假 IPv6。
++            transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0"),
+         ) as client:
+             data = await _download_pdf(client, url)
+     except ValueError as exc:
+diff --git a/backend/research_papers.py b/backend/research_papers.py
+index eaa3b53..1aff509 100644
+--- a/backend/research_papers.py
++++ b/backend/research_papers.py
+@@ -25,6 +25,45 @@ def _pdf_name(url: str) -> str:
+     return name[:200]
+ 
+ 
++def _page_name(url: str) -> str:
++    path = urlparse(url).path
++    name = path.rsplit("/", 1)[-1] or "paper.html"
++    if not name.lower().endswith((".html", ".htm")):
++        name = f"{name}.html"
++    return name[:200]
++
++
++async def create_temp_page(request: Request) -> JSONResponse:
++    """把开放获取落地页抓成临时文本论文,交给站内阅读器。"""
++    rec = require_auth(request)
++    uid = str(rec.get("uid") or "")
++    body = await read_json_object(request)
++    url = str(body.get("url") or "").strip()
++    if not lit._page_url_allowed(url):
++        raise HTTPException(400, "该论文没有可用的开放获取页面")
++    metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else None
++    rc._rate(rc._upload_limiter, uid)
++    try:
++        parsed = urlparse(url)
++        if parsed.hostname in ("arxiv.org", "www.arxiv.org") and parsed.path.startswith("/abs/"):
++            pdf_url = f"https://arxiv.org/pdf/{parsed.path[5:]}"
++            data = await lit.download_allowed_pdf(pdf_url)
++            name, mime = _pdf_name(pdf_url), "application/pdf"
++        else:
++            data = await lit.download_allowed_page(url)
++            name, mime = _page_name(url), "text/html"
++        result = await asyncio.to_thread(
++            rc._ingest, uid, name, data, mime,
++            None, status="temp", origin_url=url, analyze=False,
++            metadata=metadata)
++    except ValueError as exc:
++        raise HTTPException(400, str(exc)) from exc
++    except httpx.HTTPError as exc:
++        raise HTTPException(502, f"下载网页失败: {type(exc).__name__}") from exc
++    return JSONResponse(result,
++                        headers={"Cache-Control": "no-store"})
++
++
+ async def create_temp(request: Request) -> JSONResponse:
+     rec = require_auth(request)
+     uid = str(rec.get("uid") or "")
+diff --git a/backend/research_urls.py b/backend/research_urls.py
+index 6ae7af3..49bf385 100644
+--- a/backend/research_urls.py
++++ b/backend/research_urls.py
+@@ -68,8 +68,17 @@ def is_safe_pdf_url(url: str) -> bool:
+     return not is_forbidden_host(host) and is_trusted_pdf_host(url)
+ 
+ 
++def is_safe_page_url(url: str) -> bool:
++    """开放获取落地页:同样只允许可信来源与 https。"""
++    return is_safe_pdf_url(url)
++
++
+ async def resolves_to_public_host(url: str) -> bool:
+-    """下载前解析 DNS,拒绝私有/回环/保留地址,降低 DNS rebinding 风险。"""
++    """下载前解析 DNS,拒绝私有/回环/保留地址,降低 DNS rebinding 风险。
++
++    只校验 IPv4:本机代理常把 AAAA 映射到 2001:2::/48 一类保留段,
++    而 PDF 下载客户端绑定 IPv4;混入这些假 IPv6 会把正常论文全部误杀。
++    """
+     if not is_https_url(url):
+         return False
+     try:
+@@ -80,9 +89,11 @@ async def resolves_to_public_host(url: str) -> bool:
+         return False
+     try:
+         infos = await asyncio.to_thread(
+-            socket.getaddrinfo, host, 443, type=socket.SOCK_STREAM)
++            socket.getaddrinfo, host, 443, socket.AF_INET,
++            socket.SOCK_STREAM)
+     except OSError:
+         return False
+-    if not infos:
++    ipv4 = [info for info in infos if info[0] == socket.AF_INET]
++    if not ipv4:
+         return False
+-    return not any(is_forbidden_host(info[4][0]) for info in infos)
++    return not any(is_forbidden_host(info[4][0]) for info in ipv4)
+diff --git a/backend/tests/test_research_literature_urls.py b/backend/tests/test_research_literature_urls.py
+index c31cbe3..2f0fb0f 100644
+--- a/backend/tests/test_research_literature_urls.py
++++ b/backend/tests/test_research_literature_urls.py
+@@ -41,6 +41,15 @@ def test_trusted_pdf_host_allows_subdomains_only_for_known_hosts():
+     assert not ru.is_trusted_pdf_host("https://evil-arxiv.org/a.pdf")
+ 
+ 
++def test_safe_page_url_only_trusted_https_hosts():
++    assert ru.is_safe_page_url("https://arxiv.org/abs/2410.12345")
++    assert ru.is_safe_page_url("https://europepmc.org/article/MED/1")
++    assert not ru.is_safe_page_url("http://arxiv.org/abs/2410.12345")
++    assert not ru.is_safe_page_url("https://evil.example/a")
++    assert not ru.is_safe_page_url("https://127.0.0.1/a")
++    assert not ru.is_safe_page_url("javascript:alert(1)")
++
++
+ def test_dns_resolving_to_private_ip_is_rejected(monkeypatch):
+     monkeypatch.setattr(
+         socket, "getaddrinfo",
+@@ -50,6 +59,33 @@ def test_dns_resolving_to_private_ip_is_rejected(monkeypatch):
+         ru.resolves_to_public_host("https://example.org/a.pdf"))
+ 
+ 
++def test_dns_fake_ipv6_does_not_reject_public_ipv4(monkeypatch):
++    """本机代理常把 AAAA 映射到保留段;下载走 IPv4,不能因此拒绝整篇论文。"""
++    def fake(*args, **kwargs):
++        return [
++            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("28.0.0.208", 443)),
++            (socket.AF_INET6, socket.SOCK_STREAM, 6, "",
++             ("2001:2::a2", 443, 0, 0)),
++        ]
++
++    monkeypatch.setattr(socket, "getaddrinfo", fake)
++    assert asyncio.run(
++        ru.resolves_to_public_host("https://arxiv.org/pdf/1"))
++
++
++def test_dns_private_ipv4_is_still_rejected_with_fake_ipv6(monkeypatch):
++    def fake(*args, **kwargs):
++        return [
++            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.2", 443)),
++            (socket.AF_INET6, socket.SOCK_STREAM, 6, "",
++             ("2001:2::a2", 443, 0, 0)),
++        ]
++
++    monkeypatch.setattr(socket, "getaddrinfo", fake)
++    assert not asyncio.run(
++        ru.resolves_to_public_host("https://arxiv.org/pdf/1"))
++
++
+ def test_download_rejects_html_body(monkeypatch):
+     async def public(url):
+         return True
+@@ -62,3 +98,35 @@ def test_download_rejects_html_body(monkeypatch):
+             await rl._download_pdf(client, "https://arxiv.org/pdf/1")
+     with pytest.raises(ValueError, match="不是 PDF"):
+         asyncio.run(run())
++
++
++def test_download_page_accepts_html(monkeypatch):
++    async def public(url):
++        return True
++
++    monkeypatch.setattr(rl.research_urls, "resolves_to_public_host", public)
++    transport = httpx.MockTransport(
++        lambda request: httpx.Response(
++            200, headers={"content-type": "text/html; charset=utf-8"},
++            content=b"<html><body><h1>Paper</h1><p>Full text</p></body></html>"))
++    async def run():
++        async with httpx.AsyncClient(transport=transport) as client:
++            return await rl._download_page(client, "https://arxiv.org/abs/1")
++    data = asyncio.run(run())
++    assert b"Full text" in data
++
++
++def test_download_page_rejects_binary(monkeypatch):
++    async def public(url):
++        return True
++
++    monkeypatch.setattr(rl.research_urls, "resolves_to_public_host", public)
++    transport = httpx.MockTransport(
++        lambda request: httpx.Response(
++            200, headers={"content-type": "application/pdf"},
++            content=b"%PDF-1.4"))
++    async def run():
++        async with httpx.AsyncClient(transport=transport) as client:
++            await rl._download_page(client, "https://arxiv.org/abs/1")
++    with pytest.raises(ValueError, match="不是网页"):
++        asyncio.run(run())
+diff --git a/backend/tests/test_research_papers.py b/backend/tests/test_research_papers.py
+index d35aeec..fc60f0a 100644
+--- a/backend/tests/test_research_papers.py
++++ b/backend/tests/test_research_papers.py
+@@ -33,6 +33,20 @@ def test_temp_paper_rejects_publisher_host(monkeypatch):
+     assert res.status_code == 400
+ 
+ 
++def test_temp_page_rejects_untrusted_host(monkeypatch):
++    from starlette.testclient import TestClient
++
++    monkeypatch.setattr(rp, "require_auth", lambda request: {"uid": "u"})
++    app = Starlette(routes=[Route(
++        "/api/research/papers/temp-page", rp.create_temp_page,
++        methods=["POST"])])
++    client = TestClient(app)
++    res = client.post("/api/research/papers/temp-page", json={
++        "url": "https://evil.example/paper",
++    })
++    assert res.status_code == 400
++
++
+ @pytest.fixture()
+ def corpus(tmp_path, monkeypatch):
+     monkeypatch.setattr(rc, "DATA_DIR", tmp_path / "research")
+diff --git a/backend/tests/test_research_reader_formats.py b/backend/tests/test_research_reader_formats.py
+new file mode 100644
+index 0000000..50022dd
+--- /dev/null
++++ b/backend/tests/test_research_reader_formats.py
+@@ -0,0 +1,52 @@
++from starlette.applications import Starlette
++from starlette.routing import Route
++from starlette.testclient import TestClient
++
++import research_corpus as rc
++import research_papers as rp
++
++
++def test_temp_endpoints_return_stored_format_after_doi_dedup(tmp_path, monkeypatch):
++    monkeypatch.setattr(rc, "DATA_DIR", tmp_path / "research")
++    monkeypatch.setattr(rc.embed_mod, "is_configured", lambda: False)
++    monkeypatch.setattr(rc, "_rate", lambda *args: None)
++    text = "DOI 10.1234/example " + "Research results and full discussion. " * 10
++    html = f"<html><body>{text}</body></html>".encode()
++    pdf = b"%PDF-1.4 fake content"
++    monkeypatch.setattr(rc, "_pdf_pages", lambda data: [(1, text), (2, text)])
++    uid = ["pdf-first"]
++    monkeypatch.setattr(rp, "require_auth", lambda request: {"uid": uid[0]})
++
++    async def download_page(url):
++        return html
++
++    pdf_urls = []
++
++    async def download_pdf(url):
++        pdf_urls.append(url)
++        return pdf
++
++    monkeypatch.setattr(rp.lit, "download_allowed_page", download_page)
++    monkeypatch.setattr(rp.lit, "download_allowed_pdf", download_pdf)
++    app = Starlette(routes=[
++        Route("/page", rp.create_temp_page, methods=["POST"]),
++        Route("/pdf", rp.create_temp, methods=["POST"]),
++    ])
++    with TestClient(app) as client:
++        first = client.post("/pdf", json={"url": "https://arxiv.org/pdf/1"}).json()
++        second = client.post("/page", json={"url": "https://europepmc.org/article/MED/1"}).json()
++        assert first["kind"] == second["kind"] == "pdf"
++        assert second["duplicate"] and second["docId"] == first["docId"]
++        assert second["pages"] == first["pages"] == 2
++        uid[0] = "html-first"
++        first = client.post("/page", json={"url": "https://europepmc.org/article/MED/1"}).json()
++        second = client.post("/pdf", json={"url": "https://arxiv.org/pdf/1"}).json()
++        assert first["kind"] == second["kind"] == "text"
++        assert second["duplicate"] and second["docId"] == first["docId"]
++        assert second["pages"] == first["pages"] == 1
++        uid[0] = "arxiv-abstract"
++        arxiv = client.post("/page", json={"url": "https://arxiv.org/abs/1706.03762v1"}).json()
++        assert arxiv["kind"] == "pdf" and arxiv["pages"] == 2
++        assert pdf_urls[-1] == "https://arxiv.org/pdf/1706.03762v1"
++    rc._indexes.clear()
++    rc._index_paths.clear()
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index 366acd6..ab4da0a 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "mathguide-frontend",
+-  "version": "1.20.0",
++  "version": "1.21.0",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "mathguide-frontend",
+-      "version": "1.20.0",
++      "version": "1.21.0",
+       "dependencies": {
+         "gsap": "^3.13.0",
+         "katex": "^0.16.22",
+diff --git a/frontend/package.json b/frontend/package.json
+index 142f796..10b36a1 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "mathguide-frontend",
+   "private": true,
+-  "version": "1.20.0",
++  "version": "1.21.0",
+   "type": "module",
+   "scripts": {
+     "dev": "vite",
+diff --git a/frontend/scripts/fulltext-access-test.ts b/frontend/scripts/fulltext-access-test.ts
+index 93abbfd..0d1ed20 100644
+--- a/frontend/scripts/fulltext-access-test.ts
++++ b/frontend/scripts/fulltext-access-test.ts
+@@ -1,4 +1,10 @@
+-import { accessAction, canOpenInReader } from '../src/utils/fulltextAccess'
++import {
++  accessAction,
++  canOpenInReader,
++  externalPageUrl,
++  pageReaderUrl,
++  safeHttpUrl,
++} from '../src/utils/fulltextAccess'
+ 
+ let passed = 0
+ const failed: string[] = []
+@@ -25,6 +31,48 @@ check('ambiguous asks choose', accessAction({
+   status: 'ambiguous', best: null, candidates: [], matchedIdentifiers: [], reason: '',
+ }) === 'choose')
+ 
++function landing(url: string | undefined) {
++  return {
++    status: 'oa_landing' as const,
++    best: url ? { url, serverDownloadable: false } : null,
++    candidates: [],
++    matchedIdentifiers: [],
++    reason: '',
++  }
++}
++check('https landing navigates', externalPageUrl(landing('https://arxiv.org/abs/1')) === 'https://arxiv.org/abs/1')
++check('http landing navigates', externalPageUrl(landing('http://example.org/a')) === 'http://example.org/a')
++check('javascript landing rejected', externalPageUrl(landing('javascript:alert(1)')) === null)
++check('data landing rejected', externalPageUrl(landing('data:text/html,x')) === null)
++check('missing landing rejected', externalPageUrl(landing(undefined)) === null)
++
++check('safe https url', safeHttpUrl('https://arxiv.org/pdf/1') === 'https://arxiv.org/pdf/1')
++check('safe http url', safeHttpUrl('http://example.org/a') === 'http://example.org/a')
++check('javascript url rejected', safeHttpUrl('javascript:alert(1)') === null)
++check('data url rejected', safeHttpUrl('data:text/html,x') === null)
++check('relative url rejected', safeHttpUrl('/local/path') === null)
++check('empty url rejected', safeHttpUrl('') === null)
++
++function page(status: 'oa_landing' | 'oa_pdf', url: string, kind?: 'pdf' | 'landing') {
++  return {
++    status,
++    best: { url, kind, serverDownloadable: false },
++    candidates: [],
++    matchedIdentifiers: [],
++    reason: '',
++  }
++}
++check('oa landing reads in app',
++  pageReaderUrl(page('oa_landing', 'https://arxiv.org/abs/1', 'landing')) === 'https://arxiv.org/abs/1')
++check('oa landing without kind reads in app',
++  pageReaderUrl(page('oa_landing', 'https://europepmc.org/article/1')) === 'https://europepmc.org/article/1')
++check('oa landing pdf link not read as page',
++  pageReaderUrl(page('oa_landing', 'https://arxiv.org/pdf/1', 'pdf')) === null)
++check('oa_pdf status not read as page',
++  pageReaderUrl(page('oa_pdf', 'https://arxiv.org/pdf/1', 'pdf')) === null)
++check('unsafe landing page rejected',
++  pageReaderUrl(page('oa_landing', 'javascript:alert(1)')) === null)
++
+ if (failed.length) {
+   console.error(`FAIL ${failed.length}: ${failed.join(', ')}`)
+   process.exit(1)
+diff --git a/frontend/scripts/research-related-test.mjs b/frontend/scripts/research-related-test.mjs
+new file mode 100644
+index 0000000..7471177
+--- /dev/null
++++ b/frontend/scripts/research-related-test.mjs
+@@ -0,0 +1,43 @@
++/**
++ * 相关论文按钮:结果区只在「全网文献」模式渲染。
++ * 守护两点接线:点击后必须切模式;滚动前必须等 DOM 更新。
++ */
++import { readFileSync } from 'node:fs'
++import { dirname, resolve } from 'node:path'
++import { fileURLToPath } from 'node:url'
++
++const here = dirname(fileURLToPath(import.meta.url))
++const source = readFileSync(
++  resolve(here, '../src/views/ResearchSearchView.vue'),
++  'utf8',
++)
++
++let passed = 0
++const failed = []
++function check(name, ok, detail = '') {
++  if (ok) passed++
++  else failed.push(`${name}${detail ? `: ${detail}` : ''}`)
++}
++
++const start = source.indexOf('async function findRelated')
++const end = source.indexOf('\n}', start)
++check('找到 findRelated', start >= 0 && end > start)
++const handler = start >= 0 && end > start ? source.slice(start, end) : ''
++
++check(
++  '相关检索切到全网文献',
++  handler.includes("setSearchMode('web')"),
++  handler.slice(0, 80),
++)
++check(
++  '滚动前等待渲染',
++  handler.includes('await nextTick()')
++    && handler.indexOf('await nextTick()') < handler.indexOf("querySelector('.lit')"),
++)
++
++if (failed.length) {
++  console.error(`✗ ${failed.length} 项失败`)
++  for (const item of failed) console.error(`  - ${item}`)
++  process.exit(1)
++}
++console.log(`✓ 相关论文接线 ${passed} 项通过`)
+diff --git a/frontend/scripts/run-tests.mjs b/frontend/scripts/run-tests.mjs
+index c9b6347..620ce57 100644
+--- a/frontend/scripts/run-tests.mjs
++++ b/frontend/scripts/run-tests.mjs
+@@ -41,6 +41,12 @@ const CASES = [
+     run: 'node .regression-chart-test.cjs',
+     artifact: '.regression-chart-test.cjs',
+   },
++  {
++    name: '相关论文按钮接线',
++    bundle: 'node --check scripts/research-related-test.mjs',
++    run: 'node scripts/research-related-test.mjs',
++    artifact: '.research-related-test.cjs',
++  },
+   {
+     name: '语音数学编译器',
+     bundle: 'npx esbuild scripts/speech-math-test.ts --bundle --format=cjs --outfile=.speech-math-test.cjs',
+diff --git a/frontend/src/services/literatureService.ts b/frontend/src/services/literatureService.ts
+index d36c6cc..8fe3365 100644
+--- a/frontend/src/services/literatureService.ts
++++ b/frontend/src/services/literatureService.ts
+@@ -21,6 +21,7 @@ export interface LiteratureItem {
+   sources: string[]
+   docId?: string
+   tempDocId?: string
++  readerKind?: 'pdf' | 'text'
+   imported?: boolean
+   issn?: string
+   publisher?: string
+@@ -51,6 +52,7 @@ export interface TempPaperResult {
+   pages: number
+   title?: string
+   doi?: string
++  kind?: 'pdf' | 'text'
+ }
+ 
+ export interface TempPaperMeta {
+@@ -76,6 +78,15 @@ export async function createTempPaper(
+     '/api/research/papers/temp', { url, metadata }, authHeaders(), true)
+ }
+ 
++/** 把开放获取落地页抓成临时文本论文,站内阅读 */
++export async function createTempPage(
++  url: string,
++  metadata?: TempPaperMeta,
++): Promise<TempPaperResult> {
++  return post<TempPaperResult>(
++    '/api/research/papers/temp-page', { url, metadata }, authHeaders(), true)
++}
++
+ export interface ImportPaperResult {
+   docId: string
+   duplicate: boolean
+diff --git a/frontend/src/utils/aboutContent.ts b/frontend/src/utils/aboutContent.ts
+index a2580ae..f6765f2 100644
+--- a/frontend/src/utils/aboutContent.ts
++++ b/frontend/src/utils/aboutContent.ts
+@@ -6,8 +6,8 @@
+  */
+ 
+ export const APP_NAME = 'MathGuide'
+-export const APP_VERSION = 'v1.20.0'
+-export const APP_STABLE_VERSION = 'v1.20.0'
++export const APP_VERSION = 'v1.21.0'
++export const APP_STABLE_VERSION = 'v1.21.0'
+ export const APP_STABLE_DATE = '2026-11-08'
+ export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
+ export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
+@@ -51,6 +51,29 @@ export const RELEASES: ReleaseEntry[] = [
+     version: APP_VERSION,
+     date: APP_STABLE_DATE,
+     status: 'latest',
++    items: [
++      {
++        zh: '论文检索站内阅读:开放获取 PDF 先临时入库再进右栏阅读器;只有 OA 页面的论文由服务端抓取正文,作为临时文本论文在站内阅读;arXiv abs 地址自动转 PDF。',
++        en: 'In-app paper reading: open-access PDFs are temporarily ingested and opened in the right-pane reader; papers with only an OA landing page have their text fetched server-side and read in-app as a temporary document; arXiv abs URLs are converted to PDFs.',
++      },
++      {
++        zh: '相关论文按钮:点击后自动切到全网文献面板,等结果渲染再滚动定位,并清掉上一次搜索的标识提示。',
++        en: 'Related-papers button: it now switches to the web-results pane, waits for rendering before scrolling, and clears the previous identifier hint.',
++      },
++      {
++        zh: 'PDF 公网校验修复:本机代理把域名解析成 fake-IP IPv6 时不再误杀正常论文;只校验 IPv4,并让下载客户端绑定 IPv4。',
++        en: 'PDF public-host check fix: legitimate papers are no longer rejected when a local proxy resolves domains to fake-IPv6 addresses; only IPv4 is checked and the download client is bound to IPv4.',
++      },
++      {
++        zh: '临时入库格式统一:PDF 与网页入口按 DOI 去重时保留原阅读格式,返回 pdf/text 类型;同一篇论文不会因入口不同串成错误阅读器。',
++        en: 'Temporary ingestion format consistency: PDF and HTML entries deduplicated by DOI keep their original reading format and return pdf/text kind, so the same paper never opens in the wrong reader.',
++      },
++    ],
++  },
++  {
++    version: 'v1.20.0',
++    date: '2026-11-08',
++    status: 'released',
+     items: [
+       {
+         zh: '图解放大视图:桌面端左右分屏、移动端浮动窗口,支持双指缩放、拖动、键盘移动与全屏锁定;全屏后缩放不会缩回,点击放大区外关闭。',
+diff --git a/frontend/src/utils/fulltextAccess.ts b/frontend/src/utils/fulltextAccess.ts
+index f3558fc..92bbe92 100644
+--- a/frontend/src/utils/fulltextAccess.ts
++++ b/frontend/src/utils/fulltextAccess.ts
+@@ -67,3 +67,27 @@ export function accessAction(result: FullTextResult): FullTextAction {
+ export function accessLabelKey(result: FullTextResult): string {
+   return LABELS[result.status] || LABELS.unknown
+ }
++
++/** 只放行可安全导航的 http/https 绝对地址。 */
++export function safeHttpUrl(url: string | null | undefined): string | null {
++  if (!url) return null
++  try {
++    const parsed = new URL(url)
++    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
++  } catch {
++    return null
++  }
++  return url
++}
++
++/** 允许同标签跳转的开放获取页。 */
++export function externalPageUrl(result: FullTextResult): string | null {
++  return safeHttpUrl(result.best?.url)
++}
++
++/** 可在站内抓成正文阅读的 OA 落地页;PDF 链接不走这条。 */
++export function pageReaderUrl(result: FullTextResult): string | null {
++  if (result.status !== 'oa_landing') return null
++  if (result.best?.kind === 'pdf') return null
++  return safeHttpUrl(result.best?.url)
++}
+diff --git a/frontend/src/utils/i18n.ts b/frontend/src/utils/i18n.ts
+index cbc6b78..acb698a 100644
+--- a/frontend/src/utils/i18n.ts
++++ b/frontend/src/utils/i18n.ts
+@@ -712,7 +712,7 @@ const ZH: Dict = {
+   'search.fullTextNone': '无合法全文',
+   'search.fullTextUnknown': '来源暂不可用',
+   'search.fullTextAmbiguous': '标题有歧义',
+-  'search.openExternal': '在浏览器打开',
++  'search.openExternal': '在当前页打开',
+   'search.uploadOwnCopy': '上传我有权限的副本',
+   'search.retryResolve': '重试获取全文',
+   'search.choosePaper': '选择正确的论文',
+@@ -1648,7 +1648,7 @@ const EN: Dict = {
+   'search.fullTextNone': 'No legal full text',
+   'search.fullTextUnknown': 'Source unavailable',
+   'search.fullTextAmbiguous': 'Ambiguous title',
+-  'search.openExternal': 'Open in browser',
++  'search.openExternal': 'Open in this tab',
+   'search.uploadOwnCopy': 'Upload a copy I have access to',
+   'search.retryResolve': 'Retry full text',
+   'search.choosePaper': 'Choose the correct paper',
+diff --git a/frontend/src/views/ResearchSearchView.vue b/frontend/src/views/ResearchSearchView.vue
+index ca050c8..ff170a7 100644
+--- a/frontend/src/views/ResearchSearchView.vue
++++ b/frontend/src/views/ResearchSearchView.vue
+@@ -9,10 +9,12 @@ import { useRoute, useRouter } from 'vue-router'
+ import { t } from '@/utils/i18n'
+ import { showToast } from '@/utils/toast'
+ import {
+-  accessAction, accessLabelKey, canOpenInReader,
++  accessAction, accessLabelKey, canOpenInReader, externalPageUrl,
++  pageReaderUrl, safeHttpUrl,
+   type FullTextCandidate, type FullTextResult,
+ } from '@/utils/fulltextAccess'
+ import {
++  createTempPage,
+   createTempPaper,
+   deletePaperHistory,
+   importTempPaper,
+@@ -229,12 +231,16 @@ async function searchExternal(qArg?: string): Promise<void> {
+ async function findRelated(doc: ResearchDoc): Promise<void> {
+   const seq = ++litSeq
+   litLoading.value = true
++  // 结果区只在「全网文献」模式渲染;从文内模式点击时必须先切过去。
++  if (searchMode.value !== 'web') setSearchMode('web')
++  litIdentifier.value = null
+   try {
+     const res = await relatedLiterature({ doi: doc.doi, title: doc.title || doc.name })
+     if (seq !== litSeq) return
+     litItems.value = res.results
+     litWarnings.value = res.warnings
+     litSearched.value = true
++    await nextTick()
+     document.querySelector('.lit')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+   } catch (err) {
+     if (seq !== litSeq) return
+@@ -320,11 +326,12 @@ defineExpose({ locateForQuestion, reloadDocs, applyPaperActions, openDocForActio
+ async function openSearchItem(item: LiteratureItem): Promise<void> {
+   const url = readerUrl(item)
+   if (url) {
+-    await openPdfInReader(item, url)
++    await openPdfInReader(item, url, true)
+     return
+   }
+   if (item.doi || item.title) {
+-    await findFreeCopy(item)
++    // 有开放获取页就直接在当前页打开;只有拿不到任何全文时才显示摘要。
++    await findFreeCopy(item, true)
+     return
+   }
+   previewItem.value = item
+@@ -356,14 +363,15 @@ function showPreview(item: LiteratureItem, message?: string): void {
+ function openFreeCopy(item: LiteratureItem): void {
+   const url = readerUrl(item)
+   if (url) {
+-    void openPdfInReader(item, url)
++    void openPdfInReader(item, url, true)
+     return
+   }
+-  void findFreeCopy(item)
++  void findFreeCopy(item, true)
+ }
+ 
+-/** 按 DOI/标题解析合法全文;只有 oa_pdf 才自动进阅读器。 */
+-async function findFreeCopy(item: LiteratureItem): Promise<void> {
++/** 按 DOI/标题解析合法全文;只有 oa_pdf 才自动进阅读器。
++ *  navigate=true 时,站内打不开就直接在当前页打开来源,不弹摘要。 */
++async function findFreeCopy(item: LiteratureItem, navigate = false): Promise<void> {
+   const key = fullTextKey(item)
+   if (!key || resolvingOa.value === key) return
+   resolvingOa.value = key
+@@ -373,7 +381,16 @@ async function findFreeCopy(item: LiteratureItem): Promise<void> {
+     fullTextResults.value = { ...fullTextResults.value, [key]: res }
+     if (res.best && res.best.license) item.license = res.best.license
+     if (canOpenInReader(res) && res.best) {
+-      await openPdfInReader(item, res.best.url)
++      await openPdfInReader(item, res.best.url, navigate)
++      return
++    }
++    const pageUrl = pageReaderUrl(res)
++    if (navigate && pageUrl) {
++      await openPageInReader(item, pageUrl)
++      return
++    }
++    if (navigate && res.best?.url) {
++      navigateTo(res.best.url)
+       return
+     }
+     previewItem.value = item
+@@ -403,17 +420,23 @@ async function chooseCandidate(item: LiteratureItem, candidate: FullTextCandidat
+   }
+ }
+ 
+-/** 外部链接只由用户显式点击;不自动跳出工作区。 */
++function navigateTo(url: string | null | undefined): void {
++  const safe = safeHttpUrl(url)
++  if (safe) window.location.assign(safe)
++}
++
++/** 开放获取页只在用户显式点击后同标签跳转;不自动离开工作区。 */
+ function openExternalUrl(result: FullTextResult): void {
+-  const url = result.best?.url
+-  if (!url) return
+-  try {
+-    const parsed = new URL(url)
+-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return
+-  } catch {
++  navigateTo(externalPageUrl(result))
++}
++
++function openPreviewExternal(item: LiteratureItem, result: FullTextResult): void {
++  const pageUrl = pageReaderUrl(result)
++  if (pageUrl) {
++    void openPageInReader(item, pageUrl)
+     return
+   }
+-  window.open(url, '_blank', 'noopener,noreferrer')
++  openExternalUrl(result)
+ }
+ 
+ function tempMeta(item: LiteratureItem) {
+@@ -437,10 +460,14 @@ function tempMeta(item: LiteratureItem) {
+  *  非白名单 PDF 由服务端拒绝,前端只负责展示原因。 */
+ async function openExternalPaper(item: LiteratureItem): Promise<void> {
+   if (!item.pdfUrl || openingPdf.value) return
+-  await openPdfInReader(item, item.pdfUrl)
++  await openPdfInReader(item, item.pdfUrl, true)
+ }
+ 
+-async function openPdfInReader(item: LiteratureItem, url: string): Promise<void> {
++async function openPdfInReader(
++  item: LiteratureItem,
++  url: string,
++  navigateOnFail = false,
++): Promise<void> {
+   if (openingPdf.value) return
+   if (!url) {
+     showPreview(item, t('search.pdfReaderUnavailable'))
+@@ -449,7 +476,7 @@ async function openPdfInReader(item: LiteratureItem, url: string): Promise<void>
+   if (item.imported && item.docId) {
+     previewItem.value = null
+     viewer.value = {
+-      docId: item.docId, title: item.title, kind: 'pdf',
++      docId: item.docId, title: item.title, kind: item.readerKind || 'pdf',
+       projectId: activeProject.value || null,
+     }
+     return
+@@ -457,7 +484,7 @@ async function openPdfInReader(item: LiteratureItem, url: string): Promise<void>
+   if (item.tempDocId) {
+     previewItem.value = null
+     viewer.value = {
+-      docId: item.tempDocId, title: item.title, kind: 'pdf',
++      docId: item.tempDocId, title: item.title, kind: item.readerKind || 'pdf',
+       projectId: activeProject.value || null,
+     }
+     return
+@@ -466,15 +493,48 @@ async function openPdfInReader(item: LiteratureItem, url: string): Promise<void>
+   try {
+     const res = await createTempPaper(url, tempMeta(item))
+     item.tempDocId = res.docId
++    item.readerKind = res.kind || 'pdf'
+     previewItem.value = null
+     viewer.value = {
+       docId: res.docId,
+       title: item.title || res.title || 'PDF',
+-      kind: 'pdf',
++      kind: item.readerKind,
++      projectId: activeProject.value || null,
++    }
++  } catch (err) {
++    const message = err instanceof Error && err.message
++      ? err.message
++      : t('search.pdfFail')
++    if (navigateOnFail && safeHttpUrl(url)) {
++      showToast(message)
++      navigateTo(url)
++      return
++    }
++    showPreview(item, message)
++  } finally {
++    openingPdf.value = ''
++  }
++}
++
++/** 开放获取落地页抓成临时文本论文,在站内阅读器打开。
++ *  抓取失败时才退回当前页打开,不显示摘要层。 */
++async function openPageInReader(item: LiteratureItem, url: string): Promise<void> {
++  if (openingPdf.value) return
++  openingPdf.value = url
++  try {
++    const res = await createTempPage(url, tempMeta(item))
++    item.tempDocId = res.docId
++    item.readerKind = res.kind || 'text'
++    previewItem.value = null
++    viewer.value = {
++      docId: res.docId,
++      title: item.title || res.title || 'HTML',
++      kind: item.readerKind,
+       projectId: activeProject.value || null,
+     }
+   } catch (err) {
+-    showPreview(item, err instanceof Error && err.message ? err.message : t('search.pdfFail'))
++    showToast(err instanceof Error && err.message ? err.message : t('search.pdfFail'))
++    navigateTo(url)
+   } finally {
+     openingPdf.value = ''
+   }
+@@ -494,6 +554,7 @@ async function importPaper(item: LiteratureItem): Promise<void> {
+       const temp = await createTempPaper(item.pdfUrl, tempMeta(item))
+       docId = temp.docId
+       item.tempDocId = docId
++      item.readerKind = temp.kind || 'pdf'
+     }
+     let keep = true
+     try {
+@@ -1123,8 +1184,8 @@ onMounted(async () => {
+             <button
+               v-if="accessAction(previewFullText) === 'external'"
+               class="lit-pdf"
+-              @click="openExternalUrl(previewFullText)"
+-            >{{ t('search.openExternal') }}</button>
++              @click="openPreviewExternal(previewItem, previewFullText)"
++            >{{ t('search.readInApp') }}</button>
+             <button
+               v-else-if="accessAction(previewFullText) === 'upload'"
+               class="lit-pdf"
