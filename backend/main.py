@@ -170,6 +170,7 @@ routes = [
     Route("/api/diagnosis/report", diagnosis.weak_points),
     Route("/api/recommendation", recommendation.recommend_points),
     Route("/api/graph", graph_api.graph_data),
+    Route("/api/graph/export", graph_api.graph_export),
     Route("/api/profile", profile.learning_profile),
     Route("/api/speech/math", chat.speech_to_math, methods=["POST"]),
     Route("/api/doc/export", doc.export_pdf, methods=["POST"]),

@@ -6,7 +6,7 @@
 /* eslint-disable */
 declare const process: { exit(code: number): void }
 
-import { LEVEL_GAP, MARGIN, NODE_GAP, layoutGraph } from '../src/utils/graphLayout'
+import { LEVEL_GAP, MARGIN, NODE_GAP, layoutGraph, resolveLayout } from '../src/utils/graphLayout'
 
 let passed = 0
 const failed: string[] = []
@@ -59,6 +59,18 @@ const cycle = layoutGraph([
 ])
 check('成环不死循环且全部有位置',
   Boolean(cycle.positions.a) && Boolean(cycle.positions.b))
+
+// 后端坐标优先;缺失时退回本地布局
+const server = resolveLayout([
+  { id: 'a', x: 10, y: 20, level: 0 },
+  { id: 'b', x: 240, y: 20, level: 1, prerequisites: ['a'] },
+])
+check('使用后端坐标', server.positions.a.x === 10 && server.positions.b.x === 240)
+check('后端布局层级', server.levels.length === 2 && server.levels[1][0] === 'b')
+
+const fallback = resolveLayout([{ id: 'a' }, { id: 'b', prerequisites: ['a'] }])
+check('缺坐标时本地兜底', fallback.positions.b.level === 1
+  && fallback.positions.b.x === MARGIN + LEVEL_GAP)
 
 console.log(`\n图谱布局自测:${passed}/${passed + failed.length} 通过`)
 for (const item of failed) console.log(`✗ ${item}`)

@@ -8,6 +8,10 @@
 export interface GraphNodeInput {
   id: string
   prerequisites?: string[]
+  /** 后端 NetworkX 布局坐标(可选) */
+  x?: number
+  y?: number
+  level?: number
 }
 
 export interface GraphPosition {
@@ -96,4 +100,26 @@ export function layoutGraph(nodes: GraphNodeInput[]): GraphLayout {
     width: MARGIN * 2 + Math.max(0, levels.length - 1) * LEVEL_GAP,
     height: MARGIN * 2 + (maxRows - 1) * NODE_GAP,
   }
+}
+
+/**
+ * 优先使用后端(NetworkX)给出的坐标;缺任一节点坐标时退回本地分层布局。
+ * 这样旧后端/离线数据仍能画图,新后端可提供更优的跨层排序。
+ */
+export function resolveLayout(nodes: GraphNodeInput[]): GraphLayout {
+  const positioned = nodes.every((node) =>
+    typeof node.x === 'number' && typeof node.y === 'number' && typeof node.level === 'number')
+  if (!positioned || !nodes.length) return layoutGraph(nodes)
+
+  const positions: Record<string, GraphPosition> = {}
+  const levels: string[][] = []
+  for (const node of nodes) {
+    const level = node.level as number
+    while (levels.length <= level) levels.push([])
+    levels[level].push(node.id)
+    positions[node.id] = { x: node.x as number, y: node.y as number, level }
+  }
+  const width = Math.max(...nodes.map((node) => node.x as number)) + LEVEL_GAP
+  const height = Math.max(...nodes.map((node) => node.y as number)) + NODE_GAP
+  return { positions, levels, width, height }
 }

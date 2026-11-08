@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /**
- * 知识图谱:拓扑分层布局 + 缩放/拖拽 + 点选详情。
+ * 知识图谱:后端 NetworkX 分层坐标 + 缩放/拖拽 + 点选详情。
  *
- * 布局用纯函数 utils/graphLayout(最长路径分层),节点按掌握度着色:
+ * 坐标优先用 /api/graph 返回的 x/y/level;缺失时退回本地
+ * utils/graphLayout 的最长路径分层。节点按掌握度着色:
  * 已掌握 / 薄弱 / 未诊断。章节筛选会把视图聚焦到该章节的节点范围。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
@@ -10,6 +11,7 @@ import { useRouter } from 'vue-router'
 import Starfield from '@/components/common/Starfield.vue'
 import { statusOf } from '@/api/http'
 import {
+  exportGraphHtml,
   fetchGraph,
   fetchRecommendation,
   submitSelfRating,
@@ -19,9 +21,10 @@ import {
   type Recommendation,
   type RecommendStrategy,
 } from '@/services/graphService'
-import { layoutGraph, type GraphPosition } from '@/utils/graphLayout'
+import { resolveLayout, type GraphPosition } from '@/utils/graphLayout'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
+import { downloadBlob } from '@/services/docService'
 
 const router = useRouter()
 const data = ref<GraphData | null>(null)
@@ -41,7 +44,7 @@ const view = reactive({ x: 0, y: 0, w: 1200, h: 800 })
 
 const nodes = computed(() => data.value?.nodes ?? [])
 const edges = computed(() => data.value?.edges ?? [])
-const layout = computed(() => layoutGraph(nodes.value))
+const layout = computed(() => resolveLayout(nodes.value))
 const viewBox = computed(() => `${view.x} ${view.y} ${view.w} ${view.h}`)
 
 const nodeById = computed(() => {
@@ -253,6 +256,15 @@ async function rate(score: number) {
   }
 }
 
+async function exportHtml() {
+  try {
+    const blob = await exportGraphHtml()
+    downloadBlob(blob, `mathguide-graph-${new Date().toISOString().slice(0, 10)}.html`)
+  } catch {
+    showToast(t('graph.exportError'))
+  }
+}
+
 function switchStrategy(next: RecommendStrategy) {
   strategy.value = next
   void loadRecommendation()
@@ -302,6 +314,7 @@ onBeforeUnmount(() => {
         <h1>{{ t('graph.title') }}</h1>
         <p class="tech-label">{{ t('graph.subtitle') }}</p>
       </div>
+      <button class="ghost" @click="exportHtml">{{ t('graph.export') }}</button>
       <button class="ghost" @click="resetView">{{ t('graph.reset') }}</button>
     </header>
 

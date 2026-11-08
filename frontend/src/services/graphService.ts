@@ -1,7 +1,7 @@
 /**
  * 知识图谱服务:GET /api/graph(节点、依赖边、章节与个人掌握度)。
  */
-import { get, post } from '@/api/http'
+import { get, httpError, post } from '@/api/http'
 import { getToken } from '@/stores/user'
 
 export type MasteryStatus = 'mastered' | 'weak' | 'new'
@@ -15,6 +15,10 @@ export interface GraphNode {
   prerequisites: string[]
   mastery: number | null
   status: MasteryStatus
+  /** 后端 NetworkX 分层布局给出的像素坐标(旧后端可能缺省,前端会本地兜底) */
+  x?: number
+  y?: number
+  level?: number
 }
 
 export interface GraphEdge {
@@ -63,6 +67,13 @@ function authHeaders(): Record<string, string> {
 
 export function fetchGraph(): Promise<GraphData> {
   return get<GraphData>('/api/graph', authHeaders())
+}
+
+/** 下载可独立打开的 Pyvis HTML 图谱(vis 资源内联)。 */
+export async function exportGraphHtml(): Promise<Blob> {
+  const res = await fetch('/api/graph/export', { headers: authHeaders() })
+  if (!res.ok) throw httpError(res)
+  return res.blob()
 }
 
 export function fetchRecommendation(

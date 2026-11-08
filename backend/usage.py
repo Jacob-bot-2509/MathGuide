@@ -80,7 +80,7 @@ def _read_legacy_entries() -> list[dict]:
                     if isinstance(item, dict):
                         entries.append(item)
         except OSError:
-            return []
+            raise
         return entries
     raw = db.read_json(LEGACY_PATH)
     if isinstance(raw, list):

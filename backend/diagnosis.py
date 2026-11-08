@@ -126,7 +126,7 @@ def _import_legacy() -> None:
                         and item.get("pointId") and item.get("score")):
                     entries.append(item)
     except OSError:
-        return
+        raise
     with db.transaction() as conn:
         for item in entries:
             conn.execute(

@@ -145,6 +145,6 @@ def read_json(path: Path) -> object | None:
     try:
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (FileNotFoundError, json.JSONDecodeError):
         pass
     return None
