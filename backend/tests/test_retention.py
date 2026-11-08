@@ -7,6 +7,7 @@ from datetime import datetime
 import auth
 import retention
 import store
+import db
 import usage
 
 
@@ -73,9 +74,11 @@ def test_retention_defaults_off(temp_store, temp_usage, monkeypatch):
 
 
 def test_usage_prune_also_cleans_legacy_backup(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "mathguide.db")
     monkeypatch.setattr(usage, "DATA_DIR", tmp_path)
     monkeypatch.setattr(usage, "PATH", tmp_path / "usage.jsonl")
     monkeypatch.setattr(usage, "LEGACY_PATH", tmp_path / "usage.json")
+    db.reset_for_tests()
     usage.reset_for_tests()
     now = _ts("2026-10-26T00:00:00")
     old = {"ts": _ts("2025-01-01T00:00:00"), "uid": "old"}

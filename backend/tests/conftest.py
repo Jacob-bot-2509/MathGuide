@@ -53,6 +53,13 @@ def temp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DB_PATH", data_dir / "mathguide.db")
     monkeypatch.setattr(store, "USERS_PATH", data_dir / "users.json")
     monkeypatch.setattr(store, "TOKENS_PATH", data_dir / "tokens.json")
+    # 同一临时库:usage/diagnosis 的旧文件路径也必须指向临时目录,
+    # 否则初始化会把 backend/data 里的真实旧数据导入测试库(计数被污染)
+    monkeypatch.setattr(usage, "PATH", data_dir / "usage.jsonl")
+    monkeypatch.setattr(usage, "LEGACY_PATH", data_dir / "usage.json")
+    monkeypatch.setattr(diagnosis, "PATH", data_dir / "diagnoses.jsonl")
+    monkeypatch.setattr(store, "USERS_PATH", data_dir / "users.json")
+    monkeypatch.setattr(store, "TOKENS_PATH", data_dir / "tokens.json")
     store.reset_for_tests()
     usage.reset_for_tests()
     diagnosis.reset_for_tests()
