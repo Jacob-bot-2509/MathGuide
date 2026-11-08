@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 3D 静态图解:Three.js 场景,可旋转/缩放,不自动播放动画。 */
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
 import { t } from '@/utils/i18n'
 import {
@@ -638,8 +638,6 @@ function applyCameraFit(focused: boolean): void {
   if (renderer && scene) renderer.render(scene, camera)
 }
 
-watch(() => props.focused, (focused) => applyCameraFit(Boolean(focused)))
-
 async function boot(): Promise<void> {
   const el = host.value
   if (!el) return
@@ -755,7 +753,6 @@ async function boot(): Promise<void> {
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
-      if (contentSphere) applyCameraFit(Boolean(props.focused))
       camera.updateMatrixWorld()
       layoutLabels(THREE)
       renderer.render(scene!, camera)

@@ -566,6 +566,9 @@ check('移动窗口不越界',
 check('双指放大到阈值全屏',
   resizeFocusPanel({ x: 0, w: 90, h: 82, fullscreen: false }, 1.2,
     { width: 390, height: 844 }).fullscreen)
+check('全屏窗口不能缩回',
+  resizeFocusPanel({ x: 0, w: 100, h: 100, fullscreen: true }, 0.5,
+    { width: 390, height: 844 }).fullscreen)
 check('全屏窗口不能移动',
   moveFocusPanel({ x: 0, w: 100, h: 100, fullscreen: true }, 40,
     { width: 390, height: 844 }).x === 0)
