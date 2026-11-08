@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 import db
 import usage
@@ -166,7 +167,7 @@ def test_delete_user_removes_uid_and_legacy_phone_records(tmp_path, monkeypatch)
     assert usage.summary()["calls"] == 1
 
 
-def test_corrupt_legacy_lines_are_skipped(tmp_path, monkeypatch):
+def test_corrupt_legacy_lines_block_migration(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     path = tmp_path / "data" / "usage.jsonl"
     path.write_text(
@@ -179,9 +180,11 @@ def test_corrupt_legacy_lines_are_skipped(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
+    with pytest.raises(ValueError, match=":2:"):
+        usage.summary()
+    assert db.get_meta(usage.MIGRATION_KEY) is None
+    path.write_text(json.dumps({"user": "ok", "reply_len": 1, "role": "main"}) + "\n", encoding="utf-8")
     assert usage.summary()["calls"] == 1
-    _record("new", reply_len=1)
-    assert usage.summary()["calls"] == 2
 
 
 def test_delete_user_cleans_legacy_backup(tmp_path, monkeypatch):

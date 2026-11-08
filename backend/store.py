@@ -68,37 +68,39 @@ def _user_columns(rec: dict) -> tuple:
 
 
 def _import_legacy(conn) -> None:
-    """首次建库时导入旧 JSON;损坏记录按原规则丢弃,不阻断启动。"""
+    """首次建库时导入旧 JSON;损坏记录阻止迁移。"""
     users = db.read_json(USERS_PATH)
+    if not isinstance(users, dict) and USERS_PATH.exists():
+        raise ValueError(f"{USERS_PATH}: 用户文件必须是对象")
     if isinstance(users, dict):
         for uid, rec in users.items():
             if not isinstance(rec, dict) or not uid:
-                continue
+                raise ValueError(f"{USERS_PATH}: 无效用户记录")
             rec = dict(rec)
             rec.setdefault("uid", uid)
             phone, doc, created, active = _user_columns(rec)
             conn.execute(
-                "INSERT OR IGNORE INTO users(uid, phone, doc, created_at, last_active_at) "
+                "INSERT INTO users(uid, phone, doc, created_at, last_active_at) "
                 "VALUES(?, ?, ?, ?, ?)",
                 (uid, phone, doc, created, active),
             )
 
     tokens = db.read_json(TOKENS_PATH)
+    if not isinstance(tokens, dict) and TOKENS_PATH.exists():
+        raise ValueError(f"{TOKENS_PATH}: 令牌文件必须是对象")
     if isinstance(tokens, dict):
         for token, entry in tokens.items():
             if isinstance(entry, str):
                 entry = {"uid": entry, "issued": time.time()}
             if not isinstance(entry, dict):
-                continue
+                raise ValueError(f"{TOKENS_PATH}: 无效令牌记录")
             uid = entry.get("uid")
             issued = entry.get("issued")
-            if not isinstance(uid, str) or not uid:
-                continue
-            if not isinstance(issued, (int, float)):
-                continue  # 缺签发时间的损坏记录不导入
+            if not isinstance(uid, str) or not uid or not isinstance(issued, (int, float)):
+                raise ValueError(f"{TOKENS_PATH}: 无效令牌记录")
             key = token if token.startswith(TOKEN_KEY_PREFIX) else _token_key(token)
             conn.execute(
-                "INSERT OR IGNORE INTO tokens(key, uid, issued) VALUES(?, ?, ?)",
+                "INSERT INTO tokens(key, uid, issued) VALUES(?, ?, ?)",
                 (key, uid, float(issued)),
             )
 
@@ -110,10 +112,11 @@ def init() -> None:
     key = str(db.DB_PATH)
     if _ready_key == key and db.get_meta(MIGRATION_KEY) == "1":
         return
-    if db.get_meta(MIGRATION_KEY) != "1":
-        with db.transaction() as conn:
+    with db.transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if not conn.execute("SELECT 1 FROM meta WHERE key = ? AND value = '1'", (MIGRATION_KEY,)).fetchone():
             _import_legacy(conn)
-        db.set_meta(MIGRATION_KEY, "1")
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, '1')", (MIGRATION_KEY,))
     _ready_key = key
 
 
@@ -245,7 +248,7 @@ def phone_uid_map() -> dict[str, str]:
 
 
 def prune_inactive(days: float, exempt_uids: set[str] | None = None,
-                   now: datetime | None = None) -> list[dict]:
+                   now: datetime | None = None, before_delete=None) -> list[dict]:
     """删除超过 days 天未活动的账号及其 token;返回被删记录列表。"""
     if days <= 0:
         return []
@@ -269,45 +272,50 @@ def prune_inactive(days: float, exempt_uids: set[str] | None = None,
         removed.append(rec)
     if not removed:
         return []
+    if before_delete:
+        for rec in removed:
+            before_delete(rec)
     removed_uids = {str(rec.get("uid") or "") for rec in removed}
     with db.transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         for uid in removed_uids:
+            _delete_legacy_user(uid)
             conn.execute("DELETE FROM tokens WHERE uid = ?", (uid,))
             conn.execute("DELETE FROM users WHERE uid = ?", (uid,))
     return removed
 
 
-def _scrub_legacy_user(uid: str) -> None:
-    """注销时同步清理旧 JSON 备份,避免备份里继续留存该账号。
-
-    旧文件损坏时跳过(容错);写盘失败向上抛出,此时数据库尚未删除,
-    调用方可以重试,不会出现"账号已删但备份还留着"的状态。
-    """
+def _delete_legacy_user(uid: str) -> None:
     users = db.read_json(USERS_PATH)
-    if isinstance(users, dict) and uid in users:
-        users.pop(uid, None)
-        db.write_json(USERS_PATH, users)
     tokens = db.read_json(TOKENS_PATH)
-    if isinstance(tokens, dict):
-        kept = {key: value for key, value in tokens.items()
-                if _token_uid(value) != uid}
+    if not isinstance(users, dict) and USERS_PATH.exists():
+        raise ValueError(f"{USERS_PATH}: 用户文件必须是对象")
+    if not isinstance(tokens, dict) and TOKENS_PATH.exists():
+        raise ValueError(f"{TOKENS_PATH}: 令牌文件必须是对象")
+    if tokens is not None:
+        if any(not isinstance(entry, (str, dict)) or isinstance(entry, dict) and not isinstance(entry.get("uid"), str)
+               for entry in tokens.values()):
+            raise ValueError(f"{TOKENS_PATH}: 无效令牌记录")
+        kept = {key: entry for key, entry in tokens.items()
+                if (entry if isinstance(entry, str) else entry["uid"]) != uid}
         if len(kept) != len(tokens):
-            db.write_json(TOKENS_PATH, kept)
+            db.write_legacy(TOKENS_PATH, json.dumps(kept, ensure_ascii=False))
+    if users is not None and uid in users:
+        del users[uid]
+        db.write_legacy(USERS_PATH, json.dumps(users, ensure_ascii=False))
 
 
 def delete_user(uid: str) -> dict | None:
-    """删除账号及其全部 token(单事务);返回被删记录,不存在返回 None。
-
-    先清理旧 JSON 备份再删库:备份写失败时账号保持可重试。
-    """
+    """删除账号、令牌及迁移保留的旧记录。"""
     conn = _conn()
     try:
-        row = conn.execute("SELECT doc FROM users WHERE uid = ?", (uid,)).fetchone()
-        if row is None:
-            return None
-        rec = _rec_from_row(row)
-        _scrub_legacy_user(uid)
         with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT doc FROM users WHERE uid = ?", (uid,)).fetchone()
+            if row is None:
+                return None
+            rec = _rec_from_row(row)
+            _delete_legacy_user(uid)
             conn.execute("DELETE FROM tokens WHERE uid = ?", (uid,))
             conn.execute("DELETE FROM users WHERE uid = ?", (uid,))
         return rec

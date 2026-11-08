@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -72,10 +74,23 @@ def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=10000")
-    return conn
+    try:
+        conn.execute("PRAGMA busy_timeout=10000")
+        # 首次切换 WAL 可能直接返回锁冲突,即使已设置 busy_timeout。
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                break
+            except sqlite3.OperationalError as exc:
+                if getattr(exc, "sqlite_errorcode", 0) & 255 not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 
 @contextmanager
@@ -141,47 +156,51 @@ def reset_for_tests() -> None:
 
 
 def read_json(path: Path) -> object | None:
-    """读取旧 JSON 文件;损坏或不存在返回 None。"""
+    """读取旧 JSON 文件;不存在返回 None,损坏或无法读取时拒绝迁移。"""
     try:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
-    return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
 
 
-def read_jsonl_lenient(path: Path) -> list[dict]:
-    """读取旧 JSONL;坏行跳过,文件不可读时让 OSError 抛出(便于重试)。"""
+def read_jsonl(path: Path) -> list[dict]:
+    """完整解析旧 JSONL,任何坏行都必须先修复才能继续。"""
     try:
         with path.open(encoding="utf-8") as handle:
-            entries: list[dict] = []
-            for raw in handle:
-                text = raw.strip()
-                if not text:
+            entries = []
+            for number, line in enumerate(handle, 1):
+                if not line.strip():
                     continue
                 try:
-                    item = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(item, dict):
-                    entries.append(item)
+                    item = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"{path}:{number}: 无效 JSON") from exc
+                if not isinstance(item, dict):
+                    raise ValueError(f"{path}:{number}: 记录必须是对象")
+                entries.append(item)
             return entries
     except FileNotFoundError:
         return []
 
 
-def write_json(path: Path, data: object) -> None:
-    """原子写 JSON;先写临时文件再替换,失败时保留原文件。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+def write_legacy(path: Path, text: str) -> None:
+    """原子替换旧文件,失败时保留原文件。"""
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as handle:
+            temp_path = Path(handle.name)
+            handle.write(text)
+        temp_path.replace(path)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
-def write_jsonl(path: Path, entries: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        for entry in entries:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    tmp.replace(path)
+def remove_jsonl(path: Path, predicate) -> int:
+    entries = read_jsonl(path)
+    kept = [entry for entry in entries if not predicate(entry)]
+    removed = len(entries) - len(kept)
+    if removed:
+        write_legacy(path, "".join(json.dumps(entry, ensure_ascii=False) + "\n" for entry in kept))
+    return removed

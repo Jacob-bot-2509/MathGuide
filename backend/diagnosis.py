@@ -102,39 +102,26 @@ def init() -> None:
     key = str(db.DB_PATH)
     if _ready_key == key and db.get_meta(MIGRATION_KEY) == "1":
         return
-    if db.get_meta(MIGRATION_KEY) != "1":
-        _import_legacy()
-        db.set_meta(MIGRATION_KEY, "1")
+    with db.transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if not conn.execute("SELECT 1 FROM meta WHERE key = ? AND value = '1'", (MIGRATION_KEY,)).fetchone():
+            _import_legacy(conn)
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, '1')", (MIGRATION_KEY,))
     _ready_key = key
 
 
-def _import_legacy() -> None:
-    if not db.table_empty("diagnoses") or not PATH.exists():
-        return
-    entries: list[dict] = []
-    try:
-        with PATH.open(encoding="utf-8") as handle:
-            for raw in handle:
-                text = raw.strip()
-                if not text:
-                    continue
-                try:
-                    item = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if (isinstance(item, dict) and item.get("uid")
-                        and item.get("pointId") and item.get("score")):
-                    entries.append(item)
-    except OSError:
-        raise
-    with db.transaction() as conn:
-        for item in entries:
-            conn.execute(
-                "INSERT INTO diagnoses(uid, point_id, score, doc, at) "
-                "VALUES(?, ?, ?, ?, ?)",
-                (str(item["uid"]), str(item["pointId"]), int(item["score"]),
-                 _doc(item), str(item.get("at") or "")),
-            )
+def _import_legacy(conn) -> None:
+    if conn.execute("SELECT 1 FROM diagnoses LIMIT 1").fetchone():
+        raise ValueError("诊断表不为空,不能自动迁移旧数据")
+    for item in db.read_jsonl(PATH):
+        if not item.get("uid") or not item.get("pointId") or not item.get("score"):
+            raise ValueError(f"{PATH}: 无效诊断记录")
+        conn.execute(
+            "INSERT INTO diagnoses(uid, point_id, score, doc, at) "
+            "VALUES(?, ?, ?, ?, ?)",
+            (str(item["uid"]), str(item["pointId"]), int(item["score"]),
+             _doc(item), str(item.get("at") or "")),
+        )
 
 
 def _conn():
@@ -222,20 +209,13 @@ def weak_report(uid: str, graph: KnowledgeGraph | None = None) -> dict:
     }
 
 
-def _scrub_legacy(uid: str) -> None:
-    """同步清理旧 diagnoses.jsonl 备份;写盘失败时抛 OSError(库尚未删除)。"""
-    entries = db.read_jsonl_lenient(PATH)
-    kept = [entry for entry in entries if entry.get("uid") != uid]
-    if len(kept) != len(entries):
-        db.write_jsonl(PATH, kept)
-
-
 def delete_user(uid: str) -> int:
-    """删除该账号全部诊断记录(含旧备份),返回删除条数。"""
+    """删除该账号全部诊断记录,返回删除条数。"""
     conn = _conn()
     try:
-        _scrub_legacy(uid)
         with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            db.remove_jsonl(PATH, lambda item: item.get("uid") == uid)
             cur = conn.execute("DELETE FROM diagnoses WHERE uid = ?", (uid,))
             return cur.rowcount
     finally:

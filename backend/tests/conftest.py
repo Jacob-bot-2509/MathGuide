@@ -72,6 +72,7 @@ def temp_usage(tmp_path, monkeypatch):
     monkeypatch.setattr(usage, "DATA_DIR", data_dir)
     monkeypatch.setattr(usage, "PATH", data_dir / "usage.jsonl")
     monkeypatch.setattr(usage, "LEGACY_PATH", data_dir / "usage.json")
+    monkeypatch.setattr(diagnosis, "PATH", data_dir / "diagnoses.jsonl")
     store.reset_for_tests()
     usage.reset_for_tests()
     diagnosis.reset_for_tests()

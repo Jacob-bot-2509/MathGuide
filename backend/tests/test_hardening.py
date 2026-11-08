@@ -99,10 +99,10 @@ def test_logout_is_rate_limited(temp_store):
 # ---------- store:旧数据文件是合法 JSON 但不是对象 ----------
 
 @pytest.mark.parametrize("payload", ["[]", "null", "123", '"str"'])
-def test_legacy_non_dict_json_is_treated_as_empty(temp_store, payload):
+def test_legacy_non_dict_json_blocks_migration(temp_store, payload):
     temp_store.USERS_PATH.write_text(payload, encoding="utf-8")
-    temp_store.init()
-    assert temp_store.users_snapshot() == {}
+    with pytest.raises(ValueError):
+        temp_store.init()
 
 
 # ---------- 知识库:坏文件只跳过,不拖垮启动 ----------

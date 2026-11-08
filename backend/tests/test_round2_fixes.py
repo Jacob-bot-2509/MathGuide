@@ -190,7 +190,7 @@ def test_cancel_closes_inflight_response(monkeypatch):
 
 # ---------- usage:进程重启后坏行会被压实清掉,旧 JSON 能迁移 ----------
 
-def test_usage_skips_corrupt_legacy_line(tmp_path, monkeypatch):
+def test_usage_retries_after_corrupt_legacy_line_is_fixed(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     monkeypatch.setattr(db, "DB_PATH", data_dir / "mathguide.db")
@@ -205,10 +205,11 @@ def test_usage_skips_corrupt_legacy_line(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    assert usage.summary()["calls"] == 1, "坏行拖垮了整次导入"
-    usage.record(uid="u", cmd="c", prompt_len=1, reply_len=2,
-                 role="main", research=False, ts=time.time())
-    assert usage.summary()["calls"] == 2
+    with pytest.raises(ValueError):
+        usage.summary()
+    assert db.get_meta(usage.MIGRATION_KEY) is None
+    usage.PATH.write_text(json.dumps({"uid": "u", "ts": 1.0, "reply_len": 2, "role": "main"}) + "\n", encoding="utf-8")
+    assert usage.summary()["calls"] == 1
 
 
 def test_usage_imports_legacy_json(tmp_path, monkeypatch):

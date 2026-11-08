@@ -1,11 +1,16 @@
 import json
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
+from datetime import datetime
 
 import pytest
 
 import db
 import diagnosis
+import retention
 import store
 import usage
 
@@ -47,7 +52,6 @@ def test_failed_jsonl_read_is_retried(tmp_path, monkeypatch, module, filename, r
         patch.setattr(Path, "open", fail_open)
         with pytest.raises(PermissionError):
             module.init()
-    # 读取失败不能标记迁移完成,下次启动需要重试
     assert db.get_meta(module.MIGRATION_KEY) is None
     module.init()
     assert len(module.for_user("u1")) == 1
@@ -85,7 +89,8 @@ def legacy_data(tmp_path, monkeypatch):
     monkeypatch.setattr(diagnosis, "PATH", tmp_path / "diagnoses.jsonl")
     for module in (store, usage, diagnosis):
         monkeypatch.setattr(module, "_ready_key", None)
-    users = {"u1": {"uid": "u1", "phone": "123"}, "u2": {"uid": "u2", "phone": "456"}}
+    users = {"u1": {"uid": "u1", "phone": "123", "createdAt": "2026-01-01T00:00:00"},
+             "u2": {"uid": "u2", "phone": "456", "createdAt": "2026-10-20T00:00:00"}}
     tokens = {"tok1": "u1", "tok2": "u2"}
     entries = [{"uid": "u1", "phone": "123", "ts": 100}, {"uid": "u2", "phone": "456", "ts": 200}]
     diagnoses = [{"uid": "u1", "pointId": "p", "score": 3}, {"uid": "u2", "pointId": "p", "score": 4}]
@@ -106,9 +111,9 @@ def test_delete_cleans_all_legacy_files_and_keeps_other_user(legacy_data):
 
     assert set(json.loads(store.USERS_PATH.read_text(encoding="utf-8"))) == {"u2"}
     assert json.loads(store.TOKENS_PATH.read_text(encoding="utf-8")) == {"tok2": "u2"}
-    assert [row["uid"] for row in db.read_jsonl_lenient(usage.PATH)] == ["u2"]
+    assert [row["uid"] for row in db.read_jsonl(usage.PATH)] == ["u2"]
     assert [row["uid"] for row in json.loads(usage.LEGACY_PATH.read_text(encoding="utf-8"))] == ["u2"]
-    assert [row["uid"] for row in db.read_jsonl_lenient(diagnosis.PATH)] == ["u2"]
+    assert [row["uid"] for row in db.read_jsonl(diagnosis.PATH)] == ["u2"]
     assert store.find_user_by_phone("456")[0] == "u2"
     assert len(usage.for_user("u2")) == len(diagnosis.for_user("u2")) == 1
 
@@ -117,7 +122,7 @@ def test_backup_write_failure_leaves_account_retryable(legacy_data, monkeypatch)
     def fail_write(*args, **kwargs):
         raise OSError("disk full")
     with monkeypatch.context() as patch:
-        patch.setattr(db, "write_json", fail_write)
+        patch.setattr(db, "write_legacy", fail_write)
         with pytest.raises(OSError):
             store.delete_user("u1")
     assert store.find_user_by_phone("123")[0] == "u1"
@@ -127,15 +132,66 @@ def test_backup_write_failure_leaves_account_retryable(legacy_data, monkeypatch)
 
 
 @pytest.mark.parametrize("module,filename", [(usage, "usage.jsonl"), (diagnosis, "diagnoses.jsonl")])
-def test_corrupt_jsonl_line_is_skipped_and_migration_completes(tmp_path, monkeypatch, module, filename):
-    """容错迁移:坏行跳过,好记录入库,启动不因单个坏行失败。"""
+def test_corrupt_jsonl_does_not_mark_migration_complete(tmp_path, monkeypatch, module, filename):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(module, "PATH", tmp_path / filename)
     monkeypatch.setattr(module, "_ready_key", None)
-    original = json.dumps({"uid": "u1", "pointId": "p1", "score": 3, "ts": 1.0}) + "\n{broken\n"
+    original = '{"uid":"u1"}\n{broken\n'
     module.PATH.write_text(original, encoding="utf-8")
-    module.init()
-    assert db.get_meta(module.MIGRATION_KEY) == "1"
-    # 旧文件保留原样(备份),好记录已入库
+    with pytest.raises(ValueError):
+        module.init()
+    assert db.get_meta(module.MIGRATION_KEY) is None
     assert module.PATH.read_text(encoding="utf-8") == original
-    assert len(module.for_user("u1")) == 1
+
+
+def test_retention_cleans_legacy_and_diagnoses(legacy_data, monkeypatch):
+    monkeypatch.setenv("MG_ACCOUNT_TTL_DAYS", "30")
+    monkeypatch.setenv("MG_USAGE_TTL_DAYS", "0")
+    monkeypatch.setenv("MG_ADMIN_PHONES", "")
+    monkeypatch.setattr(retention.research_corpus, "delete_user", lambda uid: None)
+    assert retention.run(now=datetime(2026, 10, 26))["accounts"] == 1
+    assert set(json.loads(store.USERS_PATH.read_text(encoding="utf-8"))) == {"u2"}
+    assert json.loads(store.TOKENS_PATH.read_text(encoding="utf-8")) == {"tok2": "u2"}
+    assert [row["uid"] for row in db.read_jsonl(usage.PATH)] == ["u2"]
+    assert [row["uid"] for row in db.read_jsonl(diagnosis.PATH)] == ["u2"]
+    assert not diagnosis.for_user("u1")
+
+
+def test_usage_retention_cleans_old_backup_rows(legacy_data):
+    usage.prune_older_than(1, now=86550)
+    assert [row["uid"] for row in db.read_jsonl(usage.PATH)] == ["u2"]
+    assert [row["uid"] for row in json.loads(usage.LEGACY_PATH.read_text(encoding="utf-8"))] == ["u2"]
+    assert not usage.for_user("u1")
+
+
+def test_retention_cleanup_failure_keeps_account_retryable(legacy_data, monkeypatch):
+    monkeypatch.setenv("MG_ACCOUNT_TTL_DAYS", "30")
+    monkeypatch.setenv("MG_USAGE_TTL_DAYS", "0")
+    monkeypatch.setenv("MG_ADMIN_PHONES", "")
+    def fail_delete(uid):
+        raise OSError("disk full")
+    monkeypatch.setattr(diagnosis, "delete_user", fail_delete)
+    with pytest.raises(OSError):
+        retention.run(now=datetime(2026, 10, 26))
+    assert store.find_user_by_phone("123")[0] == "u1"
+    assert "u1" in json.loads(store.USERS_PATH.read_text(encoding="utf-8"))
+
+
+def test_concurrent_processes_import_legacy_only_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    legacy = tmp_path / "usage.jsonl"
+    legacy.write_text(json.dumps({"uid": "u1", "ts": 1}) + "\n", encoding="utf-8")
+    script = ("from pathlib import Path; import sys, db, usage; "
+              "db.DB_PATH=Path(sys.argv[1]); usage.PATH=Path(sys.argv[2]); "
+              "usage.LEGACY_PATH=Path(sys.argv[3]); usage.init()")
+
+    def run_import(_):
+        return subprocess.run([sys.executable, "-c", script, str(db.DB_PATH), str(legacy),
+                               str(tmp_path / "usage.json")], cwd=Path(db.__file__).parent,
+                              capture_output=True, text=True, timeout=30)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(run_import, range(4)))
+    assert all(result.returncode == 0 for result in results), [result.stderr for result in results]
+    with closing(db.connect()) as conn:
+        assert conn.execute("SELECT count(*) FROM usage").fetchone()[0] == 1

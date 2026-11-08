@@ -58,51 +58,35 @@ def init() -> None:
     key = f"{db.DB_PATH}"
     if _ready_key == key and db.get_meta(MIGRATION_KEY) == "1":
         return
-    if db.get_meta(MIGRATION_KEY) != "1":
-        _import_legacy()
-        db.set_meta(MIGRATION_KEY, "1")
+    with db.transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if not conn.execute("SELECT 1 FROM meta WHERE key = ? AND value = '1'", (MIGRATION_KEY,)).fetchone():
+            _import_legacy(conn)
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, '1')", (MIGRATION_KEY,))
     _ready_key = key
 
 
 def _read_legacy_entries() -> list[dict]:
-    entries: list[dict] = []
     if PATH.exists():
-        try:
-            with PATH.open(encoding="utf-8") as fh:
-                for raw in fh:
-                    text = raw.strip()
-                    if not text:
-                        continue
-                    try:
-                        item = json.loads(text)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(item, dict):
-                        entries.append(item)
-        except OSError:
-            raise
-        return entries
+        return db.read_jsonl(PATH)
     raw = db.read_json(LEGACY_PATH)
-    if isinstance(raw, list):
-        return [item for item in raw if isinstance(item, dict)]
-    return []
+    if raw is None and not LEGACY_PATH.exists():
+        return []
+    if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
+        raise ValueError(f"{LEGACY_PATH}: 用量文件必须是对象列表")
+    return raw
 
 
-def _import_legacy() -> None:
-    if not db.table_empty("usage"):
-        return
-    entries = _read_legacy_entries()
-    if not entries:
-        return
-    with db.transaction() as conn:
-        for item in entries:
-            uid = str(item.get("uid") or "")
-            ts = item.get("ts") if isinstance(item.get("ts"), (int, float)) else 0.0
-            # 旧记录可能只有 phone/user:先原样保留,由 migrate_identity 清洗
-            conn.execute(
-                "INSERT INTO usage(uid, ts, doc) VALUES(?, ?, ?)",
-                (uid, float(ts), _doc(item)),
-            )
+def _import_legacy(conn) -> None:
+    if conn.execute("SELECT 1 FROM usage LIMIT 1").fetchone():
+        raise ValueError("用量表不为空,不能自动迁移旧数据")
+    for item in _read_legacy_entries():
+        uid = str(item.get("uid") or "")
+        ts = item.get("ts") if isinstance(item.get("ts"), (int, float)) else 0.0
+        conn.execute(
+            "INSERT INTO usage(uid, ts, doc) VALUES(?, ?, ?)",
+            (uid, float(ts), _doc(item)),
+        )
 
 
 def _conn():
@@ -232,11 +216,15 @@ def prune_older_than(days: float, now: float | None = None) -> int:
     conn = _conn()
     try:
         with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            backup_removed = _prune_legacy_file(cutoff)
+            db.remove_jsonl(PATH, lambda item: isinstance(item.get("ts"), (int, float))
+                            and item["ts"] < cutoff)
             cur = conn.execute("DELETE FROM usage WHERE ts < ?", (cutoff,))
             removed = cur.rowcount
+        return removed + backup_removed
     finally:
         conn.close()
-    return removed + _prune_legacy_file(cutoff)
 
 
 def for_user(uid: str, phone: str = "") -> list[dict]:
@@ -255,14 +243,14 @@ def for_user(uid: str, phone: str = "") -> list[dict]:
 
 def _delete_from_legacy_file(uid: str, phone: str) -> int:
     raw = db.read_json(LEGACY_PATH)
-    if not isinstance(raw, list):
+    if raw is None and not LEGACY_PATH.exists():
         return 0
+    if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
+        raise ValueError(f"{LEGACY_PATH}: 用量文件必须是对象列表")
     kept: list[object] = []
     removed = 0
     for item in raw:
-        if isinstance(item, dict) and (
-            item.get("uid") == uid or (phone and item.get("phone") == phone)
-        ):
+        if item.get("uid") == uid or (phone and item.get("phone") == phone):
             removed += 1
             continue
         kept.append(item)
@@ -278,29 +266,20 @@ def delete_user(uid: str, phone: str = "") -> int:
     """删除某账号的用量记录(含旧 phone 记录与 usage.json 备份);返回删除条数。"""
     conn = _conn()
     try:
-        victim_ids = [
-            row["id"] for row in conn.execute("SELECT id, doc FROM usage").fetchall()
-            if (
-                _doc_entry(row).get("uid") == uid
-                or (phone and _doc_entry(row).get("phone") == phone)
-            )
-        ]
-        if victim_ids:
-            with conn:
-                conn.executemany("DELETE FROM usage WHERE id = ?",
-                                 [(item,) for item in victim_ids])
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            victim_ids = [
+                row["id"] for row in conn.execute("SELECT id, doc FROM usage").fetchall()
+                if (_doc_entry(row).get("uid") == uid
+                    or (phone and _doc_entry(row).get("phone") == phone))
+            ]
+            backup_removed = _delete_from_legacy_file(uid, phone)
+            db.remove_jsonl(PATH, lambda item: item.get("uid") == uid
+                            or (phone and item.get("phone") == phone))
+            conn.executemany("DELETE FROM usage WHERE id = ?", [(item,) for item in victim_ids])
+        return len(victim_ids) + backup_removed
     finally:
         conn.close()
-    removed = len(victim_ids) + _delete_from_legacy_file(uid, phone)
-    entries = db.read_jsonl_lenient(PATH)
-    kept = [
-        entry for entry in entries
-        if not (entry.get("uid") == uid or (phone and entry.get("phone") == phone))
-    ]
-    if len(kept) != len(entries):
-        db.write_jsonl(PATH, kept)
-        removed += len(entries) - len(kept)
-    return removed
 
 
 def summary() -> dict:

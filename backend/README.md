@@ -92,9 +92,9 @@ backend/
 - 表:`users`(手机号唯一索引)、`tokens`(SHA-256 键,uid 索引)、`usage`(uid/ts 索引)、`diagnoses`(uid+知识点索引)。
 - 旧数据:`users.json`、`tokens.json`、`usage.jsonl`、`usage.json`、`diagnoses.jsonl`
   在首次建库时导入一次(`meta` 表记录迁移标记);旧文件保留作备份,不删除。
-- 容错:旧文件缺失或损坏时跳过并打印警告,不阻断启动;坏行/非法记录不进入库。
+- 容错:缺失的旧文件按空处理;旧文件损坏或读取失败会阻止迁移,保留原文件供修复后重试。
 - 并发:账号删除、令牌吊销、游客清理在单事务内完成;WAL 允许读写并行。
-- 备份/重置:停服务后复制或删除 `mathguide.db`(连同 `-wal`/`-shm`)即可。
+- 备份/重置:停服务后备份 `mathguide.db` 及其 `-wal`/`-shm` 和旧文件;删除数据库后旧文件会重新导入。
 - 只读看板(可选):`pip install -r requirements-dashboard.txt && streamlit run tools/dashboard.py`。
 
 ## 知识库文档格式
@@ -339,12 +339,13 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 - **密码**:新账号用 PBKDF2-HMAC-SHA256(20 万轮);旧版单轮 SHA-256 记录在登录成功后
   自动升级,并全程用 `secrets.compare_digest` 比较。
 - **token 落盘**:SQLite `tokens` 表只存 token 的 SHA-256(`sha256:` 前缀),不存明文;
-  旧 `tokens.json` 在首次建库时导入一次,旧文件保留作备份,已签发 token 不需要重新登录。
+  旧 `tokens.json` 在首次建库时导入一次并保留备份,可能含明文令牌,应限制文件访问;已签发 token 不需要重新登录。
 - **测评注册**:`MG_DEMO_MODE=0` 后开放注册关闭;配置 `MG_INVITE_CODES` 后,
   持邀请码的手机号仍可注册。固定验证码与游客登录保持关闭。
 - **认证限流**:`MG_AUTH_RATE_MAX` / `MG_AUTH_RATE_WINDOW` 可调;多人共用出口 IP 时调大。
 - **留存清理**:`MG_ACCOUNT_TTL_DAYS` 删除长期未登录账号(管理员白名单保留),
-  `MG_USAGE_TTL_DAYS` 清理过期用量;默认 `0` 关闭,启动时执行。
+  `MG_USAGE_TTL_DAYS` 清理过期用量;默认 `0` 关闭,启动时执行。清理会同步处理旧备份;
+  备份无法读取或修改时保留账号以便修复后重试。
 - **安全响应头**:API 统一加 `X-Content-Type-Options` / `Referrer-Policy` /
   `X-Frame-Options` / `Permissions-Policy`;HTTPS 或 `MG_ENABLE_HSTS=1` 时加 HSTS。
 - **前端 CSP 与反代**:见仓库 `deploy/Caddyfile` / `deploy/nginx.conf`;前端主题脚本已拆成
@@ -353,7 +354,7 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
   绝不能当作全局唯一键使用。
 - **账号数据**:`POST /api/account/export` 导出账号与用量元数据(不含口令/令牌);
   `POST /api/account/delete` 需要当前密码(验证码/第三方账号需输入 `DELETE`/`注销`),
-  删除账号、全部 token 与该账号用量记录。前端同时清理本机学习数据。
+  删除账号、全部 token、用量和诊断记录,并从迁移保留的旧文件中移除该账号;前端同时清理本机学习数据。
 
 ### 聊天流(SSE)
 
@@ -431,7 +432,9 @@ data: [DONE]
 每次聊天流结束后自动记账到 SQLite `usage` 表(**只记 uid**,不记手机号/昵称;
 字段:时间、指令、字符数、模型角色;写后裁到最近 2000 条)。
 旧 `data/usage.jsonl` / `usage.json` 在首次建库时导入一次,旧文件保留作备份;
-服务启动时 `usage.migrate_identity()` 会把旧记录与备份里的 `phone`/`user` 都换成 uid 并删除 PII。
+服务启动时 `usage.migrate_identity()` 清洗库中记录和旧 `usage.json` 的 `phone`/`user`,
+旧 `usage.jsonl` 仍可能包含个人信息,应限制访问。注销时会从旧文件清除该账号记录。
+迁移遇到损坏文件或读取失败会停止并保留原文件,修复后重启重试;导入与完成标记在同一事务中。
 PDF 导出只记调用次数,不把文件字节数混进「回复字数」:
 
 ```bash
@@ -456,7 +459,7 @@ cd ../frontend && npm test                   # 前端自测(编译器/SSE/MathTe
 ## 演示账号
 
 验证码登录演示码固定 `123456`(仅 `MG_DEMO_MODE=1` 且本机绑定时可用)。注册产生的数据
-落盘于 `data/mathguide.db`(SQLite:用户、令牌、用量、诊断);删除该库文件即可重置演示环境。
+落盘于 `data/mathguide.db`(SQLite:用户、令牌、用量、诊断);删除该库后重启会重新导入仍保留的旧文件,不能单靠删除数据库清空历史数据。
 `tools/preflight.py` 在演示账号不存在时会自动注册,新 clone 也能直接自检。
 
 ## 质检工具(tools/)

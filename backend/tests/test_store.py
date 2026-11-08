@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pytest
+from contextlib import closing
 import sqlite3
 import threading
 
@@ -87,40 +89,43 @@ def test_legacy_import_is_idempotent(temp_store):
     assert list(temp_store.users_snapshot()) == ["u-1"]
 
 
-def test_corrupt_json_is_treated_as_empty(temp_store):
+def test_corrupt_json_blocks_migration_until_repaired(temp_store):
     temp_store.USERS_PATH.write_text("{not json", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        temp_store.init()
+    assert db.get_meta(temp_store.MIGRATION_KEY) is None
+    temp_store.USERS_PATH.write_text(json.dumps({"u-1": _user("u-1", "13800138000")}), encoding="utf-8")
     temp_store.init()
-    assert temp_store.users_snapshot() == {}
-    temp_store.create_user(_user("u-1", "13800138000"))
     assert temp_store.find_user_by_phone("13800138000")[0] == "u-1"
 
 
-def test_non_object_json_is_treated_as_empty(temp_store):
+def test_non_object_json_blocks_migration(temp_store):
     temp_store.USERS_PATH.write_text("[]", encoding="utf-8")
-    temp_store.init()
-    assert temp_store.users_snapshot() == {}
+    with pytest.raises(ValueError):
+        temp_store.init()
+    assert db.get_meta(temp_store.MIGRATION_KEY) is None
 
 
-def test_non_dict_user_records_are_dropped(temp_store):
+def test_non_dict_user_records_roll_back_migration(temp_store):
     temp_store.USERS_PATH.write_text(json.dumps({
         "good": _user("good", "13800138000"),
         "bad": "not-a-user",
     }, ensure_ascii=False), encoding="utf-8")
-    temp_store.init()
-    assert set(temp_store.users_snapshot()) == {"good"}
-    assert temp_store.find_user_by_phone("13800138000")[0] == "good"
+    with pytest.raises(ValueError):
+        temp_store.init()
+    assert db.get_meta(temp_store.MIGRATION_KEY) is None
+    with closing(db.connect()) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
 
 
-def test_token_without_issued_is_invalid_and_swept(temp_store):
+def test_token_without_issued_blocks_migration(temp_store):
     temp_store.USERS_PATH.write_text(
         json.dumps({"u-1": _user("u-1")}, ensure_ascii=False), encoding="utf-8")
     temp_store.TOKENS_PATH.write_text(
         json.dumps({"tok": {"uid": "u-1"}}), encoding="utf-8")
-    temp_store.init()
-    assert temp_store.resolve_token("tok") is None
-
-    temp_store.issue_token("u-1")
-    assert temp_store._token_key("tok") not in temp_store.tokens_snapshot()
+    with pytest.raises(ValueError):
+        temp_store.init()
+    assert db.get_meta(temp_store.MIGRATION_KEY) is None
 
 
 def test_data_survives_reopen(temp_store):
