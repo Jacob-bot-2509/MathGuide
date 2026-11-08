@@ -32,6 +32,60 @@ TOPIC_LABELS = {
     "topology": ("拓扑学", "Topology"),
 }
 
+# 需求文本里的确定性约束词。只做显式命中,不做语义猜测:
+# 用户写「证明题 / 基础 / 泰勒」时,题库筛选立刻收窄;没写就不过滤。
+_TYPE_HINTS = (
+    ("证明", "proof"), ("proof", "proof"),
+    ("计算", "compute"), ("compute", "compute"),
+    ("选择", "choice"), ("choice", "choice"),
+    ("填空", "fill"), ("fill", "fill"),
+    ("应用", "apply"), ("apply", "apply"),
+    ("综合", "comprehensive"), ("comprehensive", "comprehensive"),
+)
+_EASY_HINTS = ("基础", "简单", "入门", "easy", "basic", "beginner")
+_MEDIUM_HINTS = ("中等", "medium", "intermediate")
+_HARD_HINTS = ("困难", "挑战", "难题", "提高", "hard", "advanced", "challenge")
+_CROSS_HINTS = (
+    ("泰勒", "taylor"), ("taylor", "taylor"),
+    ("傅里叶", "fourier-series"), ("fourier", "fourier-series"),
+    ("格林", "green-theorem"), ("green", "green-theorem"),
+    ("斯托克斯", "stokes-theorem"), ("stokes", "stokes-theorem"),
+    ("特征值", "eigen"), ("eigen", "eigen"),
+    ("二次型", "quadratic-form"), ("quadratic form", "quadratic-form"),
+    ("最小二乘", "least-squares"), ("least squares", "least-squares"),
+    ("雅可比", "jacobian"), ("jacobian", "jacobian"),
+    ("留数", "residue"), ("residue", "residue"),
+    ("幂级数", "power-series"), ("power series", "power-series"),
+    ("欧拉", "euler-formula"), ("euler", "euler-formula"),
+    ("柯西黎曼", "cauchy-riemann"), ("cauchy-riemann", "cauchy-riemann"),
+    ("散度", "divergence-theorem"), ("divergence", "divergence-theorem"),
+    ("线面积分", "line-surface-integral"),
+    ("卷积", "convolution"),
+    ("马尔可夫", "markov-chain"), ("markov", "markov-chain"),
+)
+
+
+def _requirement_filters(requirement: str) -> dict:
+    """从自由描述中提取题型/难度/交叉知识点;显式字段优先。"""
+    text = (requirement or "").lower()
+    types: list[str] = []
+    for hint, value in _TYPE_HINTS:
+        if hint in text and value not in types:
+            types.append(value)
+    if any(hint in text for hint in _HARD_HINTS):
+        difficulty = (4, 5)
+    elif any(hint in text for hint in _MEDIUM_HINTS):
+        difficulty = (3, 3)
+    elif any(hint in text for hint in _EASY_HINTS):
+        difficulty = (1, 2)
+    else:
+        difficulty = None
+    cross: list[str] = []
+    for hint, value in _CROSS_HINTS:
+        if hint in text and value not in cross:
+            cross.append(value)
+    return {"types": types, "difficulty": difficulty, "cross_topics": cross}
+
 
 _STORE_CACHE: dict[str, tuple[tuple[int, int], ExerciseStore]] = {}
 
@@ -63,17 +117,24 @@ def _labels(topic: str, lang: str) -> str:
 
 
 def _filters(body: dict) -> dict:
+    requirement = str(body.get("requirement") or "").strip()[:200]
+    inferred = _requirement_filters(requirement)
     topics = [str(item) for item in body.get("topics", []) if str(item) in CATEGORY_KEYS]
     cross = [str(item) for item in body.get("crossTopics", []) if str(item)]
     types = [str(item) for item in body.get("types", []) if str(item)]
+    if not cross:
+        cross = inferred["cross_topics"]
+    if not types:
+        types = inferred["types"]
     raw = body.get("difficulty")
+    difficulty = None
     if isinstance(raw, list) and len(raw) == 2:
         try:
             difficulty = (max(1, int(raw[0])), min(5, int(raw[1])))
         except (TypeError, ValueError):
-            difficulty = (1, 5)
-    else:
-        difficulty = (1, 5)
+            difficulty = None
+    if difficulty is None:
+        difficulty = inferred["difficulty"] or (1, 5)
     count = body.get("count", 20)
     try:
         count = max(1, min(MAX_COUNT, int(count)))
@@ -85,6 +146,7 @@ def _filters(body: dict) -> dict:
         "types": types,
         "difficulty": difficulty,
         "count": count,
+        "requirement": requirement,
     }
 
 
@@ -212,13 +274,23 @@ def _document(items, lang: str, mode: str, allow_partial: bool, filters: dict) -
         {"id": index + 1, "title": ref["title"], "source": ref["source"], "url": ref["url"]}
         for index, ref in enumerate(refs.values())
     ]
-    return {
-        "title": "习题集" if lang != "en" else "Exercise Set",
-        "abstract": (
+    requirement = str(filters.get("requirement") or "").strip()
+    title = requirement[:80] or ("习题集" if lang != "en" else "Exercise Set")
+    abstract = (
+        f"按你的要求「{requirement}」从 MathGuide 题库抽取 {len(items)} 题;语言:{lang};模式:{mode}。"
+        if lang != "en" else
+        f"{len(items)} exercises selected from the MathGuide bank for: {requirement}. "
+        f"Language: {lang}; mode: {mode}."
+    )
+    if not requirement:
+        abstract = (
             f"由 MathGuide 题库按条件抽取 {len(items)} 题;语言:{lang};模式:{mode}。"
             if lang != "en" else
             f"{len(items)} exercises selected from the MathGuide bank; language: {lang}; mode: {mode}."
-        ),
+        )
+    return {
+        "title": title,
+        "abstract": abstract,
         "keywords": [_labels(topic, lang) for topic in groups],
         "sections": sections,
         "references": references,

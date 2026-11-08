@@ -13,7 +13,7 @@ export interface Command {
  * utils/i18n.ts 的 CMD_NAMES / CMD_HINTS / CMD_DEFAULTS 提供 —— 那里才有中英双语。
  * 曾在这里挂过一份中文 label/hint,结果两处说法逐渐分叉且英文界面无文案可用 */
 export const COMMANDS: Command[] = [
-  { key: '概念动画演示', icon: '▶' },
+  { key: '学习分析', icon: '◇' },
   { key: '章节知识导航', icon: '◈' },
   { key: '问题记录', icon: '📓' },
   { key: '公式查询手册', icon: '∫' },

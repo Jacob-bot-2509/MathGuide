@@ -92,6 +92,7 @@ export interface ExercisePlanRequest {
   difficulty?: [number, number]
   count: number
   lang: 'zh' | 'en' | 'both'
+  requirement?: string
   allowPartial?: boolean
   seed?: number
 }

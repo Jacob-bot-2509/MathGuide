@@ -7,7 +7,7 @@
  * 已掌握 / 薄弱 / 未诊断。章节筛选会把视图聚焦到该章节的节点范围。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import Starfield from '@/components/common/Starfield.vue'
 import { statusOf } from '@/api/http'
 import {
@@ -27,6 +27,7 @@ import { showToast } from '@/utils/toast'
 import { downloadBlob } from '@/services/docService'
 
 const router = useRouter()
+const route = useRoute()
 const data = ref<GraphData | null>(null)
 const loading = ref(true)
 const error = ref('')
@@ -286,6 +287,9 @@ onMounted(async () => {
     data.value = await fetchGraph()
     resetView()
     await loadRecommendation()
+    // 从学习分析/分析面板跳转过来时聚焦指定知识点
+    const focus = route.query.focus
+    if (typeof focus === 'string' && focus) selectById(focus)
   } catch (err) {
     if (statusOf(err) === 401) {
       router.replace('/login')
@@ -309,7 +313,7 @@ onBeforeUnmount(() => {
     <Starfield class="graph-bg" />
 
     <header class="topbar">
-      <button class="ghost" @click="router.push('/home')">← {{ t('graph.back') }}</button>
+      <button class="ghost" @click="router.push('/learn')">← {{ t('graph.back') }}</button>
       <div class="titles">
         <h1>{{ t('graph.title') }}</h1>
         <p class="tech-label">{{ t('graph.subtitle') }}</p>

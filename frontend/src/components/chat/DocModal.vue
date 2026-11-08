@@ -31,7 +31,7 @@ import { showToast } from '@/utils/toast'
 const props = defineProps<{ messages: ChatMsg[]; entries: NotebookEntry[] }>()
 const emit = defineEmits<{ close: [] }>()
 
-type Step = 'choose' | 'reading' | 'chat' | 'notebook' | 'custom' | 'exercise' | 'outlining' | 'outline' | 'generating' | 'done'
+type Step = 'choose' | 'reading' | 'chat' | 'notebook' | 'custom' | 'outlining' | 'outline' | 'generating' | 'done'
 
 interface SectionDraft {
   heading: string
@@ -54,6 +54,7 @@ const selectedChat = ref<number[]>([])
 const selectedNotes = ref<number[]>([])
 
 const custom = ref('')
+const docKind = ref<'document' | 'exercise'>('document')
 const outline = ref<DocOutline | null>(null)
 const outlineTitle = ref('')
 const drafts = ref<SectionDraft[]>([])
@@ -92,6 +93,22 @@ function toggleExerciseTopic(key: string): void {
 const chatSelectedCount = computed(() => selectedChat.value.length)
 const noteSelectedCount = computed(() => selectedNotes.value.length)
 const canGenerateOutline = computed(() => drafts.value.some((item) => item.has_evidence))
+/** 独立要求 + 范围/题量合成一段请求;文档走大纲,习题集走题库筛选。 */
+const customRequest = computed(() => {
+  const parts: string[] = []
+  if (custom.value.trim()) parts.push(custom.value.trim())
+  if (exerciseTopics.value.length) {
+    const names = EXERCISE_TOPICS
+      .filter((topic) => exerciseTopics.value.includes(topic.key))
+      .map(exerciseTopicLabel)
+    parts.push(`${en.value ? 'Scope' : '范围'}：${names.join(en.value ? ', ' : '、')}`)
+  }
+  const count = Math.max(0, Math.min(100, Number(exerciseCount.value) || 0))
+  if (docKind.value === 'exercise' && count) {
+    parts.push(`${en.value ? 'Question count' : '题量'}：${count}`)
+  }
+  return parts.join('\n')
+})
 
 function focusPanel(): void {
   nextTick(() => panelEl.value?.focus())
@@ -142,18 +159,12 @@ function startCustom(): void {
   focusPanel()
 }
 
-function startExercise(): void {
-  clearError()
-  exercisePlan.value = null
-  step.value = 'exercise'
-  focusPanel()
-}
-
 function exerciseRequest() {
   return {
     topics: [...exerciseTopics.value],
     count: Math.max(1, Math.min(100, Number(exerciseCount.value) || 1)),
     lang: exerciseLang.value,
+    requirement: custom.value.trim(),
     allowPartial: false,
   }
 }
@@ -192,7 +203,7 @@ function generateExercise(): void {
       const result = await generateExercises({ ...exerciseRequest(), mode: exerciseMode.value })
       if (!result.selected) {
         error.value = t('doc.exerciseNone')
-        step.value = 'exercise'
+        step.value = 'custom'
         return
       }
       const file = await renderDocument(result.document, lang.value, format.value)
@@ -201,7 +212,7 @@ function generateExercise(): void {
       showToast(t('doc.done'))
     } catch (err) {
       error.value = errorText(err, t('doc.failed'))
-      step.value = 'exercise'
+      step.value = 'custom'
     } finally {
       busy.value = false
       focusPanel()
@@ -298,11 +309,11 @@ function generateNotebook(): void {
 }
 
 function outlineCustom(): void {
-  const request = custom.value.trim()
-  if (!request) {
+  if (!custom.value.trim()) {
     error.value = t('doc.customPh')
     return
   }
+  const request = customRequest.value
   clearError()
   step.value = 'outlining'
   busy.value = true
@@ -358,7 +369,7 @@ function confirmOutline(): void {
   focusPanel()
   void (async () => {
     try {
-      const result = await generateDocument(custom.value.trim(), plan, lang.value)
+      const result = await generateDocument(customRequest.value, plan, lang.value)
       generated.value = result.document
       gaps.value = result.gaps
       const file = await renderDocument(result.document, lang.value, format.value)
@@ -398,6 +409,7 @@ function reset(): void {
   selectedChat.value = []
   selectedNotes.value = []
   custom.value = ''
+  docKind.value = 'document'
   outline.value = null
   drafts.value = []
   generated.value = null
@@ -450,14 +462,6 @@ focusPanel()
               <span class="choice-text">
                 <strong>{{ t('doc.custom') }}</strong>
                 <small>{{ t('doc.customDesc') }}</small>
-              </span>
-              <span class="chev">›</span>
-            </button>
-            <button class="choice" @click="startExercise">
-              <span class="choice-icon">☑</span>
-              <span class="choice-text">
-                <strong>{{ t('doc.exercise') }}</strong>
-                <small>{{ t('doc.exerciseDesc') }}</small>
               </span>
               <span class="chev">›</span>
             </button>
@@ -554,32 +558,30 @@ focusPanel()
           </template>
 
           <template v-else-if="step === 'custom'">
-            <h2 class="prompt">{{ t('doc.custom') }}</h2>
+            <div class="step-head">
+              <h2 class="prompt">{{ t('doc.custom') }}</h2>
+              <div class="kind-switch">
+                <button class="fmt" :class="{ on: docKind === 'document' }" @click="docKind = 'document'">
+                  {{ t('doc.kindDocument') }}
+                </button>
+                <button
+                  class="fmt"
+                  :class="{ on: docKind === 'exercise' }"
+                  @click="docKind = 'exercise'; exercisePlan = null"
+                >
+                  {{ t('doc.kindExercise') }}
+                </button>
+              </div>
+            </div>
             <textarea
               v-model="custom"
               class="custom-input"
-              rows="5"
+              rows="4"
               maxlength="2000"
               :placeholder="t('doc.customPh')"
             ></textarea>
-            <p class="note">{{ t('doc.noteEvidence') }}</p>
-            <p v-if="error" class="error">{{ error }}</p>
-            <footer class="doc-foot">
-              <button class="btn" @click="reset">{{ t('doc.back') }}</button>
-              <span class="format">
-                <span class="format-label">{{ t('doc.format') }}</span>
-                <button class="fmt" :class="{ on: format === 'pdf' }" @click="format = 'pdf'">PDF</button>
-                <button class="fmt" :class="{ on: format === 'md' }" @click="format = 'md'">Markdown</button>
-                <button class="fmt" :class="{ on: format === 'docx' }" @click="format = 'docx'">Word</button>
-              </span>
-              <button class="btn btn--primary" :disabled="busy || !custom.trim()" @click="outlineCustom">
-                {{ busy ? t('doc.outlining') : t('doc.generate') }}
-              </button>
-            </footer>
-          </template>
 
-          <template v-else-if="step === 'exercise'">
-            <h2 class="prompt">{{ t('doc.exerciseTitle') }}</h2>
+            <p class="note">{{ t('doc.scope') }}</p>
             <div class="exercise-topics">
               <button
                 v-for="topic in EXERCISE_TOPICS"
@@ -591,7 +593,8 @@ focusPanel()
                 {{ exerciseTopicLabel(topic) }}
               </button>
             </div>
-            <label class="field">
+
+            <label v-if="docKind === 'exercise'" class="field">
               <span>{{ t('doc.exerciseCount') }}</span>
               <input
                 v-model.number="exerciseCount"
@@ -601,42 +604,47 @@ focusPanel()
                 max="100"
               />
             </label>
-            <div class="exercise-row">
-              <span>{{ t('doc.exerciseLang') }}</span>
-              <button class="fmt" :class="{ on: exerciseLang === 'zh' }" @click="exerciseLang = 'zh'">
-                {{ t('doc.langZh') }}
-              </button>
-              <button class="fmt" :class="{ on: exerciseLang === 'en' }" @click="exerciseLang = 'en'">
-                {{ t('doc.langEn') }}
-              </button>
-              <button class="fmt" :class="{ on: exerciseLang === 'both' }" @click="exerciseLang = 'both'">
-                {{ t('doc.langBoth') }}
-              </button>
-            </div>
-            <div class="exercise-row">
-              <span>{{ t('doc.exerciseMode') }}</span>
-              <button class="fmt" :class="{ on: exerciseMode === 'questions' }" @click="exerciseMode = 'questions'">
-                {{ t('doc.modeQuestions') }}
-              </button>
-              <button class="fmt" :class="{ on: exerciseMode === 'answers' }" @click="exerciseMode = 'answers'">
-                {{ t('doc.modeAnswers') }}
-              </button>
-              <button class="fmt" :class="{ on: exerciseMode === 'solutions' }" @click="exerciseMode = 'solutions'">
-                {{ t('doc.modeSolutions') }}
-              </button>
-              <button class="fmt" :class="{ on: exerciseMode === 'combined' }" @click="exerciseMode = 'combined'">
-                {{ t('doc.modeCombined') }}
-              </button>
-            </div>
-            <p class="note">{{ t('doc.exerciseNote') }}</p>
-            <p v-if="exercisePlan" class="note">
-              {{ t('doc.exerciseAvailable', {
-                zh: exercisePlan.available.zh,
-                en: exercisePlan.available.en,
-                both: exercisePlan.available.both,
-              }) }}
-              · {{ t('doc.exerciseMissing', { n: exercisePlan.missing }) }}
-            </p>
+
+            <template v-if="docKind === 'exercise'">
+              <div class="exercise-row">
+                <span>{{ t('doc.exerciseLang') }}</span>
+                <button class="fmt" :class="{ on: exerciseLang === 'zh' }" @click="exerciseLang = 'zh'">
+                  {{ t('doc.langZh') }}
+                </button>
+                <button class="fmt" :class="{ on: exerciseLang === 'en' }" @click="exerciseLang = 'en'">
+                  {{ t('doc.langEn') }}
+                </button>
+                <button class="fmt" :class="{ on: exerciseLang === 'both' }" @click="exerciseLang = 'both'">
+                  {{ t('doc.langBoth') }}
+                </button>
+              </div>
+              <div class="exercise-row">
+                <span>{{ t('doc.exerciseMode') }}</span>
+                <button class="fmt" :class="{ on: exerciseMode === 'questions' }" @click="exerciseMode = 'questions'">
+                  {{ t('doc.modeQuestions') }}
+                </button>
+                <button class="fmt" :class="{ on: exerciseMode === 'answers' }" @click="exerciseMode = 'answers'">
+                  {{ t('doc.modeAnswers') }}
+                </button>
+                <button class="fmt" :class="{ on: exerciseMode === 'solutions' }" @click="exerciseMode = 'solutions'">
+                  {{ t('doc.modeSolutions') }}
+                </button>
+                <button class="fmt" :class="{ on: exerciseMode === 'combined' }" @click="exerciseMode = 'combined'">
+                  {{ t('doc.modeCombined') }}
+                </button>
+              </div>
+              <p class="note">{{ t('doc.exerciseNote') }}</p>
+              <p v-if="exercisePlan" class="note">
+                {{ t('doc.exerciseAvailable', {
+                  zh: exercisePlan.available.zh,
+                  en: exercisePlan.available.en,
+                  both: exercisePlan.available.both,
+                }) }}
+                · {{ t('doc.exerciseMissing', { n: exercisePlan.missing }) }}
+              </p>
+            </template>
+            <p v-else class="note">{{ t('doc.noteEvidence') }}</p>
+
             <p v-if="error" class="error">{{ error }}</p>
             <footer class="doc-foot">
               <button class="btn" @click="reset">{{ t('doc.back') }}</button>
@@ -646,11 +654,17 @@ focusPanel()
                 <button class="fmt" :class="{ on: format === 'md' }" @click="format = 'md'">Markdown</button>
                 <button class="fmt" :class="{ on: format === 'docx' }" @click="format = 'docx'">Word</button>
               </span>
-              <button class="btn" :disabled="busy" @click="previewExercises">
+              <button v-if="docKind === 'exercise'" class="btn" :disabled="busy" @click="previewExercises">
                 {{ t('doc.exercisePreview') }}
               </button>
-              <button class="btn btn--primary" :disabled="busy || !exerciseTopics.length" @click="generateExercise">
-                {{ busy ? t('doc.generating') : t('doc.generate') }}
+              <button
+                class="btn btn--primary"
+                :disabled="busy || (docKind === 'document' ? !custom.trim() : !exerciseTopics.length)"
+                @click="docKind === 'exercise' ? generateExercise() : outlineCustom()"
+              >
+                {{ busy
+                  ? (docKind === 'document' ? t('doc.outlining') : t('doc.generating'))
+                  : t('doc.generate') }}
               </button>
             </footer>
           </template>

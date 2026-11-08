@@ -32,6 +32,7 @@ import ResearchArchivePanel from '@/components/chat/ResearchArchivePanel.vue'
 import PaperWorkspace from '@/components/research/PaperWorkspace.vue'
 import PaperImportPrompt from '@/components/research/PaperImportPrompt.vue'
 import TodoPanel from '@/components/chat/TodoPanel.vue'
+import AnalysisPanel from '@/components/chat/AnalysisPanel.vue'
 import DocModal from '@/components/chat/DocModal.vue'
 import TodoReminder from '@/components/chat/TodoReminder.vue'
 import NotebookPanel from '@/components/chat/NotebookPanel.vue'
@@ -668,7 +669,7 @@ const commands = computed(() =>
 const input = ref('')
 /** 浮层面板统一开关:同一时间只允许一个面板展开(点开新的自动收起旧的),
     关闭后其余按钮才可点(全屏遮罩拦截) */
-type PanelKind = 'summary' | 'scope' | 'notebook' | 'formula' | 'todo' | 'archive'
+type PanelKind = 'summary' | 'scope' | 'notebook' | 'formula' | 'todo' | 'archive' | 'analysis'
 const activePanel = ref<PanelKind | null>(null)
 const archivePanelRef = ref<InstanceType<typeof ResearchArchivePanel> | null>(null)
 const paperDocId = ref<string | null>(null)
@@ -1330,9 +1331,22 @@ function runCommand(cmd: string) {
     togglePanel('todo')
     return
   }
+  // 学习分析 = 本地快照面板:先看覆盖与薄弱点,再由用户决定是否让模型分析
+  if (cmd === '学习分析') {
+    anchorTo('.cmd[data-cmd="学习分析"]')
+    togglePanel('analysis')
+    return
+  }
   // 输入为空用指令默认问题;不清空输入,由 send 在成功发出后统一清空
   const text = input.value.trim() || cmdDefault(cmd) || cmd
   send(text, cmd)
+}
+
+/** 在分析面板点「让 MG 分析」:关闭面板,把分析请求发进聊天流。 */
+function runLearningAnalysis() {
+  activePanel.value = null
+  const text = cmdDefault('学习分析') || '分析我的学习进度'
+  send(text, '学习分析')
 }
 
 /** 新建对话:当前会话与其进行中的输出原样保留(后台继续生成),切换至新会话 */
@@ -1429,6 +1443,12 @@ function onListClick(e: MouseEvent) {
     // 模型输出的百分号编码可能是畸形的:安全解码,失败时保留原文
     const name = chapterNameFromCmd(url)
     if (name !== null) onNavChapter(name)
+    return
+  }
+  if (url.startsWith('cmd://point/')) {
+    // 学习分析末尾的图谱定位链接:跳到图谱详情页并聚焦该知识点
+    const pointId = url.slice('cmd://point/'.length)
+    if (pointId) router.push({ path: '/graph', query: { focus: pointId } })
     return
   }
   if (url === 'cmd://nb/yes' || url === 'cmd://nb/no') {
@@ -2526,6 +2546,15 @@ onBeforeUnmount(() => {
           :left="panelAnchor?.left"
           :width="panelAnchor?.width"
           @close="activePanel = null"
+        />
+      </Transition>
+      <Transition name="nb-rise">
+        <AnalysisPanel
+          v-if="!isResearch && activePanel === 'analysis'"
+          :left="panelAnchor?.left"
+          :width="panelAnchor?.width"
+          @close="activePanel = null"
+          @analyze="runLearningAnalysis"
         />
       </Transition>
 

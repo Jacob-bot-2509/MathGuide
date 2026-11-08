@@ -70,6 +70,7 @@ backend/
   graph_api.py      # GET /api/graph:节点、坐标、依赖边、章节与掌握度
                     # GET /api/graph/export:Pyvis 独立 HTML 图谱
   profile.py        # GET /api/profile:诊断次数、掌握/薄弱、章节分布、最近记录
+  learning_analysis.py  # GET /api/profile/analysis:掌握度快照(覆盖/结构/瓶颈/待复核/下一步)
   rag/
     documents.py  # 知识文档加载与切片(markdown + frontmatter)
     index.py      # 检索索引:关键词 + bigram + 向量混合打分(闲聊噪声门限)
@@ -293,6 +294,7 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | GET | `/api/graph` | 知识图谱节点、依赖边、章节、NetworkX 坐标与当前账号掌握度 |
 | GET | `/api/graph/export` | 导出可独立打开的 Pyvis HTML 图谱(vis 资源内联) |
 | GET | `/api/profile` | 学习画像:诊断次数、掌握/薄弱、章节分布与最近 10 条 |
+| GET | `/api/profile/analysis` | 学习分析快照:覆盖度、掌握结构、章节均衡、前置瓶颈、待复核与下一步 |
 | POST | `/api/speech/math` | 语音识别文本 → 数学符号转写(SSE) |
 | POST | `/api/doc/export` | 研究综述 → 结构化 → PDF 下载 |
 | POST | `/api/doc/questions` | 从当前会话提取问答对 → `{items}` |
@@ -365,7 +367,7 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
   "history": [{"role": "user", "content": "…"}] }
 ```
 
-- `cmd` 与前端指令栏对应(概念动画演示 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围 / 待办清单);
+- `cmd` 与前端指令栏对应(学习分析 / 章节知识导航 / 问题记录 / 公式查询手册 / 搜索范围 / 待办清单);
   `history` 为最近几轮对话(≤16 条 × 400 字,后端校验),多轮上下文由后端组装;
 - `categoryKey` 为前端板块预判,**后端不消费**:四路裁决(研究/知识/框架/会话)由
   `rag/route.py` 依问句判定,板块只用于前端会话归并与归纳面板,字段作契约预留;
@@ -413,6 +415,11 @@ data: [DONE]
   已达标不推荐。`difficulty` 策略难度升序,`coreness` 策略核心度降序,同分按拓扑序。
 - **学习画像** `GET /api/profile` 聚合诊断次数、掌握/薄弱数、章节均分、薄弱前 5 与最近 10 条;
   提问历史仍保存在浏览器本地,随账号导出由前端合并。
+- **学习分析** `GET /api/profile/analysis` 由服务端计算快照(覆盖度、掌握结构、章节均衡、
+  前置瓶颈、待复核、下一步);待复核按艾宾浩斯遗忘曲线 `R(t,s)=exp(-t/tau(s))`,
+  `tau=30+15*(s-1)` 天,`R<0.6` 进入待复核;遗忘只影响复习优先级,不改写原始诊断分,
+  也不阻断前置。聊天指令「学习分析」把同一份快照交给模型解读,模型只叙述不补数,
+  回答末尾追加 `cmd://point/<id>` 图谱定位链接。
 - **50 题评测集** `evaluation/data/course-50.jsonl`(概念/计算/证明/选择/不可答):
 
 ```bash

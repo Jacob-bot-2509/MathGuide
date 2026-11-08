@@ -6,8 +6,8 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.21.0'
-export const APP_STABLE_VERSION = 'v1.21.0'
+export const APP_VERSION = 'v1.22.0'
+export const APP_STABLE_VERSION = 'v1.22.0'
 export const APP_STABLE_DATE = '2026-11-08'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
@@ -276,8 +276,8 @@ export const PURPOSES: PurposeEntry[] = [
     glyph: '∑',
     title: { zh: '学习辅助', en: 'Study assistance' },
     desc: {
-      zh: '从基础入门到竞赛拔尖的智能答疑,配合概念动画、章节导航、问题归纳与待办清单。',
-      en: 'Intelligent Q&A from first principles to competition level, with concept animations, chapter navigation, a question notebook and a to-do list.',
+      zh: '从基础入门到竞赛拔尖的智能答疑,配合学习分析、章节导航、问题归纳与待办清单。',
+      en: 'Intelligent Q&A from first principles to competition level, with learning analysis, chapter navigation, a question notebook and a to-do list.',
     },
   },
   {
@@ -317,8 +317,8 @@ export const TERMS: LegalDoc = {
       title: { zh: '服务内容', en: 'What MG provides' },
       paragraphs: [
         {
-          zh: 'MG 是面向高等数学的学习辅助与科学研究辅助工具。学习辅助包括智能答疑、概念动画、章节知识导航、问题归纳与待办清单;科学研究模块将分阶段接入更强的推理模型与计算验证闭环。',
-          en: 'MG is a study and research assistant for higher mathematics. Study assistance includes Q&A, concept animations, chapter navigation, a question notebook and a to-do list; the research module will add stronger reasoning models and a computation-verification loop in stages.',
+          zh: 'MG 是面向高等数学的学习辅助与科学研究辅助工具。学习辅助包括智能答疑、学习分析、章节知识导航、问题归纳与待办清单;科学研究模块将分阶段接入更强的推理模型与计算验证闭环。',
+          en: 'MG is a study and research assistant for higher mathematics. Study assistance includes Q&A, learning analysis, chapter navigation, a question notebook and a to-do list; the research module will add stronger reasoning models and a computation-verification loop in stages.',
         },
         {
           zh: '当前为演示环境,功能、模型与数据可能随时调整、暂停或重置,不承诺可用性、连续性或数据永久保存。',
