@@ -6,8 +6,8 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.20.0'
-export const APP_STABLE_VERSION = 'v1.20.0'
+export const APP_VERSION = 'v1.21.0'
+export const APP_STABLE_VERSION = 'v1.21.0'
 export const APP_STABLE_DATE = '2026-11-08'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
@@ -51,6 +51,29 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '论文检索站内阅读:开放获取 PDF 先临时入库再进右栏阅读器;只有 OA 页面的论文由服务端抓取正文,作为临时文本论文在站内阅读;arXiv abs 地址自动转 PDF。',
+        en: 'In-app paper reading: open-access PDFs are temporarily ingested and opened in the right-pane reader; papers with only an OA landing page have their text fetched server-side and read in-app as a temporary document; arXiv abs URLs are converted to PDFs.',
+      },
+      {
+        zh: '相关论文按钮:点击后自动切到全网文献面板,等结果渲染再滚动定位,并清掉上一次搜索的标识提示。',
+        en: 'Related-papers button: it now switches to the web-results pane, waits for rendering before scrolling, and clears the previous identifier hint.',
+      },
+      {
+        zh: 'PDF 公网校验修复:本机代理把域名解析成 fake-IP IPv6 时不再误杀正常论文;只校验 IPv4,并让下载客户端绑定 IPv4。',
+        en: 'PDF public-host check fix: legitimate papers are no longer rejected when a local proxy resolves domains to fake-IPv6 addresses; only IPv4 is checked and the download client is bound to IPv4.',
+      },
+      {
+        zh: '临时入库格式统一:PDF 与网页入口按 DOI 去重时保留原阅读格式,返回 pdf/text 类型;同一篇论文不会因入口不同串成错误阅读器。',
+        en: 'Temporary ingestion format consistency: PDF and HTML entries deduplicated by DOI keep their original reading format and return pdf/text kind, so the same paper never opens in the wrong reader.',
+      },
+    ],
+  },
+  {
+    version: 'v1.20.0',
+    date: '2026-11-08',
+    status: 'released',
     items: [
       {
         zh: '图解放大视图:桌面端左右分屏、移动端浮动窗口,支持双指缩放、拖动、键盘移动与全屏锁定;全屏后缩放不会缩回,点击放大区外关闭。',
