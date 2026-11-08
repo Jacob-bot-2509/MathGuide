@@ -8,6 +8,7 @@ import pytest
 from exercises import schema
 from exercises.translate import (
     TranslationError,
+    _needs_raw_translation,
     _prose_in_math,
     extract_math,
     restore_math,
@@ -299,6 +300,12 @@ def test_validate_rejects_stray_math_delimiter():
 def test_prose_in_math_detects_chinese_wrapped_formula():
     assert _prose_in_math(r"$已知函数 f(x)=x^2+1$")
     assert not _prose_in_math("已知函数 $f(x)=x^2+1$")
+
+
+def test_raw_translation_detects_chinese_inside_math_with_outer_prose():
+    text = r"$已知函数 f(x)=x^2+1$ 求曲线方程。"
+    assert _prose_in_math(text) is False
+    assert _needs_raw_translation(text, "en") is True
 
 
 def test_prose_math_validation_accepts_english_translation():

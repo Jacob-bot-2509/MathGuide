@@ -181,6 +181,16 @@ def _prose_in_math(text: str) -> bool:
     return not _CJK_RE.search(_prose(template))
 
 
+def _cjk_in_math(text: str) -> bool:
+    """公式片段里藏着成段中文(整段被 $...$ 包住,但外面还有少量中文)。"""
+    _, placeholders = extract_math(text)
+    return any(len(_CJK_RE.findall(segment)) >= 3 for segment in placeholders)
+
+
+def _needs_raw_translation(text: str, target_lang: str) -> bool:
+    return target_lang == "en" and (_prose_in_math(text) or _cjk_in_math(text))
+
+
 def _mostly_cjk(text: str) -> bool:
     cjk = len(_CJK_RE.findall(text))
     return cjk >= 5 and cjk >= len(text) * 0.2
@@ -233,13 +243,13 @@ def _translate_prose_math(text, source_lang, target_lang, translator):
 
 
 async def _translate_field_async(text, source_lang, target_lang, translator):
-    if target_lang == "en" and _prose_in_math(text):
+    if _needs_raw_translation(text, target_lang):
         return await _translate_prose_math_async(text, source_lang, target_lang, translator)
     return await _translate_text_async(text, source_lang, target_lang, translator)
 
 
 def _translate_field(text, source_lang, target_lang, translator):
-    if target_lang == "en" and _prose_in_math(text):
+    if _needs_raw_translation(text, target_lang):
         return _translate_prose_math(text, source_lang, target_lang, translator)
     return _translate_text(text, source_lang, target_lang, translator)
 
