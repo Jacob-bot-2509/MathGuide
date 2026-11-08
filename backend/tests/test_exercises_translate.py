@@ -45,8 +45,14 @@ def make_exercise():
     return schema.parse_exercise(data)
 
 
+def _fake_zh(text: str) -> str:
+    import re
+
+    return "中文翻译 " + re.sub(r"[A-Za-z]{2,}", "", text)
+
+
 def fake_translator(text: str, source: str, target: str) -> str:
-    return ("中文翻译 " if target == "zh" else "English translation ") + text
+    return _fake_zh(text) if target == "zh" else "English translation " + text
 
 
 def test_extract_and_restore_math_round_trip():
@@ -111,7 +117,8 @@ def test_validate_allows_latex_only_solution():
         r"\begin{align*} f(f(f(f(512)))) &=f(f(f(-8)))\\ &=f(64)\\ "
         r"&=f(-4)\\ &=\boxed{16}. \end{align*}"
     )
-    check = validate_translation(source, source, (), "zh")
+    template, placeholders = extract_math(source)
+    check = validate_translation(template, template, placeholders, "zh")
 
     assert check.ok is True
 
@@ -252,6 +259,67 @@ def test_translate_exercise_adds_machine_translation():
     assert translated.content["zh"].translation.reviewed is False
     assert "[[M1]]" not in translated.content["zh"].question
     assert "$x+1$" in translated.content["zh"].question
+    assert translated.content["zh"].answer == "2"
+
+
+def test_translate_strips_model_added_math_delimiters():
+    exercise = make_exercise()
+
+    def noisy(text: str, source: str, target: str) -> str:
+        return "中文翻译 $x$ " + _fake_zh(text)
+
+    translated = translate_exercise(exercise, "zh", noisy, model="fake")
+
+    assert "$x$" not in translated.content["zh"].question
+    assert "x" in translated.content["zh"].question
+
+
+def test_validate_rejects_stray_math_delimiter():
+    check = validate_translation(
+        "Compute the value.",
+        "计算 $x$ 的值。",
+        (),
+        "zh",
+    )
+
+    assert check.ok is False
+    assert "stray_math_delimiter" in check.reasons
+
+
+def test_validate_rejects_unbalanced_latex():
+    check = validate_translation(
+        "Compute the value.",
+        "计算这个值 } 的结果。",
+        (),
+        "zh",
+    )
+
+    assert check.ok is False
+    assert "unbalanced_latex" in check.reasons
+
+
+def test_validate_rejects_untranslated_english_run():
+    check = validate_translation(
+        "Compute the value of this expression.",
+        "计算 the value of this expression properly 的结果。",
+        (),
+        "zh",
+    )
+
+    assert check.ok is False
+    assert "untranslated_prose" in check.reasons
+
+
+def test_validate_rejects_translation_prompt_leak():
+    check = validate_translation(
+        "Compute the value of the expression.",
+        "计算表达式的值。保留源文本的换行和格式，直接输出翻译结果。",
+        (),
+        "zh",
+    )
+
+    assert check.ok is False
+    assert "prompt_leak" in check.reasons
 
 
 def test_translate_exercise_rejects_bad_translation():
@@ -279,7 +347,7 @@ def test_translate_exercise_async_adds_machine_translation():
     exercise = make_exercise()
 
     async def fake(text: str, source: str, target: str) -> str:
-        return ("中文翻译 " if target == "zh" else "English translation ") + text
+        return _fake_zh(text) if target == "zh" else "English translation " + text
 
     translated = asyncio.run(
         translate_exercise_async(exercise, "zh", fake, model="fake-async")

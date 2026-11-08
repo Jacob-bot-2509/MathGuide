@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from . import schema
+from .gate import latex_balanced
 
 LANGUAGES = ("zh", "en")
 Translator = Callable[[str, str, str], str]
@@ -25,6 +26,7 @@ _COMMAND_RE = re.compile(r"\\[A-Za-z]+")
 # 连续三个以上、只用空格分隔的英文单词才像句子。公式清洗后剩下的变量名
 # (mn_max、ge^-16)不算,避免把纯 LaTeX 当成未翻译的正文。
 _PROSE_RUN_RE = re.compile(r"[A-Za-z]{2,}(?:\s+[A-Za-z]{2,}){2,}")
+_LATIN_RUN_RE = re.compile(r"[A-Za-z]{2,}(?:\s+[A-Za-z]{2,}){4,}")
 # \begin{align*} / \end{align*} 的环境名不是正文;不去掉会被当成英文单词。
 _ENV_RE = re.compile(r"\\(?:begin|end)\{[^}]*\}")
 
@@ -41,6 +43,14 @@ _CJK_NUM_RE = re.compile(
     r"[零〇一二两三四五六七八九十百千万亿]+(?=[" + _CJK_CLASSIFIERS + "])"
 )
 _FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
+# 数学片段已整体换成占位符,译文模板里再出现这些定界符就是模型自己加的。
+_STRAY_MATH_RE = re.compile(r"(?<!\\)\$|\\\(|\\\[|\\begin\{")
+_LEAK_RE = re.compile(
+    r"请提供需要翻译|保留源文本的换行|保留原文的换行|直接输出翻译结果|"
+    r"将(?:上面|上述)的?文本翻译|line\s+breaks\s+and\s+format|"
+    r"output\s+the\s+translation\s+result",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -126,11 +136,21 @@ def validate_translation(
     # 但源文里的数一个都不能少,20 被改成 25 会因 20 缺失而拒绝。
     if _numbers(source) - _numbers(translated):
         reasons.append("number_mismatch")
+    if _STRAY_MATH_RE.search(translated):
+        reasons.append("stray_math_delimiter")
+    if _LEAK_RE.search(translated):
+        reasons.append("prompt_leak")
+    if not latex_balanced(translated):
+        reasons.append("unbalanced_latex")
 
     source_prose = _prose(source)
     # 连续三个空格分隔的英文单词、或任意中文,才算有需要翻译的正文。
     has_words = bool(_PROSE_RUN_RE.search(source_prose) or _CJK_RE.search(source_prose))
     translated_prose = _prose(translated)
+    if target_lang == "zh" and _LATIN_RUN_RE.search(translated_prose):
+        reasons.append("untranslated_prose")
+    if target_lang == "en" and len(_CJK_RE.findall(translated_prose)) >= 10:
+        reasons.append("residual_chinese")
     if has_words:
         if target_lang == "zh" and not _CJK_RE.search(translated_prose):
             reasons.append("target_language_mismatch")
@@ -149,6 +169,41 @@ def validate_translation(
     return TranslationCheck(ok=not reasons, reasons=tuple(reasons))
 
 
+def _prose_in_math(text: str) -> bool:
+    """中文题干被整段包在 $...$ 里时,公式占位会吞掉正文。
+
+    这类文本没法靠占位符翻译;强行输出会得到“英文版仍是中文”。
+    """
+    template, _ = extract_math(text)
+    if not _CJK_RE.search(text):
+        return False
+    return not _CJK_RE.search(_prose(template))
+
+
+def _answer_needs_translation(answer: str) -> bool:
+    """选项字母、单个变量、纯公式不翻译;只翻译有自然语言的答案。
+
+    否则 A→「一个」、B→「乙」、ABD→「安韵」这类误译会直接毁掉判分。
+    """
+    prose = _prose(answer).strip()
+    if not prose:
+        return False
+    if re.fullmatch(r"[A-Ea-e]{1,5}", prose):
+        return False
+    if re.fullmatch(r"[A-Za-z]", prose):
+        return False
+    if _CJK_RE.search(prose):
+        return True
+    return len(_LATIN_RE.findall(prose)) >= 2
+
+
+def _strip_stray_math(text: str) -> str:
+    """译文模板里的数学定界符是模型自己加的;数学已在占位符里,直接剥掉。"""
+    value = re.sub(r"(?<!\\)\$", "", text)
+    value = re.sub(r"\\[()\[\]]", "", value)
+    return re.sub(r"\\(?:begin|end)\{[A-Za-z*]+\}", "", value)
+
+
 def _translate_text(
     text: str,
     source_lang: str,
@@ -159,6 +214,7 @@ def _translate_text(
     translated_template = translator(template, source_lang, target_lang)
     if not isinstance(translated_template, str):
         raise TranslationError(("translator_returned_non_string",))
+    translated_template = _strip_stray_math(translated_template)
     check = validate_translation(template, translated_template, placeholders, target_lang)
     if not check.ok:
         raise TranslationError(check.reasons)
@@ -209,8 +265,17 @@ def translate_exercise(
     """生成目标语言内容;失败抛 TranslationError,原对象不变。"""
     _check_target(exercise, target_lang)
     source = exercise.content[exercise.original_language]
+    if target_lang == "en" and any(
+        _prose_in_math(text)
+        for text in (source.question, source.answer, source.solution, *source.solution_steps)
+    ):
+        raise TranslationError(("prose_in_math",))
     question = _translate_text(source.question, exercise.original_language, target_lang, translator)
-    answer = _translate_text(source.answer, exercise.original_language, target_lang, translator)
+    answer = (
+        _translate_text(source.answer, exercise.original_language, target_lang, translator)
+        if _answer_needs_translation(source.answer)
+        else source.answer
+    )
     solution = _translate_text(source.solution, exercise.original_language, target_lang, translator)
     steps = tuple(
         _translate_text(step, exercise.original_language, target_lang, translator)
@@ -229,6 +294,7 @@ async def _translate_text_async(
     translated_template = await translator(template, source_lang, target_lang)
     if not isinstance(translated_template, str):
         raise TranslationError(("translator_returned_non_string",))
+    translated_template = _strip_stray_math(translated_template)
     check = validate_translation(template, translated_template, placeholders, target_lang)
     if not check.ok:
         raise TranslationError(check.reasons)
@@ -244,11 +310,20 @@ async def translate_exercise_async(
 ) -> schema.Exercise:
     _check_target(exercise, target_lang)
     source = exercise.content[exercise.original_language]
+    if target_lang == "en" and any(
+        _prose_in_math(text)
+        for text in (source.question, source.answer, source.solution, *source.solution_steps)
+    ):
+        raise TranslationError(("prose_in_math",))
     question = await _translate_text_async(
         source.question, exercise.original_language, target_lang, translator
     )
-    answer = await _translate_text_async(
-        source.answer, exercise.original_language, target_lang, translator
+    answer = (
+        await _translate_text_async(
+            source.answer, exercise.original_language, target_lang, translator
+        )
+        if _answer_needs_translation(source.answer)
+        else source.answer
     )
     solution = await _translate_text_async(
         source.solution, exercise.original_language, target_lang, translator

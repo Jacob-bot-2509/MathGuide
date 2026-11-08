@@ -10,20 +10,20 @@
 
 | 项 | 数量 |
 |---|---:|
-| 题目总数 | 7,059 |
-| 双语（中+英） | 6,979（98.87%） |
-| 仅中文 | 36 |
-| 仅英文 | 44 |
+| 题目总数 | 7,013 |
+| 双语（中+英） | 6,504（92.7%） |
+| 仅中文 | 452 |
+| 仅英文 | 57 |
 
-补充题 198 道（Kuttler 53、CLP 111、CLP-2 34），原库 6,861 道。
+补充题 198 道（Kuttler 53、CLP 111、CLP-2 34），原库 6,861 道；按 2026-11-08 审计清单修复时剔除 46 道。
 
 ## 2. 来源与许可
 
 | 来源 | 数量 | 许可 | 层级 |
 |---|---:|---|---|
-| NuminaMath | 4,101 | Apache-2.0 | research |
+| NuminaMath | 4,056 | Apache-2.0 | research |
 | MATH | 1,937 | MIT | research |
-| OlympiadBench | 823 | Apache-2.0 | research |
+| OlympiadBench | 822 | Apache-2.0 | research |
 | CLP-4 Vector Calculus | 111 | CC BY-NC-SA 4.0 | research |
 | Kuttler Linear Algebra | 53 | CC BY 4.0 | research |
 | CLP-2 Integral Calculus | 34 | CC BY-NC-SA 4.0 | research |
@@ -36,11 +36,11 @@
 
 | 板块 | 数量 |
 |---|---:|
-| 高等代数 algebra | 3,399 |
-| 空间解析几何 geometry | 1,351 |
-| 数学分析 analysis | 1,206 |
-| 概率论与数理统计 probability | 581 |
-| 数论 numberTheory | 522 |
+| 高等代数 algebra | 3,384 |
+| 空间解析几何 geometry | 1,342 |
+| 数学分析 analysis | 1,199 |
+| 概率论与数理统计 probability | 575 |
+| 数论 numberTheory | 513 |
 | 微分方程 ode | **0** |
 | 复变函数 complex | **0** |
 | 拓扑 topology | **0** |
@@ -54,7 +54,7 @@
 | vector-calculus | 68 | divergence-theorem | 49 |
 | stokes-theorem | 36 | quadratic-form | 29 |
 | line-surface-integral | 29 | green-theorem | 23 |
-| taylor | 24 | residue | 18 |
+| taylor | 24 | residue | 17 |
 | power-series | 12 | vector-space | 7 |
 | orthogonal-transform | 5 | eigen | 4 |
 | least-squares | 2 | euler-formula | 1 |
@@ -66,6 +66,15 @@
 ## 5. 质量状态
 
 - 全部题目通过三件套质量门：题干、答案、过程；`quality.manual_review = pending`。
+- 2026-11-08 审计修复：
+  - 56 道中文答案被误译（`A`→“一个”、`B`→“乙”等）已回填为源答案；翻译管线不再翻译选项字母、单变量和纯公式答案。
+  - 63 道提示词泄漏：能清洗的已清洗，源文无法清除的 36 道整题剔除。
+  - 45 道中英字段放反/伪译文：重新判定语种、丢弃伪译文或重译。
+  - 17 道公式回填损坏：丢弃坏译文并重译。
+  - 4 道 Kuttler 旧版 PageIndex：用新 staging 覆盖；其中 `r4:22` 是正常交叉引用，属审计误报。
+  - 30 道 OlympiadBench HTML 标签已清洗。
+  - 修复共剔除 46 道（源提示词残留 36、源公式损坏 4、质量门 6），另丢弃 11 道无法修复的中英混杂译文；staging 中对应条目已同步移除。
+- 404 道 OlympiadBench 中文题的英文译文已回退为单语：原文正文整段包在 `$...$` 里，占位符方案无法翻译，机器译出的“英文版”实际仍是中文，不能冒充双语。
 - 补充题说明：
   - Kuttler 只导入题型可确定的证明题（答案记为 `Proof`）与是非题（`Yes`/`No`）。
   - 需要从答案块抽取数值结果的题暂未导入，留待人工核验后补。
@@ -99,8 +108,17 @@ python tools/translate_exercises.py \
 python tools/merge_bank.py
 ```
 
+审计修复（需要审计清单 `ID_LIST.md` / `issues.csv`）：
+
+```bash
+cd backend
+python tools/remediate_bank.py --ids <ID_LIST.md> --issues <issues.csv>
+python tools/clean_translations.py
+python tools/merge_remediated.py
+```
+
 ## 7. 后续
 
 1. 人工复验补充题，重点核对 Kuttler 是否题与答案块对应、CLP 数值答案。
 2. 为 ode / complex / topology 寻找可分发且带完整过程的新来源。
-3. 处理 80 道未译题（等价换算、漏译、占位符）后再决定是否补译。
+3. 处理 509 道单语题：404 道是中文正文包在 `$...$` 里的 OlympiadBench 题，需要解析层面的处理；其余为等价换算、漏译、占位符丢失。
