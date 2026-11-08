@@ -66,7 +66,9 @@ backend/
                     # 加载时校验重复/缺失/自依赖/难度/无环,并计算核心度
   diagnosis.py      # 掌握度诊断:LLM 评分或自评 → SQLite diagnoses 表(按 uid)
   recommendation.py # 学习路径推荐:前置门控 + 难度/核心度双策略
-  graph_api.py      # GET /api/graph:节点、依赖边、章节与个人掌握度
+  graph_layout.py   # NetworkX 分层布局(最长路径 + 重心排序,固定坐标)
+  graph_api.py      # GET /api/graph:节点、坐标、依赖边、章节与掌握度
+                    # GET /api/graph/export:Pyvis 独立 HTML 图谱
   profile.py        # GET /api/profile:诊断次数、掌握/薄弱、章节分布、最近记录
   rag/
     documents.py  # 知识文档加载与切片(markdown + frontmatter)
@@ -274,7 +276,8 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/diagnosis` | 掌握度诊断:`{pointId, answer}` 走模型评分,或 `{pointId, selfRating}` 自评 |
 | GET | `/api/diagnosis/report` | 薄弱点报告(低于 3 分,按分数升序/核心度降序) |
 | GET | `/api/recommendation` | 学习路径推荐:`?strategy=difficulty|coreness&limit=5` |
-| GET | `/api/graph` | 知识图谱节点、依赖边、章节与当前账号掌握度 |
+| GET | `/api/graph` | 知识图谱节点、依赖边、章节、NetworkX 坐标与当前账号掌握度 |
+| GET | `/api/graph/export` | 导出可独立打开的 Pyvis HTML 图谱(vis 资源内联) |
 | GET | `/api/profile` | 学习画像:诊断次数、掌握/薄弱、章节分布与最近 10 条 |
 | POST | `/api/speech/math` | 语音识别文本 → 数学符号转写(SSE) |
 | POST | `/api/doc/export` | 研究综述 → 结构化 → PDF 下载 |
@@ -459,6 +462,8 @@ python tools/research_backup.py --uid u-xxx --out backup.tar.gz    # 科研语�
 python tools/preflight.py      # 演示前自检:前后端健康 + 登录 + 抽查题端到端,全绿才可演示
 python tools/fetch_knowledge.py --source arxiv --limit 20   # 从 arXiv 拉论文摘要入库
 python tools/usage.py          # 用量报表:总调用 / 回复字数 / 按用户 / 按模型角色
+# 可选只读看板(不影响主服务):pip install -r requirements-dashboard.txt
+#   streamlit run tools/dashboard.py
 ```
 
 - **eval_recall**:新增文档后必须重跑,未命中项按报告补 keywords,目标封闭集 100% 命中;

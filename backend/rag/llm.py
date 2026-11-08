@@ -2,9 +2,10 @@
 LLM 客户端(OpenAI 兼容流式,多平台 + 多角色 + 容灾切换)。
 
 配置(backend/.env.local,由 config.load_env 装载;见 .env.local.example):
-    平台:MG_ALIYUN_BASE_URL/API_KEY、MG_ZHIPU_BASE_URL/API_KEY
+    平台:MG_ALIYUN_BASE_URL/API_KEY、MG_ZHIPU_BASE_URL/API_KEY、
+          MG_DEEPSEEK_API_KEY(可选;base 默认 https://api.deepseek.com/v1)
     角色:MG_ROLE_MAIN / MG_ROLE_BACKUP / MG_ROLE_DEEP / MG_ROLE_LONG
-          取值 "平台:模型名",如 aliyun:qwen3.8-flash、zhipu:glm-5.2
+          取值 "平台:模型名",如 aliyun:qwen3.8-flash、zhipu:glm-5.2、deepseek:deepseek-chat
 
 角色语义:
     main   日常问答 / 查询改写 / 精排 / 综合(便宜快模型)
@@ -38,6 +39,11 @@ def _providers() -> dict:
         "zhipu": {
             "base": os.getenv("MG_ZHIPU_BASE_URL", ""),
             "key": os.getenv("MG_ZHIPU_API_KEY", ""),
+        },
+        # DeepSeek 同为 OpenAI 兼容协议:只配 key 即可,base 有官方默认值
+        "deepseek": {
+            "base": os.getenv("MG_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+            "key": os.getenv("MG_DEEPSEEK_API_KEY", ""),
         },
     }
 

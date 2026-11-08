@@ -4,7 +4,7 @@ LLM Key 快速校验:读取 backend/.env.local,逐平台实测鉴权。
 用法(backend 目录下):
     python tools/check_keys.py
 
-只显示校验结论,绝不打印 key 内容;两把都通过时退出码 0。
+只显示校验结论,绝不打印 key 内容;全部角色可用时退出码 0。
 """
 import os
 import sys
@@ -52,15 +52,36 @@ def main() -> int:
     print("=" * 52)
     print("  LLM Key 校验(不打印 key 内容)")
     print("=" * 52)
-    ok1 = check("阿里云百炼", os.getenv("MG_ALIYUN_BASE_URL", ""),
-                os.getenv("MG_ALIYUN_API_KEY", ""), "qwen3.8-flash")
-    ok2 = check("智谱开放平台", os.getenv("MG_ZHIPU_BASE_URL", ""),
-                os.getenv("MG_ZHIPU_API_KEY", ""), "glm-5.2")
+    # 按当前角色配置逐项校验:平台 key 有效不等于具体模型已开通
+    import rag.llm as llm
+
+    platforms = {
+        "aliyun": ("MG_ALIYUN_BASE_URL", "MG_ALIYUN_API_KEY", ""),
+        "zhipu": ("MG_ZHIPU_BASE_URL", "MG_ZHIPU_API_KEY", ""),
+        "deepseek": ("MG_DEEPSEEK_BASE_URL", "MG_DEEPSEEK_API_KEY",
+                     "https://api.deepseek.com/v1"),
+    }
+    roles = llm._roles()
+    results: list[bool] = []
+    seen: set[tuple[str, str]] = set()
+    for role in ("main", "backup", "deep", "long"):
+        provider, _, model = roles.get(role, "").partition(":")
+        if provider not in platforms or not model:
+            print(f"[{role}] 未配置或平台未知: {roles.get(role, '')}")
+            results.append(False)
+            continue
+        if (provider, model) in seen:
+            continue
+        seen.add((provider, model))
+        base_env, key_env, default_base = platforms[provider]
+        base = os.getenv(base_env, default_base)
+        key = os.getenv(key_env, "")
+        results.append(check(f"{role} · {provider}", base, key, model))
     print("=" * 52)
-    if ok1 and ok2:
-        print("两把 key 均有效,可以进入真机验证。")
+    if results and all(results):
+        print("所有角色的 key 与模型均可用,可以进入真机验证。")
         return 0
-    print("仍有无效 key:请回到对应平台控制台重新完整复制(见上一条说明)。")
+    print("仍有不可用角色:请检查控制台模型开通状态,或调整 MG_ROLE_*。")
     return 1
 
 
