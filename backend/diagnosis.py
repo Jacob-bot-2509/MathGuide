@@ -1,7 +1,7 @@
 """学习掌握度诊断:LLM 评分、按账号持久化与薄弱点报告。
 
-诊断记录追加到 data/diagnoses.jsonl(只存 uid,不存手机号/昵称),
-与 usage.jsonl 同一套隐私口径:导出、注销时按 uid 读取或删除。
+诊断记录写入 SQLite(与账号、用量同一库),只存 uid,不存手机号/昵称,
+与用量同一套隐私口径:导出、注销时按 uid 读取或删除。
 
 评分口径:1~5 分,低于 WEAK_THRESHOLD 记为薄弱点。模型输出必须为
 {"score": 1-5, "comment": "..."};解析失败按服务不可用处理,不写脏数据。
@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 import auth
+import db
 import http_utils
 import rag.llm
 from knowledge_graph import KnowledgeGraph, KnowledgePoint, load_graph
@@ -29,9 +29,10 @@ WEAK_THRESHOLD = 3
 MAX_ANSWER_CHARS = 2000
 MAX_COMMENT_CHARS = 200
 MAX_BODY_BYTES = 64 * 1024
-_lock = threading.Lock()
 
 SOURCES = ("llm", "self")
+MIGRATION_KEY = "migrated:diagnosis"
+_ready_key: str | None = None
 
 _JSON_OBJECT = re.compile(r"\{.*\}", re.S)
 _graph: KnowledgeGraph | None = None
@@ -82,9 +83,68 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _doc(entry: dict) -> str:
+    return json.dumps(entry, ensure_ascii=False)
+
+
+def _entry(row) -> dict:
+    try:
+        data = json.loads(row["doc"])
+    except (TypeError, json.JSONDecodeError):
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def init() -> None:
+    """建库并一次性导入旧 diagnoses.jsonl;可重复调用。"""
+    global _ready_key
+    db.init()
+    key = str(db.DB_PATH)
+    if _ready_key == key and db.get_meta(MIGRATION_KEY) == "1":
+        return
+    if db.get_meta(MIGRATION_KEY) != "1":
+        _import_legacy()
+        db.set_meta(MIGRATION_KEY, "1")
+    _ready_key = key
+
+
+def _import_legacy() -> None:
+    if not db.table_empty("diagnoses") or not PATH.exists():
+        return
+    entries: list[dict] = []
+    try:
+        with PATH.open(encoding="utf-8") as handle:
+            for raw in handle:
+                text = raw.strip()
+                if not text:
+                    continue
+                try:
+                    item = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if (isinstance(item, dict) and item.get("uid")
+                        and item.get("pointId") and item.get("score")):
+                    entries.append(item)
+    except OSError:
+        return
+    with db.transaction() as conn:
+        for item in entries:
+            conn.execute(
+                "INSERT INTO diagnoses(uid, point_id, score, doc, at) "
+                "VALUES(?, ?, ?, ?, ?)",
+                (str(item["uid"]), str(item["pointId"]), int(item["score"]),
+                 _doc(item), str(item.get("at") or "")),
+            )
+
+
+def _conn():
+    init()
+    return db.connect()
+
+
 def record(uid: str, point_id: str, score: int, comment: str,
            *, source: str = "llm") -> dict:
-    """追加一条诊断记录,返回落盘条目。"""
+    """写入一条诊断记录,返回落盘条目。"""
     if not uid or not point_id:
         raise ValueError("uid 与 point_id 不能为空")
     if not isinstance(score, int) or not 1 <= score <= 5:
@@ -99,40 +159,30 @@ def record(uid: str, point_id: str, score: int, comment: str,
         "source": source,
         "at": _now(),
     }
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(entry, ensure_ascii=False) + "\n"
-    with _lock:
-        with PATH.open("a", encoding="utf-8") as handle:
-            handle.write(line)
-    return entry
-
-
-def _read_all() -> list[dict]:
-    """读取全部记录;坏行跳过,不让单行损坏拖垮报告。"""
-    if not PATH.exists():
-        return []
-    entries: list[dict] = []
+    conn = _conn()
     try:
-        with PATH.open(encoding="utf-8") as handle:
-            for raw in handle:
-                text = raw.strip()
-                if not text:
-                    continue
-                try:
-                    entry = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if (isinstance(entry, dict) and entry.get("uid")
-                        and entry.get("pointId") and entry.get("score")):
-                    entries.append(entry)
-    except OSError:
-        return []
-    return entries
+        with conn:
+            conn.execute(
+                "INSERT INTO diagnoses(uid, point_id, score, doc, at) "
+                "VALUES(?, ?, ?, ?, ?)",
+                (uid, point_id, score, _doc(entry), entry["at"]),
+            )
+    finally:
+        conn.close()
+    return entry
 
 
 def for_user(uid: str) -> list[dict]:
     """该账号的全部诊断记录,按写入顺序(时间正序)。"""
-    return [entry for entry in _read_all() if entry.get("uid") == uid]
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT doc FROM diagnoses WHERE uid = ? ORDER BY id", (uid,)
+        ).fetchall()
+    finally:
+        conn.close()
+    entries = [_entry(row) for row in rows]
+    return [entry for entry in entries if entry.get("pointId") and entry.get("score")]
 
 
 def latest(uid: str) -> dict[str, dict]:
@@ -174,19 +224,20 @@ def weak_report(uid: str, graph: KnowledgeGraph | None = None) -> dict:
 
 def delete_user(uid: str) -> int:
     """删除该账号全部诊断记录,返回删除条数。"""
-    entries = _read_all()
-    kept = [entry for entry in entries if entry.get("uid") != uid]
-    removed = len(entries) - len(kept)
-    if not removed:
-        return 0
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = PATH.with_suffix(PATH.suffix + ".tmp")
-    with _lock:
-        with tmp.open("w", encoding="utf-8") as handle:
-            for entry in kept:
-                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        tmp.replace(PATH)
-    return removed
+    conn = _conn()
+    try:
+        with conn:
+            cur = conn.execute("DELETE FROM diagnoses WHERE uid = ?", (uid,))
+            return cur.rowcount
+    finally:
+        conn.close()
+
+
+def reset_for_tests() -> None:
+    """测试切换临时库时调用。"""
+    global _ready_key
+    _ready_key = None
+    db.reset_for_tests()
 
 
 async def _llm_score(point: KnowledgePoint, answer: str) -> tuple[int, str]:

@@ -52,7 +52,8 @@ python -m venv .venv-analysis
 ```
 backend/
   main.py      # 应用入口 + 路由表 + CORS(默认只放行本机前端)+ UTF-8 输出修复
-  store.py     # JSON 持久化 + PBKDF2 密码哈希(旧格式登录时自动升级),token 24h 过期,账号删除级联 token
+  db.py        # SQLite 连接/建表/事务(WAL):users、tokens、usage、diagnoses 同库
+  store.py     # 用户与令牌(SQLite)+ PBKDF2 密码哈希,token 24h 过期,账号删除级联 token
   auth.py      # 注册 / 登录 / 登出 / 数据导出 / 注销 + require_auth(401) / require_admin(403) + 认证限流
   session_cache.py # 教材/摘要缓存,键 = (uid, sessionId),防止跨用户撞号
   http_utils.py    # JSON 请求体解析:2 MiB 上限(413)与 400 语义
@@ -63,7 +64,7 @@ backend/
   docgen.py    # 文档生成:问答导出/大纲/分节生成/PDF-Markdown-Word
   knowledge_graph/  # 知识点知识图谱:data/knowledge_points.csv(80 点,难度/前置)
                     # 加载时校验重复/缺失/自依赖/难度/无环,并计算核心度
-  diagnosis.py      # 掌握度诊断:LLM 评分或自评 → data/diagnoses.jsonl(按 uid)
+  diagnosis.py      # 掌握度诊断:LLM 评分或自评 → SQLite diagnoses 表(按 uid)
   recommendation.py # 学习路径推荐:前置门控 + 难度/核心度双策略
   graph_api.py      # GET /api/graph:节点、依赖边、章节与个人掌握度
   profile.py        # GET /api/profile:诊断次数、掌握/薄弱、章节分布、最近记录
@@ -320,8 +321,8 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
   否则所有请求会被当成同一个 IP。
 - **密码**:新账号用 PBKDF2-HMAC-SHA256(20 万轮);旧版单轮 SHA-256 记录在登录成功后
   自动升级,并全程用 `secrets.compare_digest` 比较。
-- **token 落盘**:`tokens.json` 只存 token 的 SHA-256(`sha256:` 前缀),不存明文;
-  旧明文键在启动时自动迁移,已签发 token 不需要重新登录。
+- **token 落盘**:SQLite `tokens` 表只存 token 的 SHA-256(`sha256:` 前缀),不存明文;
+  旧 `tokens.json` 在首次建库时导入一次,旧文件保留作备份,已签发 token 不需要重新登录。
 - **测评注册**:`MG_DEMO_MODE=0` 后开放注册关闭;配置 `MG_INVITE_CODES` 后,
   持邀请码的手机号仍可注册。固定验证码与游客登录保持关闭。
 - **认证限流**:`MG_AUTH_RATE_MAX` / `MG_AUTH_RATE_WINDOW` 可调;多人共用出口 IP 时调大。
@@ -388,7 +389,7 @@ data: [DONE]
   缺失前置、自依赖、难度 1~5 与无环;核心度 = 传递后继数。当前覆盖高数上册 80 个知识点。
 - **掌握度诊断** `POST /api/diagnosis`:带 `answer` 时由模型按助教口径输出
   `{"score": 1~5, "comment": "..."}`(解析失败返回 503,不写脏数据);带 `selfRating`
-  时直接用自评。记录落 `data/diagnoses.jsonl`,只存 uid / 知识点 id / 分数 / 短评语 / 来源 / 时间。
+  时直接用自评。记录写入 SQLite `diagnoses` 表,只存 uid / 知识点 id / 分数 / 短评语 / 来源 / 时间。
 - **薄弱点** 分数 `< 3` 记为薄弱;`GET /api/diagnosis/report` 按分数升序、核心度降序返回。
 - **推荐** 前置知识点全部 `≥ 3` 才进入候选:未诊断 = 新学,已诊断但 `< 3` = 复习,
   已达标不推荐。`difficulty` 策略难度升序,`coreness` 策略核心度降序,同分按拓扑序。
@@ -410,10 +411,10 @@ data: [DONE]
 
 ## 用量统计(测试期成本可见)
 
-每次聊天流结束后自动记账到 `data/usage.jsonl`(**只记 uid**,不记手机号/昵称;
-字段:时间、指令、字符数、模型角色;内存保留最近 2000 条,磁盘追加写入、超过 2200 行时
-压实一次;兼容旧 `data/usage.json` 数组并在下次写入时迁移,旧文件保留作备份但会先清洗 phone/user)。
-服务启动时 `usage.migrate_identity()` 会把 JSONL 与 `usage.json` 备份里的 `phone`/`user` 都换成 uid 并删除 PII。
+每次聊天流结束后自动记账到 SQLite `usage` 表(**只记 uid**,不记手机号/昵称;
+字段:时间、指令、字符数、模型角色;写后裁到最近 2000 条)。
+旧 `data/usage.jsonl` / `usage.json` 在首次建库时导入一次,旧文件保留作备份;
+服务启动时 `usage.migrate_identity()` 会把旧记录与备份里的 `phone`/`user` 都换成 uid 并删除 PII。
 PDF 导出只记调用次数,不把文件字节数混进「回复字数」:
 
 ```bash
@@ -438,7 +439,7 @@ cd ../frontend && npm test                   # 前端自测(编译器/SSE/MathTe
 ## 演示账号
 
 验证码登录演示码固定 `123456`(仅 `MG_DEMO_MODE=1` 且本机绑定时可用)。注册产生的数据
-落盘于 `data/`(users.json 存加盐口令摘要,tokens.json 存令牌);清空这两个文件即可重置演示环境。
+落盘于 `data/mathguide.db`(SQLite:用户、令牌、用量、诊断);删除该库文件即可重置演示环境。
 `tools/preflight.py` 在演示账号不存在时会自动注册,新 clone 也能直接自检。
 
 ## 质检工具(tools/)

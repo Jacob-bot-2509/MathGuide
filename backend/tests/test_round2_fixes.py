@@ -15,6 +15,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 import auth
+import db
 import store
 import usage
 
@@ -59,14 +60,14 @@ def test_guest_cap_frees_slot_at_capacity(temp_store, monkeypatch):
     assert store.guest_count() == 2
 
     # 让最早那个游客没有有效 token(模拟隔天 token 过期)
-    stale_uid = next(uid for uid in store._users if uid.startswith(store.GUEST_UID_PREFIX))
-    for token in [t for t, e in store._tokens.items()
-                  if store._token_uid(e) == stale_uid]:
-        store._tokens.pop(token, None)
+    snapshot = store.users_snapshot()
+    stale_uid = next(uid for uid in snapshot if uid.startswith(store.GUEST_UID_PREFIX))
+    with db.transaction() as conn:
+        conn.execute("UPDATE tokens SET issued = 0 WHERE uid = ?", (stale_uid,))
 
     assert _guest(client).status_code == 200, "满额时没有为新游客腾出位置"
     assert store.guest_count() == 2, "腾位后游客数应仍为上限"
-    assert stale_uid not in store._users, "无 token 的最旧游客应被清掉"
+    assert stale_uid not in store.users_snapshot(), "无 token 的最旧游客应被清掉"
 
 
 def test_guest_cap_keeps_guests_with_live_tokens(temp_store, monkeypatch):
@@ -75,9 +76,9 @@ def test_guest_cap_keeps_guests_with_live_tokens(temp_store, monkeypatch):
     client = _auth_app()
     assert _guest(client).status_code == 200
     assert _guest(client).status_code == 200
-    users_before = dict(store._users)
+    users_before = store.users_snapshot()
     assert _guest(client).status_code == 429
-    assert store._users == users_before, "活跃游客被误删"
+    assert store.users_snapshot() == users_before, "活跃游客被误删"
 
 
 def test_guest_max_zero_rejects_without_side_effects(temp_store, monkeypatch):
@@ -85,13 +86,13 @@ def test_guest_max_zero_rejects_without_side_effects(temp_store, monkeypatch):
     monkeypatch.setenv("MG_GUEST_MAX", "0")
     _seed_guest("guest-wechat-aaa")
     _seed_guest("guest-wechat-bbb", created="2026-01-02T00:00:00")
-    users_before = dict(store._users)
-    tokens_before = dict(store._tokens)
+    users_before = store.users_snapshot()
+    tokens_before = store.tokens_snapshot()
 
     client = _auth_app()
     assert _guest(client).status_code == 429
-    assert store._users == users_before, "被拒绝的登录仍删除了游客账号"
-    assert store._tokens == tokens_before, "被拒绝的登录仍改动了 tokens"
+    assert store.users_snapshot() == users_before, "被拒绝的登录仍删除了游客账号"
+    assert store.tokens_snapshot() == tokens_before, "被拒绝的登录仍改动了 tokens"
 
 
 def test_guest_cap_does_not_touch_phone_accounts(temp_store, monkeypatch):
@@ -102,7 +103,8 @@ def test_guest_cap_does_not_touch_phone_accounts(temp_store, monkeypatch):
                        json={"phone": "13900000222", "password": "secret123"}).status_code == 200
     assert _guest(client).status_code == 200
     assert _guest(client).status_code == 429          # 满额
-    assert any(not uid.startswith(store.GUEST_UID_PREFIX) for uid in store._users), \
+    assert any(not uid.startswith(store.GUEST_UID_PREFIX)
+               for uid in store.users_snapshot()), \
         "手机号账号被游客清理波及"
 
 
@@ -188,30 +190,31 @@ def test_cancel_closes_inflight_response(monkeypatch):
 
 # ---------- usage:进程重启后坏行会被压实清掉,旧 JSON 能迁移 ----------
 
-def test_usage_compacts_corrupt_line_after_reload(tmp_path, monkeypatch):
-    monkeypatch.setattr(usage, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(usage, "PATH", tmp_path / "usage.jsonl")
-    monkeypatch.setattr(usage, "LEGACY_PATH", tmp_path / "usage.json")
+def test_usage_skips_corrupt_legacy_line(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(db, "DB_PATH", data_dir / "mathguide.db")
+    monkeypatch.setattr(usage, "PATH", data_dir / "usage.jsonl")
+    monkeypatch.setattr(usage, "LEGACY_PATH", data_dir / "usage.json")
+    db.reset_for_tests()
     usage.reset_for_tests()
 
+    usage.PATH.write_text(
+        json.dumps({"uid": "u", "ts": 1.0, "reply_len": 2, "role": "main"}) + "\n"
+        + "{oops not json\n",
+        encoding="utf-8",
+    )
+
+    assert usage.summary()["calls"] == 1, "坏行拖垮了整次导入"
     usage.record(uid="u", cmd="c", prompt_len=1, reply_len=2,
                  role="main", research=False, ts=time.time())
-    with usage.PATH.open("a", encoding="utf-8") as fh:
-        fh.write("{oops not json\n")   # 模拟写一半/外部手改
-
-    usage.reset_for_tests()            # 模拟进程重启(下次读取时才发现坏行)
-    usage.record(uid="u", cmd="c", prompt_len=1, reply_len=2,
-                 role="main", research=False, ts=time.time())
-
-    text = usage.PATH.read_text(encoding="utf-8")
-    assert "{oops" not in text, "坏行没有被压实清掉"
-    for line in text.splitlines():
-        if line.strip():
-            json.loads(line)
+    assert usage.summary()["calls"] == 2
 
 
-def test_usage_migrates_legacy_json(tmp_path, monkeypatch):
-    legacy = tmp_path / "usage.json"
+def test_usage_imports_legacy_json(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    legacy = data_dir / "usage.json"
     legacy.write_text(json.dumps([
         {"ts": 1.0, "user": "a", "phone": "", "cmd": "x", "prompt_len": 1,
          "reply_len": 10, "role": "main", "research": False},
@@ -219,9 +222,10 @@ def test_usage_migrates_legacy_json(tmp_path, monkeypatch):
          "reply_len": 5, "role": "deep", "research": True},
     ]), encoding="utf-8")
 
-    monkeypatch.setattr(usage, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(usage, "PATH", tmp_path / "usage.jsonl")
+    monkeypatch.setattr(db, "DB_PATH", data_dir / "mathguide.db")
+    monkeypatch.setattr(usage, "PATH", data_dir / "usage.jsonl")
     monkeypatch.setattr(usage, "LEGACY_PATH", legacy)
+    db.reset_for_tests()
     usage.reset_for_tests()
 
     before = usage.summary()
@@ -230,7 +234,5 @@ def test_usage_migrates_legacy_json(tmp_path, monkeypatch):
     usage.record(uid="c", cmd="z", prompt_len=1, reply_len=3,
                  role="main", research=False, ts=time.time())
 
-    lines = [ln for ln in usage.PATH.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    assert len(lines) == 3, "迁移后 jsonl 行数 %d != 3" % len(lines)
-    assert legacy.exists(), "旧 usage.json 应保留作备份"
     assert usage.summary()["calls"] == 3
+    assert legacy.exists(), "旧 usage.json 应保留作备份"

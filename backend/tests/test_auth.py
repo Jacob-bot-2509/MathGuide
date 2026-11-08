@@ -160,7 +160,7 @@ def test_legacy_password_is_upgraded_on_login(client, temp_store):
     res = client.post("/api/auth/login", json={
         "method": "password", "phone": PHONE, "password": PASSWORD})
     assert res.status_code == 200
-    spec = temp_store._users["u-1"]["password_hash"][0]
+    spec = temp_store.find_user_by_phone(PHONE)[1]["password_hash"][0]
     assert spec.startswith(store.PBKDF2_PREFIX + "$")
     # 升级后的哈希仍能登录
     assert client.post("/api/auth/login", json={

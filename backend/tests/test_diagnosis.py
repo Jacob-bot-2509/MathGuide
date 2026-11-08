@@ -17,9 +17,16 @@ PASSWORD = "secret123"
 
 @pytest.fixture()
 def data_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(diagnosis, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(diagnosis, "PATH", tmp_path / "diagnoses.jsonl")
-    return tmp_path / "diagnoses.jsonl"
+    import db
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    db_path = data_dir / "mathguide.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    monkeypatch.setattr(diagnosis, "PATH", data_dir / "diagnoses.jsonl")
+    db.reset_for_tests()
+    diagnosis.reset_for_tests()
+    return db_path
 
 
 @pytest.fixture()
