@@ -77,6 +77,14 @@ def test_extract_environment_block_as_single_placeholder():
     assert restore_math(template, placeholders) == text
 
 
+def test_extract_nested_environment_inside_math_does_not_nest_placeholders():
+    text = r"由 $\begin{cases} x=1 \end{cases}$ 得 $y=2$"
+    template, placeholders = extract_math(text)
+
+    assert len(placeholders) == 2
+    assert "[[M" not in restore_math(template, placeholders)
+
+
 def test_validate_rejects_missing_placeholder():
     template, placeholders = extract_math("Compute $x+1$.")
     check = validate_translation(
