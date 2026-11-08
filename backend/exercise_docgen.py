@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import math_render
+
 from collections import Counter
 from pathlib import Path
 
@@ -208,7 +210,7 @@ def _blocks(item, lang: str, mode: str, number: int, allow_partial: bool) -> lis
         number_prefix = f"{number}. " if code == languages[0] else ""
         result.append(f"{number_prefix}{prefix}{content.question}")
         if mode in ("answers", "solutions"):
-            result.append(f"{'答案' if code == 'zh' else 'Answer'}: {content.answer}")
+            result.append(f"{'答案' if code == 'zh' else 'Answer'}: {math_render.formula_answer(content.answer)}")
         if mode == "solutions":
             result.append(f"{'解析' if code == 'zh' else 'Solution'}: {content.solution}")
         if lang != "both" and code != lang and allow_partial:
@@ -227,7 +229,7 @@ def _answer_blocks(item, lang: str, number: int, allow_partial: bool) -> list[st
     result = []
     for code in languages:
         content = item.content[code]
-        result.append(f"{number}. {'答案' if code == 'zh' else 'Answer'}: {content.answer}")
+        result.append(f"{number}. {'答案' if code == 'zh' else 'Answer'}: {math_render.formula_answer(content.answer)}")
         result.append(f"{'解析' if code == 'zh' else 'Solution'}: {content.solution}")
     return result
 

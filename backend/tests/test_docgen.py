@@ -142,3 +142,43 @@ def test_clean_markdown_strips_visible_syntax_not_math():
     assert "[是]" not in cleaned and "cmd://" not in cleaned
     assert "$f'(x)$" in cleaned
     assert "• 条目" in cleaned
+
+
+def test_word_export_contains_editable_math_for_all_supported_delimiters(client):
+    from io import BytesIO
+    from zipfile import ZipFile
+    document = {"title": "Math $x$", "sections": [{"heading": "H", "paragraphs": [
+        r"Inline $x^2$, \(\frac{1}{2}\), \[y=3\], $$\begin{aligned}a&=b\\c&=d\end{aligned}$$",
+        r"\begin{align*}\dblInt_S \vF\cdot\hn\,\dee{S}&=\tripInt_V 1\end{align*}",
+        r"\begin{align*}\overbrace{x}^{n}&=x\end{align*}",
+        "\u7b54\u6848: " + r"\frac{10}{11}",
+    ]}]}
+    res = client.post("/api/doc/render", json={"document": document, "format": "docx"})
+    assert res.status_code == 200
+    with ZipFile(BytesIO(res.content)) as archive:
+        xml = archive.read("word/document.xml").decode("utf8")
+    assert xml.count('<m:oMath>') == 8
+    assert '<m:f>' in xml and '<m:groupChr>' in xml
+    assert r'\frac' not in xml and r'\dblInt' not in xml
+
+
+def test_word_export_reports_unsupported_formula(client):
+    document = {"title": "T", "sections": [{"heading": "H", "paragraphs": [r"$\notacommand{x}$"]}]}
+    res = client.post("/api/doc/render", json={"document": document, "format": "docx"})
+    assert res.status_code == 422
+    assert "Unsupported TeX command" in res.json()["detail"]
+
+
+def test_normalize_does_not_cut_long_paragraphs_inside_formula():
+    import doc
+    paragraph = "a" * 8000 + r"$\frac{1}{2}$"
+    result = doc._normalize_doc({"sections": [{"heading": "H", "paragraphs": [paragraph]}]}, "", "zh")
+    assert result["sections"][0]["paragraphs"][0] == paragraph
+
+
+def test_bare_exercise_answers_are_marked_as_math():
+    import math_render
+    assert math_render.formula_answer(r"\alpha") == r"\(\alpha\)"
+    assert math_render.formula_answer("x^2+1") == r"\(x^2+1\)"
+    assert math_render.formula_answer("ordinary answer") == "ordinary answer"
+    assert math_render.formula_answer(r"\(x^2\)") == r"\(x^2\)"

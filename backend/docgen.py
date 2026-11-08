@@ -18,6 +18,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 import doc
+import math_render
 import rag
 from chat import _rate_check, _record, require_auth
 from http_utils import read_json_object
@@ -118,13 +119,21 @@ def _docx_bytes(document: dict, lang: str) -> bytes:
 
     d = doc._normalize_doc(document, "", lang)
     out = Document()
-    out.add_heading(d["title"], level=0)
+
+    def add_text(paragraph, text):
+        for is_math, _display, value in math_render.segments(text):
+            if is_math:
+                paragraph._p.append(math_render.to_omml(value))
+            else:
+                paragraph.add_run(value)
+
+    add_text(out.add_heading(level=0), d["title"])
     if d.get("abstract"):
-        out.add_paragraph(d["abstract"])
+        add_text(out.add_paragraph(), d["abstract"])
     for section in d.get("sections", []):
-        out.add_heading(section["heading"], level=1)
+        add_text(out.add_heading(level=1), section["heading"])
         for paragraph in section.get("paragraphs", []):
-            out.add_paragraph(paragraph)
+            add_text(out.add_paragraph(), paragraph)
     if d.get("references"):
         out.add_heading("参考依据" if lang == "zh" else "References", level=1)
         for ref in d["references"]:
@@ -145,7 +154,10 @@ async def _render(document: dict, lang: str, fmt: str, prefix: str) -> Response:
     elif fmt == "md":
         data, media, ext = _markdown(document, lang).encode("utf-8"), "text/markdown; charset=utf-8", "md"
     else:
-        data = await asyncio.to_thread(_docx_bytes, document, lang)
+        try:
+            data = await asyncio.to_thread(_docx_bytes, document, lang)
+        except (ValueError, KeyError, IndexError) as exc:
+            return JSONResponse({"detail": f"Formula cannot be converted to Word: {exc}"}, status_code=422)
         media, ext = "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"
     filename = f"{prefix}-{time.strftime('%Y%m%d')}.{ext}"
     return Response(data, media_type=media,

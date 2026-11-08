@@ -97,3 +97,29 @@ def test_render_math_supports_inline_starting_with_digit():
     html = doc._render_math(html_mod.escape(r"$0 < |x - x_0| < \delta$"))
     assert 'class="mg-math"' in html
     assert r"0 &lt; |x - x_0| &lt; \delta" in html
+
+
+def test_render_math_supports_display_environments_and_escapes_html():
+    text = r"Inline $x^2$ and \(y\), display \[\frac{1}{2}\] and \begin{align*}a&=b\\c&=d\end{align*} <script>alert(1)</script>"
+    rendered = doc._render_math(html_mod.escape(text))
+    assert rendered.count('class="mg-math"') == 2
+    assert rendered.count('class="mg-mathd"') == 2
+    assert r'\begin{align*}' in rendered
+    assert '&lt;script&gt;' in rendered and '<script>' not in rendered
+
+
+def test_pdf_renders_real_math_with_edge():
+    import pytest
+    from io import BytesIO
+    from pypdf import PdfReader
+    if not doc._find_edge():
+        pytest.skip("Edge is unavailable")
+    document = {"title": "Test", "sections": [{"heading": "Math", "paragraphs": [
+        r"Inline $x^2$; \[\frac{1}{2}\] and \begin{align*}a&=b\\c&=d\end{align*}",
+        "\u7b54\u6848: " + r"\frac{10}{11}",
+    ]}]}
+    data = doc.render_pdf_bytes(document)
+    assert data and data.startswith(b"%PDF")
+    text = " ".join(page.extract_text() or "" for page in PdfReader(BytesIO(data)).pages)
+    assert '[Formula render failed]' not in text
+    assert r'\frac' not in text and r'\begin' not in text

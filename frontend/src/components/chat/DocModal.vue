@@ -123,6 +123,9 @@ function clearError(): void {
 }
 
 function errorText(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.startsWith('Formula cannot be converted to Word:')) {
+    return en.value ? err.message : `公式无法转换为 Word 公式：${err.message.split(':').slice(1).join(':').trim()}`
+  }
   if (statusOf(err) === 422) return t('doc.noEvidence')
   if (statusOf(err) === 503) return t('doc.retrievalFailed')
   return fallback

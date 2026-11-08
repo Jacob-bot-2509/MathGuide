@@ -9,3 +9,6 @@ python-docx==1.2.0
 openpyxl==3.1.5
 networkx==3.7  # 知识图谱分层布局
 pyvis==0.3.2  # 图谱独立 HTML 导出
+
+latex2mathml==3.81.1
+mathml2omml==0.0.2

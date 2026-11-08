@@ -32,7 +32,16 @@ export async function postBinary(path: string, body: unknown): Promise<ExportRes
     showToast(t('login.toastExpired'))
     throw httpError(res)
   }
-  if (!res.ok) throw httpError(res)
+  if (!res.ok) {
+    const error = httpError(res)
+    try {
+      const body = await res.json() as { detail?: unknown }
+      if (typeof body.detail === 'string' && body.detail.startsWith('Formula cannot be converted to Word:')) {
+        error.message = body.detail
+      }
+    } catch { /* retain status */ }
+    throw error
+  }
   const blob = await res.blob()
   const cd = res.headers.get('Content-Disposition') ?? ''
   const match = /filename="([^"]+)"/.exec(cd)
