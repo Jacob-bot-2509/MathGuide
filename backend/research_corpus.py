@@ -2435,7 +2435,10 @@ def projects_for_export(uid: str) -> list[dict]:
 def delete_user(uid: str) -> None:
     """注销/留存清理:删除该用户的整个语料目录(原文件、索引、向量缓存)。"""
     path = DATA_DIR / _safe_uid(uid)
-    shutil.rmtree(path, ignore_errors=True)
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
     with _index_lock:
         _indexes.pop(uid, None)
         _index_paths.pop(uid, None)

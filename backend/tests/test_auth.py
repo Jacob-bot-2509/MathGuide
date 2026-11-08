@@ -11,6 +11,7 @@ from starlette.testclient import TestClient
 
 import auth
 import http_utils
+import research_corpus
 import session_cache
 import store
 import usage
@@ -264,6 +265,23 @@ def test_delete_account_requires_password_and_cascades(client, temp_store, temp_
 
     # 注销后旧 token 立即失效,不能继续导出
     assert client.post("/api/account/export", json={}, headers=headers).status_code == 401
+
+
+def test_delete_account_retries_after_corpus_cleanup_failure(client, monkeypatch):
+    body = _register(client)
+    uid = store.find_user_by_phone(PHONE)[0]
+    headers = {"Authorization": f"Bearer {body['token']}"}
+    path = research_corpus.DATA_DIR / uid
+    path.mkdir(parents=True)
+    with monkeypatch.context() as patch:
+        def fail(*args, **kwargs):
+            raise PermissionError("locked")
+        patch.setattr(research_corpus.shutil, "rmtree", fail)
+        assert client.post("/api/account/delete", json={"password": PASSWORD}, headers=headers).status_code == 500
+    assert store.find_user_by_phone(PHONE) is not None
+    assert client.post("/api/account/delete", json={"password": PASSWORD}, headers=headers).status_code == 200
+    assert store.find_user_by_phone(PHONE) is None
+    assert not path.exists()
 
 
 def test_delete_guest_requires_explicit_confirmation(client):

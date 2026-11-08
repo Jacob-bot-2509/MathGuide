@@ -343,7 +343,7 @@ def _token_uid(entry: object) -> str:
     return str(entry or "")
 
 
-def prune_guests(max_guests: int) -> int:
+def prune_guests(max_guests: int, before_delete=None) -> int:
     """把游客账号压到 max_guests 以内;只删「没有有效 token」的最旧记录。"""
     if max_guests < 0:
         max_guests = 0
@@ -371,8 +371,13 @@ def prune_guests(max_guests: int) -> int:
         if not removed:
             return 0
 
-        with conn:
+        if before_delete:
             for uid in removed:
+                before_delete(users[uid])
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for uid in removed:
+                _delete_legacy_user(uid)
                 conn.execute("DELETE FROM tokens WHERE uid = ?", (uid,))
                 conn.execute("DELETE FROM users WHERE uid = ?", (uid,))
         return len(removed)

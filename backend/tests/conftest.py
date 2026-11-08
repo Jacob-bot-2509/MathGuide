@@ -19,6 +19,7 @@ import db  # noqa: E402
 import diagram_alerts  # noqa: E402
 import diagram_metrics  # noqa: E402
 import diagnosis  # noqa: E402
+import research_corpus  # noqa: E402
 import research_diagrams  # noqa: E402
 import session_cache  # noqa: E402
 import store  # noqa: E402
@@ -58,6 +59,7 @@ def temp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(usage, "PATH", data_dir / "usage.jsonl")
     monkeypatch.setattr(usage, "LEGACY_PATH", data_dir / "usage.json")
     monkeypatch.setattr(diagnosis, "PATH", data_dir / "diagnoses.jsonl")
+    monkeypatch.setattr(research_corpus, "DATA_DIR", data_dir / "research")
     monkeypatch.setattr(store, "USERS_PATH", data_dir / "users.json")
     monkeypatch.setattr(store, "TOKENS_PATH", data_dir / "tokens.json")
     store.reset_for_tests()

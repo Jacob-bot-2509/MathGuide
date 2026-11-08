@@ -16,6 +16,8 @@ from starlette.testclient import TestClient
 
 import auth
 import db
+import diagnosis
+import research_corpus
 import store
 import usage
 
@@ -68,6 +70,53 @@ def test_guest_cap_frees_slot_at_capacity(temp_store, monkeypatch):
     assert _guest(client).status_code == 200, "满额时没有为新游客腾出位置"
     assert store.guest_count() == 2, "腾位后游客数应仍为上限"
     assert stale_uid not in store.users_snapshot(), "无 token 的最旧游客应被清掉"
+
+
+def test_guest_cap_cleans_data_and_backups(temp_store, monkeypatch):
+    monkeypatch.setenv("MG_GUEST_MAX", "2")
+    _seed_guest("guest-old")
+    _seed_guest("guest-live", "2026-01-02T00:00:00")
+    store.issue_token("guest-live")
+    store.USERS_PATH.write_text(json.dumps({"guest-old": {"uid": "guest-old"}, "guest-live": {"uid": "guest-live"}}), encoding="utf-8")
+    store.TOKENS_PATH.write_text(json.dumps({"old": "guest-old", "live": "guest-live"}), encoding="utf-8")
+    rows = [{"uid": uid, "ts": 1} for uid in ("guest-old", "guest-live")]
+    usage.PATH.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    usage.LEGACY_PATH.write_text(json.dumps(rows), encoding="utf-8")
+    diagnosis.PATH.write_text("".join(json.dumps({"uid": row["uid"], "pointId": "p", "score": 3}) + "\n" for row in rows), encoding="utf-8")
+    for uid in ("guest-old", "guest-live"):
+        usage.record(uid=uid, cmd="x", prompt_len=1, reply_len=1, role="user", research=False, ts=1)
+        diagnosis.record(uid, "p", 3, "")
+        path = research_corpus.DATA_DIR / uid
+        path.mkdir(parents=True)
+        (path / "paper.txt").write_text("paper", encoding="utf-8")
+
+    assert _guest(_auth_app()).status_code == 200
+    assert set(json.loads(store.USERS_PATH.read_text(encoding="utf-8"))) == {"guest-live"}
+    assert json.loads(store.TOKENS_PATH.read_text(encoding="utf-8")) == {"live": "guest-live"}
+    assert [row["uid"] for row in db.read_jsonl(usage.PATH)] == ["guest-live"]
+    assert [row["uid"] for row in json.loads(usage.LEGACY_PATH.read_text(encoding="utf-8"))] == ["guest-live"]
+    assert [row["uid"] for row in db.read_jsonl(diagnosis.PATH)] == ["guest-live"]
+    assert not usage.for_user("guest-old") and not diagnosis.for_user("guest-old")
+    assert usage.for_user("guest-live") and diagnosis.for_user("guest-live")
+    assert not (research_corpus.DATA_DIR / "guest-old").exists()
+    assert (research_corpus.DATA_DIR / "guest-live" / "paper.txt").exists()
+
+
+def test_guest_cap_cleanup_failure_keeps_account_for_retry(temp_store, monkeypatch):
+    monkeypatch.setenv("MG_GUEST_MAX", "1")
+    _seed_guest("guest-old")
+    path = research_corpus.DATA_DIR / "guest-old"
+    path.mkdir(parents=True)
+    with monkeypatch.context() as patch:
+        def fail(*args, **kwargs):
+            raise PermissionError("locked")
+        patch.setattr(research_corpus.shutil, "rmtree", fail)
+        assert _guest(_auth_app()).status_code == 500
+    assert "guest-old" in store.users_snapshot()
+    assert path.exists()
+    assert _guest(_auth_app()).status_code == 200
+    assert "guest-old" not in store.users_snapshot()
+    assert not path.exists()
 
 
 def test_guest_cap_keeps_guests_with_live_tokens(temp_store, monkeypatch):
