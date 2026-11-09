@@ -1,6 +1,7 @@
 """docgen.py:问答提取、问答/文档渲染、严格依据的大纲与分节生成。"""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -23,6 +24,7 @@ def client(monkeypatch):
         Route("/api/doc/qa", docgen.qa_export, methods=["POST"]),
         Route("/api/doc/outline", docgen.outline, methods=["POST"]),
         Route("/api/doc/generate", docgen.generate, methods=["POST"]),
+        Route("/api/doc/revise", docgen.revise, methods=["POST"]),
         Route("/api/doc/render", docgen.render, methods=["POST"]),
     ])
     with TestClient(app, raise_server_exceptions=False) as c:
@@ -142,3 +144,53 @@ def test_clean_markdown_strips_visible_syntax_not_math():
     assert "[是]" not in cleaned and "cmd://" not in cleaned
     assert "$f'(x)$" in cleaned
     assert "• 条目" in cleaned
+
+
+def test_revise_document_applies_user_instruction(client, monkeypatch):
+    monkeypatch.setattr(docgen.rag.llm, "is_configured", lambda: True)
+    seen: dict[str, str] = {}
+
+    async def fake_collect(system, user, **kwargs):
+        seen["system"] = system
+        seen["user"] = user
+        return json.dumps({
+            "title": "导数速览",
+            "abstract": "按用户要求压缩后的摘要。",
+            "sections": [{
+                "heading": "导数",
+                "paragraphs": ["导数是瞬时变化率。"],
+            }],
+            "references": [],
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(docgen, "_collect_llm", fake_collect)
+    document = {
+        "title": "一个很长的原始标题",
+        "abstract": "原始摘要",
+        "sections": [{"heading": "导数", "paragraphs": ["原始正文"]}],
+        "references": [],
+    }
+    res = client.post("/api/doc/revise", json={
+        "document": document,
+        "request": "把标题改短,摘要也压缩一下",
+        "lang": "zh",
+    })
+
+    assert res.status_code == 200
+    revised = res.json()["document"]
+    assert revised["title"] == "导数速览"
+    assert revised["sections"][0]["paragraphs"] == ["导数是瞬时变化率。"]
+    assert "把标题改短" in seen["user"]
+    assert "原始正文" in seen["user"]
+
+
+def test_revise_document_requires_content_and_llm(client, monkeypatch):
+    assert client.post("/api/doc/revise", json={
+        "document": {"sections": []}, "request": "改",
+    }).status_code == 400
+    monkeypatch.setattr(docgen.rag.llm, "is_configured", lambda: False)
+    res = client.post("/api/doc/revise", json={
+        "document": {"sections": [{"heading": "A", "paragraphs": ["x"]}]},
+        "request": "改",
+    })
+    assert res.status_code == 503

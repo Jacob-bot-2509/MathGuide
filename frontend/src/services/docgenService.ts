@@ -85,6 +85,16 @@ export function generateDocument(
   return post<GeneratedDocument>('/api/doc/generate', { request, outline, lang }, authHeaders())
 }
 
+/** 按用户要求修订已生成的文档;引用与证据不改。 */
+export function reviseDocument(
+  document: StructuredDocument,
+  request: string,
+  lang: 'zh' | 'en',
+): Promise<{ document: StructuredDocument }> {
+  return post<{ document: StructuredDocument }>(
+    '/api/doc/revise', { document, request, lang }, authHeaders())
+}
+
 export interface ExercisePlanRequest {
   topics: string[]
   crossTopics?: string[]

@@ -7,6 +7,7 @@
  */
 import { computed, nextTick, ref } from 'vue'
 import { statusOf } from '@/api/http'
+import MathText from '@/components/chat/MathText.vue'
 import { downloadBlob } from '@/services/docService'
 import {
   exportQaDocument,
@@ -16,6 +17,7 @@ import {
   planExercises,
   renderDocument,
   requestOutline,
+  reviseDocument,
   type DocFormat,
   type DocOutline,
   type DocQuestion,
@@ -31,7 +33,7 @@ import { showToast } from '@/utils/toast'
 const props = defineProps<{ messages: ChatMsg[]; entries: NotebookEntry[] }>()
 const emit = defineEmits<{ close: [] }>()
 
-type Step = 'choose' | 'reading' | 'chat' | 'notebook' | 'custom' | 'outlining' | 'outline' | 'generating' | 'done'
+type Step = 'choose' | 'reading' | 'chat' | 'notebook' | 'custom' | 'outlining' | 'outline' | 'generating' | 'preview' | 'done'
 
 interface SectionDraft {
   heading: string
@@ -61,6 +63,8 @@ const drafts = ref<SectionDraft[]>([])
 const generated = ref<StructuredDocument | null>(null)
 const gaps = ref<string[]>([])
 const format = ref<DocFormat>('pdf')
+const previewKind = ref<'document' | 'exercise'>('document')
+const revision = ref('')
 
 const EXERCISE_TOPICS = [
   { key: 'analysis', zh: '数学分析', en: 'Mathematical Analysis' },
@@ -206,10 +210,11 @@ function generateExercise(): void {
         step.value = 'custom'
         return
       }
-      const file = await renderDocument(result.document, lang.value, format.value)
-      downloadBlob(file.blob, file.filename)
-      step.value = 'done'
-      showToast(t('doc.done'))
+      generated.value = result.document
+      gaps.value = result.gaps
+      previewKind.value = 'exercise'
+      revision.value = ''
+      step.value = 'preview'
     } catch (err) {
       error.value = errorText(err, t('doc.failed'))
       step.value = 'custom'
@@ -372,13 +377,55 @@ function confirmOutline(): void {
       const result = await generateDocument(customRequest.value, plan, lang.value)
       generated.value = result.document
       gaps.value = result.gaps
-      const file = await renderDocument(result.document, lang.value, format.value)
+      previewKind.value = 'document'
+      revision.value = ''
+      step.value = 'preview'
+    } catch (err) {
+      error.value = errorText(err, t('doc.failed'))
+      step.value = 'outline'
+    } finally {
+      busy.value = false
+      focusPanel()
+    }
+  })()
+}
+
+/** 预览阶段让模型按用户要求修改;引用与依据由后端保留。 */
+function revisePreview(): void {
+  if (!generated.value || !revision.value.trim() || busy.value) return
+  clearError()
+  busy.value = true
+  focusPanel()
+  void (async () => {
+    try {
+      const result = await reviseDocument(
+        generated.value!, revision.value.trim(), lang.value)
+      generated.value = result.document
+      revision.value = ''
+      showToast(t('doc.revised'))
+    } catch (err) {
+      error.value = errorText(err, t('doc.reviseFail'))
+    } finally {
+      busy.value = false
+      focusPanel()
+    }
+  })()
+}
+
+/** 用户确认预览后才真正导出文件。 */
+function exportPreview(): void {
+  if (!generated.value || busy.value) return
+  clearError()
+  busy.value = true
+  focusPanel()
+  void (async () => {
+    try {
+      const file = await renderDocument(generated.value!, lang.value, format.value)
       downloadBlob(file.blob, file.filename)
       step.value = 'done'
       showToast(t('doc.done'))
     } catch (err) {
       error.value = errorText(err, t('doc.failed'))
-      step.value = 'outline'
     } finally {
       busy.value = false
       focusPanel()
@@ -415,6 +462,8 @@ function reset(): void {
   generated.value = null
   gaps.value = []
   exercisePlan.value = null
+  previewKind.value = 'document'
+  revision.value = ''
   focusPanel()
 }
 
@@ -703,6 +752,63 @@ focusPanel()
             </footer>
           </template>
 
+          <template v-else-if="step === 'preview' && generated">
+            <h2 class="prompt">{{ t('doc.previewTitle') }}</h2>
+            <p class="note">{{ t('doc.previewHint') }}</p>
+            <div class="doc-preview">
+              <h3 class="preview-title"><MathText :text="generated.title" /></h3>
+              <MathText v-if="generated.abstract" :text="generated.abstract" />
+              <p v-if="generated.keywords?.length" class="preview-keywords">
+                <span v-for="keyword in generated.keywords" :key="keyword">#{{ keyword }}</span>
+              </p>
+              <section v-for="(section, index) in generated.sections" :key="index">
+                <h4 class="preview-heading"><MathText :text="section.heading" /></h4>
+                <MathText
+                  v-for="(paragraph, i) in section.paragraphs"
+                  :key="i"
+                  :text="paragraph"
+                />
+              </section>
+              <section v-if="generated.references?.length">
+                <h4 class="preview-heading">{{ t('doc.references') }}</h4>
+                <p v-for="ref in generated.references" :key="ref.id" class="preview-ref">
+                  [{{ ref.id }}] {{ ref.title }} · {{ ref.source }} {{ ref.url || '' }}
+                </p>
+              </section>
+            </div>
+            <label v-if="previewKind === 'document'" class="field">
+              <span>{{ t('doc.reviseLabel') }}</span>
+              <textarea
+                v-model="revision"
+                class="custom-input"
+                rows="3"
+                maxlength="1000"
+                :placeholder="t('doc.revisePh')"
+              ></textarea>
+            </label>
+            <button
+              v-if="previewKind === 'document'"
+              class="btn"
+              :disabled="busy || !revision.trim()"
+              @click="revisePreview"
+            >{{ busy ? t('doc.revising') : t('doc.revise') }}</button>
+            <p v-else class="note">{{ t('doc.exercisePreviewHint') }}</p>
+            <p v-if="gaps.length" class="gaps">{{ t('doc.gaps') }} {{ gaps.join('、') }}</p>
+            <p v-if="error" class="error">{{ error }}</p>
+            <footer class="doc-foot">
+              <button class="btn" :disabled="busy" @click="step = 'custom'">{{ t('doc.back') }}</button>
+              <span class="format">
+                <span class="format-label">{{ t('doc.format') }}</span>
+                <button class="fmt" :class="{ on: format === 'pdf' }" @click="format = 'pdf'">PDF</button>
+                <button class="fmt" :class="{ on: format === 'md' }" @click="format = 'md'">Markdown</button>
+                <button class="fmt" :class="{ on: format === 'docx' }" @click="format = 'docx'">Word</button>
+              </span>
+              <button class="btn btn--primary" :disabled="busy" @click="exportPreview">
+                {{ busy ? t('doc.generating') : t('doc.export') }}
+              </button>
+            </footer>
+          </template>
+
           <div v-else-if="step === 'generating'" class="loading">
             <span class="spinner" aria-hidden="true"></span>
             <p>{{ t('doc.generating') }}</p>
@@ -733,6 +839,54 @@ focusPanel()
 </template>
 
 <style scoped>
+.doc-preview {
+  max-height: 42vh;
+  overflow-y: auto;
+  margin: 12px 0;
+  padding: 14px 16px;
+  background: var(--bg-void);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.75;
+}
+
+.preview-title {
+  margin: 0 0 10px;
+  color: var(--text-hi);
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+.preview-heading {
+  margin: 16px 0 6px;
+  color: var(--cyan);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.preview-keywords {
+  margin: 8px 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.preview-keywords span {
+  margin-right: 8px;
+}
+
+.preview-ref {
+  margin: 4px 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.doc-preview section + section {
+  border-top: 1px solid var(--line);
+}
+
 .doc-backdrop {
   position: fixed;
   inset: 0;

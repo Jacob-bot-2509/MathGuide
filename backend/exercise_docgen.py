@@ -1,6 +1,9 @@
 """习题集生成:按板块/难度/语言抽题,输出可交给 doc.render 的段落式文档。
 
 不调用 LLM,不改写题目;缺译默认排除,allowPartial 时才保留原文并标注。
+
+当前题库绑定:临时题库(bilingual/all.jsonl + staging)作为正式后端库使用;
+人工复验完成后替换为 verified 数据即可,接口与前端无需改动。
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ from exercises.store import ExerciseStore, tiers_from_env
 from exercises.taxonomy import CATEGORY_KEYS
 from http_utils import read_json_object
 
-DATA_DIR = Path(__file__).resolve().parent / "data" / "exercises" / "final"
+DATA_DIR = Path(__file__).resolve().parent / "data" / "exercises" / "staging"
 BILINGUAL_FILE = Path(__file__).resolve().parent / "data" / "exercises" / "bilingual" / "all.jsonl"
 MAX_COUNT = 100
 MODES = ("questions", "answers", "solutions", "combined")
