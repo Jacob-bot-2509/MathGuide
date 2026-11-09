@@ -112,6 +112,8 @@ def test_point_context_injected_for_followups(monkeypatch):
 
     chunk, score = captured["chunks"][0]
     assert chunk.title == "极限"
+    assert chunk.title_en == ""
+    assert chunk.section == "函数与极限"
     assert "摘要内容" in chunk.text
     assert score == 9.0
     assert "继续讲" in text

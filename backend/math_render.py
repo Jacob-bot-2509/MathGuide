@@ -40,6 +40,20 @@ _DEFINITIONS = "".join(
 )
 
 
+def _looks_like_pending_math(partial: str) -> bool:
+    """A lone `$` is only a pending formula when its partial body looks mathematical."""
+    head = re.split(r"\\{1,2}[\(\[]|\$\$", partial, maxsplit=1)[0]
+    head = re.sub(r"</?[A-Za-z][^<>]*>", " ", head)
+    value = head.strip()
+    if not value or len(value) > 300 or re.search(r"\n\s*\n", value):
+        return False
+    if re.search(r"\\[A-Za-z]+", value):
+        return True
+    if re.search(r"[=^_<>+\-/()\[\]{}]", value):
+        return True
+    return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", value))
+
+
 def isolate(text: str) -> tuple[str, dict[str, str]]:
     """Protect complete math from text cleanup and paragraph splitting."""
     prefix = "MGFORMULATOKEN"
@@ -53,7 +67,14 @@ def isolate(text: str) -> tuple[str, dict[str, str]]:
         return token
 
     protected = MATH_RE.sub(replace, text)
-    pending = re.search(r"(?<![\\$])(?:\$\$|\$(?!\$)|\\{1,2}[\[(])", protected)
+    pending = re.search(r"(?<![\\$])(?:\$\$|\\{1,2}[\[(])", protected)
+    if pending is None:
+        for match in re.finditer(r"(?<![\\$])\$(?!\$)", protected):
+            tail = re.sub(rf"{re.escape(prefix)}\d+END", " ",
+                          protected[match.end():])
+            if _looks_like_pending_math(tail):
+                pending = match
+                break
     if pending:
         token = f"{prefix}{len(formulas)}END"
         formulas[token] = protected[pending.start():]

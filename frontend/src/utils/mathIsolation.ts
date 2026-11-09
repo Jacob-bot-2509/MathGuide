@@ -23,7 +23,7 @@ function escaped(text: string, index: number): boolean {
 
 function isDollarMath(latex: string, before: string, after: string): boolean {
   const value = latex.trim()
-  if (!value || /\n\s*\n/.test(value) || (value.length > 300 && /^[A-Za-z]/.test(after))) return false
+  if (!value || /\n\s*\n/.test(value) || value.length > 300) return false
   if (/[\u3400-\u9fff\uf900-\ufaff]/.test(value)
       && !/\\[a-zA-Z]+|[=^_<>+\-*/]/.test(value)) return false
   if (!/[\\^_=<>+\-*/()[\]{}0-9a-zA-Z]/.test(value)) return false
@@ -34,6 +34,17 @@ function isDollarMath(latex: string, before: string, after: string): boolean {
         || /(价格|售价|花费|便宜|贵|折|￥|¥)\s*$/.test(before)) return false
   }
   return true
+}
+
+/** A lone `$` is only a pending formula if its partial body already looks mathematical. */
+function looksLikePendingMath(partial: string): boolean {
+  // Stop at the next opener or HTML tag: those belong to later content.
+  const head = partial.split(/\\[\(\[]|\$\$/)[0].replace(/<\/?[A-Za-z][^<>]*>/g, ' ')
+  const value = head.trim()
+  if (!value || value.length > 300 || /\n\s*\n/.test(value)) return false
+  if (/\\[a-zA-Z]+/.test(value)) return true
+  if (/[=^_<>+\-/()[\]{}]/.test(value)) return true
+  return /^[A-Za-z][A-Za-z0-9]*$/.test(value)
 }
 
 /** Undo Markdown escaping only when the environment name proves it was escaped. */
@@ -175,6 +186,11 @@ export function isolateMath(source: string): IsolatedMath {
     }
 
     if (!closeLength) {
+      // A lone `$` in prose ("costs $5") must not swallow the rest of the message.
+      if (closer === '$' && !looksLikePendingMath(source.slice(i + openLength))) {
+        output += source[i++]
+        continue
+      }
       // Pending input is displayed as literal text until its closer arrives.
       protect(source.slice(i), '', display, true)
       break

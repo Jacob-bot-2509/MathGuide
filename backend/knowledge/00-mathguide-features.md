@@ -1,7 +1,7 @@
 ---
 title: MathGuide 学习分析与遗忘曲线
 title_en: MathGuide Learning Analysis and Forgetting Curve
-keywords: ["艾宾浩斯", "遗忘曲线", "遗忘", "记忆保持", "retention", "待复核", "学习分析", "掌握度", "知识图谱", "复习优先级", "复习", "学习进度", "ebbinghaus", "forgetting curve"]
+keywords: ["艾宾浩斯", "遗忘曲线", "遗忘", "记忆保持", "retention", "待复核", "复习优先级", "ebbinghaus", "forgetting curve"]
 category: other
 ---
 

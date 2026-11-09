@@ -1203,7 +1203,6 @@ function send(text?: string, cmd?: string, extra?: { pointId?: string }) {
   // 闲聊沿用当前会话(无会话则开一个未归类会话,不绑定板块、不进归纳面板)
   let session = activeSession.value
   if (!session) session = createSession(catInfo)
-  if (extra?.pointId) session.pointId = extra.pointId
 
   if (catInfo) {
     if (!session.cat) {
@@ -1220,6 +1219,9 @@ function send(text?: string, cmd?: string, extra?: { pointId?: string }) {
       }
     }
   }
+
+  // 绑定到最终会话:板块切换可能把 session 换成已有会话
+  if (extra?.pointId) session.pointId = extra.pointId
 
   // 新问题进来时丢弃未回答的澄清气泡:同一时刻只保留一个待选方向
   if (session.messages.some((m) => m.clarify)) {

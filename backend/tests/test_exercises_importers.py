@@ -164,3 +164,8 @@ def test_numinamath_invalid_problem_is_skipped():
 def test_numinamath_unknown_source_is_skipped():
     with pytest.raises(ImportSkip, match="source"):
         numinamath.parse_row(numina_row(source="orca_math"), index=6)
+
+
+def test_clean_text_stray_dollar_does_not_keep_html():
+    from exercises.importers.common import clean_text
+    assert clean_text("Price is $5</p><p>More <b>t</b>") == "Price is $5More t"

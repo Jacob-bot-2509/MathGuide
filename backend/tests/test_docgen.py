@@ -493,3 +493,8 @@ def test_nested_delimiters_inside_formula_are_removed_for_both_renderers():
     assert math_render.prepare(r"\(x^2\)") == "x^2"
     assert math_render.prepare(r"\[x^2\]") == "x^2"
     assert math_render.to_omml(r"\(x^2\)") is not None
+
+
+def test_stray_dollar_does_not_disable_markdown_cleanup():
+    import docgen
+    assert docgen._clean_markdown("价格 $5 **重点**") == "价格 $5 重点"

@@ -1928,8 +1928,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         note_text = _point_notes_text(point) if point is not None else ""
         if point is not None and note_text:
             chunks = [(rag.Chunk(
-                f"point:{point.id}", point.name, point.chapter,
-                "知识点主要内容", note_text), 9.0)] + chunks
+                f"point:{point.id}", point.name, "", point.chapter,
+                note_text), 9.0)] + chunks
 
     # 科研区:无论是否命中研究意图,都先查用户自己的论文库。
     # 个人论文是私有且最对口的证据,排在公共知识库之前进入上下文。

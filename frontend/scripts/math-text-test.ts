@@ -86,6 +86,18 @@ async function main() {
     html = await renderComp('还没写完 $f(x')
     check('未闭合公式原样保留', html.includes('$f(x') && !html.includes('katex'), '')
 
+    // ⑦b 孤立美元("价格 $5")不能吞掉后面的 Markdown 与公式
+    html = await renderComp('价格 $5，后面 **重点** 和 \\(x\\)')
+    check('孤立美元不吞后续 Markdown/公式',
+      html.includes('<strong') && html.includes('katex'),
+      `输出: ${html.slice(0, 300)}`)
+
+    const isoMod = await server.ssrLoadModule('/src/utils/mathIsolation.ts')
+    const { isolateMath } = isoMod as { isolateMath: (text: string) => { formulas: unknown[] } }
+    check('孤立美元不隔离整段', isolateMath('价格 $5，后面 **重点**').formulas.length === 0, '')
+    check('超长行内内容不按公式隔离',
+      isolateMath('$' + 'a'.repeat(310) + '$').formulas.length === 0, '')
+
     // ⑧ Unicode 数学符号纯文本直通(不经 KaTeX,无损失)
     html = await renderComp('x² + ∫₀¹ dx ≤ π → ∞')
     check('Unicode 符号原样保留', html.includes('x²') && html.includes('∫₀¹') && html.includes('→'), '')
