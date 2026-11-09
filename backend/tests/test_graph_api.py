@@ -1,6 +1,8 @@
 """graph_api:知识图谱数据接口(节点、边、章节与个人掌握度)。"""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from starlette.applications import Starlette
 from starlette.routing import Route
@@ -61,6 +63,9 @@ def test_graph_returns_all_nodes_and_edges(client):
     assert node["prerequisites"] == list(graph.points["chain-rule"].prerequisites)
     assert node["descendantCount"] == graph.descendant_count("chain-rule")
     assert node["status"] == "new"
+    assert node["summary"] == graph.points["chain-rule"].summary
+    assert node["summary"]
+    assert node["keyPoints"] == list(graph.points["chain-rule"].key_points)
     assert body["chapters"][0] == "函数与极限"
 
     edge = next(item for item in body["edges"]
@@ -107,3 +112,20 @@ def test_graph_contains_networkx_layout(client):
     for node in nodes.values():
         for prereq in node["prerequisites"]:
             assert nodes[prereq]["x"] < node["x"]
+
+
+def test_graph_marks_review_due_with_ebbinghaus(client, monkeypatch):
+    token, _ = _register(client)
+    old = {"set-map": {
+        "score": 5,
+        "at": (datetime.now(timezone.utc) - timedelta(days=90))
+        .isoformat(timespec="seconds"),
+    }}
+    monkeypatch.setattr(diagnosis, "latest", lambda uid: old)
+
+    body = _get(client, token)
+    node = next(item for item in body["nodes"] if item["id"] == "set-map")
+
+    assert node["mastery"] == 5
+    assert node["reviewDue"] is True
+    assert node["retention"] < 0.6

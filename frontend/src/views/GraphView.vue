@@ -19,6 +19,7 @@ import {
   type GraphEdge,
   type GraphNode,
   type Recommendation,
+  type RecommendationItem,
   type RecommendStrategy,
 } from '@/services/graphService'
 import { resolveLayout, type GraphPosition } from '@/utils/graphLayout'
@@ -276,10 +277,29 @@ function selectById(id: string) {
   if (node) pick(node)
 }
 
+/** 带着知识点进入学习辅助;聊天页消费一次 query 后立即清掉。 */
+function goLearn(node: GraphNode) {
+  router.push({
+    path: '/learn',
+    query: { point: node.id, name: node.name, start: '1' },
+  })
+}
+
 function statusLabel(status: GraphNode['status']): string {
   if (status === 'mastered') return t('graph.legendMastered')
   if (status === 'weak') return t('graph.legendWeak')
   return t('graph.legendNew')
+}
+
+function retentionLabel(value?: number | null): string {
+  return value === null || value === undefined
+    ? ''
+    : t('graph.retention', { pct: Math.round(value * 100) })
+}
+
+function recLabel(item: RecommendationItem): string {
+  if (item.reviewDue) return t('graph.reviewDue')
+  return item.reason === 'review' ? t('graph.reasonReview') : t('graph.reasonNew')
 }
 
 onMounted(async () => {
@@ -420,6 +440,10 @@ onBeforeUnmount(() => {
         <button class="close" :aria-label="t('graph.close')" @click="selectedId = ''">×</button>
         <h2>{{ selected.name }}</h2>
         <span class="badge" :class="`is-${selected.status}`">{{ statusLabel(selected.status) }}</span>
+        <span v-if="selected.reviewDue" class="badge is-review">{{ t('graph.reviewDue') }}</span>
+        <span v-if="selected.reviewDue && selected.retention != null" class="retention-note">
+          {{ retentionLabel(selected.retention) }}
+        </span>
 
         <dl>
           <div><dt>{{ t('graph.chapter') }}</dt><dd>{{ selected.chapter }}</dd></div>
@@ -453,6 +477,16 @@ onBeforeUnmount(() => {
           >
             {{ item.name }}
           </button>
+        </section>
+
+        <section>
+          <h3>{{ t('graph.mainContent') }}</h3>
+          <p v-if="selected.summary" class="summary">{{ selected.summary }}</p>
+          <ul v-if="selected.keyPoints?.length" class="key-points">
+            <li v-for="item in selected.keyPoints" :key="item">{{ item }}</li>
+          </ul>
+          <p v-else-if="!selected.summary" class="none">{{ t('graph.noSummary') }}</p>
+          <button class="go-learn" @click="goLearn(selected)">{{ t('graph.goLearn') }}</button>
         </section>
 
         <section>
@@ -496,8 +530,10 @@ onBeforeUnmount(() => {
         >
           <span class="rec-name">{{ item.name }}</span>
           <span class="rec-meta">
-            {{ item.reason === 'review' ? t('graph.reasonReview') : t('graph.reasonNew') }}
-            · {{ item.difficulty }}/5
+            {{ recLabel(item) }} · {{ item.difficulty }}/5
+            <template v-if="item.reviewDue && item.retention != null">
+              · {{ retentionLabel(item.retention) }}
+            </template>
           </span>
         </button>
       </aside>
@@ -866,6 +902,17 @@ onBeforeUnmount(() => {
   color: var(--text-dim);
 }
 
+.badge.is-review {
+  color: var(--magenta);
+  border-color: var(--magenta);
+}
+
+.retention-note {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
 .detail dl {
   margin: 16px 0;
   display: grid;
@@ -926,6 +973,42 @@ onBeforeUnmount(() => {
 .link-node:hover {
   border-color: var(--cyan);
   color: var(--cyan);
+}
+
+.summary {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.key-points {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.key-points li {
+  margin-bottom: 4px;
+}
+
+.go-learn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-bright);
+  border-radius: 7px;
+  background: rgba(77, 214, 255, 0.1);
+  color: var(--cyan);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.go-learn:hover {
+  box-shadow: var(--glow-cyan);
 }
 
 .rating {

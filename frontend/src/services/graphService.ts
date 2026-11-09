@@ -13,7 +13,13 @@ export interface GraphNode {
   difficulty: number
   descendantCount: number
   prerequisites: string[]
+  summary?: string
+  keyPoints?: string[]
   mastery: number | null
+  /** 艾宾浩斯记忆保持率;仅由后端计算 */
+  retention?: number | null
+  /** 保持率低于阈值,进入待复核 */
+  reviewDue?: boolean
   status: MasteryStatus
   /** 后端 NetworkX 分层布局给出的像素坐标(旧后端可能缺省,前端会本地兜底) */
   x?: number
@@ -42,6 +48,9 @@ export interface RecommendationItem {
   descendantCount: number
   reason: 'new' | 'review'
   mastery: number | null
+  retention?: number | null
+  reviewDue?: boolean
+  ageDays?: number | null
   prerequisites: string[]
 }
 
@@ -114,6 +123,8 @@ export interface LearningAnalysis {
     frontierRatio: number
   }
   structure: { mastered: number; weak: number; stale: number; undiagnosed: number }
+  /** 互斥四类:掌握/遗忘/待补/没学 */
+  buckets: { mastered: number; forgotten: number; reinforce: number; unlearned: number }
   chapters: AnalysisChapter[]
   bottlenecks: AnalysisPoint[]
   stale: AnalysisPoint[]

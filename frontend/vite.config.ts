@@ -19,8 +19,12 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      // 开发环境:后端接口统一走 vite 代理 → 同源(免 CORS)
-      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      // 开发环境:后端接口统一走 vite 代理 → 同源(免 CORS)。
+      // 多工作树并行时用 MG_API_TARGET 指向另一端口的主仓库后端。
+      '/api': {
+        target: process.env.MG_API_TARGET || 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
     },
   },
   build: {

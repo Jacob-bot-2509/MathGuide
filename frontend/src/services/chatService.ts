@@ -33,6 +33,8 @@ export interface ChatMeta {
   tableRegression?: ChatRequest['tableRegression']
   /** 研究综述显式生成图解 */
   diagrams?: boolean
+  /** 图谱知识点讲解:会话级上下文,追问仍携带 */
+  pointId?: string
 }
 
 function authHeaders(): Record<string, string> {
@@ -144,6 +146,7 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
     tableId: meta?.tableId,
     tableRegression: meta?.tableRegression,
     diagrams: meta?.diagrams,
+    pointId: meta?.pointId,
   }
 
   postSSE(

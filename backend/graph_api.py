@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse, Response
 
 import auth
 import diagnosis
+import ebbinghaus
 from graph_layout import layout_points
 from recommendation import MASTERED_SCORE
 
@@ -37,7 +38,9 @@ async def graph_data(request: Request) -> JSONResponse:
     for point in graph.points.values():
         if point.chapter not in chapters:
             chapters.append(point.chapter)
-        score = latest.get(point.id, {}).get("score")
+        entry = latest.get(point.id, {})
+        score = entry.get("score")
+        due, retention, _age = ebbinghaus.review_due(entry.get("at"), score)
         position = layout.get(point.id, {"x": 0, "y": 0, "level": 0})
         nodes.append({
             "id": point.id,
@@ -46,7 +49,11 @@ async def graph_data(request: Request) -> JSONResponse:
             "difficulty": point.difficulty,
             "descendantCount": graph.descendant_count(point.id),
             "prerequisites": list(point.prerequisites),
+            "summary": point.summary,
+            "keyPoints": list(point.key_points),
             "mastery": score,
+            "retention": retention,
+            "reviewDue": due,
             "status": _status(score),
             "x": position["x"],
             "y": position["y"],

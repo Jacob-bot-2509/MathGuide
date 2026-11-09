@@ -188,6 +188,7 @@ def _render_html(doc: dict, lang: str, katex_dir: Path, brand: str | None = None
     css = (katex_dir / "katex.min.css").as_uri()
     js = (katex_dir / "katex.min.js").as_uri()
     nonce = secrets.token_hex(16)  # 只放行本页内联脚本;注入的 <script> 没有 nonce
+    render_macros = {**math_render.MACROS, r"\knowl": r"\def\mgIgnore##1{}\mgIgnore{#1}#2"}
 
     def esc(s: str) -> str:
         return html_mod.escape(s)
@@ -270,14 +271,16 @@ def _render_html(doc: dict, lang: str, katex_dir: Path, brand: str | None = None
   {refs}
   <script nonce="{nonce}" src="{js}"></script>
   <script nonce="{nonce}">
-    const mathMacros = {json.dumps(math_render.MACROS, ensure_ascii=True)};
+    const mathMacros = {json.dumps(render_macros, ensure_ascii=True)};
     document.querySelectorAll('.mg-math').forEach(function (el) {{
-      try {{ katex.render(el.textContent, el, {{ throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
-      catch (e) {{ el.textContent = '[Formula render failed] ' + el.textContent; /* 渲染失败保留源码,与聊天页同口径 */ }}
+      const source = el.textContent;
+      try {{ katex.render(source, el, {{ throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
+      catch (e) {{ el.textContent = source; }}
     }});
     document.querySelectorAll('.mg-mathd').forEach(function (el) {{
-      try {{ katex.render(el.textContent, el, {{ displayMode: true, throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
-      catch (e) {{ el.textContent = '[Formula render failed] ' + el.textContent; }}
+      const source = el.textContent;
+      try {{ katex.render(source, el, {{ displayMode: true, throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
+      catch (e) {{ el.textContent = source; }}
     }});
   </script>
 </body>

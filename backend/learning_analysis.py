@@ -18,20 +18,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
-from datetime import datetime, timezone
+from datetime import datetime
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 import auth
 import diagnosis
+import ebbinghaus
 from knowledge_graph import KnowledgeGraph, KnowledgePoint
 from recommendation import MASTERED_SCORE
 
-TAU_BASE = 30.0
-TAU_STEP = 15.0
-REVIEW_RETENTION = 0.6
 MIN_SAMPLE = 8
 BOTTLENECK_LIMIT = 5
 NEXT_LIMIT = 5
@@ -41,38 +38,6 @@ FOOTER_LIMIT = 8
 
 def _now() -> datetime:
     return datetime.now().astimezone()
-
-
-def _parse_at(value) -> datetime | None:
-    try:
-        parsed = datetime.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def _age_days(at, now: datetime) -> int | None:
-    parsed = _parse_at(at)
-    if parsed is None:
-        return None
-    return max(0, int((now - parsed).total_seconds() // 86400))
-
-
-def _memory_strength(score: int) -> float:
-    """记忆强度(天):艾宾浩斯曲线的时间常数,掌握度越高衰减越慢。"""
-    score = max(1, min(5, int(score)))
-    return TAU_BASE + TAU_STEP * (score - 1)
-
-
-def _retention(age: int | None, score: int | None) -> float | None:
-    """R(t,s)=exp(-t/tau(s));0 天为 1,随时间单调下降。"""
-    if score is None or age is None:
-        return None
-    if age <= 0:
-        return 1.0
-    return math.exp(-age / _memory_strength(score))
 
 
 def _effective_score(score: int | None, retention: float | None) -> float | None:
@@ -137,14 +102,14 @@ def build_snapshot(uid: str, graph: KnowledgeGraph | None = None,
         entry = latest.get(point_id) or {}
         score = entry.get("score")
         score = int(score) if isinstance(score, int) else None
-        age = _age_days(entry.get("at"), now) if score is not None else None
-        retention = _retention(age, score)
+        age = ebbinghaus.age_days(entry.get("at"), now) if score is not None else None
+        retention = ebbinghaus.retention(age, score)
         info[point_id] = {
             "point": point,
             "score": score,
             "age": age,
             "retention": retention,
-            "stale": retention is not None and retention < REVIEW_RETENTION,
+            "stale": retention is not None and retention < ebbinghaus.REVIEW_RETENTION,
             "effectiveScore": _effective_score(score, retention),
         }
 
@@ -157,6 +122,14 @@ def build_snapshot(uid: str, graph: KnowledgeGraph | None = None,
         1 for item in info.values()
         if item["score"] is not None and item["score"] < MASTERED_SCORE)
     stale_count = sum(1 for item in info.values() if item["stale"])
+    bucket_mastered = sum(
+        1 for item in info.values()
+        if item["score"] is not None and item["score"] >= MASTERED_SCORE
+        and not item["stale"])
+    bucket_reinforce = sum(
+        1 for item in info.values()
+        if item["score"] is not None and item["score"] < MASTERED_SCORE
+        and not item["stale"])
 
     def gate_ok(point: KnowledgePoint) -> bool:
         # 遗忘只排复习,不撤销前置资格
@@ -187,7 +160,7 @@ def build_snapshot(uid: str, graph: KnowledgeGraph | None = None,
             "effectiveScore": item["effectiveScore"],
             "retention": item["retention"],
             "tauDays": (
-                round(_memory_strength(item["score"]), 1)
+                round(ebbinghaus.tau_days(item["score"]), 1)
                 if item["score"] is not None else None),
             "descendantCount": graph.descendant_count(point_id),
             "stale": item["stale"],
@@ -263,9 +236,9 @@ def build_snapshot(uid: str, graph: KnowledgeGraph | None = None,
         "generatedAt": now.isoformat(timespec="seconds"),
         "dataQuality": _quality(diagnosed),
         "limits": {
-            "reviewRetention": REVIEW_RETENTION,
-            "tauBase": TAU_BASE,
-            "tauStep": TAU_STEP,
+            "reviewRetention": ebbinghaus.REVIEW_RETENTION,
+            "tauBase": ebbinghaus.TAU_BASE,
+            "tauStep": ebbinghaus.TAU_STEP,
             "minSample": MIN_SAMPLE,
         },
         "coverage": {
@@ -281,6 +254,12 @@ def build_snapshot(uid: str, graph: KnowledgeGraph | None = None,
             "weak": weak,
             "stale": stale_count,
             "undiagnosed": total - diagnosed,
+        },
+        "buckets": {
+            "mastered": bucket_mastered,
+            "forgotten": stale_count,
+            "reinforce": bucket_reinforce,
+            "unlearned": total - diagnosed,
         },
         "chapters": _chapter_rows(graph, info),
         "bottlenecks": bottlenecks,
@@ -301,7 +280,9 @@ def system_prompt(snapshot: dict, zh: bool = True) -> str:
             "1. 只能引用【学习事实】里的数字与知识点;不得编造分数、覆盖率、"
             "章节或前置关系,不得自行估算缺失数据。\n"
             "2. 按以下顺序组织回答:覆盖度 → 掌握结构 → 章节均衡 → 前置瓶颈 → "
-            "待复核 → 下一步。\n"
+            "待复核 → 下一步。掌握结构使用 buckets:mastered=已掌握(高分且未遗忘)、"
+            "forgotten=已遗忘(待复核)、reinforce=待补(低分且未到待复核)、"
+            "unlearned=没学(未诊断)。建议顺序:先已遗忘,再待补,再没学。\n"
             "3. dataQuality 为 none 或 sparse 时,先明确说明数据不足,"
             "再给已有事实与下一步建议,不要假装掌握情况完整。\n"
             "4. 待复核由服务端按艾宾浩斯遗忘曲线计算。直接引用快照里的 score、"
@@ -319,7 +300,10 @@ def system_prompt(snapshot: dict, zh: bool = True) -> str:
         "1. Use only the numbers and points in LEARNING FACTS. Do not invent scores, "
         "coverage, chapters or prerequisites, and do not estimate missing data.\n"
         "2. Structure the answer in this order: Coverage -> Mastery structure -> "
-        "Chapter balance -> Prerequisite bottlenecks -> Stale reviews -> Next steps.\n"
+        "Chapter balance -> Prerequisite bottlenecks -> Stale reviews -> Next steps. "
+        "Use buckets for mastery: mastered (high score, not review due), forgotten "
+        "(review due), reinforce (low score, not review due), unlearned (not "
+        "diagnosed). Suggest forgotten first, then reinforce, then not learned.\n"
         "3. If dataQuality is none or sparse, say clearly that the data is "
         "insufficient before giving the available facts and next steps.\n"
         "4. Review-due points are computed server-side with the Ebbinghaus curve. "
@@ -338,7 +322,6 @@ def system_prompt(snapshot: dict, zh: bool = True) -> str:
 def fallback_report(snapshot: dict, zh: bool = True) -> str:
     """模型未配置或未出字时的确定性报告。"""
     coverage = snapshot["coverage"]
-    structure = snapshot["structure"]
     if zh:
         lines = [
             "**学习分析 · 掌握度快照**",
@@ -346,9 +329,10 @@ def fallback_report(snapshot: dict, zh: bool = True) -> str:
             f"**覆盖度**：已诊断 {coverage['diagnosed']}/{coverage['total']}"
             f"（{round(coverage['ratio'] * 100)}%）；当前可学前沿 "
             f"{coverage['frontierDiagnosed']}/{coverage['frontierTotal']}。",
-            f"**掌握结构**：已掌握 {structure['mastered']} · 薄弱 "
-            f"{structure['weak']} · 待复核 {structure['stale']} · 未诊断 "
-            f"{structure['undiagnosed']}。",
+            f"**掌握结构**：已掌握 {snapshot['buckets']['mastered']} · 已遗忘 "
+            f"{snapshot['buckets']['forgotten']} · 待补 "
+            f"{snapshot['buckets']['reinforce']} · 没学 "
+            f"{snapshot['buckets']['unlearned']}。",
         ]
         chapters = snapshot["chapters"]
         if chapters:
@@ -392,9 +376,10 @@ def fallback_report(snapshot: dict, zh: bool = True) -> str:
         f"**Coverage**: {coverage['diagnosed']}/{coverage['total']} diagnosed "
         f"({round(coverage['ratio'] * 100)}%); learnable frontier "
         f"{coverage['frontierDiagnosed']}/{coverage['frontierTotal']}.",
-        f"**Mastery structure**: mastered {structure['mastered']} · weak "
-        f"{structure['weak']} · stale {structure['stale']} · undiagnosed "
-        f"{structure['undiagnosed']}.",
+        f"**Mastery structure**: mastered {snapshot['buckets']['mastered']} · "
+        f"forgotten {snapshot['buckets']['forgotten']} · reinforce "
+        f"{snapshot['buckets']['reinforce']} · not learned "
+        f"{snapshot['buckets']['unlearned']}.",
     ]
     chapters = snapshot["chapters"]
     if chapters:

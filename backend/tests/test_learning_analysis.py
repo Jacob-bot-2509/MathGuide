@@ -257,3 +257,36 @@ def test_analysis_endpoint_returns_empty_snapshot_for_new_account(client):
     assert body["coverage"]["diagnosed"] == 0
     assert body["suggestedDiagnosis"]
     assert "generatedAt" in body
+
+
+def test_snapshot_buckets_are_exclusive():
+    latest = {
+        "a": _entry(5),
+        "b": _entry(2),
+        "c": _entry(3, days_ago=90),
+    }
+    snapshot = learning_analysis.build_snapshot(
+        "u1", graph=_graph(), latest_map=latest, now=NOW)
+
+    assert snapshot["buckets"] == {
+        "mastered": 1,
+        "forgotten": 1,
+        "reinforce": 1,
+        "unlearned": 2,
+    }
+    assert sum(snapshot["buckets"].values()) == 5
+
+
+def test_system_prompt_mentions_four_buckets():
+    snapshot = learning_analysis.build_snapshot(
+        "u1", graph=_graph(), latest_map={"a": _entry(4)}, now=NOW)
+
+    zh = learning_analysis.system_prompt(snapshot, zh=True)
+    assert "已遗忘" in zh
+    assert "待补" in zh
+    assert "没学" in zh
+
+    en = learning_analysis.system_prompt(snapshot, zh=False)
+    assert "forgotten" in en.lower()
+    assert "reinforce" in en.lower()
+    assert "not learned" in en.lower()

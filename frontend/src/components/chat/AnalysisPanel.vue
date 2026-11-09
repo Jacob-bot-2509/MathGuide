@@ -119,10 +119,10 @@ onMounted(load)
         </div>
 
         <dl class="ana-stats">
-          <div><dt>{{ t('analysis.mastered') }}</dt><dd>{{ data.structure.mastered }}</dd></div>
-          <div><dt>{{ t('analysis.weak') }}</dt><dd>{{ data.structure.weak }}</dd></div>
-          <div><dt>{{ t('analysis.stale') }}</dt><dd>{{ data.structure.stale }}</dd></div>
-          <div><dt>{{ t('analysis.undiagnosed') }}</dt><dd>{{ data.structure.undiagnosed }}</dd></div>
+          <div><dt>{{ t('analysis.bucketMastered') }}</dt><dd>{{ data.buckets.mastered }}</dd></div>
+          <div><dt>{{ t('analysis.bucketForgotten') }}</dt><dd>{{ data.buckets.forgotten }}</dd></div>
+          <div><dt>{{ t('analysis.bucketReinforce') }}</dt><dd>{{ data.buckets.reinforce }}</dd></div>
+          <div><dt>{{ t('analysis.bucketUnlearned') }}</dt><dd>{{ data.buckets.unlearned }}</dd></div>
         </dl>
 
         <section v-if="bottlenecks.length" class="ana-section">

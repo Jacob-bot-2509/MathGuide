@@ -122,3 +122,61 @@ def test_recommendation_rejects_bad_strategy(client):
     res = client.get("/api/recommendation?strategy=random",
                      headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 400
+
+
+# ---------- 艾宾浩斯复习评判 ----------
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+NOW = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
+
+
+def _latest(score: int, days: int) -> dict:
+    return {
+        "score": score,
+        "at": (NOW - timedelta(days=days)).isoformat(timespec="seconds"),
+    }
+
+
+def test_mastered_review_due_point_is_recommended():
+    result = recommendation.recommend(
+        _graph(), {"a": 5}, strategy="difficulty", limit=5,
+        latest={"a": _latest(5, 90)}, now=NOW)
+
+    by_id = {item["pointId"]: item for item in result["items"]}
+    assert by_id["a"]["reason"] == "review"
+    assert by_id["a"]["reviewDue"] is True
+    assert by_id["a"]["retention"] < 0.6
+    assert result["mastered"] == 1
+
+
+def test_review_due_sorts_before_new():
+    result = recommendation.recommend(
+        _graph(), {"a": 5}, strategy="difficulty", limit=5,
+        latest={"a": _latest(5, 90)}, now=NOW)
+
+    assert result["items"][0]["pointId"] == "a"
+
+
+def test_fresh_mastered_point_is_not_reviewed():
+    result = recommendation.recommend(
+        _graph(), {"a": 5}, strategy="difficulty", limit=5,
+        latest={"a": _latest(5, 0)}, now=NOW)
+
+    assert "a" not in [item["pointId"] for item in result["items"]]
+
+
+def test_endpoint_returns_review_due(client, monkeypatch):
+    token, uid = _register(client)
+    old = {"set-map": {
+        "score": 5,
+        "at": (datetime.now(timezone.utc) - timedelta(days=90)).isoformat(timespec="seconds"),
+    }}
+    monkeypatch.setattr(diagnosis, "latest", lambda uid: old)
+
+    res = client.get("/api/recommendation",
+                     headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200, res.text
+    by_id = {item["pointId"]: item for item in res.json()["items"]}
+    assert by_id["set-map"]["reviewDue"] is True
+    assert by_id["set-map"]["reason"] == "review"

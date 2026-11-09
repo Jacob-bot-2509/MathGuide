@@ -43,6 +43,8 @@ export interface ChatRequest {
   }
   /** 研究综述显式生成图解;缺省 false */
   diagrams?: boolean
+  /** 图谱“前往”带入的知识点 id:会话级上下文,追问仍携带 */
+  pointId?: string
 }
 
 /** 流式回调(OpenAI 兼容 SSE 的通用形态) */

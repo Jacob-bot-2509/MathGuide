@@ -36,6 +36,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
 import config
+import diagnosis
 import learning_analysis
 import rag
 import research_actions
@@ -1450,7 +1451,7 @@ async def speech_to_math(request: Request) -> StreamingResponse:
 
 _ANALYSIS_TOPICS = (
     "学习进度", "学习情况", "掌握情况", "学习分析", "知识图谱", "薄弱点",
-    "学得怎么样", "学得如何",
+    "学得怎么样", "学得如何", "艾宾浩斯", "遗忘曲线", "记忆保持", "复习优先级",
 )
 _ANALYSIS_EN = (
     "my learning progress",
@@ -1470,6 +1471,142 @@ def _is_learning_analysis_request(question: str) -> bool:
         return True
     lower = text.lower()
     return any(marker in lower for marker in _ANALYSIS_EN)
+
+
+_FEATURE_TOPICS = (
+    "艾宾浩斯", "遗忘曲线", "记忆保持", "复习优先级",
+    "学习分析算法", "掌握度算法", "待复核算法",
+)
+
+
+def _is_feature_question(question: str) -> bool:
+    """问系统实现而不是问自己的进度:必须按固定事实回答。"""
+    text = (question or "").strip()
+    if not text or "我的" in text:
+        return False
+    return any(topic in text for topic in _FEATURE_TOPICS)
+
+
+def _feature_answer(zh: bool) -> str:
+    if zh:
+        return (
+            "**MathGuide 学习分析 · 遗忘曲线**\n\n"
+            "学习分析由服务端先计算掌握度快照,再交给模型解读;"
+            "接口是 `GET /api/profile/analysis`。\n\n"
+            "待复核使用艾宾浩斯曲线:\n\n"
+            "$$R(t,s)=\\exp\\left(-\\frac{t}{\\tau(s)}\\right),\\quad "
+            "\\tau(s)=30+15\\times(s-1)\\text{ 天}$$\n\n"
+            "- `t`:距最近一次诊断的天数;`s`:当时的诊断分(1–5)。\n"
+            "- `R<0.6` 进入待复核,并优先进入复习队列。\n"
+            "- 遗忘只影响复习优先级,不改写原始诊断分,也不阻断前置知识门槛。\n"
+            "- 已掌握/薄弱仍按原始诊断分判断;待复核是叠加标记。\n\n"
+            "如果你想看自己的进度,用「学习分析」或直接说“分析我的学习进度”。"
+        )
+    return (
+        "**MathGuide Learning Analysis · Forgetting Curve**\n\n"
+        "The server computes a mastery snapshot first; the model only interprets it. "
+        "Endpoint: `GET /api/profile/analysis`.\n\n"
+        "Review-due uses the Ebbinghaus curve:\n\n"
+        "$$R(t,s)=\\exp\\left(-\\frac{t}{\\tau(s)}\\right),\\quad "
+        "\\tau(s)=30+15\\times(s-1)\\text{ days}$$\n\n"
+        "- `t`: days since the last diagnosis; `s`: score 1–5.\n"
+        "- `R<0.6` means review due and moves the point up the review queue.\n"
+        "- Forgetting affects review priority only; it does not rewrite the raw "
+        "score or block prerequisites.\n"
+        "- Mastered/weak still follow the raw score; review-due is an overlay.\n\n"
+        "For your own progress, use Learning Analysis or ask “analyze my learning progress”."
+    )
+
+
+def _point_notes_text(point) -> str:
+    """把知识点摘要与要点拼成模型可引用的纯文本。"""
+    parts: list[str] = []
+    if point.summary:
+        parts.append(point.summary)
+    if point.key_points:
+        parts.append("重点注意点:\n" + "\n".join(
+            f"- {item}" for item in point.key_points))
+    return "\n\n".join(parts)
+
+
+async def _gen_point_lesson(uid: str, point_id: str, question: str, zh: bool):
+    """「知识点讲解」:先主干与重点注意点,再等待用户追问。"""
+    graph = diagnosis.get_graph()
+    point = graph.points.get(point_id)
+    if point is None:
+        text = ("未找到该知识点,请返回知识图谱重新选择。"
+                if zh else "Knowledge point not found. Please pick one from the graph.")
+        async for frame in _frames(text):
+            yield frame
+        return
+
+    notes = _point_notes_text(point)
+    excerpts = ""
+    if not notes:
+        try:
+            hits = await asyncio.to_thread(rag.search, point.name, 3)
+        except Exception:  # noqa: BLE001 检索失败不影响讲解入口
+            hits = []
+        excerpts = "\n\n".join(
+            f"【{chunk.title} · {chunk.section}】{chunk.text[:600]}"
+            for chunk, _score in hits)
+
+    prereqs = "、".join(
+        graph.points[item].name for item in point.prerequisites
+        if item in graph.points) or ("无" if zh else "none")
+    dependents = "、".join(
+        graph.points[item].name for item in graph.direct_dependents(point.id)
+        if item in graph.points) or ("无" if zh else "none")
+
+    fallback = "\n\n".join(item for item in (
+        ("**" + point.name + "**"),
+        notes or excerpts or ("暂无预置内容。" if zh else "No prepared content yet."),
+        (f"前置知识:{prereqs};后续知识:{dependents}。"),
+        ("接下来你想先听哪一部分?定义、方法,还是常见错误?"
+         if zh else "Which part would you like next: the definition, the method, or common mistakes?"),
+    ) if item)
+
+    if not rag.llm.is_configured():
+        async for frame in _frames(fallback):
+            yield frame
+        return
+
+    if zh:
+        system = (
+            "你是 MathGuide 的知识点讲解助教。下面是该知识点的服务端事实,是唯一可用内容。\n"
+            "要求:\n"
+            "1. 先输出「主干」(3–6 条),再输出「重点注意点」(2–4 条);\n"
+            "2. 首轮不展开例题、不输出图解标记;\n"
+            "3. 只使用提供的事实;内容不足时明确说明,不要编造;\n"
+            "4. 最后问用户想先听哪一部分,等待追问。\n\n"
+            f"知识点:{point.name}({point.chapter},难度 {point.difficulty}/5)\n"
+            f"前置知识:{prereqs}\n后续知识:{dependents}\n\n"
+            f"主要内容:\n{notes or excerpts or '暂无预置内容'}"
+        )
+    else:
+        system = (
+            "You are MathGuide's concept tutor. The facts below are the only allowed "
+            "source.\nRules:\n"
+            "1. First output 'Main structure' (3-6 bullets), then 'Key cautions' "
+            "(2-4 bullets);\n"
+            "2. Do not expand worked examples or emit diagram markers in the first turn;\n"
+            "3. Use only the supplied facts; say so when content is insufficient;\n"
+            "4. End by asking which part the user wants next.\n\n"
+            f"Concept: {point.name} ({point.chapter}, difficulty {point.difficulty}/5)\n"
+            f"Prerequisites: {prereqs}\nUnlocks: {dependents}\n\n"
+            f"Main content:\n{notes or excerpts or 'No prepared content'}"
+        )
+    user = question or (f"讲解知识点:{point.name}" if zh else f"Explain the concept: {point.name}")
+    parts: list[str] = []
+    try:
+        async for delta in rag.llm.stream_chat(system, user, role="main", thinking=False):
+            parts.append(delta)
+            yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+    except Exception as exc:  # noqa: BLE001 模型失败降级为预置内容
+        print(f"[chat] 知识点讲解模型失败,降级: {exc}")
+        if not parts:
+            async for frame in _frames(fallback):
+                yield frame
 
 
 async def _gen_learning_analysis(uid: str, question: str, zh: bool):
@@ -1608,6 +1745,12 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     question = _strip_meta(prompt, cmd)
     zh = _is_chinese(question)
 
+    # 知识点讲解:图谱“前往”进入,首轮讲主干与注意点,不检索知识库
+    if cmd == "知识点讲解" and workspace == "learn":
+        meta["role"] = "main"
+        point_id = str(body.get("pointId") or "")[:64]
+        return _sse(_gen_point_lesson(uid, point_id, question, zh))
+
     # 学习分析:指令或自然语言要求时,不检索知识库,直接解读服务端快照
     analysis_request = cmd == "学习分析" or (
         cmd is None and workspace == "learn"
@@ -1615,6 +1758,11 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     if analysis_request:
         meta["role"] = "main"
         return _sse(_gen_learning_analysis(uid, question, zh))
+
+    # 系统能力问题(艾宾浩斯/遗忘曲线/复习优先级):按实现事实回答,禁止自由发挥
+    if workspace == "learn" and cmd is None and _is_feature_question(question):
+        meta["role"] = "main"
+        return _stream_text(_feature_answer(zh))
 
     # 章节导航(教材正文随提示词携带):不检索知识库、不走研究路由
     if cmd in ("章节知识导航", "章节知识指引"):
@@ -1772,6 +1920,16 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # 检索含 embedding 请求(同步、冷启动可达数十秒)→ 线程池执行,
     # 不阻塞事件循环(否则这段等待会冻住所有并发会话)
     chunks = await asyncio.to_thread(rag.search, retrieval_query, 3)
+
+    # 图谱知识点会话:追问仍带上摘要与要点,排在普通检索资料之前
+    if workspace == "learn":
+        point_id = str(body.get("pointId") or "")[:64]
+        point = diagnosis.get_graph().points.get(point_id) if point_id else None
+        note_text = _point_notes_text(point) if point is not None else ""
+        if point is not None and note_text:
+            chunks = [(rag.Chunk(
+                f"point:{point.id}", point.name, point.chapter,
+                "知识点主要内容", note_text), 9.0)] + chunks
 
     # 科研区:无论是否命中研究意图,都先查用户自己的论文库。
     # 个人论文是私有且最对口的证据,排在公共知识库之前进入上下文。

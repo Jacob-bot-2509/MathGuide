@@ -213,6 +213,93 @@ async function main() {
     html = await renderComp('$a' + 'x'.repeat(400) + '$b')
     check('落单 $ 不吞长文', !html.includes('katex'), '')
 
+
+    // Isolation happens before table and Markdown parsing.
+    html = await renderComp(String.raw`| a | b |
+|---|---|
+| \\(|x_1| < \boxed{2}\\) | 2 |`)
+    check('双重转义和公式竖线在表格中渲染',
+      (html.match(/<td/g) || []).length === 2 && html.includes('katex') && !html.includes('seg-math-raw'))
+
+    html = await renderComp(String.raw`**值 \(\boxed{x_1 < 2}\)**`)
+    check('公式在粗体解析前受保护', html.includes('katex') && !html.includes('seg-math-raw'))
+
+    html = await renderComp(String.raw`先写 $$\begin{aligned}a&=b\\c&=`)
+    check('未闭合块级公式原样显示', html.includes('$$') && !html.includes('katex'))
+    html = await renderComp(String.raw`先写 $$\begin{aligned}a&=b\\c&=d\end{aligned}$$`)
+    check('流式公式闭合后渲染', html.includes('katex-display') && !html.includes('seg-math-raw'))
+
+    html = await renderComp('代码 `$x_1$` 和公式 $y_2$')
+    check('行内代码里的公式不进入 KaTeX',
+      (html.match(/class="katex"/g) || []).length === 1 && html.includes('$x_1$'))
+
+    const isolationMod = await server.ssrLoadModule('/src/utils/mathIsolation.ts')
+    const isolation = isolationMod as {
+      isolateMath: (text: string) => { text: string, formulas: { source: string }[] }
+      restoreMathSource: (text: string, formulas: { source: string }[]) => string
+      normalizeMathDelimiters: (text: string) => string
+    }
+    const original = String.raw`MGFORMULATOKEN0END \(x_1 < 2\) \\[y^2\\]`
+    const protectedMath = isolation.isolateMath(original)
+    check('占位符不会与用户内容冲突且可还原',
+      isolation.restoreMathSource(protectedMath.text, protectedMath.formulas) === original)
+    check('括号定界符归一化',
+      isolation.normalizeMathDelimiters(String.raw`\(x\) \\[y\\]`) === '$x$ $$y$$')
+
+    html = await renderComp(String.raw`积分 \begin{align*}\dblInt_{\cS_t}\vF\cdot\hn\,\dee{x}&=15\pi\\&=15\pi\end{align*}`)
+    check('题库独立公式环境及自定义宏渲染', html.includes('katex-display') && !html.includes('seg-math-raw'))
+    html = await renderComp(String.raw`积分 \begin{align\*}\dblInt\_{\cS_t}\\,\dee{x}\\\ &=15\pi\end{align\*}`)
+    check('Markdown 转义的题库公式环境渲染', html.includes('katex-display') && !html.includes('seg-math-raw'))
+    html = await renderComp(String.raw`未结束 \begin{align*}x&=y`)
+    check('流式未闭合环境保留原文', html.includes('\\begin{align*}') && !html.includes('katex'))
+
+    html = await renderComp(String.raw`\begin{align*}x &= \knowl{./ref/path}{\text{4.1.3}}\end{align*}`)
+    check('题库引用宏保留显示文字', html.includes('katex-display') && html.includes('4.1.3') && !html.includes('seg-math-raw'))
+
+    const currentIsolation = isolationMod as { prepareMath: (text: string) => string }
+    const pairs = [
+      [String.raw`\\dfrac{x}{\\sqrt{y}}`, String.raw`\dfrac{x}{\sqrt{y}}`],
+      [String.raw`\root 3 \of {x \root 3 \of {x}}`, String.raw`\sqrt[3]{x \sqrt[3]{x}}`],
+      [String.raw`15(_x_+40)=900`, String.raw`15(x+40)=900`],
+      [String.raw`(1)\[x+1\]`, String.raw`(1)[x+1]`],
+      [String.raw`n\in N^{\*}`, String.raw`n\in N^{*}`],
+      [String.raw`\begin{cases}x=1\\\\y=2\\end{cases}`, String.raw`\begin{cases}x=1\\y=2\end{cases}`],
+    ]
+    for (const [raw, expected] of pairs) {
+      check('来源语法归一化: ' + raw.slice(0, 28), currentIsolation.prepareMath(raw) === expected)
+    }
+    const keep = String.raw`\begin{aligned}x_1&=1\\y_2&=2\end{aligned}+\text{file\_1}+\mathrm{A_B}+\operatorname{foo_bar}`
+    check('原本正确的换行与下标不变', currentIsolation.prepareMath(keep) === keep)
+    html = await renderComp(String.raw`$\begin{align*}x&=y\\a&=b\end{align*}$`)
+    check('行内定界符内的块级环境渲染', html.includes('katex-display') && !html.includes('seg-math-raw'))
+
+    html = await renderComp(String.raw`$①\times 3-$$②\times 2$`)
+    check('相邻行内公式不被误认为块级定界符', html.includes('katex') && !html.includes('seg-math-raw') && !html.includes('katex-display'))
+    html = await renderComp('`$x-$$y$`')
+    check('代码中的相邻公式定界符保持原样', !html.includes('katex') && html.includes('$x-$$y$'))
+
+    html = await renderComp(String.raw`$\frac{\cancelto{2}{10}}{\cancelto{3}{12}}$`)
+    check('消去标记保留箭头和约分结果', html.includes('katex') && !html.includes('seg-math-raw') && html.includes('10') && html.includes('12') && html.includes('↗'))
+
+    html = await renderComp(String.raw`引用 \( \PageIndex{21} \)`)
+    check('题库页码引用宏显示编号', html.includes('katex') && html.includes('21') && !html.includes('seg-math-raw'))
+
+    check('文字下划线安全保留', currentIsolation.prepareMath(String.raw`S_{\text {_NUA }}`) === String.raw`S_{\text {\_NUA }}`)
+    check('转义根号保留原符号', currentIsolation.prepareMath('\\' + String.fromCharCode(0x221a)) === String.raw`\surd`)
+
+    check('独立转义括号显示为括号', currentIsolation.prepareMath(String.raw`\(`) === '(' && currentIsolation.prepareMath(String.raw`\)`) === ')')
+    html = await renderComp(String.raw`选择 $\($ $\)$ A`)
+    check('选择题括号可渲染', html.includes('katex') && !html.includes('seg-math-raw'))
+
+    check('重复的几何符号和嵌套定界符去除', currentIsolation.prepareMath(String.raw`\triangle\(\triangle ABC\\)`) === String.raw`\triangle ABC`)
+    check('不同的几何符号不擅自合并', currentIsolation.prepareMath(String.raw`\triangle\(\angle ABC\)`) === String.raw`\triangle\(\angle ABC\)`)
+    html = await renderComp(String.raw`$\triangle\(\triangle ABC\\)$`)
+    check('重复几何符号的题目可渲染', html.includes('katex') && !html.includes('seg-math-raw'))
+
+    check('嵌套括号定界符去除', currentIsolation.prepareMath(String.raw`\[x^2\]`) === 'x^2')
+
+    html = await renderComp(String.raw`$\begin{aligned}x&=y\end{aligned}$`)
+    check('aligned 环境保留行内排版', html.includes('katex') && !html.includes('katex-display') && !html.includes('seg-math-raw'))
     console.log(`\nMathText 公式渲染自测:${passed}/${passed + failed.length} 通过`)
     for (const f of failed) console.log(f)
     if (failed.length) process.exit(1)

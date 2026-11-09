@@ -6,6 +6,8 @@
  */
 import { defineComponent, h, type VNode } from 'vue'
 import katex from 'katex'
+import mathMacros from '@/utils/mathMacros.json'
+import { isolateMath, prepareMath, splitIsolatedMath, type IsolatedFormula } from '@/utils/mathIsolation'
 
 interface Seg {
   type: 'text' | 'bold' | 'math' | 'mathd' | 'code' | 'link' | 'hr' | 'quote' | 'table'
@@ -34,7 +36,11 @@ function renderKatex(latex: string, display: boolean): string {
     // throwOnError: true —— 语法有误(未闭合花括号、非法宏等)时抛异常走下方 catch,
     // 原样展示 LaTeX 源码;若用 false,KaTeX 会把错误渲染成红色 katex-error 文本,
     // 用户看到的是刺眼的报错而不是内容
-    html = katex.renderToString(latex, { displayMode: display, throwOnError: true })
+    html = katex.renderToString(prepareMath(latex), {
+      displayMode: display, throwOnError: true,
+      // KaTeX infers argument count from #1, even when only #2 is displayed.
+      macros: { ...mathMacros, '\\knowl': '\\def\\mgIgnore##1{}\\mgIgnore{#1}#2' },
+    })
   } catch {
     // 渲染异常时不静默丢内容:原样展示 LaTeX 源码,保证任何符号都不会"凭空消失"
     html = `<code class="seg-math-raw">${escapeHtml(latex)}</code>`
@@ -57,63 +63,20 @@ function parseBold(src: string): Seg[] {
   return segs
 }
 
-function looksLikeInlineMath(inner: string): boolean {
-  const s = inner.trim()
-  if (!s || s.length > 300) return false
-  // 含中文时:必须是「公式里夹了说明文字」而不是「落单的 $ 吞了整段正文」。
-  // 判据是出现 LaTeX 命令或数学运算符;纯汉字句子一律不渲染(否则 KaTeX
-  // 会把整段中文当数学排版,既慢又乱)。
-  if (/[㐀-鿿豈-﫿]/.test(s)) {
-    return s.length <= 160 && /\\[a-zA-Z]+|[=^_<>+\-*/]/.test(s)
-  }
-  return /[\\^_=<>+\-*/()[\]{}0-9a-zA-Z]/.test(s)
-}
-
-function isMoneyMath(inner: string, before: string, after: string): boolean {
-  // 金额保护:只挡真正的价格写法,不能因为 "$0$" 以数字开头就拒绝渲染。
-  const s = inner.trim()
-  if (!s) return false
-  // "$5 and $6" 这种两个金额并列
-  if (/\b(?:and|or)\b/i.test(s)) return true
-  if (!/^\d[\d,.]*$/.test(s)) return false
-  const next = after.trimStart().charAt(0)
-  if ('元块美圆¥￥'.includes(next)) return true
-  return /(价格|售价|花费|便宜|贵|折|￥|¥)\s*$/.test(before)
-}
-
-function parseInline(src: string): Seg[] {
-  const segs: Seg[] = []
-  // 四种公式写法:$$..$$ 与 \[..\] 块级、\(..\) 与 $..$ 行内(LLM 与知识库常用)。
-  // 行内 $ 允许数字开头("$0$" 很常见),金额由 isMoneyMath 结合上下文排除。
-  // 允许单个换行(模型常把一句公式折行),但禁止空行、限制 300 字,
-  // 避免一个落单的 $ 把后面大段正文吞进公式。
-  // 未闭合的公式不会匹配,留在纯文本里,闭合后自动渲染(流式友好)。
-  const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$(?!\$)((?:\n(?!\s*\n)|[^$\n]){1,300}?)\$/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(src))) {
-    if (m[4] !== undefined
-        && (!looksLikeInlineMath(m[4])
-          || isMoneyMath(m[4], src.slice(Math.max(0, m.index - 8), m.index),
-            src.slice(m.index + m[0].length, m.index + m[0].length + 8)))) {
-      continue
-    }
-    segs.push(...parseBold(src.slice(last, m.index)))
-    if (m[1] !== undefined) segs.push({ type: 'mathd', value: m[1] })
-    else if (m[2] !== undefined) segs.push({ type: 'mathd', value: m[2] })
-    else if (m[3] !== undefined) segs.push({ type: 'math', value: m[3] })
-    else segs.push({ type: 'math', value: m[4] })
-    last = m.index + m[0].length
-  }
-  segs.push(...parseBold(src.slice(last)))
-  // 纯文本段再拆行内链接(章节胶囊 / 返回按钮等可点击载体)
+function parseInline(src: string, formulas: IsolatedFormula[]): Seg[] {
   const out: Seg[] = []
-  for (const s of segs) {
-    if (s.type !== 'text') {
-      out.push(s)
-      continue
+  for (const segment of parseBold(src)) {
+    for (const part of splitIsolatedMath(segment.value, formulas)) {
+      if (typeof part !== 'string') {
+        out.push(part.pending
+          ? { type: 'text', value: part.source }
+          : { type: part.display ? 'mathd' : 'math', value: part.latex })
+      } else if (segment.type === 'bold') {
+        out.push({ type: 'bold', value: part })
+      } else {
+        out.push(...parseInlineLinks(part))
+      }
     }
-    out.push(...parseInlineLinks(s.value))
   }
   return out
 }
@@ -136,7 +99,7 @@ function parseInlineLinks(src: string): Seg[] {
   return segs
 }
 
-function parse(src: string): Seg[] {
+function parse(src: string, formulas: IsolatedFormula[]): Seg[] {
   const segs: Seg[] = []
   for (const part of src.split(/(```[\s\S]*?(?:```|$))/g)) {
     if (part.startsWith('```')) {
@@ -150,7 +113,7 @@ function parse(src: string): Seg[] {
         segs.push({ type: 'hr', value: '' })
         continue
       }
-      segs.push(...parseBlock(blocks[i]))
+      segs.push(...parseBlock(blocks[i], formulas))
     }
   }
   return segs
@@ -315,12 +278,12 @@ function tableAligns(line: string): Array<'left' | 'center' | 'right'> {
 }
 
 /** 行级解析:表格优先,其次连续 > 引用块,其余走常规解析 */
-function parseBlock(src: string): Seg[] {
+function parseBlock(src: string, formulas: IsolatedFormula[]): Seg[] {
   const segs: Seg[] = []
   let normal = ''
   let quote = ''
   const flushNormal = () => {
-    if (normal.trim()) segs.push(...parseInline(normal))
+    if (normal.trim()) segs.push(...parseInline(normal, formulas))
     normal = ''
   }
   const flushQuote = () => {
@@ -377,9 +340,10 @@ function renderLink(key: number | string, value: string, href: string | undefine
 function inlineNodes(
   value: string,
   keyPrefix: string,
+  formulas: IsolatedFormula[],
   inlineDisplayMath = false,
 ): VNode[] {
-  return parseInline(value).map((seg, index) => {
+  return parseInline(value, formulas).map((seg, index) => {
     const key = `${keyPrefix}-${index}`
     if (seg.type === 'math') {
       return h('span', { key, class: 'seg-math', innerHTML: renderKatex(seg.value, false) })
@@ -398,7 +362,8 @@ function inlineNodes(
 }
 
 function buildNodes(text: string): VNode[] {
-  return parse(text).map((s, i) => {
+  const isolated = isolateMath(text)
+  return parse(isolated.text, isolated.formulas).map((s, i) => {
     switch (s.type) {
       case 'text':
         return h('span', { key: i }, s.value)
@@ -415,10 +380,7 @@ function buildNodes(text: string): VNode[] {
       case 'hr':
         return h('hr', { key: i, class: 'seg-hr' })
       case 'quote':
-        return h('div', { key: i, class: 'seg-quote' }, parseInlineLinks(s.value).map((x, j) =>
-          x.type === 'link'
-            ? renderLink(j, x.value, x.href)
-            : h('span', { key: j }, x.value)))
+        return h('div', { key: i, class: 'seg-quote' }, inlineNodes(s.value, `quote-${i}`, isolated.formulas))
       case 'table': {
         const header = s.header || []
         const rows = s.rows || []
@@ -430,14 +392,14 @@ function buildNodes(text: string): VNode[] {
             h('thead', null, [
               h('tr', null, header.map((cell, j) => h(
                 'th', { key: j, style: { textAlign: align(j) } },
-                inlineNodes(cell, `${i}-h-${j}`, true),
+                inlineNodes(cell, `${i}-h-${j}`, isolated.formulas, true),
               ))),
             ]),
             h('tbody', null, rows.map((row, r) => h(
               'tr', { key: r },
               header.map((_cell, j) => h(
                 'td', { key: j, style: { textAlign: align(j) } },
-                inlineNodes(row[j] || '', `${i}-${r}-${j}`, true),
+                inlineNodes(row[j] || '', `${i}-${r}-${j}`, isolated.formulas, true),
               )),
             ))),
           ]),

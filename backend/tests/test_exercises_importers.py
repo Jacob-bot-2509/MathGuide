@@ -7,6 +7,16 @@ from exercises.importers import math_dataset, numinamath, olympiadbench
 from exercises.importers.common import ImportSkip
 
 
+
+def test_import_cleanup_preserves_math_comparisons_while_removing_html():
+    from exercises.importers.common import clean_text
+
+    assert clean_text(r"<p><b>Given</b> $x<y$ and $y>0$</p>") == r"Given $x<y$ and $y>0$"
+    assert clean_text(r"\(x<y\) and \(y>0\)") == r"\(x<y\) and \(y>0\)"
+    assert clean_text("x<y and y>0") == "x<y and y>0"
+    assert clean_text(r'<a href="https://example.org">Item</a> $x&lt;y$') == r"Item $x<y$"
+
+
 def olympiad_row(**overrides):
     row = {
         "id": 2400,

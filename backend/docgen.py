@@ -44,6 +44,7 @@ def _clean_text(value: object, limit: int) -> str:
 
 def _clean_markdown(text: str) -> str:
     """PDF 渲染器只认纯文本 + LaTeX;去掉 LLM/原回答里的 Markdown 标记。"""
+    text, formulas = math_render.isolate(text)
     text = re.sub(r"```[^\n]*\n?", "", text)
     text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text, flags=re.M)
     text = re.sub(r"^\s*---\s*$", "", text, flags=re.M)
@@ -51,13 +52,14 @@ def _clean_markdown(text: str) -> str:
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
     text = text.replace("**", "").replace("__", "")
     text = re.sub(r"^\s*[-*]\s+", "• ", text, flags=re.M)
-    return text.strip()
+    return math_render.restore(text.strip(), formulas)
 
 
 def _paragraphs(text: str) -> list[str]:
+    text, formulas = math_render.isolate(text)
     text = _clean_markdown(text)
     parts = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    return parts or ([text] if text else [])
+    return [math_render.restore(part, formulas) for part in parts] or ([math_render.restore(text, formulas)] if text else [])
 
 
 def _format(value: object) -> str:
@@ -99,13 +101,13 @@ def _qa_document(items: list[dict], lang: str, source: str) -> dict:
 def _markdown(document: dict, lang: str) -> str:
     d = doc._normalize_doc(document, "", lang)
     zh = lang == "zh"
-    lines = [f"# {d['title']}", ""]
+    lines = [f"# {math_render.markdown(d['title'])}", ""]
     if d.get("abstract"):
-        lines += [f"> {d['abstract']}", ""]
+        lines += [f"> {math_render.markdown(d['abstract'])}", ""]
     for section in d.get("sections", []):
-        lines += [f"## {section['heading']}", ""]
+        lines += [f"## {math_render.markdown(section['heading'])}", ""]
         for paragraph in section.get("paragraphs", []):
-            lines += [paragraph, ""]
+            lines += [math_render.markdown(paragraph), ""]
     if d.get("references"):
         lines += [f"## {'参考依据' if zh else 'References'}", ""]
         for ref in d["references"]:
@@ -123,7 +125,10 @@ def _docx_bytes(document: dict, lang: str) -> bytes:
     def add_text(paragraph, text):
         for is_math, _display, value in math_render.segments(text):
             if is_math:
-                paragraph._p.append(math_render.to_omml(value))
+                try:
+                    paragraph._p.append(math_render.to_omml(value))
+                except (ValueError, KeyError, IndexError):
+                    paragraph.add_run(value)
             else:
                 paragraph.add_run(value)
 
