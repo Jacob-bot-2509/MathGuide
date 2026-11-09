@@ -1180,7 +1180,7 @@ function resumeReply(msg: ChatMsg) {
   persistSessions()
 }
 
-function send(text?: string, cmd?: string) {
+function send(text?: string, cmd?: string, extra?: { pointId?: string }) {
   let content = (text ?? input.value).trim()
   if (!content) return
   // 阅读器打开时:先请求当前论文的命中段落,阅读器会滚到对应页并高亮。
@@ -1219,6 +1219,9 @@ function send(text?: string, cmd?: string) {
       }
     }
   }
+
+  // 绑定到最终会话:板块切换可能把 session 换成已有会话
+  if (extra?.pointId) session.pointId = extra.pointId
 
   // 新问题进来时丢弃未回答的澄清气泡:同一时刻只保留一个待选方向
   if (session.messages.some((m) => m.clarify)) {
@@ -1280,6 +1283,7 @@ function send(text?: string, cmd?: string) {
     cmd,
     sessionId: session.id,
     categoryKey: session.cat?.key,
+    pointId: extra?.pointId ?? session.pointId,
     history,
     // 搜索范围只属于科研链路:学习区不传,避免误触发跨区文献检索
     sources: isResearch.value ? scopeForRequest() : undefined,
@@ -2134,6 +2138,20 @@ function greet() {
   scheduleStream(session, live, '', 0)
 }
 
+/** 图谱详情页「前往」:消费一次 query,随后清掉,避免刷新重复发问。 */
+function consumePointLink() {
+  if (isResearch.value) return
+  const point = typeof route.query.point === 'string'
+    ? route.query.point.slice(0, 64) : ''
+  if (!point || route.query.start !== '1') return
+  const name = typeof route.query.name === 'string'
+    ? route.query.name.slice(0, 40) : point
+  router.replace({ path: '/learn' })
+  nextTick(() => {
+    send(t('learn.pointLessonPrompt', { name }), '知识点讲解', { pointId: point })
+  })
+}
+
 function restoreStagedPapers(): void {
   const seen = new Set<string>()
   for (const session of sessions.value) {
@@ -2160,6 +2178,7 @@ onMounted(() => {
   restoreStagedPapers()
   createSession()
   greet()
+  consumePointLink()
   // 文献检索页「基于这些结果提问」:证据已拼好,进对话后直接发送
   if (isResearch.value) {
     const seed = sessionStorage.getItem('mg-research-seed')

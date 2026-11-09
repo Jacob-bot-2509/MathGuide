@@ -893,3 +893,9 @@ def test_learning_analysis_natural_language_request(monkeypatch):
 
     assert "覆盖度" in text
     assert "cmd://point/b" in text
+
+
+def test_learning_analysis_intent_includes_forgetting_terms():
+    assert chat._is_learning_analysis_request("我的遗忘曲线怎么样")
+    assert chat._is_learning_analysis_request("我的复习优先级")
+    assert chat._is_learning_analysis_request("我的艾宾浩斯记忆保持率")

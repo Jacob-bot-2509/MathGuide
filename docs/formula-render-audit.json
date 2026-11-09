@@ -1,0 +1,136 @@
+{
+  "formula_occurrences": 262777,
+  "unique_formulas": 68524,
+  "katex_failed_occurrences": 52,
+  "word_failed_occurrences": 46,
+  "katex_failures": [
+    {
+      "reason": "KaTeX parse error: Unknown column alignment: @",
+      "occurrences": 28,
+      "exercise_ids": [
+        "math:number_theory:10-54b44607b98c",
+        "math:number_theory:101-49ca9e6ff3f0",
+        "math:number_theory:138-35293187f3ff",
+        "math:number_theory:162-a376dda82515",
+        "math:number_theory:163-c813f47835cd",
+        "math:number_theory:22-3eae889193c6",
+        "math:number_theory:25-992ce393b16c",
+        "math:number_theory:37-b5c71574957f",
+        "math:number_theory:58-5f89e7cf1f3e",
+        "math:number_theory:99-c9f4b37ba1dc",
+        "math:prealgebra:210-60a34c09b7ac",
+        "math:prealgebra:271-3dcf6f6bd4c4"
+      ]
+    },
+    {
+      "reason": "KaTeX parse error: Expected '}', got 'EOF'",
+      "occurrences": 6,
+      "exercise_ids": [
+        "numinamath:cn_k12:130-441db194ea8e",
+        "numinamath:cn_k12:832-d79099b1dfcc"
+      ]
+    },
+    {
+      "reason": "KaTeX parse error: Undefined control sequence: \\multicolumn",
+      "occurrences": 6,
+      "exercise_ids": [
+        "math:intermediate_algebra:305-3fe0c62bfb66",
+        "math:intermediate_algebra:78-1cce36effe03"
+      ]
+    },
+    {
+      "reason": "KaTeX parse error: Double subscript",
+      "occurrences": 6,
+      "exercise_ids": [
+        "olympiadbench:OE_TO_maths_zh_CEE:3163"
+      ]
+    },
+    {
+      "reason": "KaTeX parse error: Unknown column alignment: *",
+      "occurrences": 2,
+      "exercise_ids": [
+        "math:number_theory:1-130ac561eb6b"
+      ]
+    },
+    {
+      "reason": "KaTeX parse error: Undefined control sequence: \\DeltaA",
+      "occurrences": 2,
+      "exercise_ids": [
+        "numinamath:cn_contest:3733-348676a8a7d4"
+      ]
+    },
+    {
+      "reason": "KaTeX parse error: Can't use function '$' in math mode",
+      "occurrences": 2,
+      "exercise_ids": [
+        "numinamath:cn_contest:4042-56276ca2683d"
+      ]
+    }
+  ],
+  "word_failures": [
+    {
+      "reason": "Unsupported array column specification",
+      "occurrences": 30,
+      "exercise_ids": [
+        "math:number_theory:1-130ac561eb6b",
+        "math:number_theory:10-54b44607b98c",
+        "math:number_theory:101-49ca9e6ff3f0",
+        "math:number_theory:138-35293187f3ff",
+        "math:number_theory:162-a376dda82515",
+        "math:number_theory:163-c813f47835cd",
+        "math:number_theory:22-3eae889193c6",
+        "math:number_theory:25-992ce393b16c",
+        "math:number_theory:37-b5c71574957f",
+        "math:number_theory:58-5f89e7cf1f3e",
+        "math:number_theory:99-c9f4b37ba1dc",
+        "math:prealgebra:210-60a34c09b7ac",
+        "math:prealgebra:271-3dcf6f6bd4c4"
+      ]
+    },
+    {
+      "reason": "Unsupported TeX command: \\multicolumn",
+      "occurrences": 6,
+      "exercise_ids": [
+        "math:intermediate_algebra:305-3fe0c62bfb66",
+        "math:intermediate_algebra:78-1cce36effe03"
+      ]
+    },
+    {
+      "reason": "Invalid or unsupported formula",
+      "occurrences": 6,
+      "exercise_ids": [
+        "olympiadbench:OE_TO_maths_zh_CEE:3163"
+      ]
+    },
+    {
+      "reason": "Unsupported TeX command: \\",
+      "occurrences": 2,
+      "exercise_ids": [
+        "numinamath:cn_k12:2179-77a2ca7870ad"
+      ]
+    },
+    {
+      "reason": "Unsupported TeX command: \\DeltaA",
+      "occurrences": 2,
+      "exercise_ids": [
+        "numinamath:cn_contest:3733-348676a8a7d4"
+      ]
+    }
+  ],
+  "word_layout_warning_occurrences": 16,
+  "word_layout_warnings": [
+    {
+      "reason": "Array horizontal rules may be omitted",
+      "occurrences": 16,
+      "exercise_ids": [
+        "math:algebra:350-ecab41198609",
+        "math:algebra:90-f85545e393e0",
+        "math:counting_and_probability:31-5dc24fdcec80",
+        "math:intermediate_algebra:223-64489c149eb0",
+        "math:intermediate_algebra:245-bcc527028e60",
+        "math:intermediate_algebra:3-c174c1620e2a",
+        "numinamath:cn_contest:3396-106e2c692e73"
+      ]
+    }
+  ]
+}

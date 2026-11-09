@@ -9,8 +9,12 @@
  * - 块尾保留空行,拼回去与原文逐字相同,pre-wrap 的段落间距不变;
  * - 未闭合的代码围栏/公式会留在最后一块,等闭合后再成为稳定块。
  */
+import { isolateMath, restoreMathSource } from './mathIsolation'
+
 export function splitStableBlocks(text: string): string[] {
   if (!text) return []
+  const isolated = isolateMath(text)
+  text = isolated.text
 
   const blocks: string[] = []
   let start = 0
@@ -57,5 +61,5 @@ export function splitStableBlocks(text: string): string[] {
   }
 
   if (start < text.length) blocks.push(text.slice(start))
-  return blocks
+  return blocks.map(block => restoreMathSource(block, isolated.formulas))
 }

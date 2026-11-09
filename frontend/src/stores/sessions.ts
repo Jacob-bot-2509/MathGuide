@@ -75,6 +75,8 @@ export interface ChatSession {
   id: number
   cat?: { key: string; label: string; color: string }
   messages: ChatMsg[]
+  /** 图谱知识点讲解会话:后续每条消息都携带该 id */
+  pointId?: string
 }
 
 export interface SessionsState {
@@ -106,7 +108,7 @@ interface PersistedMsg {
 }
 
 interface Persisted {
-  sessions: Array<{ id: number; cat?: ChatSession['cat']; messages: PersistedMsg[] }>
+  sessions: Array<{ id: number; cat?: ChatSession['cat']; pointId?: string; messages: PersistedMsg[] }>
   activeId: number
   msgId: number
   sessionId: number
@@ -142,6 +144,7 @@ function load(key: string): Persisted {
             .filter((s) => s && Array.isArray(s.messages))
             .map((s) => ({
               ...s,
+              pointId: typeof s.pointId === 'string' ? s.pointId.slice(0, 64) : undefined,
               messages: s.messages
                 .filter((m) => m && typeof m === 'object')
                 .map((m) => ({
@@ -193,6 +196,7 @@ function createSessionStore(workspace: Workspace): SessionStore {
         sessions: state.sessions.map((s) => ({
           id: s.id,
           cat: s.cat,
+          pointId: s.pointId,
           messages: s.messages
             .filter((m) => m && typeof m === 'object')
             .map((m) => ({

@@ -19,6 +19,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 import doc
+import math_render
 import rag
 from chat import _rate_check, _record, require_auth
 from http_utils import read_json_object
@@ -44,6 +45,7 @@ def _clean_text(value: object, limit: int) -> str:
 
 def _clean_markdown(text: str) -> str:
     """PDF 渲染器只认纯文本 + LaTeX;去掉 LLM/原回答里的 Markdown 标记。"""
+    text, formulas = math_render.isolate(text)
     text = re.sub(r"```[^\n]*\n?", "", text)
     text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text, flags=re.M)
     text = re.sub(r"^\s*---\s*$", "", text, flags=re.M)
@@ -51,13 +53,14 @@ def _clean_markdown(text: str) -> str:
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
     text = text.replace("**", "").replace("__", "")
     text = re.sub(r"^\s*[-*]\s+", "• ", text, flags=re.M)
-    return text.strip()
+    return math_render.restore(text.strip(), formulas)
 
 
 def _paragraphs(text: str) -> list[str]:
+    text, formulas = math_render.isolate(text)
     text = _clean_markdown(text)
     parts = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    return parts or ([text] if text else [])
+    return [math_render.restore(part, formulas) for part in parts] or ([math_render.restore(text, formulas)] if text else [])
 
 
 def _format(value: object) -> str:
@@ -99,13 +102,13 @@ def _qa_document(items: list[dict], lang: str, source: str) -> dict:
 def _markdown(document: dict, lang: str) -> str:
     d = doc._normalize_doc(document, "", lang)
     zh = lang == "zh"
-    lines = [f"# {d['title']}", ""]
+    lines = [f"# {math_render.markdown(d['title'])}", ""]
     if d.get("abstract"):
-        lines += [f"> {d['abstract']}", ""]
+        lines += [f"> {math_render.markdown(d['abstract'])}", ""]
     for section in d.get("sections", []):
-        lines += [f"## {section['heading']}", ""]
+        lines += [f"## {math_render.markdown(section['heading'])}", ""]
         for paragraph in section.get("paragraphs", []):
-            lines += [paragraph, ""]
+            lines += [math_render.markdown(paragraph), ""]
     if d.get("references"):
         lines += [f"## {'参考依据' if zh else 'References'}", ""]
         for ref in d["references"]:
@@ -119,13 +122,24 @@ def _docx_bytes(document: dict, lang: str) -> bytes:
 
     d = doc._normalize_doc(document, "", lang)
     out = Document()
-    out.add_heading(d["title"], level=0)
+
+    def add_text(paragraph, text):
+        for is_math, _display, value in math_render.segments(text):
+            if is_math:
+                try:
+                    paragraph._p.append(math_render.to_omml(value))
+                except (ValueError, KeyError, IndexError):
+                    paragraph.add_run(value)
+            else:
+                paragraph.add_run(value)
+
+    add_text(out.add_heading(level=0), d["title"])
     if d.get("abstract"):
-        out.add_paragraph(d["abstract"])
+        add_text(out.add_paragraph(), d["abstract"])
     for section in d.get("sections", []):
-        out.add_heading(section["heading"], level=1)
+        add_text(out.add_heading(level=1), section["heading"])
         for paragraph in section.get("paragraphs", []):
-            out.add_paragraph(paragraph)
+            add_text(out.add_paragraph(), paragraph)
     if d.get("references"):
         out.add_heading("参考依据" if lang == "zh" else "References", level=1)
         for ref in d["references"]:
@@ -146,7 +160,10 @@ async def _render(document: dict, lang: str, fmt: str, prefix: str) -> Response:
     elif fmt == "md":
         data, media, ext = _markdown(document, lang).encode("utf-8"), "text/markdown; charset=utf-8", "md"
     else:
-        data = await asyncio.to_thread(_docx_bytes, document, lang)
+        try:
+            data = await asyncio.to_thread(_docx_bytes, document, lang)
+        except (ValueError, KeyError, IndexError) as exc:
+            return JSONResponse({"detail": f"Formula cannot be converted to Word: {exc}"}, status_code=422)
         media, ext = "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"
     filename = f"{prefix}-{time.strftime('%Y%m%d')}.{ext}"
     return Response(data, media_type=media,

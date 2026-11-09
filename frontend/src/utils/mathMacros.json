@@ -1,0 +1,88 @@
+{
+
+  "\\dee": "\\mathrm{d}#1",
+
+  "\\pdiff": "\\frac{\\partial #1}{\\partial #2}",
+
+  "\\Set": "\\left\\{#1\\mid #2\\right\\}",
+  "\\set": "\\left\\{#1\\mid #2\\right\\}",
+
+  "\\dblInt": "\\iint",
+
+  "\\tripInt": "\\iiint",
+
+  "\\vF": "\\mathbf{F}",
+
+  "\\vr": "\\mathbf{r}",
+
+  "\\vnabla": "\\boldsymbol{\\nabla}",
+
+  "\\hn": "\\hat{\\mathbf{n}}",
+
+  "\\hi": "\\hat{\\mathbf{i}}",
+
+  "\\hj": "\\hat{\\mathbf{j}}",
+
+  "\\hk": "\\hat{\\mathbf{k}}",
+
+  "\\ds": "\\displaystyle",
+
+  "\\diff": "\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}",
+
+  "\\overparen": "\\overset{\\frown}{#1}",
+
+  "\\mbox": "\\text{#1}",
+
+  "\\bbbr": "\\mathbb{R}",
+
+  "\\vZero": "\\mathbf{0}",
+
+  "\\half": "\\frac{1}{2}",
+
+  "\\perpendicular": "\\perp",
+
+  "\\Om": "\\Omega",
+  "\\cancelto": "\\overset{\\nearrow #1}{\\cancel{#2}}",
+  "\\Atop": "\\substack{#1\\\\#2}",
+  "\\knowl": "#2",
+  "\\PageIndex": "#1",
+
+  "\\hN": "\\hat{\\mathbf{N}}",
+
+  "\\hT": "\\hat{\\mathbf{T}}",
+
+  "\\cC": "\\mathcal{C}",
+
+  "\\cD": "\\mathcal{D}",
+
+  "\\cL": "\\mathcal{L}",
+
+  "\\cP": "\\mathcal{P}",
+
+  "\\cR": "\\mathcal{R}",
+
+  "\\cS": "\\mathcal{S}",
+
+  "\\cV": "\\mathcal{V}",
+
+  "\\vA": "\\mathbf{A}",
+
+  "\\vE": "\\mathbf{E}",
+
+  "\\vG": "\\mathbf{G}",
+
+  "\\vH": "\\mathbf{H}",
+
+  "\\vV": "\\mathbf{V}",
+
+  "\\va": "\\mathbf{a}",
+
+  "\\vb": "\\mathbf{b}",
+
+  "\\vc": "\\mathbf{c}",
+
+  "\\vn": "\\mathbf{n}",
+
+  "\\vv": "\\mathbf{v}"
+
+}

@@ -151,3 +151,45 @@ def test_bundled_dataset_is_valid_and_has_about_80_points():
     for point in graph.points.values():
         for prereq in point.prerequisites:
             assert position[prereq] < position[point.id]
+
+
+def test_loads_point_notes(tmp_path):
+    path = _write(tmp_path, "a,集合与映射,函数与极限,1,\n")
+    notes = tmp_path / "notes.json"
+    notes.write_text(
+        '{"a": {"summary": "摘要A", "keyPoints": ["要点1", "要点2"]}}',
+        encoding="utf-8")
+
+    graph = load_graph(path, notes_path=notes)
+
+    assert graph.points["a"].summary == "摘要A"
+    assert graph.points["a"].key_points == ("要点1", "要点2")
+
+
+def test_rejects_unknown_note_id(tmp_path):
+    path = _write(tmp_path, "a,集合与映射,函数与极限,1,\n")
+    notes = tmp_path / "notes.json"
+    notes.write_text(
+        '{"ghost": {"summary": "x", "keyPoints": []}}', encoding="utf-8")
+
+    with pytest.raises(KnowledgeGraphError, match="笔记.*不存在"):
+        load_graph(path, notes_path=notes)
+
+
+def test_rejects_bad_note_shape(tmp_path):
+    path = _write(tmp_path, "a,集合与映射,函数与极限,1,\n")
+    notes = tmp_path / "notes.json"
+    notes.write_text(
+        '{"a": {"summary": 1, "keyPoints": "x"}}', encoding="utf-8")
+
+    with pytest.raises(KnowledgeGraphError, match="笔记"):
+        load_graph(path, notes_path=notes)
+
+
+def test_missing_notes_file_keeps_empty_content(tmp_path):
+    path = _write(tmp_path, "a,集合与映射,函数与极限,1,\n")
+
+    graph = load_graph(path, notes_path=tmp_path / "absent.json")
+
+    assert graph.points["a"].summary == ""
+    assert graph.points["a"].key_points == ()

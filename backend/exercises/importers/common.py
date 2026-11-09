@@ -6,12 +6,18 @@ import re
 from dataclasses import replace
 from typing import Any
 
+import math_render
+
 from .. import schema
 from ..gate import gate_exercise
 
 _CJK_RE = re.compile(r"[㐀-鿿]")
 _IMAGE_RE = re.compile(r"<image[_0-9]*>", re.I)
-_TAG_RE = re.compile(r"</?[A-Za-z][^<>]{0,24}>")
+_TAG_RE = re.compile(
+    r"</?(?:a|abbr|b|blockquote|body|br|code|dd|div|dl|dt|em|h[1-6]|html|i|li|ol|p|pre|script|span|strong|sub|sup|table|tbody|td|th|thead|tr|u|ul)"
+    r"(?:\s+[A-Za-z_:][\w:.-]*\s*=\s*(?:\"[^\"<>]*\"|'[^'<>]*'|[^\s<>]+))*\s*/?>",
+    re.I,
+)
 _LEAK_RES = (
     re.compile(r"请提供需要翻译的[^。\n]{0,40}。?"),
     re.compile(r"请?保留源文本的换行和格式[^。\n]{0,40}。?"),
@@ -35,10 +41,11 @@ _LEAK_MARK_RE = re.compile(
 
 def clean_text(text: str) -> str:
     """去掉源数据里的 HTML 标签、实体与翻译提示词残留。"""
-    value = html.unescape(_TAG_RE.sub("", text or ""))
+    protected, formulas = math_render.isolate(text or "")
+    value = _TAG_RE.sub("", protected)
     for pattern in _LEAK_RES:
         value = pattern.sub(" ", value)
-    return " ".join(value.split())
+    return html.unescape(math_render.restore(" ".join(value.split()), formulas))
 
 
 def has_leak(text: str) -> bool:
