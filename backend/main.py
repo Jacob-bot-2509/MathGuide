@@ -181,6 +181,7 @@ routes = [
     Route("/api/doc/qa", docgen.qa_export, methods=["POST"]),
     Route("/api/doc/outline", docgen.outline, methods=["POST"]),
     Route("/api/doc/generate", docgen.generate, methods=["POST"]),
+    Route("/api/doc/revise", docgen.revise, methods=["POST"]),
     Route("/api/doc/render", docgen.render, methods=["POST"]),
     Route("/api/doc/exercise/plan", exercise_docgen.plan, methods=["POST"]),
     Route("/api/doc/exercise", exercise_docgen.generate, methods=["POST"]),

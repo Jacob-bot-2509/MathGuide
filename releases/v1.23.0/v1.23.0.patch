@@ -1,0 +1,624 @@
+diff --git a/backend/docgen.py b/backend/docgen.py
+index 0bcb742..092fad4 100644
+--- a/backend/docgen.py
++++ b/backend/docgen.py
+@@ -9,6 +9,7 @@
+ from __future__ import annotations
+ 
+ import asyncio
++import json
+ import re
+ import time
+ from io import BytesIO
+@@ -481,6 +482,88 @@ async def generate(request: Request) -> JSONResponse:
+     return JSONResponse({"document": document, "gaps": gaps})
+ 
+ 
++def _revision_system(lang: str) -> str:
++    if lang == "en":
++        return (
++            "You revise an existing structured document. Apply ONLY the user's "
++            "revision instruction. Do not invent facts, theorems, numbers or citations. "
++            "Keep the references array unchanged. Output strict JSON with this shape: "
++            '{"title": string, "abstract": string, "keywords": [string], '
++            '"sections": [{"heading": string, "paragraphs": [string]}]}. '
++            "No markdown code fences, no commentary."
++        )
++    return (
++        "你是文档修订助手。只按用户的修改要求调整现有结构化文档,"
++        "不得编造事实、定理、数字或引用;references 数组必须原样保留。"
++        "只输出严格 JSON:{\"title\":字符串,\"abstract\":字符串,"
++        "\"keywords\":[字符串],\"sections\":[{\"heading\":字符串,"
++        "\"paragraphs\":[字符串]}]}。不要 markdown 代码块,不要解释。"
++    )
++
++
++def _revise_document(raw, fallback: dict, lang: str) -> dict | None:
++    if not isinstance(raw, dict):
++        return None
++    sections = []
++    for item in (raw.get("sections") if isinstance(raw.get("sections"), list) else [])[:MAX_SECTIONS]:
++        if not isinstance(item, dict):
++            continue
++        heading = _clean_text(item.get("heading"), 120)
++        paragraphs = [
++            _clean_text(paragraph, 4000)
++            for paragraph in (item.get("paragraphs") if isinstance(item.get("paragraphs"), list) else [])
++            if _clean_text(paragraph, 4000)
++        ][:20]
++        if heading and paragraphs:
++            sections.append({"heading": heading, "paragraphs": paragraphs})
++    if not sections:
++        return None
++    keywords = [
++        _clean_text(keyword, 40)
++        for keyword in (raw.get("keywords") if isinstance(raw.get("keywords"), list) else [])
++        if _clean_text(keyword, 40)
++    ][:10]
++    return {
++        "title": _clean_text(raw.get("title"), 120) or fallback.get("title", ""),
++        "abstract": _clean_text(raw.get("abstract"), 1200),
++        "keywords": keywords,
++        "sections": sections,
++        "references": fallback.get("references", []),
++    }
++
++
++async def revise(request: Request) -> JSONResponse:
++    """按用户修改要求重写已生成的文档;证据与引用不改。"""
++    rec = require_auth(request)
++    _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
++    body = await read_json_object(request)
++    document = body.get("document")
++    instruction = _clean_text(body.get("request"), 1000)
++    if (not isinstance(document, dict)
++            or not isinstance(document.get("sections"), list)
++            or not document["sections"] or not instruction):
++        return JSONResponse({"detail": "empty document or request"}, status_code=400)
++    if len(json.dumps(document, ensure_ascii=False)) > 60000:
++        return JSONResponse({"detail": "document too large"}, status_code=413)
++    if not rag.llm.is_configured():
++        return JSONResponse({"error": "llm_unavailable"}, status_code=503)
++    lang = _lang(body.get("lang"), instruction)
++    user = json.dumps({
++        "document": document,
++        "instruction": instruction,
++    }, ensure_ascii=False)
++    try:
++        raw = await _collect_llm(_revision_system(lang), user, max_tokens=4000)
++        parsed = doc._extract_json(raw)
++    except Exception as exc:  # noqa: BLE001
++        print(f"[docgen] 文档修订失败: {exc}")
++        return JSONResponse({"error": "revision_failed"}, status_code=502)
++    revised = _revise_document(parsed, document, lang)
++    if not revised:
++        return JSONResponse({"error": "revision_failed"}, status_code=422)
++    return JSONResponse({"document": revised})
++
++
+ async def render(request: Request) -> Response | JSONResponse:
+     """把前端已生成的结构化文档导出为 PDF/Markdown/Word。"""
+     rec = require_auth(request)
+diff --git a/backend/exercise_docgen.py b/backend/exercise_docgen.py
+index 97e2117..c91b1f5 100644
+--- a/backend/exercise_docgen.py
++++ b/backend/exercise_docgen.py
+@@ -1,6 +1,9 @@
+ """习题集生成:按板块/难度/语言抽题,输出可交给 doc.render 的段落式文档。
+ 
+ 不调用 LLM,不改写题目;缺译默认排除,allowPartial 时才保留原文并标注。
++
++当前题库绑定:临时题库(bilingual/all.jsonl + staging)作为正式后端库使用;
++人工复验完成后替换为 verified 数据即可,接口与前端无需改动。
+ """
+ from __future__ import annotations
+ 
+@@ -16,7 +19,7 @@ from exercises.store import ExerciseStore, tiers_from_env
+ from exercises.taxonomy import CATEGORY_KEYS
+ from http_utils import read_json_object
+ 
+-DATA_DIR = Path(__file__).resolve().parent / "data" / "exercises" / "final"
++DATA_DIR = Path(__file__).resolve().parent / "data" / "exercises" / "staging"
+ BILINGUAL_FILE = Path(__file__).resolve().parent / "data" / "exercises" / "bilingual" / "all.jsonl"
+ MAX_COUNT = 100
+ MODES = ("questions", "answers", "solutions", "combined")
+diff --git a/backend/main.py b/backend/main.py
+index cd813a5..fb6a30c 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -181,6 +181,7 @@ routes = [
+     Route("/api/doc/qa", docgen.qa_export, methods=["POST"]),
+     Route("/api/doc/outline", docgen.outline, methods=["POST"]),
+     Route("/api/doc/generate", docgen.generate, methods=["POST"]),
++    Route("/api/doc/revise", docgen.revise, methods=["POST"]),
+     Route("/api/doc/render", docgen.render, methods=["POST"]),
+     Route("/api/doc/exercise/plan", exercise_docgen.plan, methods=["POST"]),
+     Route("/api/doc/exercise", exercise_docgen.generate, methods=["POST"]),
+diff --git a/backend/tests/test_docgen.py b/backend/tests/test_docgen.py
+index 2f5a356..27f286c 100644
+--- a/backend/tests/test_docgen.py
++++ b/backend/tests/test_docgen.py
+@@ -1,6 +1,7 @@
+ """docgen.py:问答提取、问答/文档渲染、严格依据的大纲与分节生成。"""
+ from __future__ import annotations
+ 
++import json
+ from types import SimpleNamespace
+ 
+ import pytest
+@@ -23,6 +24,7 @@ def client(monkeypatch):
+         Route("/api/doc/qa", docgen.qa_export, methods=["POST"]),
+         Route("/api/doc/outline", docgen.outline, methods=["POST"]),
+         Route("/api/doc/generate", docgen.generate, methods=["POST"]),
++        Route("/api/doc/revise", docgen.revise, methods=["POST"]),
+         Route("/api/doc/render", docgen.render, methods=["POST"]),
+     ])
+     with TestClient(app, raise_server_exceptions=False) as c:
+@@ -142,3 +144,53 @@ def test_clean_markdown_strips_visible_syntax_not_math():
+     assert "[是]" not in cleaned and "cmd://" not in cleaned
+     assert "$f'(x)$" in cleaned
+     assert "• 条目" in cleaned
++
++
++def test_revise_document_applies_user_instruction(client, monkeypatch):
++    monkeypatch.setattr(docgen.rag.llm, "is_configured", lambda: True)
++    seen: dict[str, str] = {}
++
++    async def fake_collect(system, user, **kwargs):
++        seen["system"] = system
++        seen["user"] = user
++        return json.dumps({
++            "title": "导数速览",
++            "abstract": "按用户要求压缩后的摘要。",
++            "sections": [{
++                "heading": "导数",
++                "paragraphs": ["导数是瞬时变化率。"],
++            }],
++            "references": [],
++        }, ensure_ascii=False)
++
++    monkeypatch.setattr(docgen, "_collect_llm", fake_collect)
++    document = {
++        "title": "一个很长的原始标题",
++        "abstract": "原始摘要",
++        "sections": [{"heading": "导数", "paragraphs": ["原始正文"]}],
++        "references": [],
++    }
++    res = client.post("/api/doc/revise", json={
++        "document": document,
++        "request": "把标题改短,摘要也压缩一下",
++        "lang": "zh",
++    })
++
++    assert res.status_code == 200
++    revised = res.json()["document"]
++    assert revised["title"] == "导数速览"
++    assert revised["sections"][0]["paragraphs"] == ["导数是瞬时变化率。"]
++    assert "把标题改短" in seen["user"]
++    assert "原始正文" in seen["user"]
++
++
++def test_revise_document_requires_content_and_llm(client, monkeypatch):
++    assert client.post("/api/doc/revise", json={
++        "document": {"sections": []}, "request": "改",
++    }).status_code == 400
++    monkeypatch.setattr(docgen.rag.llm, "is_configured", lambda: False)
++    res = client.post("/api/doc/revise", json={
++        "document": {"sections": [{"heading": "A", "paragraphs": ["x"]}]},
++        "request": "改",
++    })
++    assert res.status_code == 503
+diff --git a/docs/EXERCISE_BANK_STATUS.md b/docs/EXERCISE_BANK_STATUS.md
+index 5ffca3b..e0a93b9 100644
+--- a/docs/EXERCISE_BANK_STATUS.md
++++ b/docs/EXERCISE_BANK_STATUS.md
+@@ -1,10 +1,11 @@
+-# 习题题库状态（临时使用）
++# 习题题库状态（临时题库，已绑定为后端正式库）
+ 
+-- 更新：2026-11-08
++- 更新：2026-11-09
+ - 数据：`backend/data/exercises/bilingual/all.jsonl`（gitignored，需单独投放）
+ - 来源级单语文件：`backend/data/exercises/staging/{kuttler,clp,clp2}.jsonl` 与对应 `.manifest.json`
+ - 补题合并结果：`backend/data/exercises/supplement/all.jsonl`
+-- 定位：供实验/内测临时使用的题库；**人工复验未完成**，不可用于正式评分或对外承诺正确率。
++- 绑定状态：当前临时题库已作为文档生成的后端正式库使用；接口和前端不再区分“临时/正式”。
++- 定位：人工复验未完成；复验完成后把通过项替换为 `verified` 数据即可，不需要改接口。
+ 
+ ## 1. 规模
+ 
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index e891ea2..4fe7bc9 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "mathguide-frontend",
+-  "version": "1.22.0",
++  "version": "1.23.0",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "mathguide-frontend",
+-      "version": "1.22.0",
++      "version": "1.23.0",
+       "dependencies": {
+         "gsap": "^3.13.0",
+         "katex": "^0.16.22",
+diff --git a/frontend/package.json b/frontend/package.json
+index 1c7f70e..300c8b3 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "mathguide-frontend",
+   "private": true,
+-  "version": "1.22.0",
++  "version": "1.23.0",
+   "type": "module",
+   "scripts": {
+     "dev": "vite",
+diff --git a/frontend/src/components/chat/DocModal.vue b/frontend/src/components/chat/DocModal.vue
+index db43e5c..35b948c 100644
+--- a/frontend/src/components/chat/DocModal.vue
++++ b/frontend/src/components/chat/DocModal.vue
+@@ -7,6 +7,7 @@
+  */
+ import { computed, nextTick, ref } from 'vue'
+ import { statusOf } from '@/api/http'
++import MathText from '@/components/chat/MathText.vue'
+ import { downloadBlob } from '@/services/docService'
+ import {
+   exportQaDocument,
+@@ -16,6 +17,7 @@ import {
+   planExercises,
+   renderDocument,
+   requestOutline,
++  reviseDocument,
+   type DocFormat,
+   type DocOutline,
+   type DocQuestion,
+@@ -31,7 +33,7 @@ import { showToast } from '@/utils/toast'
+ const props = defineProps<{ messages: ChatMsg[]; entries: NotebookEntry[] }>()
+ const emit = defineEmits<{ close: [] }>()
+ 
+-type Step = 'choose' | 'reading' | 'chat' | 'notebook' | 'custom' | 'outlining' | 'outline' | 'generating' | 'done'
++type Step = 'choose' | 'reading' | 'chat' | 'notebook' | 'custom' | 'outlining' | 'outline' | 'generating' | 'preview' | 'done'
+ 
+ interface SectionDraft {
+   heading: string
+@@ -61,6 +63,8 @@ const drafts = ref<SectionDraft[]>([])
+ const generated = ref<StructuredDocument | null>(null)
+ const gaps = ref<string[]>([])
+ const format = ref<DocFormat>('pdf')
++const previewKind = ref<'document' | 'exercise'>('document')
++const revision = ref('')
+ 
+ const EXERCISE_TOPICS = [
+   { key: 'analysis', zh: '数学分析', en: 'Mathematical Analysis' },
+@@ -206,10 +210,11 @@ function generateExercise(): void {
+         step.value = 'custom'
+         return
+       }
+-      const file = await renderDocument(result.document, lang.value, format.value)
+-      downloadBlob(file.blob, file.filename)
+-      step.value = 'done'
+-      showToast(t('doc.done'))
++      generated.value = result.document
++      gaps.value = result.gaps
++      previewKind.value = 'exercise'
++      revision.value = ''
++      step.value = 'preview'
+     } catch (err) {
+       error.value = errorText(err, t('doc.failed'))
+       step.value = 'custom'
+@@ -372,13 +377,55 @@ function confirmOutline(): void {
+       const result = await generateDocument(customRequest.value, plan, lang.value)
+       generated.value = result.document
+       gaps.value = result.gaps
+-      const file = await renderDocument(result.document, lang.value, format.value)
++      previewKind.value = 'document'
++      revision.value = ''
++      step.value = 'preview'
++    } catch (err) {
++      error.value = errorText(err, t('doc.failed'))
++      step.value = 'outline'
++    } finally {
++      busy.value = false
++      focusPanel()
++    }
++  })()
++}
++
++/** 预览阶段让模型按用户要求修改;引用与依据由后端保留。 */
++function revisePreview(): void {
++  if (!generated.value || !revision.value.trim() || busy.value) return
++  clearError()
++  busy.value = true
++  focusPanel()
++  void (async () => {
++    try {
++      const result = await reviseDocument(
++        generated.value!, revision.value.trim(), lang.value)
++      generated.value = result.document
++      revision.value = ''
++      showToast(t('doc.revised'))
++    } catch (err) {
++      error.value = errorText(err, t('doc.reviseFail'))
++    } finally {
++      busy.value = false
++      focusPanel()
++    }
++  })()
++}
++
++/** 用户确认预览后才真正导出文件。 */
++function exportPreview(): void {
++  if (!generated.value || busy.value) return
++  clearError()
++  busy.value = true
++  focusPanel()
++  void (async () => {
++    try {
++      const file = await renderDocument(generated.value!, lang.value, format.value)
+       downloadBlob(file.blob, file.filename)
+       step.value = 'done'
+       showToast(t('doc.done'))
+     } catch (err) {
+       error.value = errorText(err, t('doc.failed'))
+-      step.value = 'outline'
+     } finally {
+       busy.value = false
+       focusPanel()
+@@ -415,6 +462,8 @@ function reset(): void {
+   generated.value = null
+   gaps.value = []
+   exercisePlan.value = null
++  previewKind.value = 'document'
++  revision.value = ''
+   focusPanel()
+ }
+ 
+@@ -703,6 +752,63 @@ focusPanel()
+             </footer>
+           </template>
+ 
++          <template v-else-if="step === 'preview' && generated">
++            <h2 class="prompt">{{ t('doc.previewTitle') }}</h2>
++            <p class="note">{{ t('doc.previewHint') }}</p>
++            <div class="doc-preview">
++              <h3 class="preview-title"><MathText :text="generated.title" /></h3>
++              <MathText v-if="generated.abstract" :text="generated.abstract" />
++              <p v-if="generated.keywords?.length" class="preview-keywords">
++                <span v-for="keyword in generated.keywords" :key="keyword">#{{ keyword }}</span>
++              </p>
++              <section v-for="(section, index) in generated.sections" :key="index">
++                <h4 class="preview-heading"><MathText :text="section.heading" /></h4>
++                <MathText
++                  v-for="(paragraph, i) in section.paragraphs"
++                  :key="i"
++                  :text="paragraph"
++                />
++              </section>
++              <section v-if="generated.references?.length">
++                <h4 class="preview-heading">{{ t('doc.references') }}</h4>
++                <p v-for="ref in generated.references" :key="ref.id" class="preview-ref">
++                  [{{ ref.id }}] {{ ref.title }} · {{ ref.source }} {{ ref.url || '' }}
++                </p>
++              </section>
++            </div>
++            <label v-if="previewKind === 'document'" class="field">
++              <span>{{ t('doc.reviseLabel') }}</span>
++              <textarea
++                v-model="revision"
++                class="custom-input"
++                rows="3"
++                maxlength="1000"
++                :placeholder="t('doc.revisePh')"
++              ></textarea>
++            </label>
++            <button
++              v-if="previewKind === 'document'"
++              class="btn"
++              :disabled="busy || !revision.trim()"
++              @click="revisePreview"
++            >{{ busy ? t('doc.revising') : t('doc.revise') }}</button>
++            <p v-else class="note">{{ t('doc.exercisePreviewHint') }}</p>
++            <p v-if="gaps.length" class="gaps">{{ t('doc.gaps') }} {{ gaps.join('、') }}</p>
++            <p v-if="error" class="error">{{ error }}</p>
++            <footer class="doc-foot">
++              <button class="btn" :disabled="busy" @click="step = 'custom'">{{ t('doc.back') }}</button>
++              <span class="format">
++                <span class="format-label">{{ t('doc.format') }}</span>
++                <button class="fmt" :class="{ on: format === 'pdf' }" @click="format = 'pdf'">PDF</button>
++                <button class="fmt" :class="{ on: format === 'md' }" @click="format = 'md'">Markdown</button>
++                <button class="fmt" :class="{ on: format === 'docx' }" @click="format = 'docx'">Word</button>
++              </span>
++              <button class="btn btn--primary" :disabled="busy" @click="exportPreview">
++                {{ busy ? t('doc.generating') : t('doc.export') }}
++              </button>
++            </footer>
++          </template>
++
+           <div v-else-if="step === 'generating'" class="loading">
+             <span class="spinner" aria-hidden="true"></span>
+             <p>{{ t('doc.generating') }}</p>
+@@ -733,6 +839,54 @@ focusPanel()
+ </template>
+ 
+ <style scoped>
++.doc-preview {
++  max-height: 42vh;
++  overflow-y: auto;
++  margin: 12px 0;
++  padding: 14px 16px;
++  background: var(--bg-void);
++  border: 1px solid var(--line);
++  border-radius: 9px;
++  color: var(--text);
++  font-size: 12.5px;
++  line-height: 1.75;
++}
++
++.preview-title {
++  margin: 0 0 10px;
++  color: var(--text-hi);
++  font-size: 16px;
++  line-height: 1.45;
++}
++
++.preview-heading {
++  margin: 16px 0 6px;
++  color: var(--cyan);
++  font-size: 13px;
++  font-weight: 500;
++}
++
++.preview-keywords {
++  margin: 8px 0;
++  color: var(--text-dim);
++  font-size: 11px;
++}
++
++.preview-keywords span {
++  margin-right: 8px;
++}
++
++.preview-ref {
++  margin: 4px 0;
++  color: var(--text-dim);
++  font-size: 11px;
++  word-break: break-all;
++}
++
++.doc-preview section + section {
++  border-top: 1px solid var(--line);
++}
++
+ .doc-backdrop {
+   position: fixed;
+   inset: 0;
+diff --git a/frontend/src/services/docgenService.ts b/frontend/src/services/docgenService.ts
+index 49605c9..bffb5d4 100644
+--- a/frontend/src/services/docgenService.ts
++++ b/frontend/src/services/docgenService.ts
+@@ -85,6 +85,16 @@ export function generateDocument(
+   return post<GeneratedDocument>('/api/doc/generate', { request, outline, lang }, authHeaders())
+ }
+ 
++/** 按用户要求修订已生成的文档;引用与证据不改。 */
++export function reviseDocument(
++  document: StructuredDocument,
++  request: string,
++  lang: 'zh' | 'en',
++): Promise<{ document: StructuredDocument }> {
++  return post<{ document: StructuredDocument }>(
++    '/api/doc/revise', { document, request, lang }, authHeaders())
++}
++
+ export interface ExercisePlanRequest {
+   topics: string[]
+   crossTopics?: string[]
+diff --git a/frontend/src/utils/aboutContent.ts b/frontend/src/utils/aboutContent.ts
+index a477909..b110996 100644
+--- a/frontend/src/utils/aboutContent.ts
++++ b/frontend/src/utils/aboutContent.ts
+@@ -6,9 +6,9 @@
+  */
+ 
+ export const APP_NAME = 'MathGuide'
+-export const APP_VERSION = 'v1.22.0'
+-export const APP_STABLE_VERSION = 'v1.22.0'
+-export const APP_STABLE_DATE = '2026-11-08'
++export const APP_VERSION = 'v1.23.0'
++export const APP_STABLE_VERSION = 'v1.23.0'
++export const APP_STABLE_DATE = '2026-11-09'
+ export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
+ export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
+ export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
+@@ -51,6 +51,44 @@ export const RELEASES: ReleaseEntry[] = [
+     version: APP_VERSION,
+     date: APP_STABLE_DATE,
+     status: 'latest',
++    items: [
++      {
++        zh: '文档生成预览:文档和习题集生成后先进入预览,可反复让模型按修改要求重写,满意后再点“生成”导出 PDF、Markdown 或 Word。',
++        en: 'Document preview: generated documents and exercise sets open in a preview first; ask the model to revise them as many times as needed, then export PDF, Markdown or Word only when satisfied.',
++      },
++      {
++        zh: '模型修订:新增 /api/doc/revise,只改文字、不编造事实与引用,references 原样保留;习题集内容来自题库,不允许模型改写。',
++        en: 'Model revision: the new /api/doc/revise endpoint edits prose only, never invents facts or citations and keeps references unchanged; exercise sets stay bank-sourced and are never rewritten.',
++      },
++      {
++        zh: '题库绑定:临时题库(bilingual + staging)作为文档生成的后端正式库启用,加载 research 层 6,776 道双语题;数据仍需单独投放。',
++        en: 'Exercise bank binding: the temporary bank (bilingual + staging) is now the production backend for document generation, loading 6,776 research-tier bilingual exercises; data is still deployed separately.',
++      },
++    ],
++  },
++  {
++    version: 'v1.22.0',
++    date: '2026-11-08',
++    status: 'released',
++    items: [
++      {
++        zh: '知识图谱并入学习辅助:首页只保留学习辅助与科学研究,图谱改为分析面板和结果里的详情入口。',
++        en: 'Knowledge graph merged into Learn: the home page keeps only Learn and Research, while the graph becomes a detail view reached from analysis.',
++      },
++      {
++        zh: '新增学习分析:覆盖度、掌握结构、章节均衡、前置瓶颈、艾宾浩斯待复核与下一步,支持快速自评和 cmd://point 图谱定位。',
++        en: 'Learning analysis: coverage, mastery structure, chapter balance, prerequisite bottlenecks, Ebbinghaus review queue and next steps, with quick self-rating and cmd://point graph links.',
++      },
++      {
++        zh: '生成文档整合:独立要求与习题集合并为同一个自定义生成入口,支持范围、题量、语言与输出模式。',
++        en: 'Document generation integration: custom requests and exercise sets share one form with scope, count, language and output mode.',
++      },
++    ],
++  },
++  {
++    version: 'v1.21.0',
++    date: '2026-11-08',
++    status: 'released',
+     items: [
+       {
+         zh: '论文检索站内阅读:开放获取 PDF 先临时入库再进右栏阅读器;只有 OA 页面的论文由服务端抓取正文,作为临时文本论文在站内阅读;arXiv abs 地址自动转 PDF。',
+diff --git a/frontend/src/utils/i18n.ts b/frontend/src/utils/i18n.ts
+index 76dce0c..1d41cbd 100644
+--- a/frontend/src/utils/i18n.ts
++++ b/frontend/src/utils/i18n.ts
+@@ -178,6 +178,17 @@ const ZH: Dict = {
+   'doc.generating': '正在生成文档…',
+   'doc.done': '文档已生成',
+   'doc.doneHint': '下载已开始。若没有反应,请检查浏览器下载权限。',
++  'doc.previewTitle': '预览文档',
++  'doc.previewHint': '先预览,满意后再生成;不满意可以让模型继续修改。',
++  'doc.reviseLabel': '修改要求',
++  'doc.revisePh': '例如:标题短一点;第二节补一个例子;删掉重复段落',
++  'doc.revise': '让模型修改',
++  'doc.revising': '修改中…',
++  'doc.revised': '预览已更新',
++  'doc.reviseFail': '修改失败,请换个说法重试',
++  'doc.export': '生成',
++  'doc.references': '参考来源',
++  'doc.exercisePreviewHint': '习题集内容直接来自题库,模型不改写;需要调整请返回修改范围或题量。',
+   'doc.failed': '生成失败,请稍后重试',
+   'doc.noEvidence': '没有检索到可依据的知识库内容。请先补充材料或换一个更具体的主题。',
+   'doc.retrievalFailed': '检索失败,请稍后重试',
+@@ -1148,6 +1159,17 @@ const EN: Dict = {
+   'doc.generating': 'Generating document…',
+   'doc.done': 'Document generated',
+   'doc.doneHint': 'Download started. Check your browser download settings if nothing happens.',
++  'doc.previewTitle': 'Preview document',
++  'doc.previewHint': 'Preview first; export when satisfied. You can ask the model to revise it.',
++  'doc.reviseLabel': 'Revision request',
++  'doc.revisePh': 'e.g. shorten the title; add an example to section 2; remove repeated paragraphs',
++  'doc.revise': 'Revise with AI',
++  'doc.revising': 'Revising…',
++  'doc.revised': 'Preview updated',
++  'doc.reviseFail': 'Revision failed; try rephrasing the request.',
++  'doc.export': 'Generate',
++  'doc.references': 'References',
++  'doc.exercisePreviewHint': 'Exercises come directly from the bank and are not rewritten by the model; go back to change scope or count.',
+   'doc.failed': 'Generation failed. Try again.',
+   'doc.noEvidence': 'No knowledge-base evidence found. Add materials or use a more specific topic.',
+   'doc.retrievalFailed': 'Retrieval failed. Try again.',

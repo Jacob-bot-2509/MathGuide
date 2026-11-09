@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from io import BytesIO
@@ -496,6 +497,88 @@ async def generate(request: Request) -> JSONResponse:
     except Exception as exc:  # noqa: BLE001
         print(f"[docgen] 记账失败: {exc}")
     return JSONResponse({"document": document, "gaps": gaps})
+
+
+def _revision_system(lang: str) -> str:
+    if lang == "en":
+        return (
+            "You revise an existing structured document. Apply ONLY the user's "
+            "revision instruction. Do not invent facts, theorems, numbers or citations. "
+            "Keep the references array unchanged. Output strict JSON with this shape: "
+            '{"title": string, "abstract": string, "keywords": [string], '
+            '"sections": [{"heading": string, "paragraphs": [string]}]}. '
+            "No markdown code fences, no commentary."
+        )
+    return (
+        "你是文档修订助手。只按用户的修改要求调整现有结构化文档,"
+        "不得编造事实、定理、数字或引用;references 数组必须原样保留。"
+        "只输出严格 JSON:{\"title\":字符串,\"abstract\":字符串,"
+        "\"keywords\":[字符串],\"sections\":[{\"heading\":字符串,"
+        "\"paragraphs\":[字符串]}]}。不要 markdown 代码块,不要解释。"
+    )
+
+
+def _revise_document(raw, fallback: dict, lang: str) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    sections = []
+    for item in (raw.get("sections") if isinstance(raw.get("sections"), list) else [])[:MAX_SECTIONS]:
+        if not isinstance(item, dict):
+            continue
+        heading = _clean_text(item.get("heading"), 120)
+        paragraphs = [
+            _clean_text(paragraph, 4000)
+            for paragraph in (item.get("paragraphs") if isinstance(item.get("paragraphs"), list) else [])
+            if _clean_text(paragraph, 4000)
+        ][:20]
+        if heading and paragraphs:
+            sections.append({"heading": heading, "paragraphs": paragraphs})
+    if not sections:
+        return None
+    keywords = [
+        _clean_text(keyword, 40)
+        for keyword in (raw.get("keywords") if isinstance(raw.get("keywords"), list) else [])
+        if _clean_text(keyword, 40)
+    ][:10]
+    return {
+        "title": _clean_text(raw.get("title"), 120) or fallback.get("title", ""),
+        "abstract": _clean_text(raw.get("abstract"), 1200),
+        "keywords": keywords,
+        "sections": sections,
+        "references": fallback.get("references", []),
+    }
+
+
+async def revise(request: Request) -> JSONResponse:
+    """按用户修改要求重写已生成的文档;证据与引用不改。"""
+    rec = require_auth(request)
+    _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
+    body = await read_json_object(request)
+    document = body.get("document")
+    instruction = _clean_text(body.get("request"), 1000)
+    if (not isinstance(document, dict)
+            or not isinstance(document.get("sections"), list)
+            or not document["sections"] or not instruction):
+        return JSONResponse({"detail": "empty document or request"}, status_code=400)
+    if len(json.dumps(document, ensure_ascii=False)) > 60000:
+        return JSONResponse({"detail": "document too large"}, status_code=413)
+    if not rag.llm.is_configured():
+        return JSONResponse({"error": "llm_unavailable"}, status_code=503)
+    lang = _lang(body.get("lang"), instruction)
+    user = json.dumps({
+        "document": document,
+        "instruction": instruction,
+    }, ensure_ascii=False)
+    try:
+        raw = await _collect_llm(_revision_system(lang), user, max_tokens=4000)
+        parsed = doc._extract_json(raw)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[docgen] 文档修订失败: {exc}")
+        return JSONResponse({"error": "revision_failed"}, status_code=502)
+    revised = _revise_document(parsed, document, lang)
+    if not revised:
+        return JSONResponse({"error": "revision_failed"}, status_code=422)
+    return JSONResponse({"document": revised})
 
 
 async def render(request: Request) -> Response | JSONResponse:

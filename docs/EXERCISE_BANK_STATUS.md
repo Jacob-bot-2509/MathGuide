@@ -1,10 +1,11 @@
-# 习题题库状态（临时使用）
+# 习题题库状态（临时题库，已绑定为后端正式库）
 
-- 更新：2026-11-08
+- 更新：2026-11-09
 - 数据：`backend/data/exercises/bilingual/all.jsonl`（gitignored，需单独投放）
 - 来源级单语文件：`backend/data/exercises/staging/{kuttler,clp,clp2}.jsonl` 与对应 `.manifest.json`
 - 补题合并结果：`backend/data/exercises/supplement/all.jsonl`
-- 定位：供实验/内测临时使用的题库；**人工复验未完成**，不可用于正式评分或对外承诺正确率。
+- 绑定状态：当前临时题库已作为文档生成的后端正式库使用；接口和前端不再区分“临时/正式”。
+- 定位：人工复验未完成；复验完成后把通过项替换为 `verified` 数据即可，不需要改接口。
 
 ## 1. 规模
 
