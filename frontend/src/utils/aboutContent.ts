@@ -6,9 +6,9 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.22.0'
-export const APP_STABLE_VERSION = 'v1.22.0'
-export const APP_STABLE_DATE = '2026-11-08'
+export const APP_VERSION = 'v1.23.0'
+export const APP_STABLE_VERSION = 'v1.23.0'
+export const APP_STABLE_DATE = '2026-11-09'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
 export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
@@ -51,6 +51,44 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '文档生成预览:文档和习题集生成后先进入预览,可反复让模型按修改要求重写,满意后再点“生成”导出 PDF、Markdown 或 Word。',
+        en: 'Document preview: generated documents and exercise sets open in a preview first; ask the model to revise them as many times as needed, then export PDF, Markdown or Word only when satisfied.',
+      },
+      {
+        zh: '模型修订:新增 /api/doc/revise,只改文字、不编造事实与引用,references 原样保留;习题集内容来自题库,不允许模型改写。',
+        en: 'Model revision: the new /api/doc/revise endpoint edits prose only, never invents facts or citations and keeps references unchanged; exercise sets stay bank-sourced and are never rewritten.',
+      },
+      {
+        zh: '题库绑定:临时题库(bilingual + staging)作为文档生成的后端正式库启用,加载 research 层 6,776 道双语题;数据仍需单独投放。',
+        en: 'Exercise bank binding: the temporary bank (bilingual + staging) is now the production backend for document generation, loading 6,776 research-tier bilingual exercises; data is still deployed separately.',
+      },
+    ],
+  },
+  {
+    version: 'v1.22.0',
+    date: '2026-11-08',
+    status: 'released',
+    items: [
+      {
+        zh: '知识图谱并入学习辅助:首页只保留学习辅助与科学研究,图谱改为分析面板和结果里的详情入口。',
+        en: 'Knowledge graph merged into Learn: the home page keeps only Learn and Research, while the graph becomes a detail view reached from analysis.',
+      },
+      {
+        zh: '新增学习分析:覆盖度、掌握结构、章节均衡、前置瓶颈、艾宾浩斯待复核与下一步,支持快速自评和 cmd://point 图谱定位。',
+        en: 'Learning analysis: coverage, mastery structure, chapter balance, prerequisite bottlenecks, Ebbinghaus review queue and next steps, with quick self-rating and cmd://point graph links.',
+      },
+      {
+        zh: '生成文档整合:独立要求与习题集合并为同一个自定义生成入口,支持范围、题量、语言与输出模式。',
+        en: 'Document generation integration: custom requests and exercise sets share one form with scope, count, language and output mode.',
+      },
+    ],
+  },
+  {
+    version: 'v1.21.0',
+    date: '2026-11-08',
+    status: 'released',
     items: [
       {
         zh: '论文检索站内阅读:开放获取 PDF 先临时入库再进右栏阅读器;只有 OA 页面的论文由服务端抓取正文,作为临时文本论文在站内阅读;arXiv abs 地址自动转 PDF。',
