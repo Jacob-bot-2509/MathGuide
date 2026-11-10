@@ -9,6 +9,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Starfield from '@/components/common/Starfield.vue'
+import MathText from '@/components/chat/MathText.vue'
 import { statusOf } from '@/api/http'
 import {
   exportGraphHtml,
@@ -481,9 +482,9 @@ onBeforeUnmount(() => {
 
         <section>
           <h3>{{ t('graph.mainContent') }}</h3>
-          <p v-if="selected.summary" class="summary">{{ selected.summary }}</p>
+          <MathText v-if="selected.summary" class="summary" :text="selected.summary" />
           <ul v-if="selected.keyPoints?.length" class="key-points">
-            <li v-for="item in selected.keyPoints" :key="item">{{ item }}</li>
+            <li v-for="item in selected.keyPoints" :key="item"><MathText :text="item" /></li>
           </ul>
           <p v-else-if="!selected.summary" class="none">{{ t('graph.noSummary') }}</p>
           <button class="go-learn" @click="goLearn(selected)">{{ t('graph.goLearn') }}</button>

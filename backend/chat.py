@@ -29,6 +29,7 @@ import random
 import re
 import secrets
 import time
+import unicodedata
 from collections import OrderedDict
 
 from starlette.exceptions import HTTPException
@@ -64,6 +65,9 @@ from session_cache import (
 CHUNK = 6          # 直答模式每帧字符数(配合浏览器端 ~24ms 渲染节流)
 FRAME_MS = 0.02    # 帧间隔(秒),模拟真实模型逐字输出
 DIAGRAM_TIMEOUT = 45.0  # 单张图规划上限(秒);3D 采样较慢,但不能无限拖住回答
+# 普通问答检索条数:前 3 条在 prompt 里标「重点」,后 2 条标「备选」。
+# top5 比 top3 多召回金标(旧 48 题:0.667→0.75),但不会全部当同等依据。
+RETRIEVAL_TOP_K = 5
 _DONE = "data: [DONE]\n\n"  # SSE 收尾标记(由 _sse 统一补,生成器不再各自 yield)
 
 WELCOME_ZH = (
@@ -133,13 +137,22 @@ def _is_chinese(text: str) -> bool:
 
 # 深答路由触发词:证明 / 竞赛类问题交给 deep 强模型(未配置自动回退 main)
 _DEEP_MARKERS = ("证明", "求证", "竞赛", "奥数", "难题", "prove", "proof", "olympiad")
+# 多小问标记:一道题里出现 2 个以上,通常比单问计算更吃推理
+_MULTI_PART_RE = re.compile(r"[（(]\s*[1-9一二三四五六七八九]\s*[)）]|[①②③④⑤⑥⑦⑧⑨]")
 
 
 def _pick_role(question: str) -> str:
-    """按需路由 LLM 角色:证明/竞赛 → deep,其余 main(节省成本,好钢用在刀刃上)"""
+    """按需路由 LLM 角色:证明/竞赛/多小问/长综合题 → deep,其余 main。
+    只按规则路由,不做模型分类:规则离线可解释,且不会把简单题误送贵模型。"""
     q = question.lower()
-    role = rag.llm.pick("deep") if any(m in q for m in _DEEP_MARKERS) else "main"
-    print(f"[chat] 角色路由 {role} | 问题长度 {len(question)}")
+    parts = len(_MULTI_PART_RE.findall(question))
+    hard = (
+        any(m in q for m in _DEEP_MARKERS)
+        or parts >= 2
+        or len(question) >= 300
+    )
+    role = rag.llm.pick("deep") if hard else "main"
+    print(f"[chat] 角色路由 {role} | 问题长度 {len(question)} | 小问数 {parts}")
     return role
 
 
@@ -328,11 +341,29 @@ _FOLLOWUP_RE = re.compile(
 )
 
 
+# 检索专用口语前缀:只影响检索词,不改发给模型的 prompt
+_QUERY_FILLER_RE = re.compile(
+    r"^(?:请问|请帮我|帮我|麻烦(?:你)?|我想问(?:一下)?|求解一下|解一下)[,，:：\s]*"
+)
+
+
+def _normalize_query(text: str) -> str:
+    """检索前归一化:全角转半角、LaTeX 定界命令去噪、空白压缩、去口语前缀。
+    只做等价变换,不删题目里的数学内容。"""
+    value = unicodedata.normalize("NFKC", str(text or ""))
+    value = re.sub(r"\\(?:left|right)(?![A-Za-z])", "", value)
+    value = value.replace("−", "-").replace("–", "-")
+    value = re.sub(r"\s+", " ", value).strip()
+    value = _QUERY_FILLER_RE.sub("", value)
+    return value[:500]
+
+
 def _retrieval_query(question: str, history: list[dict] | None) -> str:
     """普通问答的检索词:追问时拼上一轮用户问题,避免「它和积分有什么关系」只检索“积分”。
 
     只影响检索,不改发给模型的 prompt;历史仍按原样交给 LLM。
     """
+    question = _normalize_query(question)
     if not history or not _FOLLOWUP_RE.search(question):
         return question
     previous = next(
@@ -341,7 +372,7 @@ def _retrieval_query(question: str, history: list[dict] | None) -> str:
     )
     if not previous:
         return question
-    return f"{previous} {question}"[:500]
+    return f"{_normalize_query(previous)} {question}"[:500]
 
 
 # 会话滚动摘要:每 8 次请求压缩一次旧对话(便宜模型,失败静默),长对话保持早期上下文。
@@ -636,24 +667,49 @@ def _stream_text(text: str) -> StreamingResponse:
     return _sse(_frames(text))
 
 
-async def _verify_answer(question: str, answer: str, role: str) -> str | None:
-    """双角色验证:解答生成后用另一角色复核,返回一句复核结论(失败返回 None,不打断主回答)"""
+async def _verify_answer(question: str, answer: str, role: str) -> dict | None:
+    """双角色验证:解答生成后用另一角色复核。
+    返回 {"verdict": correct|wrong|uncertain, "issue": ..., "correction": ...};
+    复核不可用时返回 None,不打断主回答。"""
     system = (
-        "你是数学解答复核员。请核查用户问题与给出的解答:判断结论是否正确"
-        "(结论:正确 / 有误 / 需人工复核),并用一句话说明依据。"
-        "不要重算过程,不要输出除结论和一句话依据以外的任何内容。"
+        "你是数学解答复核员。请核查用户问题与给出的解答,只输出一个 JSON 对象,"
+        "不要 Markdown、不要解释。字段:\n"
+        '{"verdict":"correct|wrong|uncertain","issue":"一句话指出问题或依据",'
+        '"correction":"若 verdict=wrong,给出可替换的更正解答;否则留空"}\n'
+        "判断以题目条件和数学定义为准;过程省略但结论正确也算 correct;"
+        "不确定时用 uncertain,不要强行判错。"
     )
-    user = f"问题:{question[:300]}\n\n解答:\n{answer[:1500]}"
+    user = f"问题:{question[:500]}\n\n解答:\n{answer[:4000]}"
     parts: list[str] = []
     try:
-        async for delta in rag.llm.stream_chat(system, user, role=role, thinking=False):
+        async for delta in rag.llm.stream_chat(
+                system, user, role=role, thinking=False, max_tokens=1600,
+                temperature=0):
             parts.append(delta)
-            if sum(len(p) for p in parts) >= 300:
+            if sum(len(p) for p in parts) >= 4000:
                 break
     except Exception:  # noqa: BLE001 复核失败静默跳过,不影响主回答
         return None
     text = "".join(parts).strip()
-    return text[:200] or None
+    if not text:
+        return None
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            verdict = str(data.get("verdict", "")).strip().lower()
+            if verdict not in {"correct", "wrong", "uncertain"}:
+                verdict = "uncertain"
+            return {
+                "verdict": verdict,
+                "issue": str(data.get("issue", "")).strip()[:300],
+                "correction": str(data.get("correction", "")).strip()[:4000],
+            }
+    # 兼容模型只给一句话的情况:不把它当判错
+    return {"verdict": "uncertain", "issue": text[:300], "correction": ""}
 
 
 async def _diagram_verified(question: str, context: str, diagram: dict) -> bool:
@@ -680,7 +736,8 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                    diagram_mode: bool = False, diagram_allowed: bool = True,
                    diagram_question: str = "",
                    diagram_excerpts: list[dict] | None = None,
-                   diagram_request_id: str = ""):
+                   diagram_request_id: str = "",
+                   temperature: float | None = None):
     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
     verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过);
     summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)。
@@ -822,8 +879,11 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             return research_diagrams.diagram_event(
                 diagram, markers.request_id,
                 marker.anchor_id, marker.anchor_index)
+        stream_kwargs = {"history": history, "role": role}
+        if temperature is not None:
+            stream_kwargs["temperature"] = temperature
         if markers is None:
-            async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
+            async for delta in rag.llm.stream_chat(system, prompt, **stream_kwargs):
                 answer.append(delta)
                 yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
         else:
@@ -833,7 +893,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                     {"section": chunk.section, "text": chunk.text}
                     for chunk, _score in chunks
                 ]
-            async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
+            async for delta in rag.llm.stream_chat(system, prompt, **stream_kwargs):
                 clean = markers.feed(delta)
                 if clean:
                     answer.append(clean)
@@ -964,8 +1024,16 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             vrole = "main" if role == "deep" else rag.llm.pick("deep")
             verdict = await _verify_answer(prompt, "".join(answer), vrole)
             if verdict:
-                print(f"[chat] 复核({vrole}): {len(verdict)} 字")
-                yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
+                label = {"correct": "正确", "wrong": "有误",
+                         "uncertain": "需人工复核"}.get(verdict["verdict"], "需人工复核")
+                print(f"[chat] 复核({vrole}): {label} | {len(verdict['issue'])} 字")
+                correction = verdict.get("correction", "")
+                if verdict["verdict"] == "wrong" and correction:
+                    # 更正放在复核行之前:_clean_answer 只剥末尾复核行,更正会保留给评测
+                    yield (f"data: {json.dumps(f'**更正**\n\n{correction}', ensure_ascii=False)}\n\n")
+                issue = verdict.get("issue", "")
+                suffix = f":{issue}" if issue else ""
+                yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}):{label}{suffix}', ensure_ascii=False)}\n\n"
             # 解答完询问是否收录进问题记录(归纳本):前端渲染为「是/否」按钮。
             # 科研区不设问题归纳,不追加该入口。
             if workspace == "learn":
@@ -1919,7 +1987,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     retrieval_query = _retrieval_query(question, history)
     # 检索含 embedding 请求(同步、冷启动可达数十秒)→ 线程池执行,
     # 不阻塞事件循环(否则这段等待会冻住所有并发会话)
-    chunks = await asyncio.to_thread(rag.search, retrieval_query, 3)
+    chunks = await asyncio.to_thread(rag.search, retrieval_query, RETRIEVAL_TOP_K)
 
     # 图谱知识点会话:追问仍带上摘要与要点,排在普通检索资料之前
     if workspace == "learn":
@@ -1959,6 +2027,13 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         # 公式手册第二步(上一条用户消息带澄清标记)强制开启:公式定理作答必须有独立复核
         role = _pick_role(question)
         meta["role"] = role
+        # 评测可显式传 temperature=0 固定随机性;普通请求不传,沿用平台默认
+        raw_temperature = body.get("temperature")
+        temperature = (
+            min(2.0, max(0.0, float(raw_temperature)))
+            if isinstance(raw_temperature, (int, float)) and not isinstance(raw_temperature, bool)
+            else None
+        )
         sid = valid_session_id(body.get("sessionId"))
         verify = bool(chunks) or rag.is_math_question(question) or _is_formula_followup(history)
         summary = get_summary(uid, sid, workspace=workspace) if sid is not None else ""
@@ -1973,7 +2048,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                 {"section": chunk.section, "text": chunk.text}
                 for chunk, _score in chunks
             ],
-            diagram_request_id=secrets.token_hex(8)))
+            diagram_request_id=secrets.token_hex(8),
+            temperature=temperature))
     # 直答模式:
     # ① 检索到相关知识 → 知识直答(专业问询专业回答);
     # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架;

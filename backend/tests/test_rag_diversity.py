@@ -36,3 +36,12 @@ def test_diversity_does_not_change_top_one():
     hits = _index().search("alpha beta", 1)
     assert len(hits) == 1
     assert hits[0][0].title == "Doc A"
+
+
+def test_section_heading_contributes_to_ranking():
+    chunks = [
+        Chunk("a", "Doc", "Doc", "泰勒公式", "普通内容", [], "analysis"),
+        Chunk("b", "Doc", "Doc", "无关章节", "普通内容", [], "analysis"),
+    ]
+    hits = KnowledgeIndex(chunks, None).search("泰勒公式", 1)
+    assert hits[0][0].id == "a"

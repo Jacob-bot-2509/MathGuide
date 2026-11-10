@@ -5,9 +5,10 @@ import runpy
 from pathlib import Path
 
 
-def test_formula_audit_reports_failures_without_changing_source():
+def test_formula_audit_reports_failures_without_changing_source(monkeypatch):
     path = Path(__file__).resolve().parents[2] / "scripts" / "audit" / "formula_render_audit.py"
     module = runpy.run_path(str(path))
+    monkeypatch.setattr(module["math_table_render"], "render_table_image", lambda _tex: (b"image", 1.0))
     records = [{
         "id": "fixture:one",
         "content": {"en": {
@@ -19,8 +20,9 @@ def test_formula_audit_reports_failures_without_changing_source():
     formulas = module["collect_formulas"](records)
     report = module["audit"](formulas)
     assert report["formula_occurrences"] == 3
-    assert report["word_layout_warning_occurrences"] == 1
-    assert report["word_layout_warnings"][0]["exercise_ids"] == ["fixture:one"]
+    assert report["word_layout_warning_occurrences"] == 0
+    assert report["word_image_occurrences"] == 1
+    assert report["word_images"][0]["exercise_ids"] == ["fixture:one"]
     assert report["katex_failed_occurrences"] == 1
     assert report["word_failed_occurrences"] == 1
     assert report["katex_failures"][0]["exercise_ids"] == ["fixture:one"]

@@ -94,6 +94,12 @@ def _warm_embedder() -> None:
         print(f"[rag] embedding 预热失败(不影响启动): {exc}")
 
 
+# 数学题专用向量门限:比闲聊门限低,让具体习题也能召回同主题的概念/方法片段。
+# 0.50 取自 course-50 实测:命中率 top3 0.667→0.708、top5 0.708→0.792;
+# 闲聊句仍在 0.36~0.46,不会越过这条线。换 embedding 模型必须重标。
+MATH_VECTOR_ONLY_MIN = 0.50
+
+
 def search(query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
     """检索相关片段;知识库文件有增删改时自动重建索引后返回。
     重建时 embedding 失败同样降级关键词模式,检索链路永不因向量服务崩断。
@@ -111,7 +117,10 @@ def search(query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
                     _index = _load_index_or_empty()
                 _stamp = _dir_stamp()
                 _terms = _collect_terms(_index)
-    return _index.search(query, top_k)
+    # 数学题放宽向量门限:具体习题常与概念文档语义相关但措辞差异大;
+    # 闲聊/非数学问句仍走严格门限,避免凭空命中知识库。
+    vector_floor = MATH_VECTOR_ONLY_MIN if is_math_question(query) else None
+    return _index.search(query, top_k, vector_only_min=vector_floor)
 
 
 def terms() -> frozenset[str]:
@@ -169,22 +178,29 @@ def build_system(chunks: list[tuple[Chunk, float]], cmd: str | None, zh: bool = 
         "输出规范:"
         "解题时只给推导过程与最终结论,末尾另起一段「**参考思路**」"
         "(2~4 句,讲关键思路与可推广点),不要写形象化类比;"
+        "计算、求值、化简类题目在最后单独一行用 \\boxed{...} 给出最终答案;"
         "解释概念时给定义、成立条件、关键性质和一个最小例子,不主动打比方;"
         "只有用户明确要求通俗、直观、举例或\"听不懂\"时,才使用生活化类比。"
         "语气自然,但不客套、不重复题干、不写与问题无关的铺垫。"
         "对寒暄、闲聊、倾诉等一般对话,像正常人一样回应,不要总把话题拽回数学;"
-        "只有用户明确在问数学问题时,才给出专业解答。",
+        "只有用户明确在问数学问题时,才给出专业解答。"
+        "如果题目引用的定理或对象不存在、条件互相矛盾,直接指出,"
+        "不得编造定义、数值、反例或构造。",
         "一次提问包含若干道题时,逐题给出解答,每题的参考思路紧随该题。",
         "",
-        "以下是从知识库检索到的参考资料,请优先依据它们回答;"
-        "资料不足以回答时,可结合自身数学知识补充,并注明「以下内容超出知识库,仅供参考」。",
+        "以下是检索到的参考资料,可能相关也可能无关:"
+        "与题目无关时直接忽略,不要为了用资料而强行套用;"
+        "确实用到资料时按编号注明。资料不足时,可基于数学定义独立推导;"
+        "使用自身知识补充的部分,注明「以下内容超出知识库,仅供参考」。",
         "",
     ]
     if cmd:
         parts.append(f"用户使用了指令「{cmd}」,请按该指令的功能形态组织回答。")
         parts.append("")
     for i, (c, score) in enumerate(chunks, 1):
-        parts.append(f"【资料{i}】{c.title} · {c.section}(相关度 {score:.1f})")
+        # 前 3 条是排序最高的重点资料,其余是补齐召回的备选;不把 5 条都当同等依据
+        tier = "重点" if i <= 3 else "备选"
+        parts.append(f"【资料{i}·{tier}】{c.title} · {c.section}(相关度 {score:.1f})")
         parts.append(c.text)
         parts.append("")
     return "\n".join(parts).strip()

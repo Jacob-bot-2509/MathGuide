@@ -105,7 +105,8 @@ async def run_answer(item: EvalItem, top_k: int = 3,
         t0 = time.monotonic()
         try:
             resp = await chat_module._route_chat(
-                item.question, None, {}, {"uid": "eval", "nickname": "eval"}, {})
+                item.question, None, {"temperature": 0},
+                {"uid": "eval", "nickname": "eval"}, {})
             text, meta = await asyncio.wait_for(_consume_stream_async(resp), timeout=300)
         except Exception as exc:  # noqa: BLE001
             return AnswerTrace(error=f"{type(exc).__name__}: {exc}",
@@ -136,6 +137,7 @@ async def run_item(item: EvalItem, *, stage: str = "all", top_k: int = 3,
         "answerable": item.answerable,
         "gold_chunk_ids": item.gold_chunk_ids,
         "reference_answer": item.reference_answer,
+        "reference_solution": item.reference_solution,
     }
     if stage == "retrieval":
         # 只测检索:单独跑一次 search,不生成、不评审
@@ -163,11 +165,16 @@ async def run_item(item: EvalItem, *, stage: str = "all", top_k: int = 3,
         return record
 
     objective, detail = objective_check(item, answer.text)
+    strict_objective, strict_detail = objective_check(item, answer.text, strict=True)
     record["objective_correct"] = objective
+    record["objective_correct_strict"] = strict_objective
     record["objective_detail"] = detail
+    record["objective_detail_strict"] = strict_detail
 
     if use_judge:
-        record["judge"] = await judges.judge_answer(item, answer.text, answer.chunks, judge_role)
+        record["judge"] = await judges.judge_answer(
+            item, answer.text, answer.chunks, judge_role,
+            ground_truth_only=bool(item.reference_solution))
     return record
 
 

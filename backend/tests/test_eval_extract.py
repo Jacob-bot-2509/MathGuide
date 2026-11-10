@@ -38,6 +38,15 @@ def test_objective_numeric_and_choice():
     assert objective_check(item, "答案：A")[0] is False
 
 
+def test_objective_numeric_strict_uses_final_answer():
+    item = EvalItem(id="n", question="q", reference_answer="9", answer_type="numeric")
+    # 中间过程出现 9,最终答案写 8:宽松口径会误判对,严格口径必须判错
+    answer = "中间算到 9,最后结果是 8。"
+    assert objective_check(item, answer)[0] is True
+    assert objective_check(item, answer, strict=True)[0] is False
+    assert objective_check(item, "整理得 \\boxed{9}", strict=True)[0] is True
+
+
 def test_objective_numeric_accepts_approximate_reference():
     item = EvalItem(id="a", question="q", reference_answer="约 0.6827",
                     answer_type="numeric")

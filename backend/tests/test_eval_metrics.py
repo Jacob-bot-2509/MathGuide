@@ -33,6 +33,7 @@ def test_metrics_accuracy_hallucination_retrieval():
             "retrieval": {"chunks": [{"id": "c1"}]},
             "judge": {
                 "correct": False,
+                "claim_schema": "truth-v2",
                 "claims": [
                     {"text": "u", "supported": False},
                     {"text": "v", "supported": True},
