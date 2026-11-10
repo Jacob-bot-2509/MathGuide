@@ -56,3 +56,21 @@ def test_judge_stops_after_two_attempts(monkeypatch):
 
     assert "error" in result
     assert calls["n"] == 2
+
+
+def test_judge_uses_reference_solution_and_can_ignore_chunks(monkeypatch):
+    item = EvalItem(id="p", question="证明", answer_type="proof",
+                    reference_answer="Proof", reference_solution="标准推导步骤")
+    captured: dict[str, str] = {}
+
+    async def fake_stream(system, user, **kwargs):
+        captured["user"] = user
+        yield '{"correct": true, "score": 1, "refused": false, "claims": []}'
+
+    monkeypatch.setattr(judges.llm, "is_configured", lambda role: True)
+    monkeypatch.setattr(judges.llm, "stream_chat", fake_stream)
+    asyncio.run(judges.judge_answer(item, "答案", [], role="backup",
+                                    ground_truth_only=True))
+
+    assert "标准推导步骤" in captured["user"]
+    assert "本次判分不使用检索资料" in captured["user"]

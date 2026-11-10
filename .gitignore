@@ -35,3 +35,15 @@ backend/tools/.last_sync
 
 # 独立分析 worker 的本地虚拟环境
 backend/.venv-analysis/
+
+# 教材扫描与内部提取数据：仅内部使用，不入库/不发布
+_analysis_book.pdf
+review_packets/_book_pages/
+review_packets/_vision_*.json
+review_packets/book_extract/pilot*/
+review_packets/book_extract/full*/
+
+review_packets/_incoming_zip/
+review_packets/book_extract/_*.txt
+_zip_p006.jpg
+_our_p006.jpg

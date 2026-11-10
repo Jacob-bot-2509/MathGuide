@@ -11,6 +11,7 @@ class EvalItem:
     id: str
     question: str
     reference_answer: str = ""
+    reference_solution: str = ""   # 完整解答(证明题判分/幻觉判定的金标)
     answer_type: str = "concept"   # concept / numeric / expr / choice / proof / unanswerable
     domain: str = "other"
     difficulty: int = 1

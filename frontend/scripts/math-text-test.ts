@@ -11,6 +11,7 @@
 /* eslint-disable */
 declare const process: { exit(code: number): void }
 
+import { readFileSync } from 'node:fs'
 import { createServer } from 'vite'
 import { renderToString } from 'vue/server-renderer'
 
@@ -45,6 +46,26 @@ async function main() {
       const vnode = h(MathText as never, { text })
       return renderToString(vnode)
     }
+
+    const notes = JSON.parse(readFileSync('../backend/knowledge_graph/data/point_notes.json', 'utf8')) as
+      Record<string, { summary: string, keyPoints: string[] }>
+    const graphIsolation = await server.ssrLoadModule('/src/utils/mathIsolation.ts') as {
+      isolateMath: (text: string) => { text: string, formulas: { pending: boolean }[] }
+    }
+    let graphMathFields = 0
+    const graphFailures: string[] = []
+    for (const [id, note] of Object.entries(notes)) {
+      for (const text of [note.summary, ...note.keyPoints]) {
+        if (!text.includes('$') && !text.includes(String.raw`\(`) && !text.includes(String.raw`\[`)) continue
+        graphMathFields++
+        const isolated = graphIsolation.isolateMath(text)
+        const rendered = await renderComp(text)
+        if (!isolated.formulas.length || isolated.text.includes('$') || isolated.formulas.some((f) => f.pending)
+            || !rendered.includes('katex') || rendered.includes('seg-math-raw')) graphFailures.push(id)
+      }
+    }
+    check('全部知识图谱笔记中的公式可渲染', graphMathFields > 0 && !graphFailures.length,
+      `公式字段 ${graphMathFields}, 失败节点 ${graphFailures.slice(0, 5).join(', ')}`)
 
     // ① \(...\) 行内公式 → KaTeX 渲染
     let html = await renderComp('导数定义:\\(f\'(x)=\\lim_{h\\to 0}\\frac{f(x+h)-f(x)}{h}\\)')

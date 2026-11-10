@@ -5,15 +5,19 @@
 向量相似度与关键词打分混合排序,语义化提问召回率大幅提升;
 未配置时行为与纯关键词模式完全一致。
 """
+import math
 import re
+from collections import Counter
 from typing import Optional
 
 from .documents import Chunk
 from .embed import Embedder
 
-# 打分权重:关键词命中 > 标题重合 > 正文 bigram 重合
-W_KEYWORD = 3.0
+# 打分权重:关键词命中 > 标题重合 > 章节标题重合 > 正文 bigram 重合。
+# 关键词是人工维护的强触发词,必须压过正文里偶发的二元组重合。
+W_KEYWORD = 5.0
 W_TITLE = 2.0
+W_SECTION = 1.5
 W_BODY = 1.0
 # 向量相似度权重(embedding 启用时生效)
 W_VECTOR = 5.0
@@ -47,19 +51,38 @@ def _bigrams(text: str) -> set[str]:
     return {s[i:i + 2] for i in range(len(s) - 1)}
 
 
-def _overlap(q_grams: set[str], t_grams: set[str]) -> float:
+def _overlap(q_grams: set[str], t_grams: set[str],
+             idf: dict[str, float] | None = None) -> float:
     """重合二元组计分:只计含 CJK 字符的二元组。
     纯 ASCII 二元组噪声极大(LaTeX 符号如 \\forall/\\varepsilon 与英文单词频繁撞车),
-    英文相关性完全交给 keywords 词表与 token 匹配承担。"""
-    return float(len({b for b in (q_grams & t_grams) if not b.isascii()}))
+    英文相关性完全交给 keywords 词表与 token 匹配承担。
+    传入 idf 时按逆文档频率加权,压住「函数/性质/定理」这类高频二元组。"""
+    grams = {b for b in (q_grams & t_grams) if not b.isascii()}
+    if idf is None:
+        return float(len(grams))
+    return sum(idf.get(b, 1.0) for b in grams)
 
 
 class KnowledgeIndex:
     def __init__(self, chunks: list[Chunk], embedder: Optional[Embedder] = None):
-        # 预计算每个 chunk 的标题/正文 bigram(检索时不再重复切分)
+        # 预计算每个 chunk 的标题/章节/正文 bigram(检索时不再重复切分)
         self._entries = [
-            (c, _bigrams(c.title + c.title_en), _bigrams(c.text)) for c in chunks
+            (c, _bigrams(c.title + c.title_en), _bigrams(c.section), _bigrams(c.text))
+            for c in chunks
         ]
+        # IDF:同一批知识片段内的文档频率。只统计 CJK 二元组,与 _overlap 口径一致。
+        df: Counter[str] = Counter()
+        for _c, title_grams, section_grams, body_grams in self._entries:
+            for gram in (title_grams | section_grams | body_grams):
+                if not gram.isascii():
+                    df[gram] += 1
+        total = max(1, len(chunks))
+        # 归一化到 [1, 2]:保留稀有词权重,但单个二元组不能压过人工关键词。
+        scale = math.log(total + 1) or 1.0
+        self._idf = {
+            gram: 1.0 + math.log((total + 1) / (count + 1)) / scale
+            for gram, count in df.items()
+        }
         self._embedder = embedder
         self._vectors: list[Optional[list[float]]] = [None] * len(chunks)
         if embedder is not None:
@@ -68,14 +91,15 @@ class KnowledgeIndex:
 
     @staticmethod
     def _embed_text(c: Chunk) -> str:
-        """向量化的文本口径(标题 + 中英标题 + 正文):集中一处,
-        避免装载与重算用了不同拼法导致缓存指纹不匹配"""
-        return f"{c.title} {c.title_en} {c.text}"
+        """向量化的文本口径(标题 + 中英标题 + 章节标题 + 正文):集中一处,
+        避免装载与重算用了不同拼法导致缓存指纹不匹配。
+        章节标题必须进来:长节被切成多片后,单片正文未必重复章节主题词。"""
+        return f"{c.title} {c.title_en} {c.section} {c.text}"
 
     @property
     def chunks(self) -> list[Chunk]:
         """已装载的全部片段(供上层收集触发词等,免去二次解析知识库)"""
-        return [c for c, _, _ in self._entries]
+        return [entry[0] for entry in self._entries]
 
     def _keyword_score(self, chunk: Chunk, q: str) -> float:
         score = 0.0
@@ -119,9 +143,11 @@ class KnowledgeIndex:
             chosen.extend(deferred[:top_k - len(chosen)])
         return chosen
 
-    def search(self, query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
+    def search(self, query: str, top_k: int = 3,
+               vector_only_min: float | None = None) -> list[tuple[Chunk, float]]:
         q = query.lower()
         q_grams = _bigrams(q)
+        floor = VECTOR_ONLY_MIN if vector_only_min is None else vector_only_min
         q_vec = None
         if self._embedder is not None:
             try:
@@ -131,11 +157,12 @@ class KnowledgeIndex:
                 q_vec = None
 
         scored: list[tuple[Chunk, float]] = []
-        for i, (c, title_grams, body_grams) in enumerate(self._entries):
+        for i, (c, title_grams, section_grams, body_grams) in enumerate(self._entries):
             kw = self._keyword_score(c, q)
             score = kw
-            score += W_TITLE * _overlap(q_grams, title_grams)
-            score += W_BODY * _overlap(q_grams, body_grams)
+            score += W_TITLE * _overlap(q_grams, title_grams, self._idf)
+            score += W_SECTION * _overlap(q_grams, section_grams, self._idf)
+            score += W_BODY * _overlap(q_grams, body_grams, self._idf)
 
             if self._embedder is not None and q_vec is not None and self._vectors[i] is not None:
                 cosine = Embedder.cosine(q_vec, self._vectors[i])
@@ -143,7 +170,7 @@ class KnowledgeIndex:
                 if cosine < MIN_COSINE and kw < W_KEYWORD:
                     continue
                 # 无关键词命中 = 只有语义相似度在支撑,需要更强置信度,拦住闲聊噪声
-                if kw <= 0 and cosine < VECTOR_ONLY_MIN:
+                if kw <= 0 and cosine < floor:
                     continue
                 score += W_VECTOR * cosine
 

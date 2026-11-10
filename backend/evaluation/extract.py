@@ -9,7 +9,6 @@ import re
 
 from .types import EvalItem
 
-_BOXED_RE = re.compile(r"\\boxed\s*\{([^{}]+)\}")
 _NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 _ANSWER_CHOICE_RE = re.compile(
     r"(?:正确答案|答案)\s*(?:是|为)?\s*[:：]?\s*([A-Da-d])\b")
@@ -23,8 +22,20 @@ except Exception:  # noqa: BLE001
 
 
 def extract_boxed(text: str) -> str:
-    matches = _BOXED_RE.findall(text)
-    return matches[-1].strip() if matches else ""
+    result = ""
+    for match in re.finditer(r"\\boxed\s*\{", text):
+        result = ""
+        depth = 1
+        pos = match.end()
+        while pos < len(text) and depth:
+            if text[pos] == "\\" and pos + 1 < len(text) and text[pos + 1] in "{}":
+                pos += 2
+                continue
+            depth += (text[pos] == "{") - (text[pos] == "}")
+            pos += 1
+        if depth == 0:
+            result = text[match.end():pos - 1].strip()
+    return result
 
 
 def extract_numbers(text: str) -> list[float]:
@@ -83,8 +94,37 @@ def _sympy_equal(a: str, b: str) -> bool | None:
         return None
 
 
-def objective_check(item: EvalItem, answer: str) -> tuple[bool | None, str]:
-    """返回 (是否正确, 判分说明)。None 表示无法客观判定。"""
+def _strict_scalar(value: str) -> float | None:
+    """Parse a complete numeric value without treating a fraction's denominator as its answer."""
+    import math
+
+    value = value.strip().strip("$").strip()
+    number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+    frac = re.fullmatch(rf"([+-]?)\\(?:d|t)?frac\s*\{{\s*({number})\s*\}}\s*\{{\s*({number})\s*\}}", value)
+    slash = re.fullmatch(rf"({number})\s*/\s*({number})", value)
+    try:
+        if frac:
+            result = float(frac.group(2)) / float(frac.group(3))
+            if frac.group(1) == "-":
+                result = -result
+        elif slash:
+            result = float(slash.group(1)) / float(slash.group(2))
+        elif re.fullmatch(number, value):
+            result = float(value)
+        else:
+            return None
+        return result if math.isfinite(result) else None
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+
+
+def objective_check(item: EvalItem, answer: str,
+                    strict: bool = False) -> tuple[bool | None, str]:
+    """返回 (是否正确, 判分说明)。None 表示无法客观判定。
+
+    strict=True 用于评测口径:数值题只认 \boxed{} 或最后一个数字,
+    避免「回答任意位置出现标准数字」把错误答案判对。默认 False 保持旧行为。
+    """
     ref = item.reference_answer.strip()
     if not ref:
         return None, "无标准答案"
@@ -96,6 +136,22 @@ def objective_check(item: EvalItem, answer: str) -> tuple[bool | None, str]:
         return None, "选项无法解析"
 
     if item.answer_type == "numeric":
+        if strict:
+            want = _strict_scalar(extract_boxed(ref) or ref)
+            boxed = extract_boxed(answer)
+            if boxed:
+                got = _strict_scalar(boxed)
+            elif r"\boxed" in answer:
+                got = None
+            elif re.search(r"\\(?:d|t)?frac\b|\d\s*/\s*\d", answer):
+                got = _strict_scalar(answer)
+            else:
+                got = extract_number(answer)
+            if want is None or got is None:
+                return None, "数值无法可靠解析"
+            approximate = any(marker in ref or marker in answer for marker in ("约", "大约", "≈", "~"))
+            tolerance = (0.01 if approximate else 1e-6) * max(1.0, abs(want))
+            return abs(got - want) <= tolerance, f"numeric-strict: ref={want}, got={got}"
         want = extract_number(ref)
         # 不只看最后一个数字:答案里可能后出现 "2σ""区间端点" 等噪声。
         # 标准答案的数字出现在回答任意位置即判对;这偏宽松,但避免解析假阴性。

@@ -187,6 +187,7 @@ def _render_html(doc: dict, lang: str, katex_dir: Path, brand: str | None = None
     zh = lang != "en"
     css = (katex_dir / "katex.min.css").as_uri()
     js = (katex_dir / "katex.min.js").as_uri()
+    array_js = (katex_dir.parent / "math_arrays.js").as_uri()
     nonce = secrets.token_hex(16)  # 只放行本页内联脚本;注入的 <script> 没有 nonce
     render_macros = {**math_render.MACROS, r"\knowl": r"\def\mgIgnore##1{}\mgIgnore{#1}#2"}
 
@@ -270,18 +271,23 @@ def _render_html(doc: dict, lang: str, katex_dir: Path, brand: str | None = None
   {''.join(secs)}
   {refs}
   <script nonce="{nonce}" src="{js}"></script>
+  <script nonce="{nonce}" src="{array_js}"></script>
   <script nonce="{nonce}">
     const mathMacros = {json.dumps(render_macros, ensure_ascii=True)};
-    document.querySelectorAll('.mg-math').forEach(function (el) {{
+    function renderFormula(el, display) {{
       const source = el.textContent;
-      try {{ katex.render(source, el, {{ throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
-      catch (e) {{ el.textContent = source; }}
-    }});
-    document.querySelectorAll('.mg-mathd').forEach(function (el) {{
-      const source = el.textContent;
-      try {{ katex.render(source, el, {{ displayMode: true, throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
-      catch (e) {{ el.textContent = source; }}
-    }});
+      try {{ katex.render(source, el, {{ displayMode: display, throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
+      catch (e) {{
+        try {{
+          const table = MGMathArrays.renderMathArray(source, cell => katex.renderToString(cell,
+            {{throwOnError: true, macros: Object.assign({{}}, mathMacros)}}));
+          if (table) {{ el.innerHTML = table; return; }}
+        }} catch (ignored) {{}}
+        el.textContent = source;
+      }}
+    }}
+    document.querySelectorAll('.mg-math').forEach(el => renderFormula(el, false));
+    document.querySelectorAll('.mg-mathd').forEach(el => renderFormula(el, true));
   </script>
 </body>
 </html>"""

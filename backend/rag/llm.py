@@ -102,7 +102,8 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
                        history: list[dict] | None = None,
                        max_tokens: int | None = None,
                        first_token_secs: float = 20.0,
-                       thinking: bool = True) -> AsyncIterator[str]:
+                       thinking: bool = True,
+                       temperature: float | None = None) -> AsyncIterator[str]:
     messages: list[dict] = [{"role": "system", "content": system}]
     if history:
         messages.extend(history)
@@ -114,6 +115,8 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
     }
     if max_tokens:
         payload["max_tokens"] = max_tokens
+    if temperature is not None:
+        payload["temperature"] = temperature
     payload.update(_thinking_param(model, thinking))
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     # trust_env=False 强制直连:阿里云/智谱 API 国内直连可达,走系统代理
@@ -171,12 +174,14 @@ async def stream_chat(system: str, user: str, role: str = "main",
                       fallback: bool = True,
                       history: list[dict] | None = None,
                       max_tokens: int | None = None,
-                      thinking: bool | None = None) -> AsyncIterator[str]:
+                      thinking: bool | None = None,
+                      temperature: float | None = None) -> AsyncIterator[str]:
     """流式对话;role 失败且 fallback 时自动切 backup(异平台容灾)。
     history:最近几轮对话 [{role, content}](调用方已校验/截断);
     max_tokens:约束输出长度(短任务转写/复核用,更快收尾);
     thinking:是否允许模型思考。None=按角色默认(main/backup 关,deep/long 开);
               复核/摘要/导航/综合等机械任务传 False,省掉整段思考延迟。
+    temperature:None=平台默认;评测传 0 可降低采样波动,不保证完全可复现。
 
     重要:只有「一字未出」时才允许切 backup。已经向调用方 yield 过内容后再
     从头重放,会让用户看到「半截 A + 完整 B」的拼接答案;此时直接把异常抛给
@@ -193,9 +198,12 @@ async def stream_chat(system: str, user: str, role: str = "main",
     if thinking is None:
         thinking = role in ("deep", "long")
     emitted = False
+    extra = {"thinking": thinking}
+    if temperature is not None:
+        extra["temperature"] = temperature
     try:
         async for delta in _stream_once(*spec, system, user, history, max_tokens, ttft,
-                                        thinking=thinking):
+                                        **extra):
             emitted = True
             yield delta
         return
@@ -207,5 +215,5 @@ async def stream_chat(system: str, user: str, role: str = "main",
             raise
         print(f"[llm] {role} 调用失败,切换到 backup")
         async for delta in _stream_once(*backup, system, user, history, max_tokens, ttft,
-                                        thinking=thinking):
+                                        **extra):
             yield delta

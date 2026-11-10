@@ -20,6 +20,7 @@ from starlette.responses import JSONResponse, Response
 
 import doc
 import math_render
+import math_table_render
 import rag
 from chat import _rate_check, _record, require_auth
 from http_utils import read_json_object
@@ -119,15 +120,24 @@ def _markdown(document: dict, lang: str) -> str:
 
 def _docx_bytes(document: dict, lang: str) -> bytes:
     from docx import Document
+    from docx.shared import Inches
 
     d = doc._normalize_doc(document, "", lang)
     out = Document()
+    images: dict[str, tuple[bytes, float]] = {}
 
     def add_text(paragraph, text):
         for is_math, _display, value in math_render.segments(text):
             if is_math:
                 try:
-                    paragraph._p.append(math_render.to_omml(value))
+                    if math_render.requires_table_image(math_render.prepare(value)):
+                        if value not in images:
+                            images[value] = math_table_render.render_table_image(value)
+                        picture, width = images[value]
+                        shape = paragraph.add_run().add_picture(BytesIO(picture), width=Inches(width))
+                        shape._inline.docPr.set("descr", value)
+                    else:
+                        paragraph._p.append(math_render.to_omml(value))
                 except (ValueError, KeyError, IndexError):
                     paragraph.add_run(value)
             else:
