@@ -1,8 +1,9 @@
 """Selected-document restrictions must survive empty scopes and tree fallback."""
-import research_corpus as rc
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
+
+import research_corpus as rc
 
 
 def test_empty_selection_does_not_search_all(tmp_path, monkeypatch):

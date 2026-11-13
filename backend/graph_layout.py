@@ -9,8 +9,6 @@
 """
 from __future__ import annotations
 
-from collections import defaultdict
-
 import networkx as nx
 
 from knowledge_graph import KnowledgeGraph

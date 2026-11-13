@@ -16,9 +16,9 @@ if str(BACKEND_DIR) not in sys.path:
 
 import auth  # noqa: E402
 import db  # noqa: E402
+import diagnosis  # noqa: E402
 import diagram_alerts  # noqa: E402
 import diagram_metrics  # noqa: E402
-import diagnosis  # noqa: E402
 import research_corpus  # noqa: E402
 import research_diagrams  # noqa: E402
 import session_cache  # noqa: E402

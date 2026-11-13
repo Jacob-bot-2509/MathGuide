@@ -10,8 +10,12 @@ import re
 from collections import Counter
 from typing import Optional
 
+from log import get_logger
+
 from .documents import Chunk
 from .embed import Embedder
+
+log = get_logger(__name__)
 
 # 打分权重:关键词命中 > 标题重合 > 章节标题重合 > 正文 bigram 重合。
 # 关键词是人工维护的强触发词,必须压过正文里偶发的二元组重合。
@@ -153,7 +157,7 @@ class KnowledgeIndex:
             try:
                 q_vec = self._embedder.embed_query(query)
             except Exception as exc:  # noqa: BLE001 embedding 服务抖动:本查询退化为关键词模式
-                print(f"[rag] query embedding 失败,本查询走关键词模式: {exc}")
+                log.warning(f"[rag] query embedding 失败,本查询走关键词模式: {exc}")
                 q_vec = None
 
         scored: list[tuple[Chunk, float]] = []

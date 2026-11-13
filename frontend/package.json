@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
+    "lint": "eslint src",
+    "format": "prettier --write src",
     "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
@@ -19,12 +21,20 @@
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/katex": "^0.16.7",
     "@types/node": "^26.4.1",
     "@types/three": "^0.187.0",
     "@vitejs/plugin-vue": "^6.0.2",
+    "esbuild": "0.28.2",
+    "eslint": "^10.14.0",
+    "eslint-plugin-vue": "^10.12.1",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.1",
     "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.2",
     "vite": "^7.2.4",
+    "vue-eslint-parser": "^10.4.2",
     "vue-tsc": "^3.2.4"
   }
 }

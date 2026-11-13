@@ -36,19 +36,20 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
+import analysis_client
 import config
 import diagnosis
+import diagram_metrics
 import learning_analysis
 import rag
 import research_actions
 import research_corpus
-import diagram_metrics
 import research_diagrams
 import research_tables
-import analysis_client
 import usage
 from auth import require_auth
 from http_utils import read_json_object
+from log import get_logger
 from rag.research.types import SearchHit
 from rate_limit import SlidingWindowLimiter
 from session_cache import (
@@ -61,6 +62,8 @@ from session_cache import (
     valid_session_id,
     valid_workspace,
 )
+
+log = get_logger(__name__)
 
 CHUNK = 6          # 直答模式每帧字符数(配合浏览器端 ~24ms 渲染节流)
 FRAME_MS = 0.02    # 帧间隔(秒),模拟真实模型逐字输出
@@ -152,7 +155,7 @@ def _pick_role(question: str) -> str:
         or len(question) >= 300
     )
     role = rag.llm.pick("deep") if hard else "main"
-    print(f"[chat] 角色路由 {role} | 问题长度 {len(question)} | 小问数 {parts}")
+    log.info(f"[chat] 角色路由 {role} | 问题长度 {len(question)} | 小问数 {parts}")
     return role
 
 
@@ -398,7 +401,7 @@ async def _update_summary(uid: str, sid: int, old_turns: list[dict], prev: str,
     text = "".join(parts).strip()
     if text:
         set_summary(uid, sid, text, workspace=workspace)
-        print(f"[chat] 会话 {sid} 摘要已更新({len(text)} 字)")
+        log.info(f"[chat] 会话 {sid} 摘要已更新({len(text)} 字)")
 
 
 def _research_reply(outcome: rag.research.SearchOutcome, zh: bool) -> str:
@@ -513,7 +516,7 @@ def _meter(resp: StreamingResponse, rec: dict, prompt_len: int, cmd: str,
                 role=meta["role"], research=meta["research"],
                 workspace=meta.get("workspace", "learn"))
         except Exception as exc:  # noqa: BLE001 记账失败不能反过来打断已完成的回答
-            print(f"[chat] 用量记账失败(不影响回答): {exc}")
+            log.warning(f"[chat] 用量记账失败(不影响回答): {exc}")
 
     resp.body_iterator = counted()
     return resp
@@ -578,7 +581,7 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
             full.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
-        print(f"[chat] 研究综合失败,降级为来源列表: {exc}")
+        log.warning(f"[chat] 研究综合失败,降级为来源列表: {exc}")
         if full:
             # 已经流出一部分:不能再回放来源列表(用户会看到「半截正文 + 完整兜底」)
             note = ("\n\n⚠ 综合生成中断,以上内容可能不完整。"
@@ -607,7 +610,7 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
                 if frame:
                     yield frame
         except Exception as exc:  # noqa: BLE001 图解失败不影响综述
-            print(f"[chat] 研究综述图解失败(忽略): {exc}")
+            log.warning(f"[chat] 研究综述图解失败(忽略): {exc}")
     if ck:
         _RESEARCH_ANSWER[ck] = (time.monotonic(), "".join(full))
         _RESEARCH_ANSWER.move_to_end(ck)
@@ -1026,7 +1029,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             if verdict:
                 label = {"correct": "正确", "wrong": "有误",
                          "uncertain": "需人工复核"}.get(verdict["verdict"], "需人工复核")
-                print(f"[chat] 复核({vrole}): {label} | {len(verdict['issue'])} 字")
+                log.info(f"[chat] 复核({vrole}): {label} | {len(verdict['issue'])} 字")
                 correction = verdict.get("correction", "")
                 if verdict["verdict"] == "wrong" and correction:
                     # 更正放在复核行之前:_clean_answer 只剥末尾复核行,更正会保留给评测
@@ -1063,7 +1066,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
         for _marker, _diagram, task in pending_verify:
             if not task.done():
                 task.cancel()
-        print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
+        log.warning(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
         if answer:
             note = ("\n\n⚠ 模型连接中断,以上回答可能不完整。"
                     if zh else "\n\n⚠ Model connection lost; the answer above may be incomplete.")
@@ -1121,7 +1124,7 @@ async def _gen_paper_llm(question: str, cmd: str | None,
                 try:
                     actions = planner.result()
                 except Exception as exc:  # noqa: BLE001
-                    print(f"[chat] 论文窗口动作规划失败(忽略): {exc}")
+                    log.warning(f"[chat] 论文窗口动作规划失败(忽略): {exc}")
                     actions = []
                 if actions:
                     frame = _paper_actions_frame(actions, request_id, doc_id)
@@ -1139,7 +1142,7 @@ async def _gen_paper_llm(question: str, cmd: str | None,
                     try:
                         actions = await asyncio.wait_for(planner, timeout=15)
                     except Exception as exc:  # noqa: BLE001
-                        print(f"[chat] 论文窗口动作规划超时/失败(忽略): {exc}")
+                        log.warning(f"[chat] 论文窗口动作规划超时/失败(忽略): {exc}")
                         actions = []
                     if actions:
                         frame = _paper_actions_frame(actions, request_id, doc_id)
@@ -1195,7 +1198,7 @@ async def _gen_continue(question: str, partial: str, zh: bool):
         async for delta in rag.llm.stream_chat(system, user, role=role):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 续写失败只提示,不改动已有内容
-        print(f"[chat] 续写失败: {exc}")
+        log.warning(f"[chat] 续写失败: {exc}")
         note = ("⚠ 续写失败,请稍后重试。" if zh
                 else "⚠ Continuation failed. Please try again.")
         yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
@@ -1230,7 +1233,7 @@ async def _gen_nav_list(question: str):
             emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
-        print(f"[chat] 章节导航调用失败: {exc}")
+        log.warning(f"[chat] 章节导航调用失败: {exc}")
         zh = _is_chinese(question)
         text = (("⚠ 章节导航中断,以上列表可能不完整。" if emitted
                  else "⚠ 章节导航调用失败,请稍后重试。") if zh else
@@ -1255,7 +1258,7 @@ async def _gen_nav_guide(question: str, tb: str = ""):
             emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
-        print(f"[chat] 章节指引调用失败: {exc}")
+        log.warning(f"[chat] 章节指引调用失败: {exc}")
         zh = _is_chinese(question)
         text = (("⚠ 章节指引中断,以上内容可能不完整。" if emitted
                  else "⚠ 章节指引调用失败,请稍后重试。") if zh else
@@ -1280,7 +1283,7 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
             emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型侧错误统一降级,不让前端假死
-        print(f"[chat] 粘贴文本 LLM 调用失败,降级为接收回执: {exc}")
+        log.warning(f"[chat] 粘贴文本 LLM 调用失败,降级为接收回执: {exc}")
         if emitted:
             note = ("⚠ 文件解读中断,以上内容可能不完整。" if zh
                     else "⚠ File reading interrupted; the text above may be incomplete.")
@@ -1349,7 +1352,7 @@ async def _gen_formula_clarify(question: str):
             answer.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
-        print(f"[chat] 公式手册澄清调用失败,降级为静态提示: {exc}")
+        log.warning(f"[chat] 公式手册澄清调用失败,降级为静态提示: {exc}")
         zh = _is_chinese(question)
         if answer:
             text = ("⚠ 澄清提问中断,以上内容可能不完整。" if zh
@@ -1366,7 +1369,7 @@ async def _gen_formula_clarify(question: str):
     vrole = rag.llm.pick("deep")
     verdict = await _verify_clarify(question, "".join(answer), vrole)
     if verdict:
-        print(f"[chat] 公式手册澄清复核({vrole}): {len(verdict)} 字")
+        log.info(f"[chat] 公式手册澄清复核({vrole}): {len(verdict)} 字")
         yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
 
 
@@ -1405,7 +1408,7 @@ async def _gen_intuition(question: str, answer: str, zh: bool):
             parts.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 失败不伪造内容
-        print(f"[chat] 直观解释生成失败: {exc}")
+        log.warning(f"[chat] 直观解释生成失败: {exc}")
         note = ("⚠ 直观解释生成失败,请稍后重试。" if zh
                 else "⚠ Could not generate an intuitive explanation. Please try again.")
         yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
@@ -1512,7 +1515,7 @@ async def speech_to_math(request: Request) -> StreamingResponse:
                 _record, rec, cmd="语音转写", prompt_len=len(text),
                 reply_len=sum(len(p) for p in parts), role="main", research=False)
         except Exception as exc:  # noqa: BLE001 记账失败不影响转写结果
-            print(f"[chat] 语音转写记账失败: {exc}")
+            log.warning(f"[chat] 语音转写记账失败: {exc}")
 
     return _sse(gen())
 
@@ -1671,7 +1674,7 @@ async def _gen_point_lesson(uid: str, point_id: str, question: str, zh: bool):
             parts.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型失败降级为预置内容
-        print(f"[chat] 知识点讲解模型失败,降级: {exc}")
+        log.warning(f"[chat] 知识点讲解模型失败,降级: {exc}")
         if not parts:
             async for frame in _frames(fallback):
                 yield frame
@@ -1696,7 +1699,7 @@ async def _gen_learning_analysis(uid: str, question: str, zh: bool):
                 parts.append(delta)
                 yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
         except Exception as exc:  # noqa: BLE001 分析失败降级为确定性报告
-            print(f"[chat] 学习分析模型失败,降级: {exc}")
+            log.warning(f"[chat] 学习分析模型失败,降级: {exc}")
             text = learning_analysis.fallback_report(snapshot, zh=zh)
             if parts:
                 text = "\n\n" + text
@@ -1740,7 +1743,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                 table_context = research_tables.context_text(table)
                 table_stamp = f"{candidate}:{int(table.get('updatedAt') or 0)}"
         except Exception as exc:  # noqa: BLE001 表格校验失败不影响普通对话
-            print(f"[chat] 数据表上下文读取失败(忽略): {exc}")
+            log.warning(f"[chat] 数据表上下文读取失败(忽略): {exc}")
 
     raw_regression = body.get("tableRegression")
     if (workspace == "research" and prompt and table_row is not None
@@ -1777,7 +1780,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             table_context = research_tables.context_text(
                 table_row, _regression_summary(result, stale))
         except Exception as exc:  # noqa: BLE001 回归失败不阻断聊天
-            print(f"[chat] 聊天回归重算失败(忽略): {exc}")
+            log.warning(f"[chat] 聊天回归重算失败(忽略): {exc}")
             table_context = research_tables.context_text(
                 table_row, "回归结果不可用(计算服务未安装或失败),不要自行估算。")
 
@@ -1898,7 +1901,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                         "status": status,
                     }
             except Exception as exc:  # noqa: BLE001 入库失败要如实告知
-                print(f"[chat] 论文入库失败: {exc}")
+                log.warning(f"[chat] 论文入库失败: {exc}")
                 imported = {
                     "docId": paper_id, "title": paper_title,
                     "status": "failed", "reason": str(exc)[:200],
@@ -1928,7 +1931,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             actions = await research_actions.plan_actions(
                 uid, paper_id, question, excerpts, history)
         except Exception as exc:  # noqa: BLE001
-            print(f"[chat] 论文窗口动作规划失败(忽略): {exc}")
+            log.warning(f"[chat] 论文窗口动作规划失败(忽略): {exc}")
             actions = []
         if actions:
             meta["paperActions"] = actions
@@ -1952,7 +1955,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         cached = _RESEARCH_ANSWER.get(ck)
         if cached and time.monotonic() - cached[0] < _RESEARCH_TTL:
             _RESEARCH_ANSWER.move_to_end(ck)  # 命中即刷新 LRU 顺序
-            print(f"[chat] 研究综合缓存命中(问题 {len(question)} 字)")
+            log.info(f"[chat] 研究综合缓存命中(问题 {len(question)} 字)")
             meta["role"] = "deep"
             return _stream_text(cached[1])
         outcome = await rag.research.deep_search(question, top_k=3, scope=scope)
@@ -1962,7 +1965,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             local = await asyncio.to_thread(
                 research_corpus.chat_hits, uid, question, 4, paper_id or None)
         except Exception as exc:  # noqa: BLE001 语料检索失败不阻断外部检索
-            print(f"[chat] 科研语料检索失败(继续外部来源): {exc}")
+            log.warning(f"[chat] 科研语料检索失败(继续外部来源): {exc}")
             local = []
         if local:
             outcome.hits = [
@@ -2006,7 +2009,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             local = await asyncio.to_thread(
                 research_corpus.chat_hits, uid, question, 4, paper_id or None)
         except Exception as exc:  # noqa: BLE001 语料检索失败不影响主链路
-            print(f"[chat] 科研语料检索失败(继续公共知识库): {exc}")
+            log.warning(f"[chat] 科研语料检索失败(继续公共知识库): {exc}")
             local = []
         if local:
             chunks = [

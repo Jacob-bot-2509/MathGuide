@@ -1,6 +1,8 @@
 """profile:学习画像聚合(诊断次数、掌握/薄弱统计、章节分布与最近记录)。"""
 from __future__ import annotations
 
+import profile
+
 import pytest
 from starlette.applications import Starlette
 from starlette.routing import Route
@@ -8,7 +10,6 @@ from starlette.testclient import TestClient
 
 import auth
 import diagnosis
-import profile
 import store
 
 PHONE = "13800138000"

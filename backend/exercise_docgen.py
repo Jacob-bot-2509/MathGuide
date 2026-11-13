@@ -7,14 +7,12 @@
 """
 from __future__ import annotations
 
-import math_render
-
-from collections import Counter
 from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import math_render
 from chat import _rate_check, require_auth
 from exercises.schema import SchemaError
 from exercises.store import ExerciseStore, tiers_from_env

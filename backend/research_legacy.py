@@ -10,8 +10,8 @@ import time
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from auth import require_auth
 import research_corpus as corpus
+from auth import require_auth
 
 MAX_BYTES = 6 * 1024 * 1024
 

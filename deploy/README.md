@@ -100,7 +100,11 @@ cd backend && ../.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --p
 
 - `backend/data/` 只允许后端进程用户读写;备份加密并限制访问。
 - `usage.jsonl` / `usage.json` 已不含手机号/昵称;账号注销会级联删除。
-- 定期备份 `users.json` / `tokens.json`;`tokens.json` 只存 SHA-256 哈希。
+- 定期备份 `backend/data/mathguide.db`(连同 `-wal` / `-shm`):停服务后
+  `sqlite3 mathguide.db ".backup '/backup/mathguide.db'"` 或整目录复制;
+  `tokens` 表只存 token 的 SHA-256,库文件泄露不等于凭据泄露。
+- `users.json` / `tokens.json` 只在首次建库时作为迁移源被导入一次,之后不再写入;
+  可留作历史备份,但**不要再按它们做日常备份**。
 - 设置留存期限后由启动清理执行:
   ```ini
   MG_ACCOUNT_TTL_DAYS=180   # 长期未登录账号;管理员白名单不会被删

@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-
 # For f(x)=2x^3-3x, f'(x_0)=6x_0^2-3. Substitution into the tangent
 # equation gives 4x_0^3-6x_0^2+t+3=0. The upstream transcription lost ^.
 _TANGENT_REPAIRS = (

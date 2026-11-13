@@ -12,7 +12,7 @@
     {method: "wechat" | "qq", nickname?, avatar?}
         访客式登录(演示:模拟与设备账号授权交接),创建 guest 用户
     统一返回 200 {token, user}
-- POST /api/auth/session  (Bearer 或 Cookie) → 200 {user} | 401
+- GET  /api/auth/session  (Bearer 或 Cookie) → 200 {user} | 401
 - POST /api/auth/logout  (Bearer 或 Cookie) → 200 {ok: true}
 
 双域部署:登录成功同时下发 HttpOnly 会话 Cookie(mg_session,作用域由
@@ -38,14 +38,17 @@ import session_cache
 import store
 import usage
 from http_utils import read_json_object
+from log import get_logger
 from rate_limit import SlidingWindowLimiter
+
+log = get_logger(__name__)
 
 DEMO_CODE = "123456"
 
 # 跨子域共享登录:Cookie 作用域设为父域(MG_COOKIE_DOMAIN),learn/research
 # 两个子域都能读到;localStorage 仍按 origin 各自隔离,数据不会因此串区。
 COOKIE_NAME = "mg_session"
-COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 天,与 token 的实际留存策略同量级
+COOKIE_MAX_AGE = store.TOKEN_TTL_HOURS * 3600  # 与 token TTL 同寿命:Cookie 活得比 token 久会让用户"看着登录、实际已登出"
 
 DEFAULT_AVATAR = "preset:sum"  # 与前端 AVATAR_PRESETS[0] 对应
 NICKNAME_MAX = 40
@@ -302,7 +305,7 @@ async def login(request: Request) -> JSONResponse:
                 try:
                     store.update_password_hash(uid, store.hash_password(password))
                 except OSError as exc:
-                    print(f"[auth] 密码哈希升级失败(不影响本次登录): {exc}")
+                    log.warning(f"[auth] 密码哈希升级失败(不影响本次登录): {exc}")
         else:  # code
             if not _demo_mode():
                 raise HTTPException(400, "code login disabled")
@@ -445,7 +448,7 @@ async def delete_account(request: Request) -> JSONResponse:
     import diagnosis
 
     diagnosis.delete_user(uid)
-    # ?????????,???????
+    # 科研文档/项目/表格随账号一并删除,避免留下孤儿数据
     import research_corpus
 
     research_corpus.delete_user(uid)

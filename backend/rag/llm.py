@@ -29,6 +29,11 @@ from typing import AsyncIterator
 
 import httpx
 
+from log import get_logger
+
+log = get_logger(__name__)
+
+
 def _providers() -> dict:
     """惰性读取平台配置(config.load_env 在 main 启动时执行,晚于模块导入)"""
     return {
@@ -213,7 +218,7 @@ async def stream_chat(system: str, user: str, role: str = "main",
         backup = resolve("backup")
         if backup is None:
             raise
-        print(f"[llm] {role} 调用失败,切换到 backup")
+        log.warning(f"[llm] {role} 调用失败,切换到 backup")
         async for delta in _stream_once(*backup, system, user, history, max_tokens, ttft,
                                         **extra):
             yield delta

@@ -5,7 +5,6 @@ import pytest
 
 import research_corpus as rc
 
-
 SAMPLE = """Abstract
 We study attention mechanisms for long documents.
 

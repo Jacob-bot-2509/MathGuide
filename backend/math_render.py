@@ -259,10 +259,10 @@ def requires_table_image(tex: str) -> bool:
 
 
 def to_omml(tex: str):
-    from latex2mathml.converter import convert
     import mathml2omml
-    from lxml import etree
     from docx.oxml import parse_xml
+    from latex2mathml.converter import convert
+    from lxml import etree
 
     tex = prepare(tex).replace(r"\begin{aligned}", r"\begin{align*}").replace(r"\end{aligned}", r"\end{align*}")
     if requires_table_image(tex):

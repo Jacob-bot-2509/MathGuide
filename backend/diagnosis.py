@@ -22,6 +22,9 @@ import db
 import http_utils
 import rag.llm
 from knowledge_graph import KnowledgeGraph, KnowledgePoint, load_graph
+from log import get_logger
+
+log = get_logger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PATH = DATA_DIR / "diagnoses.jsonl"
@@ -286,7 +289,7 @@ async def diagnose(request: Request) -> JSONResponse:
         except DiagnosisUnavailable as exc:
             raise HTTPException(503, str(exc)) from None
         except Exception as exc:  # noqa: BLE001 模型侧错误统一按服务不可用处理
-            print(f"[diagnosis] 模型评分失败: {exc}")
+            log.warning(f"[diagnosis] 模型评分失败: {exc}")
             raise HTTPException(503, "diagnosis unavailable") from None
         source = "llm"
     elif rating is not None:

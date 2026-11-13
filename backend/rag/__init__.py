@@ -13,9 +13,13 @@ import re
 import threading
 from pathlib import Path
 
+from log import get_logger
+
+from . import embed, llm, route
 from .documents import Chunk, load_knowledge
 from .index import KnowledgeIndex
-from . import embed, llm, route
+
+log = get_logger(__name__)
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowledge"
 
@@ -53,7 +57,7 @@ def _load_index_or_empty() -> KnowledgeIndex:
     try:
         return _load_index(None)
     except Exception as exc:  # noqa: BLE001
-        print(f"[rag] 知识库装载失败,以空索引启动(检索将走通用知识): {exc}")
+        log.warning(f"[rag] 知识库装载失败,以空索引启动(检索将走通用知识): {exc}")
         return KnowledgeIndex([], None)
 
 
@@ -65,7 +69,7 @@ def init() -> None:
         try:
             _embedder = embed.Embedder()
         except Exception as exc:  # noqa: BLE001
-            print(f"[rag] embedding 初始化失败,降级为关键词检索: {exc}")
+            log.warning(f"[rag] embedding 初始化失败,降级为关键词检索: {exc}")
             _embedder = None
     else:
         _embedder = None
@@ -75,7 +79,7 @@ def init() -> None:
         # (README 承诺「初始化失败自动降级」,不能只包住 Embedder 构造)。
         _index = _load_index(_embedder)
     except Exception as exc:  # noqa: BLE001
-        print(f"[rag] 索引装载失败,降级为关键词检索: {exc}")
+        log.warning(f"[rag] 索引装载失败,降级为关键词检索: {exc}")
         _index = _load_index_or_empty()
     _stamp = _dir_stamp()
     _terms = _collect_terms(_index)
@@ -89,9 +93,9 @@ def _warm_embedder() -> None:
     try:
         assert _embedder is not None
         _embedder.embed_query("预热")
-        print("[rag] embedding 预热完成")
+        log.info("[rag] embedding 预热完成")
     except Exception as exc:  # noqa: BLE001 预热失败不影响启动与检索(查询侧仍有降级)
-        print(f"[rag] embedding 预热失败(不影响启动): {exc}")
+        log.warning(f"[rag] embedding 预热失败(不影响启动): {exc}")
 
 
 # 数学题专用向量门限:比闲聊门限低,让具体习题也能召回同主题的概念/方法片段。
@@ -113,7 +117,7 @@ def search(query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
                 try:
                     _index = _load_index(_embedder)
                 except Exception as exc:  # noqa: BLE001
-                    print(f"[rag] 索引重建失败,降级为关键词模式: {exc}")
+                    log.warning(f"[rag] 索引重建失败,降级为关键词模式: {exc}")
                     _index = _load_index_or_empty()
                 _stamp = _dir_stamp()
                 _terms = _collect_terms(_index)

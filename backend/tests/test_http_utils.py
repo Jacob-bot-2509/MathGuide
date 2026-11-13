@@ -4,13 +4,13 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from starlette.exceptions import HTTPException
-
-import http_utils
 from starlette.applications import Starlette
+from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
+
+import http_utils
 
 
 async def _echo(request):

@@ -3,8 +3,8 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 

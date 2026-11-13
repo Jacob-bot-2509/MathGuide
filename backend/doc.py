@@ -24,10 +24,13 @@ from pathlib import Path
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+import math_render
+import rag.llm as llm
 from chat import _rate_check, _record, require_auth
 from http_utils import read_json_object
-import rag.llm as llm
-import math_render
+from log import get_logger
+
+log = get_logger(__name__)
 
 # Edge 浏览器(Windows 自带,仅调用不改系统文件)
 _EDGE_CANDIDATES = (
@@ -297,7 +300,7 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> bytes | None:
     """Edge headless 打印 HTML 为 PDF;失败返回 None(由调用方决定兜底)"""
     edge = _find_edge()
     if edge is None:
-        print("[doc] 未找到 Edge 浏览器")
+        log.info("[doc] 未找到 Edge 浏览器")
         return None
     cmd = [
         edge, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
@@ -307,14 +310,14 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> bytes | None:
     try:
         subprocess.run(cmd, capture_output=True, timeout=60, check=False)
     except subprocess.TimeoutExpired:
-        print("[doc] Edge 转 PDF 超时")
+        log.warning("[doc] Edge 转 PDF 超时")
         return None
     if not pdf_path.is_file():
-        print("[doc] Edge 未产出 PDF")
+        log.info("[doc] Edge 未产出 PDF")
         return None
     data = pdf_path.read_bytes()
     if not data.startswith(b"%PDF"):
-        print("[doc] 产物不是合法 PDF")
+        log.info("[doc] 产物不是合法 PDF")
         return None
     return data
 
@@ -357,17 +360,17 @@ async def export_pdf(request: Request) -> Response | JSONResponse:
         raw = "".join(full)
         parsed = _extract_json(raw)
         if parsed is None:
-            print(f"[doc] LLM 输出非 JSON({len(raw)} 字),降级排版")
+            log.warning(f"[doc] LLM 输出非 JSON({len(raw)} 字),降级排版")
             doc = _fallback_doc(content, lang)
         else:
             doc = _normalize_doc(parsed, content, lang)
     except Exception as exc:  # noqa: BLE001 模型侧错误不阻断下载
-        print(f"[doc] LLM 重组失败,降级排版: {exc}")
+        log.warning(f"[doc] LLM 重组失败,降级排版: {exc}")
         doc = _fallback_doc(content, lang)
 
     katex_dir = _katex_dir()
     if not (katex_dir / "katex.min.js").is_file():
-        print("[doc] 未找到 KaTeX 资源,PDF 中的公式将以源码展示")
+        log.info("[doc] 未找到 KaTeX 资源,PDF 中的公式将以源码展示")
 
     # HTML → PDF(Edge 转码也放线程池,不冻事件循环)
     with tempfile.TemporaryDirectory(prefix="mg-doc-") as tmp:
@@ -384,7 +387,7 @@ async def export_pdf(request: Request) -> Response | JSONResponse:
             _record, rec, cmd="导出文档", prompt_len=len(content),
             reply_len=0, role="deep", research=True)
     except Exception as exc:  # noqa: BLE001 记账失败不影响下载
-        print(f"[doc] 导出记账失败: {exc}")
+        log.warning(f"[doc] 导出记账失败: {exc}")
     filename = f"mg-survey-{lang}-{time.strftime('%Y%m%d')}.pdf"
     return Response(
         pdf,

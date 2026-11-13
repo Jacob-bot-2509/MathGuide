@@ -88,6 +88,7 @@ def test_temp_doc_is_hidden_from_library_and_default_search(corpus):
     temp = rc._ingest("u-t", "temp.txt", TEXT.encode(), "text/plain",
                       status="temp", analyze=False)
     normal = rc._ingest("u-n", "normal.txt", TEXT.encode(), "text/plain")
+    assert normal["status"] != "temp"
     assert temp["status"] == "temp"
 
     docs, _, _ = rc._load_rows("u-t")
@@ -338,6 +339,7 @@ def test_temp_capacity_evicts_oldest_unannotated(corpus, monkeypatch):
 
 def test_explain_region_endpoint(corpus, monkeypatch):
     import base64
+
     from starlette.testclient import TestClient
 
     doc = rc._ingest("u-vis", "paper.txt", TEXT.encode(), "text/plain",

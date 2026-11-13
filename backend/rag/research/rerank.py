@@ -9,10 +9,12 @@ import asyncio
 import json
 import re
 
+from log import get_logger
 from rag import llm
 
 from .types import SearchHit
 
+log = get_logger(__name__)
 
 MAX_CANDIDATES = 8   # 只精排规则分最高的前若干条,候选越多模型越慢、收益越低
 
@@ -76,7 +78,7 @@ async def rerank(question: str, candidates: list[SearchHit],
         raw = await asyncio.wait_for(_collect(), timeout=timeout)
         llm_scores = _parse(raw, len(candidates))
     except Exception as exc:  # noqa: BLE001 精排失败退化为纯规则排序
-        print(f"[rerank] 精排失败,回退规则排序: {type(exc).__name__} {exc}")
+        log.warning(f"[rerank] 精排失败,回退规则排序: {type(exc).__name__} {exc}")
         return head + tail
     for h, s in zip(head, llm_scores):
         h.score = round(h.score * 0.5 + s * 0.05, 2)  # 规则分×0.5 + LLM分(0~100→0~5)×0.5

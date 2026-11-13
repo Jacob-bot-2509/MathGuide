@@ -18,7 +18,7 @@ import os
 import re
 import secrets
 import time
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, getcontext, localcontext
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, getcontext, localcontext
 from pathlib import Path
 from urllib.parse import quote
 
@@ -26,12 +26,15 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-import research_corpus as rc
 import analysis_client
+import research_corpus as rc
 from auth import require_auth
 from http_utils import read_json_object
+from log import get_logger
 from rag import llm as llm_mod
 from rate_limit import SlidingWindowLimiter
+
+log = get_logger(__name__)
 
 getcontext().prec = 28
 
@@ -190,7 +193,6 @@ def _call(name: str, args: list, row: int, rows: list[list[str]],
         r = int(scalar(args[1])) - 2
         if c < 0 or r < 0:
             raise FormulaError("引用越界")
-        keys = list(col_index.keys())
         if c not in col_index.values():
             raise FormulaError("引用列不存在")
         key = next(k for k, v in col_index.items() if v == c)
@@ -882,8 +884,10 @@ def _clean_merges(raw: object, n_rows: int, n_cols: int) -> list[dict]:
         if not isinstance(item, dict):
             continue
         try:
-            r1 = int(item.get("r1")); c1 = int(item.get("c1"))
-            r2 = int(item.get("r2")); c2 = int(item.get("c2"))
+            r1 = int(item.get("r1"))
+            c1 = int(item.get("c1"))
+            r2 = int(item.get("r2"))
+            c2 = int(item.get("c2"))
         except (TypeError, ValueError):
             continue
         r1, r2 = sorted((r1, r2))
@@ -1086,7 +1090,7 @@ def _delete_table(uid: str, table_id: str, *, hard: bool = False) -> bool:
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 conn.execute("VACUUM")
             except Exception as exc:  # noqa: BLE001 清理失败不影响删除结果
-                print(f"[tables] 彻底清除后压缩失败(忽略): {exc}")
+                log.warning(f"[tables] 彻底清除后压缩失败(忽略): {exc}")
         return True
     finally:
         conn.close()

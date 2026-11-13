@@ -12,6 +12,9 @@ import threading
 import time
 
 import diagram_metrics
+from log import get_logger
+
+log = get_logger(__name__)
 
 _lock = threading.Lock()
 _last_sent = 0.0
@@ -61,7 +64,7 @@ async def notify(reason: str) -> bool:
     except Exception:  # noqa: BLE001 告警失败不能影响业务
         ok = False
     # 只记结果,不打印 webhook 地址或载荷。
-    print(f"[diagram] alert reason={reason[:80]} ok={int(ok)}")
+    log.info(f"[diagram] alert reason={reason[:80]} ok={int(ok)}")
     return ok
 
 

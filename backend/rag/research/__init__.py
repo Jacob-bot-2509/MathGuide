@@ -16,12 +16,15 @@ import re
 import time
 from collections import OrderedDict
 
+from log import get_logger
 from rag import llm, route
 from rag import search as kb_search
 from rag.index import STOPWORDS
 
 from . import rank, rerank, sources, synthesize
 from .types import KB_SOURCE, SearchHit, SearchOutcome
+
+log = get_logger(__name__)
 
 __all__ = ["expand_query", "deep_search", "rerank", "synthesize",
            "SearchHit", "SearchOutcome"]
@@ -128,7 +131,7 @@ async def _llm_expand_terms(question: str, timeout: float = 6.0) -> list[str] | 
     try:
         terms = await asyncio.wait_for(collect(), timeout=timeout)
         if terms:
-            print(f"[research] LLM 改写: {terms}")
+            log.info(f"[research] LLM 改写: {terms}")
         return terms
     except Exception:  # noqa: BLE001 改写失败不影响主链路,规则版兜底
         return None
@@ -147,7 +150,7 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = DEFAULT_TI
     hit = _cache.get(key)
     if hit and now - hit[0] < _CACHE_TTL:
         _cache.move_to_end(key)  # 命中即刷新 LRU 顺序
-        print(f"[research] 缓存命中(问题 {len(question)} 字)")
+        log.info(f"[research] 缓存命中(问题 {len(question)} 字)")
         return hit[1]
     started = time.perf_counter()
     # 查询改写:LLM 可用时优先(口语化提问拆词更全),失败回退规则版
@@ -155,7 +158,6 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = DEFAULT_TI
     if not terms:
         terms = expand_query(question)
     outcome = SearchOutcome(question=question, terms=terms)
-    query = " ".join(terms)
 
     # 内部知识库(同步实现,含可能数十秒的 embedding 请求 → 挪出事件循环,
     # 否则会冻住整个后端的所有并发请求)
@@ -176,7 +178,7 @@ async def deep_search(question: str, top_k: int = 3, timeout: float = DEFAULT_TI
         except Exception as exc:  # noqa: BLE001 单源失败只记录,不影响其他源
             # errors 存来源名(给用户看的话术),细节打日志(给排查用)
             outcome.errors.append(name)
-            print(f"[research] {name} 不可达(已跳过): {type(exc).__name__} {exc}")
+            log.warning(f"[research] {name} 不可达(已跳过): {type(exc).__name__} {exc}")
 
     # 源搜索预算:LLM 配置时给精排留 6s,总预算仍 ≤ timeout(默认 15s)
     src_budget = max((timeout - 6) if llm.is_configured() else (timeout - 2), 5)

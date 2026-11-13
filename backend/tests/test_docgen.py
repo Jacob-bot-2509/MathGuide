@@ -258,8 +258,9 @@ def test_markdown_escaped_environment_is_repaired_without_changing_text():
 
 def test_frontend_math_macros_match_document_export():
     import json
-    import math_render
     from pathlib import Path
+
+    import math_render
     macros = Path(__file__).resolve().parents[2] / "frontend" / "src" / "utils" / "mathMacros.json"
     assert json.loads(macros.read_text(encoding="utf8")) == math_render.MACROS
 
@@ -360,8 +361,9 @@ def test_inline_display_environment_is_treated_as_display_math():
 
 
 def test_text_underscore_and_escaped_unicode_surd_preserve_their_symbols():
-    import math_render
     from lxml import etree
+
+    import math_render
     tex = r"S_{\text {_NUA }}" + r"+\boxed{" + "\\" + "\u221a" + "}"
     prepared = math_render.prepare(tex)
     assert r"\text {\_NUA }" in prepared
@@ -386,8 +388,9 @@ def test_adjacent_inline_formulas_keep_their_operator_and_round_trip():
 
 
 def test_cancelto_keeps_crossed_value_arrow_and_result():
-    import math_render
     from lxml import etree
+
+    import math_render
 
     tex = r"\frac{\cancelto{2}{10}}{\cancelto{3}{12}}"
     xml = etree.tostring(math_render.to_omml(tex), encoding="unicode")
@@ -434,8 +437,9 @@ def test_word_preserves_cancellation_lines_and_boxes():
 
 
 def test_word_preserves_operators_when_tex_only_controls_layout():
-    import math_render
     from lxml import etree
+
+    import math_render
     tex = r"\arg(z)=\theta\nonumber\allowbreak"
     xml = etree.tostring(math_render.to_omml(tex), encoding="unicode")
     assert ">arg<" in xml and ">z<" in xml and "\u03b8" in xml
@@ -445,8 +449,9 @@ def test_word_preserves_operators_when_tex_only_controls_layout():
 
 
 def test_word_preserves_set_difference_operators_and_matrix_exponents():
-    import math_render
     from lxml import etree
+
+    import math_render
     tex = r"\mathop{\text{lcm}}[a,b]+|A\backslash B|+\begin{pmatrix}1&2\\3&4\end{pmatrix}^{2016}"
     xml = etree.tostring(math_render.to_omml(tex), encoding="unicode")
     assert ">lcm<" in xml and "\\</m:t>" in xml
@@ -454,8 +459,9 @@ def test_word_preserves_set_difference_operators_and_matrix_exponents():
 
 
 def test_word_still_rejects_malformed_delimiters_with_backslash_symbol():
-    import math_render
     import pytest
+
+    import math_render
     with pytest.raises(ValueError):
         math_render.to_omml(r"\(x+\backslash y")
 
@@ -464,8 +470,9 @@ def test_word_still_rejects_malformed_delimiters_with_backslash_symbol():
 
 
 def test_word_rejects_array_specs_that_would_be_silently_printed():
-    import math_render
     import pytest
+
+    import math_render
     with pytest.raises(ValueError, match="array column specification"):
         math_render.to_omml(r"\begin{array}{c@{}c}1&2\end{array}")
     with pytest.raises(ValueError, match="array column specification"):

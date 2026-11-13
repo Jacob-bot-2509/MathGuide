@@ -39,9 +39,12 @@ from starlette.responses import FileResponse, JSONResponse
 
 from auth import require_auth
 from http_utils import read_json_object
+from log import get_logger
 from rag import embed as embed_mod
 from rag import llm as llm_mod
 from rate_limit import SlidingWindowLimiter
+
+log = get_logger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent / "data" / "research"
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 默认单文件 100MB(MG_RESEARCH_MAX_UPLOAD_MB 可调)
@@ -705,7 +708,7 @@ def _llm_sync(system: str, user: str, max_tokens: int = 400,
     try:
         return asyncio.run(with_timeout())
     except Exception as exc:  # noqa: BLE001 摘要失败静默,退回首段摘要
-        print(f"[research] LLM 调用失败(走降级): {type(exc).__name__}")
+        log.warning(f"[research] LLM 调用失败(走降级): {type(exc).__name__}")
         return ""
 
 
@@ -920,7 +923,7 @@ class UserIndex:
                 self._chunk_vectors = list(vectors[:chunk_n])
                 self._node_vectors = list(vectors[chunk_n:])
             except Exception as exc:  # noqa: BLE001 向量服务失败退化为 BM25
-                print(f"[research] embedding 失败,降级为 BM25: {exc}")
+                log.warning(f"[research] embedding 失败,降级为 BM25: {exc}")
                 self.embedder = None
                 self._chunk_vectors = [None] * len(self.chunks)
                 self._node_vectors = [None] * len(self.nodes)
@@ -932,7 +935,7 @@ class UserIndex:
         try:
             qv = self.embedder.embed_query(query)
         except Exception as exc:  # noqa: BLE001
-            print(f"[research] query embedding 失败,本次纯 BM25: {exc}")
+            log.warning(f"[research] query embedding 失败,本次纯 BM25: {exc}")
             return []
         scored = []
         for idx in allowed:
@@ -1184,7 +1187,7 @@ def _get_index(uid: str) -> UserIndex:
             try:
                 embedder = embed_mod.Embedder(cache_path=_user_dir(uid) / ".embeddings.json")
             except Exception as exc:  # noqa: BLE001
-                print(f"[research] embedding 初始化失败,纯 BM25: {exc}")
+                log.warning(f"[research] embedding 初始化失败,纯 BM25: {exc}")
         index = UserIndex(uid, docs, nodes, chunks, embedder)
         _indexes[uid] = index
         _index_paths[uid] = version
@@ -1436,7 +1439,7 @@ def _ingest(uid: str, name: str, data: bytes, mime: str,
         try:
             (_user_dir(uid) / "files" / f"{doc_id}{suffix}").write_bytes(data)
         except OSError as exc:
-            print(f"[research] 原文件保存失败(索引已入库): {exc}")
+            log.warning(f"[research] 原文件保存失败(索引已入库): {exc}")
 
         with _index_lock:
             _indexes.pop(uid, None)
@@ -1500,7 +1503,7 @@ def _vacuum(uid: str) -> None:
         finally:
             conn.close()
     except sqlite3.Error as exc:
-        print(f"[research] 彻底清除后压缩失败(忽略): {exc}")
+        log.warning(f"[research] 彻底清除后压缩失败(忽略): {exc}")
 
 
 def corpus_stamp(uid: str) -> str:
@@ -2378,7 +2381,7 @@ def paper_context(uid: str, doc_id: str, question: str = "", top_k: int = 6,
         try:
             hits = index.search(question, top_k=top_k, doc_id=doc_id)["hits"]
         except Exception as exc:  # noqa: BLE001 检索失败时退回开头片段
-            print(f"[research] 当前论文片段检索失败,改用开头片段: {exc}")
+            log.warning(f"[research] 当前论文片段检索失败,改用开头片段: {exc}")
             hits = []
         for hit in hits:
             chunk = by_id.get(str(hit.get("chunkId") or ""))

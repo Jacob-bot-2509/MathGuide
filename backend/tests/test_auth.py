@@ -85,6 +85,8 @@ def test_register_sets_shared_cookie_and_session_restores(client):
     assert auth.COOKIE_NAME in cookie
     assert "httponly" in cookie.lower()
     assert "samesite=lax" in cookie.lower()
+    # Cookie 有效期必须与 token TTL 一致(否则浏览器留着 Cookie、服务端已判过期)
+    assert f"max-age={store.TOKEN_TTL_HOURS * 3600}" in cookie.lower()
 
     restored = client.get("/api/auth/session")
     assert restored.status_code == 200
@@ -92,6 +94,19 @@ def test_register_sets_shared_cookie_and_session_restores(client):
 
     # 登出只靠 Cookie 也必须生效:共享凭据在服务端被吊销
     assert client.post("/api/auth/logout").status_code == 200
+    assert client.get("/api/auth/session").status_code == 401
+
+
+def test_expired_token_closes_session(client, monkeypatch):
+    """token 过期后必须 401:Cookie 再新鲜也不能续命(COOKIE_MAX_AGE 与 TTL 同寿命)。"""
+    now = [1_000_000.0]
+    monkeypatch.setattr(store.time, "time", lambda: now[0])
+    assert client.post(
+        "/api/auth/register", json={"phone": PHONE, "password": PASSWORD}
+    ).status_code == 200
+    assert client.get("/api/auth/session").status_code == 200
+
+    now[0] += store.TOKEN_TTL_HOURS * 3600 + 1
     assert client.get("/api/auth/session").status_code == 401
 
 

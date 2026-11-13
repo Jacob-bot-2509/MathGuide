@@ -1,0 +1,25 @@
+[tool.ruff]
+# 仅用于静态检查(不接管格式化),所以不配置 formatter 相关项。
+target-version = "py313"
+line-length = 120
+extend-exclude = ["data", ".venv-analysis"]
+
+[tool.ruff.lint]
+# 首轮只开「找 bug」的规则集:
+#   E4/E7/E9 = 导入相关与语法级错误;F = pyflakes(未用导入/未定义名/f-string 占位符);
+#   I = 导入排序(可自动修)。
+# 暂不开 B(34 条)/UP(大量注解改写)/SIM(合并 if 之类),它们会带来几百行与业务无关的
+# 纯风格 diff,淹没真正的改动;等 M3 拆分时逐文件顺带收紧。
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = [
+  "E501",  # 行宽交给 review(现有代码有长中文注释)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试里允许「导入后仅用于 fixture 注册」这类写法
+"tests/*" = ["F401"]
+# 开发工具是一次性脚本,不强制导入顺序
+"tools/*" = ["I", "F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["auth", "chat", "config", "db", "store", "usage", "rag", "doc", "docgen"]

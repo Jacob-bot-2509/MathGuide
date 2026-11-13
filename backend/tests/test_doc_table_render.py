@@ -1,7 +1,7 @@
 """Ruled arrays must keep their lines in PDF and Word export."""
+import struct
 from io import BytesIO
 from zipfile import ZipFile
-import struct
 
 import pytest
 from lxml import etree
@@ -36,7 +36,8 @@ def test_word_ruled_array_keeps_borders_and_neighboring_math():
     width, height = struct.unpack_from("<ii", bitmap, 18)
     stride = (width * 3 + 3) & ~3
     rows = [bitmap[54 + y * stride:54 + y * stride + width * 3] for y in range(height)]
-    dark = lambda row, x: max(row[x * 3:x * 3 + 3]) < 128
+    def dark(row, x: int) -> bool:
+        return max(row[x * 3:x * 3 + 3]) < 128
     assert max(sum(dark(row, x) for x in range(width)) for row in rows) > width * 0.6
     assert max(sum(dark(row, x) for row in rows) for x in range(width)) > height * 0.6
 

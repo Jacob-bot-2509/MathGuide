@@ -11,8 +11,8 @@ import re
 import time
 from typing import Iterable
 
-import rag
 import chat as chat_module
+import rag
 from rag import route as rag_route
 
 from . import judges

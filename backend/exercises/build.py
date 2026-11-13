@@ -8,11 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from log import get_logger
+
 from . import schema
 from .dedupe import dedupe
 from .importers import math_dataset, numinamath, olympiadbench
 from .importers.common import ImportSkip
 from .tagging import apply_tags
+
+log = get_logger(__name__)
 
 SOURCES = {
     "math": (math_dataset, math_dataset.SOURCE),
@@ -108,6 +112,7 @@ def build_source(
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+
     from .fetch import fetch_source
 
     parser = argparse.ArgumentParser(description="构建习题 JSONL 与 manifest")
@@ -124,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     for name in names:
         rows = fetch_source(name, args.limit, args.seed, Path(args.cache))
         report = build_source(name, rows, Path(args.output))
-        print(json.dumps({
+        log.info(json.dumps({
             "source": report.source,
             "parsed": report.parsed,
             "accepted": report.accepted,

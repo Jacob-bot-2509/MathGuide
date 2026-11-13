@@ -24,6 +24,9 @@ import math_table_render
 import rag
 from chat import _rate_check, _record, require_auth
 from http_utils import read_json_object
+from log import get_logger
+
+log = get_logger(__name__)
 
 MAX_ITEMS = 20
 MAX_TOTAL_CHARS = 40000
@@ -368,7 +371,7 @@ async def qa_export(request: Request) -> Response | JSONResponse:
         await asyncio.to_thread(_record, rec, cmd="生成文档", prompt_len=total,
                                 reply_len=0, role="deep", research=False)
     except Exception as exc:  # noqa: BLE001
-        print(f"[docgen] 记账失败: {exc}")
+        log.warning(f"[docgen] 记账失败: {exc}")
     return await _render(document, lang, _format(body.get("format")), "mg-qa")
 
 
@@ -383,7 +386,7 @@ async def outline(request: Request) -> JSONResponse:
     try:
         evidence = _evidence_list(await asyncio.to_thread(rag.search, text, 8))
     except Exception as exc:  # noqa: BLE001
-        print(f"[docgen] 大纲检索失败: {exc}")
+        log.warning(f"[docgen] 大纲检索失败: {exc}")
         return JSONResponse({"error": "retrieval_failed"}, status_code=503)
     if not evidence:
         return JSONResponse({"error": "no_evidence", "gaps": [text[:120]]}, status_code=422)
@@ -395,7 +398,7 @@ async def outline(request: Request) -> JSONResponse:
                                      max_tokens=2200)
             parsed = doc._extract_json(raw)
         except Exception as exc:  # noqa: BLE001
-            print(f"[docgen] 大纲生成失败,使用检索片段兜底: {exc}")
+            log.warning(f"[docgen] 大纲生成失败,使用检索片段兜底: {exc}")
     plan = _normalize_outline(parsed or {}, evidence, text, lang)
     return JSONResponse({
         "title": plan["title"],
@@ -424,7 +427,7 @@ async def generate(request: Request) -> JSONResponse:
     try:
         evidence = _evidence_list(await asyncio.to_thread(rag.search, text, 8))
     except Exception as exc:  # noqa: BLE001
-        print(f"[docgen] 分节检索失败: {exc}")
+        log.warning(f"[docgen] 分节检索失败: {exc}")
         return JSONResponse({"error": "retrieval_failed"}, status_code=503)
     if not evidence:
         return JSONResponse({"error": "no_evidence"}, status_code=422)
@@ -464,7 +467,7 @@ async def generate(request: Request) -> JSONResponse:
         try:
             raw_text = await _collect_llm(_section_system(lang), user, max_tokens=1800)
         except Exception as exc:  # noqa: BLE001
-            print(f"[docgen] 分节生成失败: {exc}")
+            log.warning(f"[docgen] 分节生成失败: {exc}")
             gaps.append(heading)
             continue
         if not raw_text.strip() or "[未找到依据]" in raw_text or "[NO EVIDENCE]" in raw_text:
@@ -505,7 +508,7 @@ async def generate(request: Request) -> JSONResponse:
         await asyncio.to_thread(_record, rec, cmd="生成文档", prompt_len=len(text),
                                 reply_len=total_reply, role="deep", research=False)
     except Exception as exc:  # noqa: BLE001
-        print(f"[docgen] 记账失败: {exc}")
+        log.warning(f"[docgen] 记账失败: {exc}")
     return JSONResponse({"document": document, "gaps": gaps})
 
 
@@ -583,7 +586,7 @@ async def revise(request: Request) -> JSONResponse:
         raw = await _collect_llm(_revision_system(lang), user, max_tokens=4000)
         parsed = doc._extract_json(raw)
     except Exception as exc:  # noqa: BLE001
-        print(f"[docgen] 文档修订失败: {exc}")
+        log.warning(f"[docgen] 文档修订失败: {exc}")
         return JSONResponse({"error": "revision_failed"}, status_code=502)
     revised = _revise_document(parsed, document, lang)
     if not revised:

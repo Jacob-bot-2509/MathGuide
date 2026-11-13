@@ -9,6 +9,10 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from log import get_logger
+
+log = get_logger(__name__)
+
 ENV_FILE = Path(__file__).resolve().parent / ".env.local"
 
 
@@ -116,4 +120,4 @@ def assert_safe_demo_mode(argv: list[str] | None = None) -> None:
             + ", ".join(public_origins)
             + "。公网部署请设置 MG_DEMO_MODE=0。"
         )
-    print("[config] 演示模式开启:仅限本机访问;公网部署必须设置 MG_DEMO_MODE=0")
+    log.info("[config] 演示模式开启:仅限本机访问;公网部署必须设置 MG_DEMO_MODE=0")

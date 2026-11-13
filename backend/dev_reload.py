@@ -23,6 +23,10 @@ from pathlib import Path
 
 from watchfiles import DefaultFilter, watch
 
+from log import get_logger
+
+log = get_logger(__name__)
+
 PORT = sys.argv[1] if len(sys.argv) > 1 else "8000"
 ROOT = Path(__file__).resolve().parent
 
@@ -56,7 +60,7 @@ def free_port(port: str) -> None:
         ).stdout
         if "python" in name.lower():
             _kill_tree(int(pid))
-            print(f"[dev_reload] 清掉残留进程树 PID {pid}(端口 {port})")
+            log.info(f"[dev_reload] 清掉残留进程树 PID {pid}(端口 {port})")
 
 
 def start() -> subprocess.Popen:
@@ -73,7 +77,7 @@ def restart() -> None:
         _kill_tree(proc.pid)  # 按树强杀(见 _kill_tree 注),不走 Ctrl+C 广播
         proc.wait()
     proc = start()
-    print(f"[dev_reload] 已重启 uvicorn(端口 {PORT})")
+    log.info(f"[dev_reload] 已重启 uvicorn(端口 {PORT})")
 
 
 def main() -> None:
@@ -88,17 +92,17 @@ def main() -> None:
                              yield_on_timeout=True):
             changed = [p for _, p in changes if p.endswith(".py")]
             if changed:
-                print(f"[dev_reload] 检测到变更: {', '.join(changed)}")
+                log.info(f"[dev_reload] 检测到变更: {', '.join(changed)}")
                 restart()
             elif proc is not None and proc.poll() is not None:
-                print("[dev_reload] uvicorn 意外退出,自动重起")
+                log.info("[dev_reload] uvicorn 意外退出,自动重起")
                 proc = start()
     except KeyboardInterrupt:
         pass
     finally:
         if proc is not None and proc.poll() is None:
             _kill_tree(proc.pid)
-        print("[dev_reload] 已退出")
+        log.info("[dev_reload] 已退出")
 
 
 if __name__ == "__main__":

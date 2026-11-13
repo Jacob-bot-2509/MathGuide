@@ -8,7 +8,6 @@ import pytest
 
 import research_corpus as rc
 
-
 DOCX_TEXT = "Introduction\nWe study quantum error correction in trapped ions."
 HTML_TEXT = "Introduction\nA short HTML paper about spectral gaps."
 EPUB_TEXT = "Introduction\nAn EPUB chapter about modular forms."

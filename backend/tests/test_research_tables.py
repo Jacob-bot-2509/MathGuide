@@ -97,10 +97,11 @@ def test_exponent_guard():
 
 
 def test_regression_endpoint_returns_worker_result(monkeypatch, tables):
-    import research_tables as rt
     from starlette.applications import Starlette
     from starlette.routing import Route
     from starlette.testclient import TestClient
+
+    import research_tables as rt
 
     monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-reg"})
     monkeypatch.setattr(rt, "_get_table", lambda uid, tid: {"id": tid, "title": "T"})

@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import threading
 import tempfile
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path

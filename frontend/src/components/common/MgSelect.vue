@@ -12,7 +12,7 @@ export interface SelectOption {
   disabled?: boolean
 }
 
-const props = defineProps<{
+defineProps<{
   modelValue: string
   options: SelectOption[]
   title?: string

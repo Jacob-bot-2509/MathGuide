@@ -1,7 +1,6 @@
 """合法全文解析:把标识符变成开放获取候选,不代理付费墙内容。"""
 from __future__ import annotations
 
-import asyncio
 import difflib
 import re
 import time

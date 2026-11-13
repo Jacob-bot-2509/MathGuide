@@ -15,6 +15,9 @@ import research_lit as lit
 import research_vision as vision
 from auth import require_auth
 from http_utils import read_json_object
+from log import get_logger
+
+log = get_logger(__name__)
 
 
 def _pdf_name(url: str) -> str:
@@ -91,7 +94,7 @@ async def history_retention_loop() -> None:
         try:
             await asyncio.to_thread(rc.purge_expired_history_all)
         except Exception as exc:  # A failed cleanup must not stop future daily attempts.
-            print(f"[retention] 浏览历史清理失败: {exc}")
+            log.warning(f"[retention] 浏览历史清理失败: {exc}")
 
 
 async def history_list(request: Request) -> JSONResponse:

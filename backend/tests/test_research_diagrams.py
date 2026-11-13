@@ -45,10 +45,11 @@ def test_research_diagram_switch_defaults_off():
 
 
 def test_plan_endpoint_accepts_table_id(monkeypatch):
-    import research_diagrams as rd
     from starlette.applications import Starlette
     from starlette.routing import Route
     from starlette.testclient import TestClient
+
+    import research_diagrams as rd
 
     seen = {}
     monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "u"})
@@ -75,10 +76,11 @@ def test_plan_endpoint_accepts_table_id(monkeypatch):
 
 
 def test_plan_endpoint_builds_data_plot_from_regression_spec(monkeypatch):
-    import research_diagrams as rd
     from starlette.applications import Starlette
     from starlette.routing import Route
     from starlette.testclient import TestClient
+
+    import research_diagrams as rd
 
     monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "u"})
     monkeypatch.setattr(rd, "_get_table", lambda uid, tid: {
@@ -112,10 +114,11 @@ def test_plan_endpoint_builds_data_plot_from_regression_spec(monkeypatch):
 
 
 def test_plan_endpoint_rejects_model_written_table_points(monkeypatch):
-    import research_diagrams as rd
     from starlette.applications import Starlette
     from starlette.routing import Route
     from starlette.testclient import TestClient
+
+    import research_diagrams as rd
 
     monkeypatch.setattr(rd, "require_auth", lambda request: {"uid": "u"})
     monkeypatch.setattr(rd, "_get_table", lambda uid, tid: {
