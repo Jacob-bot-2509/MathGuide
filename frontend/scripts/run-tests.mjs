@@ -132,6 +132,12 @@ const CASES = [
     artifact: '.i18n-test.cjs',
   },
   {
+    name: '会话恢复与 token 轮换',
+    bundle: 'npx esbuild scripts/session-bootstrap-test.ts --bundle --format=cjs --platform=node --define:import.meta.env={} --outfile=.session-bootstrap-test.cjs',
+    run: 'node .session-bootstrap-test.cjs',
+    artifact: '.session-bootstrap-test.cjs',
+  },
+  {
     name: '账号导出本机数据',
     bundle: 'npx esbuild scripts/account-export-test.ts --bundle --format=cjs --platform=node --define:import.meta.env={} --outfile=.account-export-test.cjs',
     run: 'node .account-export-test.cjs',

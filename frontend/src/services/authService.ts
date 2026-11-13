@@ -44,9 +44,13 @@ async function applyLogin(user: AuthUserDto, token: string): Promise<UserInfo> {
  *  - 网络错误:保留现状,离线打开不至于被踢回登录页。 */
 export async function bootstrapSession(): Promise<void> {
   try {
-    const res = await get<{ user?: AuthUserDto }>('/api/auth/session')
+    const res = await get<{ user?: AuthUserDto; token?: string }>('/api/auth/session')
     if (res?.user) {
-      setUser({ ...res.user })
+      // 服务端可能借这次调用轮换了 token(滑动续期),必须写回本地;
+      // 没轮换时保留原有 token —— 直接展开 res.user 会把它覆盖成 undefined,
+      // 之后所有请求就悄悄退化成纯 Cookie 鉴权了。
+      const token = res.token ?? getToken()
+      setUser({ ...res.user, ...(token ? { token } : {}) } as UserInfo)
       claimLocalData(res.user.accountKey)
     }
   } catch (err) {

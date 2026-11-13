@@ -63,11 +63,12 @@ npm run build
 ## 4. 上线前检查
 
 ```bash
-# 后端测试
+# 后端测试与静态检查
 cd backend && ../.venv/Scripts/python.exe -m pytest
+cd backend && ../.venv/Scripts/ruff.exe check .
 
-# 前端测试与构建
-cd frontend && npm test && npm run build
+# 前端测试、静态检查与构建
+cd frontend && npm run lint && npm test && npm run build
 
 # 公网绑定必须被拒绝(MG_DEMO_MODE=1 时)
 cd backend && ../.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --port 8010
@@ -81,6 +82,8 @@ cd backend && ../.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --p
 - 账号页可导出数据、可注销
 - 浏览器控制台无 CSP violation
 - SSE 回答能持续输出,不被代理缓冲
+- 登录态:断网/刷新不掉登录;`mg_session` Cookie 的 `Max-Age` 为 30 天,
+  而服务端 token 上限 24h(活跃用户由 `/api/auth/session` 自动轮换)
 
 ## 5. 进程与日志
 

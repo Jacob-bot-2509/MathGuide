@@ -1,7 +1,7 @@
 # MathGuide 工程优化方案（P0–P5）
 
 日期：2026-11-13
-状态：**M0 / M1 / M2 / M7 已完成并验证**（见第 0 节）；M3–M6 待排期
+状态：**M0 / M1 / M2 / M7 已完成并验证**（D1 已改为方案 B 并落地，见第 0 节）；M3–M6 待排期
 基线：v1.25.0（代码快照 `8475f4a` / 发布提交 `66ead6e`）；后端 944 passed、前端 20 套自测
 关联：[后端 README](../backend/README.md)、[部署清单](../deploy/README.md)、[评测报告](EVAL_REPORT.md)
 
@@ -9,13 +9,13 @@
 
 | 批次 | 状态 | 实际改动 |
 | --- | --- | --- |
-| M0 热修 | ✅ 完成 | 会话 Cookie 与 token 同寿命（24h）+ 过期 401 测试；乱码注释、`POST→GET` 文档、部署备份改 `mathguide.db`、后端 README 存储描述改 SQLite；删除零引用 `GeoGebraBlock.vue`；`.env.local.example` 补齐 16 个变量（另加 `MG_LOG_LEVEL`） |
+| M0 热修 | ✅ 完成 | 会话改为**方案 B 滑动续期**（Cookie 30 天 / token 24h 硬上限 / 剩 20% 轮换 + 5 分钟节流 / 旧 Bearer 回退 Cookie / 登出双清）+ 6 条后端与 5 条前端断言；乱码注释、`POST→GET` 文档、部署备份改 `mathguide.db`、后端 README 存储描述改 SQLite；删除零引用 `GeoGebraBlock.vue`；`.env.local.example` 补齐 16 个变量（另加 `MG_LOG_LEVEL`） |
 | M1 契约护栏 | ✅ 完成 | `tests/test_api_contract.py`（5 条：路由↔README 双向、auth 文档↔注册方式、KaTeX 前后端版本）；`scripts/i18n-test.ts`（ZH/EN 键一致 + `t()` 引用存在）；README 补 31 条接口；`main.py` docstring 改为分组概览 |
 | M2 基建 | ✅ 完成 | ruff（`backend/pyproject.toml`，59 处自动修 + 8 处手改，现存 0 违规）；eslint 9 flat + prettier + `globals`（`npm run lint` 0 违规）；`print` → logging（服务代码 85 处，`backend/log.py` 带 request_id 中间件）；`watchfiles` 移出运行依赖、`sympy` 锁版本、`ruff` 入 dev；CI 加 ruff / eslint / Windows / py3.14 矩阵，node 固定 22 |
 | M7 仓库卫生 | ⚠️ 部分 | `releases/` 已加入 `.gitignore` + `NEWRELEASE.md` 说明（停止新增，历史保留）；KaTeX 物理去重**延后**，由 M1 的版本一致性测试守住 |
 | M3–M6 | ⏳ 待做 | 见第 7–10 节 |
 
-**验证结果**：后端 `956 passed, 1 skipped`（基线 944 + 新增 12：契约 5 条、会话过期 1 条、日志 6 条）；前端 `eslint` 0 违规、`vue-tsc` 通过、21 套自测全通过、`vite build` 通过；`ruff check backend` 全绿。
+**验证结果**：后端 `961 passed, 1 skipped`（基线 944 + 新增 17：契约 5、日志 6、会话 6）；前端 `eslint` 0 违规、`vue-tsc` 通过、21 套自测全通过（新增 i18n、会话恢复两套）、`vite build` 通过；`ruff check backend` 全绿。
 
 
 ## 1. 这份方案解决什么
@@ -34,7 +34,7 @@ v1.25.0 的功能与测试水位已经不错（PBKDF2、token 只存哈希、bod
 | ruff / eslint 违规数 | 无工具，未测 | 0（新增代码零违规，存量按 `--diff` 增量） | CI |
 | `print(` 数量（非测试） | 196 | 0（全部走 logging） | `Select-String` / rg |
 | 接口文档覆盖率 | 49/78 = 63% | 100% + CI 守护 | M1-1 测试 |
-| 会话行为 | 24h 必掉登录 | 与 Cookie 语义一致 | `test_auth.py` |
+| 会话行为 | 24h 必掉登录 | 30 天滑动（闲置 24h 失效） | `test_auth.py` |
 | 最大单文件行数 | 3944（ChatWorkspace） | ≤ 1200 | `wc -l` 排序 |
 | RAG 检索回归护栏 | 无 | top-k 顺序 golden 测试 | `test_rag_regression.py` |
 | 仓库体积（.git） | 257 MB | 停止增长（历史迁移见 D3） | `git count-objects -vH` |
@@ -83,27 +83,28 @@ v1.25.0 的功能与测试水位已经不错（PBKDF2、token 只存哈希、bod
 
 这一批可以当天合入 `release/v1.26.0`，独立成一个 `fix:` 提交。
 
-### M0-1 会话语义定案
+### M0-1 会话语义定案（已按方案 B 落地）
 
-**现状**：`store.py:27` `TOKEN_TTL_HOURS = 24`，`store.py:423` 超期即 `None`；`auth.py:48` 却写 `COOKIE_MAX_AGE = 30 * 24 * 3600`，注释还声称"与 token 的实际留存策略同量级"。`auth.py:361` 的 `session()` 只 `_set_session_cookie(response, token)`，用同一个 token，**没有轮换**。净效果：Cookie 留 30 天，token 24 小时失效，用户每天被登出一次。
+**原始缺陷**：`store.py:27` `TOKEN_TTL_HOURS = 24`，`store.py` 里超期即 `None`；`auth.py` 却把 Cookie 记成 30 天且没有任何轮换逻辑。净效果是「Cookie 还在，服务端已判过期」——用户每天被登出一次。
 
-**方案 A（推荐，最小改动）**：让 Cookie 与 token 同寿命。
+**决策**：D1 选 **方案 B（滑动续期）**，理由是「30 天内来过就保持登录」才是产品预期，而 A 只是把矛盾统一到 24h。
 
-```python
-# backend/auth.py
-COOKIE_MAX_AGE = store.TOKEN_TTL_HOURS * 3600  # 与 token TTL 同寿命,避免"Cookie 还在但已登出"
-```
+**实际实现**（`backend/auth.py`、`backend/store.py`、`frontend/src/services/authService.ts`）：
 
-验收：`test_auth.py` 增加断言 `Max-Age=86400`，并断言把 `issued` 拨回 25 小时前 `/api/auth/session` 返回 401。
+1. `COOKIE_MAX_AGE = 30 天`，token 仍是 **24h 硬上限**（安全边界不放松）；
+2. `GET /api/auth/session` 在 `token_age >= TTL × 0.8`（剩余不足 20%）时轮换：签发新 token、响应体带回 `token` 字段、Cookie 同步换新；同一账号 5 分钟内不重复轮换（客户端没写回新 token 时不会把 token 表刷大）；
+3. **轮换不吊销旧 token** —— tokens 表没有"退役时间"字段（本轮不改表结构），且多标签页/长连接可能仍持有旧 token；它随自己的 24h 到期被 `issue_token` 的 sweep 清掉，暴露窗口不超过原 TTL；
+4. 鉴权改为**先试 Bearer、失效退回 Cookie**（`_tokens_in_play`）：否则「旧 Bearer 盖住新 Cookie」会让用户莫名被踢；
+5. 登出**同时吊销** Bearer 与 Cookie 两个凭据（轮换后二者可能不同）；
+6. 前端 `bootstrapSession` 把轮换后的 token 写回 localStorage —— 顺带修掉一个既有 bug：原实现 `setUser({ ...res.user })` 会把 `token` 覆盖成 `undefined`，之后所有请求悄悄退化成纯 Cookie 鉴权。
 
-**方案 B（体验更好，需额外测试）**：滑动续期 —— 在 `session()` 里签发新 token 并吊销旧的，但必须处理两个坑：
+**验收**（已跑通）：
+- `test_auth.py`：不轮换新 token / 临近过期轮换且旧 token 仍可用 / 旧 Bearer 回退 Cookie / 登出双清 / 过期且无新 Cookie 返回 401；
+- `frontend/scripts/session-bootstrap-test.ts`：未轮换保留旧 token、轮换写回新 token、localStorage 同步、401 清登录态。
 
-1. 多标签页并发续期会让别的标签页拿着已被吊销的 token → 401，因此旧 token 要留 60 秒宽限期（`revoke` 改为"打标记 + 宽限后清理"）；
-2. 每次启动都换 token 会写库，需要节流（剩余寿命 > 20% 时不续期）。
+**已知边界**：标签页连续打开超过 24h 且完全不刷新时，下一次请求可能 401（等价于 A 方案的行为）；`MG_LOG_LEVEL` 之外的会话参数目前写死在常量里，测评若要更短/更长会期需改 `COOKIE_MAX_AGE`。
 
-验收：`issued` 拨到 23 小时 → `session` 返回新 token；旧 token 在宽限期内仍可用、宽限期后 401；连点 5 次 `session` 只产生 1 个新 token。
-
-> 决策点 **D1**：选 A 还是 B。A 一天内可完成；B 约 1 人日并要动 `store.py` 的 token 生命周期语义。
+> 备选 A（已放弃）：`COOKIE_MAX_AGE = store.TOKEN_TTL_HOURS * 3600`，实现一行，但用户每天都要重新登录。
 
 ### M0-2 ~ M0-5 文档与注释修正
 
@@ -410,7 +411,7 @@ Cookie 用 `samesite=lax`，跨站 POST 已被浏览器挡住；但双域部署�
 
 | 编号 | 问题 | 选项 | 建议 | 影响 |
 | --- | --- | --- | --- | --- |
-| D1 | 会话有效期怎么统一 | A：Cookie 改为 24h；B：实现 token 滑动续期 | **A**（当天可完成，风险最低）；B 留到有用户反馈再评估 | M0-1 |
+| D1 | 会话有效期怎么统一 | A：Cookie 改为 24h；B：滑动续期 | **已定：B**（Cookie 30 天 + token 24h + 剩 20% 轮换，见 §4） | M0-1 |
 | D2 | `chat.py` 是否拆 | 拆 / 不拆 | **拆**，但必须在 M4-2 之后（先有条链路测试再搬） | M3-1 |
 | D3 | `releases/` 怎么处理 | A 停止新增 / B 重写历史 / C LFS | **A 先止血**，B 放到测评结束 | M7-1 |
 | D4 | 前端测试是否迁 vitest | 迁 / 不迁 | **迁**（否则大组件永远没测试入口） | M4-4、M3-2 |

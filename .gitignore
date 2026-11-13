@@ -30,6 +30,7 @@ backend/tools/.last_sync
 .trash-store-test.cjs
 .todo-test.cjs
 .i18n-test.cjs
+.session-bootstrap-test.cjs
 
 # 版本发布附件(源码 tar.gz / patch)不再入库:v1.25.0 及以后改挂 GitHub Release assets。
 # 历史目录仍在版本库中(已跟踪),新增的 releases/v* 不会再被提交,避免仓库每版 +2MB。
