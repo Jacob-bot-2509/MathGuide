@@ -3,6 +3,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 import research_corpus as rc
+import research_formats as rf
 import research_papers as rp
 
 
@@ -13,7 +14,9 @@ def test_temp_endpoints_return_stored_format_after_doi_dedup(tmp_path, monkeypat
     text = "DOI 10.1234/example " + "Research results and full discussion. " * 10
     html = f"<html><body>{text}</body></html>".encode()
     pdf = b"%PDF-1.4 fake content"
-    monkeypatch.setattr(rc, "_pdf_pages", lambda data: [(1, text), (2, text)])
+    # 注意:M3-3 之后 PDF 解析在 research_formats 里,patch rc._pdf_pages 不再生效
+    # (那是 corpus 的一份导入绑定);必须 patch 真正调用它的模块。
+    monkeypatch.setattr(rf, "_pdf_pages", lambda data: [(1, text), (2, text)])
     uid = ["pdf-first"]
     monkeypatch.setattr(rp, "require_auth", lambda request: {"uid": uid[0]})
 

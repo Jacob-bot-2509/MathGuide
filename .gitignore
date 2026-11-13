@@ -36,6 +36,15 @@ backend/tools/.last_sync
 # 历史目录仍在版本库中(已跟踪),新增的 releases/v* 不会再被提交,避免仓库每版 +2MB。
 releases/
 
+# 覆盖率产物(pytest-cov / vitest)
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+
+# 本地临时日志(排查/批处理脚本输出,勿入库)
+tmp_*.log
+
 # 编辑器/编码代理本地配置(Serena,勿入库)
 .serena/
 

@@ -23,6 +23,7 @@ dev.bat
 
 - [DEMO.md](DEMO.md) — 大创展示脚本:环境准备、演示动线、翻车预案、答辩备答
 - [docs/EVAL_REPORT.md](docs/EVAL_REPORT.md) — 50 题问答评测与 50 题抗幻觉评测报告
+- [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) — 工程优化方案与落地进度(P0–P5)
 
 ## 测试
 

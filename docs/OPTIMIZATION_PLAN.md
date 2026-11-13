@@ -15,8 +15,9 @@
 | M7 仓库卫生 | ⚠️ 部分 | `releases/` 已加入 `.gitignore` + `NEWRELEASE.md` 说明（停止新增，历史保留）；KaTeX 物理去重**延后**，由 M1 的版本一致性测试守住 |
 | M4 测试补齐 | ✅ 完成（M4-1/2/3/4/4-5） | `test_rag_regression.py`（7 条 golden：固定语料 + 排序/门限/稳定性）、`test_chat_stream_e2e.py`（9 条真跑：认证/限流/`[DONE]`/降级直答/用量记账/每日额度）、KaTeX 版本一致性；**覆盖率门槛**：基线 77%，CI `--cov-fail-under=75` 防倒退；**vitest 落地**（`vitest.config.ts` + `src/services/authService.test.ts`，`npm test` = 脚本套件 + vitest） |
 | M6 安全加固 | ✅ 完成（M6-1/2/3/4） | `MG_PRINT_OPEN` 不再能绕过本机校验（+3 条测试）、`config.detect_workers()` 启动告警 + `deploy` 写死单 worker 与 `--proxy-headers`、`origin_guard.py` 写操作来源校验（+9 条测试）、**每日额度护栏** `quota.py` + `MG_DAILY_LLM_CALLS`（+7 条测试，顺带修掉"问候也记用量"） |
-| M3 结构治理 | ⚠️ 部分 | `chat.py` 拆出 `chat_sse.py` / `chat_prompts.py` / `chat_routing.py`（445 行），1875 → 1509 行，`chat.*` 兼容导出保持不断链；**ChatWorkspace / research_corpus / i18n 未动** |
+| M3 结构治理 | ⚠️ 部分 | `chat.py` 拆出 `chat_sse.py` / `chat_prompts.py` / `chat_routing.py`（445 行，1875 → 1509）；`research_corpus.py` 拆出 `research_formats.py`（366 行，2568 → 2202），两处都用整组 `from ... import` 保留兼容导出；**`ChatWorkspace.vue`（3944 行）与 `i18n.ts`（2027 行）未动**，M3-2 已定位到两个可抽块（分栏状态 ~110 行、图解放大 ~310 行）及其依赖 |
 | M5 产品与研究 | ⏳ 未做 | 见第 9 节（需先补数据再调参） |
+| 仓库卫生（补充） | ✅ 完成 | `.gitignore` 补覆盖率产物与本地临时日志；`.release-notes-v1.5.0.md` 移入 `docs/`；`EVAL_REPORT.md` 加版本时效说明（0.667 是改动前数字）；`RESEARCH_SOURCE_PLAN.md` 标注已被 V2 取代；密钥扫描（`sk-*` / API key / 私钥）无命中；确认 `node_modules` / `dist` / `data` 未被跟踪 |
 
 **验证结果**：后端 `988 passed, 1 skipped`（基线 944 → 988，新增契约 5、日志 6、会话 6、RAG golden 7、流式 e2e 7、安全加固 12）；前端 `eslint` 0 违规、`vue-tsc` 通过、21 套自测全通过（新增 i18n、会话恢复）、`vite build` 通过；`ruff check backend` 全绿，`chat.py` 拆分前后**测试数与结果完全一致**。
 
@@ -254,6 +255,30 @@ strategy:
 4. 已知副作用：`monkeypatch.setattr(chat, "FRAME_MS", 0)` **不再影响流**（`_frames` 读的是 `chat_sse.FRAME_MS`），测试已改到 `chat_sse`。
 
 **第二阶段（未做，约 5 人日）**：`_gen_llm`（344 行）与 `_gen_paper_llm` / `_gen_point_lesson` / `_gen_learning_analysis` 仍在一处；目标是 `chat.py` ≤ 700 行，按 `chat_llm.py` / `chat_paper.py` / `chat_lesson.py` 继续搬，搬法与上面相同。
+
+### M3-3 `research_corpus.py` 拆分（已完成第一阶段）
+
+`research_corpus.py` 2568 → **2202 行**，拆出 `research_formats.py`（377 行）：
+
+| 迁入内容 | 说明 |
+| --- | --- |
+| `_pdf_pages` / `_pdf_pages_pdfium` / `_text_pages` / `_decode_text` / `_detect_format` / `_pack_pages` | 字节 → 页 |
+| `_HtmlText` / `_html_text` / `_docx_pages` / `_epub_pages` / `_rtf_text` / `_extract_pages` / `_extract_doi` | 各格式解析 |
+| `Section` / `_heading_level` / `_sections` / `_split_long` / `_chunk_section` / `_clean_line` / `_is_heading` | 页 → 章节 → 切片 |
+| `MAX_PAGES` / `CHUNK_CHARS` / `_NUMBERED_HEAD_RE` / `_KNOWN_HEADINGS` / `_DOI_RE` | 只被上述函数使用的常量 |
+
+这批是纯函数（只有字节进、结构出），与用户目录 / SQLite / 索引缓存无关，所以**能单独改、单独测**。
+第二阶段可继续拆 `UserIndex`（检索与索引，约 280 行）与 HTTP 层，但那两处共享模块状态（`_indexes` / `_index_paths` / `_index_lock`，被 40+ 处引用），需要先设计状态归属。
+
+### ⚠️ 搬运内部符号的两个通用坑（各踩过一次）
+
+1. **`monkeypatch.setattr(旧模块, "内部名")` 会静默失效**：内部调用读的是新模块的全局。
+   已踩两次 —— `chat.FRAME_MS`（改成 `chat_sse.FRAME_MS`）、`rc._pdf_pages`（改成
+   `research_formats._pdf_pages`）。**搬完必须 grep 测试里的 `setattr(旧模块, ...)`**，
+   否则测试会"看起来还在跑"，实际测的是真实实现。
+2. **兼容导出必须写成整组 `from 新模块 import (...)` 加 F401 豁免**：逐个导入时 ruff 会把
+   "只用来说兼容"的名字当未使用导入删掉，删完外部调用就 404（`chat._sse`、`rc._pack_pages`）。
+   最好在 import 上方写明"为什么不能删"。
 
 
 ### M3-2 `ChatWorkspace.vue` 抽 composables（3 人日）
