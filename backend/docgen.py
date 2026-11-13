@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse, Response
 import doc
 import math_render
 import math_table_render
+import quota
 import rag
 from chat import _rate_check, _record, require_auth
 from http_utils import read_json_object
@@ -377,6 +378,7 @@ async def qa_export(request: Request) -> Response | JSONResponse:
 
 async def outline(request: Request) -> JSONResponse:
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
     body = await read_json_object(request)
     text = _clean_text(body.get("request"), 2000)
@@ -413,6 +415,7 @@ async def outline(request: Request) -> JSONResponse:
 
 async def generate(request: Request) -> JSONResponse:
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
     body = await read_json_object(request)
     text = _clean_text(body.get("request"), 2000)
@@ -565,6 +568,7 @@ def _revise_document(raw, fallback: dict, lang: str) -> dict | None:
 async def revise(request: Request) -> JSONResponse:
     """按用户修改要求重写已生成的文档;证据与引用不改。"""
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
     body = await read_json_object(request)
     document = body.get("document")

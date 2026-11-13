@@ -13,8 +13,8 @@
 | M1 契约护栏 | ✅ 完成 | `tests/test_api_contract.py`（5 条：路由↔README 双向、auth 文档↔注册方式、KaTeX 前后端版本）；`scripts/i18n-test.ts`（ZH/EN 键一致 + `t()` 引用存在）；README 补 31 条接口；`main.py` docstring 改为分组概览 |
 | M2 基建 | ✅ 完成 | ruff（`backend/pyproject.toml`，59 处自动修 + 8 处手改，现存 0 违规）；eslint 9 flat + prettier + `globals`（`npm run lint` 0 违规）；`print` → logging（服务代码 85 处，`backend/log.py` 带 request_id 中间件）；`watchfiles` 移出运行依赖、`sympy` 锁版本、`ruff` 入 dev；CI 加 ruff / eslint / Windows / py3.14 矩阵，node 固定 22 |
 | M7 仓库卫生 | ⚠️ 部分 | `releases/` 已加入 `.gitignore` + `NEWRELEASE.md` 说明（停止新增，历史保留）；KaTeX 物理去重**延后**，由 M1 的版本一致性测试守住 |
-| M4 测试补齐 | ✅ 完成（M4-1/2/4-5） | `test_rag_regression.py`（7 条 golden：固定语料 + 排序/门限/稳定性）、`test_chat_stream_e2e.py`（7 条真跑：认证/限流/`[DONE]`/降级直答/用量记账）、KaTeX 版本一致性；**M4-3 覆盖率门槛、M4-4 vitest 未做** |
-| M6 安全加固 | ✅ 完成（M6-1/2/3） | `MG_PRINT_OPEN` 不再能绕过本机校验（+3 条测试）、`config.detect_workers()` 启动告警 + `deploy` 写死单 worker 与 `--proxy-headers`、`origin_guard.py` 写操作来源校验（+9 条测试）；**M6-4 每日额度护栏未做** |
+| M4 测试补齐 | ✅ 完成（M4-1/2/3/4/4-5） | `test_rag_regression.py`（7 条 golden：固定语料 + 排序/门限/稳定性）、`test_chat_stream_e2e.py`（9 条真跑：认证/限流/`[DONE]`/降级直答/用量记账/每日额度）、KaTeX 版本一致性；**覆盖率门槛**：基线 77%，CI `--cov-fail-under=75` 防倒退；**vitest 落地**（`vitest.config.ts` + `src/services/authService.test.ts`，`npm test` = 脚本套件 + vitest） |
+| M6 安全加固 | ✅ 完成（M6-1/2/3/4） | `MG_PRINT_OPEN` 不再能绕过本机校验（+3 条测试）、`config.detect_workers()` 启动告警 + `deploy` 写死单 worker 与 `--proxy-headers`、`origin_guard.py` 写操作来源校验（+9 条测试）、**每日额度护栏** `quota.py` + `MG_DAILY_LLM_CALLS`（+7 条测试，顺带修掉"问候也记用量"） |
 | M3 结构治理 | ⚠️ 部分 | `chat.py` 拆出 `chat_sse.py` / `chat_prompts.py` / `chat_routing.py`（445 行），1875 → 1509 行，`chat.*` 兼容导出保持不断链；**ChatWorkspace / research_corpus / i18n 未动** |
 | M5 产品与研究 | ⏳ 未做 | 见第 9 节（需先补数据再调参） |
 

@@ -138,3 +138,23 @@ def test_usage_recorded_once_per_stream(client):
 def test_usage_not_recorded_when_unauthorized(client):
     client.post("/api/chat/stream", json={"prompt": "未登录提问"})
     assert usage.for_user(UID) == []
+
+
+def test_daily_quota_blocks_further_requests(client, monkeypatch):
+    """MG_DAILY_LLM_CALLS=1:当天第一条放行,第二条 429(测评期成本护栏)。"""
+    monkeypatch.setenv("MG_DAILY_LLM_CALLS", "1")
+    headers = _auth()
+    first = client.post("/api/chat/stream", json={"prompt": "夹逼定理"}, headers=headers)
+    assert first.status_code == 200
+    second = client.post("/api/chat/stream", json={"prompt": "泰勒公式"}, headers=headers)
+    assert second.status_code == 429
+
+
+def test_daily_quota_ignores_empty_prompt(client, monkeypatch):
+    """问候不调用模型,不该消耗额度。"""
+    monkeypatch.setenv("MG_DAILY_LLM_CALLS", "1")
+    headers = _auth()
+    assert client.post("/api/chat/stream", json={"prompt": ""}, headers=headers).status_code == 200
+    assert client.post("/api/chat/stream", json={"prompt": "极限"}, headers=headers).status_code == 200
+    assert client.post("/api/chat/stream", json={"prompt": "极限"}, headers=headers).status_code == 429
+

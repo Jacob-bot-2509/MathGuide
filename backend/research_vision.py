@@ -26,6 +26,7 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import quota
 import research_corpus as rc
 from auth import require_auth
 from http_utils import read_json_object
@@ -521,6 +522,7 @@ def extract(images: list[tuple[str, bytes]], columns: list[dict],
 async def analyze_page(request: Request) -> JSONResponse:
     """整页图片 → 区块结构(正文/公式/表格/手写/图注),可选落库。"""
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     uid = str(rec.get("uid") or "")
     if not _limiter.allow(uid):
         raise HTTPException(429, "too many requests")
@@ -574,6 +576,7 @@ async def analyze_page(request: Request) -> JSONResponse:
 
 async def extract_formulas(request: Request) -> JSONResponse:
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     uid = str(rec.get("uid") or "")
     if not _limiter.allow(uid):
         raise HTTPException(429, "too many requests")

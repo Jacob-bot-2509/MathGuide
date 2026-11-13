@@ -23,3 +23,17 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["auth", "chat", "config", "db", "store", "usage", "rag", "doc", "docgen"]
+
+[tool.coverage.run]
+# 覆盖率只统计后端服务代码:tests/ 是测试本身(统计进去会虚高),
+# tools/ 是一次性脚本(没有单测价值)。
+source = ["."]
+omit = ["tests/*", "tools/*", ".venv-analysis/*"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "@abstractmethod",
+]

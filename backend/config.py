@@ -93,6 +93,19 @@ def _is_loopback_origin(origin: str) -> bool:
     return bool(parsed.hostname) and parsed.hostname in LOOPBACK_HOSTS
 
 
+def daily_llm_limit() -> int:
+    """每账号每天的模型请求上限;0 = 不限(默认)。
+
+    测评期用它兜住"单个账号把额度刷穿"的风险:按 usage 表里当天的记录数计,
+    超限直接 429。计数口径与 /api/stats、账号导出同一份数据,不额外维护计数器。
+    """
+    raw = os.getenv("MG_DAILY_LLM_CALLS", "").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
 def detect_workers(argv: list[str] | None = None) -> int:
     """uvicorn/gunicorn 的 worker 数(拿不到按 1)。
 

@@ -39,8 +39,9 @@ jobs:
         run: python -m compileall -q backend
       - name: Test
         working-directory: backend
-        # Windows 上 pytest 偶发句柄占用,失败即停能更快暴露第一个真实问题
-        run: python -m pytest -q
+        # 覆盖率门槛只用来**防倒退**(基线 77%,门槛设 75%),
+        # 不要为了数字好看去写无断言的测试。
+        run: python -m pytest -q --cov --cov-report=term-missing --cov-fail-under=75
 
   frontend:
     name: frontend (node 22)

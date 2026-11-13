@@ -39,6 +39,7 @@ import config
 import diagnosis
 import diagram_metrics
 import learning_analysis
+import quota
 import rag
 import research_actions
 import research_corpus
@@ -1067,6 +1068,7 @@ async def _gen_intuition(question: str, answer: str, zh: bool):
 async def intuition(request: Request) -> StreamingResponse | JSONResponse:
     """按需生成直观解释;默认命中缓存,refresh=true 时重写(用户点「换个说法」)。"""
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     body = await read_json_object(request)
     question = str(body.get("question", "")).strip()[:2000]
     answer = str(body.get("answer", "")).strip()[:4000]
@@ -1084,7 +1086,7 @@ async def intuition(request: Request) -> StreamingResponse | JSONResponse:
 
 
 async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
-    """聊天入口(安全外壳):认证 → 输入上限 → 限流 → 路由 → 用量记账"""
+    """聊天入口(安全外壳):认证 → 输入上限 → 限流/额度 → 路由 → 用量记账"""
     rec = require_auth(request)  # 401: {"detail": "unauthorized"}
 
     body = await read_json_object(request)
@@ -1102,13 +1104,20 @@ async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
         prompt = prompt[:PROMPT_MAX]
 
     # 限流:每用户滑动窗口,仅对非空提问计次(新会话问候不占用额度)
+    # 每日额度同理放在这里:问候不调用模型,不该算进当天用量。
     if prompt:
-        _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
+        uid = str(rec.get("uid") or rec.get("phone") or "")
+        _rate_check(uid)
+        quota.check(uid)
 
     meta = {"role": "main", "research": False, "workspace": workspace}
     resp = await _route_chat(prompt, cmd, body, rec, meta, workspace)
     if not isinstance(resp, StreamingResponse):
         return resp
+    if not prompt:
+        # 空 prompt 只是"新会话问候"(固定文案,不调用模型):不计入用量,
+        # 否则会污染成本报表,也会白占用户当天的模型额度
+        return _with_meta(resp, meta)
     resp = _meter(resp, rec, len(prompt), cmd or "", meta)
     return _with_meta(resp, meta)
 
@@ -1119,6 +1128,7 @@ async def speech_to_math(request: Request) -> StreamingResponse:
     一字未出时回放原文帧,不阻断语音输入;已输出半截则主动中断流(前端
     complete=false 回退原文,避免半截转写混进缓存);计入限流与用量统计"""
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     body = await read_json_object(request)
     text = str(body.get("text", "")).strip()[:6000]
     if not text:
