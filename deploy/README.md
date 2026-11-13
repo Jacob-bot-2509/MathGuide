@@ -88,8 +88,17 @@ cd backend && ../.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --p
 ## 5. 进程与日志
 
 - 参考 `deploy/mathguide.service` 用 systemd 托管后端;`data/` 是唯一可写目录。
+- **必须单 worker**:限流器(`rate_limit`)、会话缓存(`session_cache`)、聊天检索缓存
+  都放在进程内存里。加 `--workers 4` 会让"每账号 6 次/分"变成 24 次/分、
+  缓存互相看不见(同一用户切到别的 worker 就像换了台机器)。
+  启动时若检测到多 worker,后端会打一条 WARNING 提醒。
+- **必须传 `--proxy-headers --forwarded-allow-ips=127.0.0.1`**:反向代理已带
+  `X-Forwarded-For`,不显式声明时能否取到真实客户端 IP 取决于 uvicorn 版本默认值,
+  而按 IP 限流与日志都依赖它。
 - 参考 `deploy/logrotate.conf` 轮转 `/var/log/mathguide/*.log`(默认保留 14 天)。
 - 如果使用 journald,改用 journald 的 `SystemMaxUse` / `MaxRetentionSec`。
+- 日志级别用 `MG_LOG_LEVEL`(默认 INFO);每条带 `request_id`,同一次回答的多条
+  日志可用它串起来。日志里不含问题正文、回答正文与手机号。
 
 ## 6. 备份与模型厂商
 

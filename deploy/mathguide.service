@@ -15,7 +15,10 @@ User=mathguide
 Group=mathguide
 WorkingDirectory=/srv/mathguide/backend
 EnvironmentFile=/srv/mathguide/backend/.env.local
-ExecStart=/srv/mathguide/.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
+# 必须单进程(--workers 不要加):限流器、会话缓存、检索缓存都是进程内存,
+# 多 worker 会让"每账号 N 次/分"变成 N×worker 倍且缓存各自分裂。
+# --proxy-headers 让 request.client.host 取 nginx/caddy 传来的真实 IP(按 IP 限流依赖它)。
+ExecStart=/srv/mathguide/.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=3
 UMask=0077

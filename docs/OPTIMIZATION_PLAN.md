@@ -13,9 +13,12 @@
 | M1 契约护栏 | ✅ 完成 | `tests/test_api_contract.py`（5 条：路由↔README 双向、auth 文档↔注册方式、KaTeX 前后端版本）；`scripts/i18n-test.ts`（ZH/EN 键一致 + `t()` 引用存在）；README 补 31 条接口；`main.py` docstring 改为分组概览 |
 | M2 基建 | ✅ 完成 | ruff（`backend/pyproject.toml`，59 处自动修 + 8 处手改，现存 0 违规）；eslint 9 flat + prettier + `globals`（`npm run lint` 0 违规）；`print` → logging（服务代码 85 处，`backend/log.py` 带 request_id 中间件）；`watchfiles` 移出运行依赖、`sympy` 锁版本、`ruff` 入 dev；CI 加 ruff / eslint / Windows / py3.14 矩阵，node 固定 22 |
 | M7 仓库卫生 | ⚠️ 部分 | `releases/` 已加入 `.gitignore` + `NEWRELEASE.md` 说明（停止新增，历史保留）；KaTeX 物理去重**延后**，由 M1 的版本一致性测试守住 |
-| M3–M6 | ⏳ 待做 | 见第 7–10 节 |
+| M4 测试补齐 | ✅ 完成（M4-1/2/4-5） | `test_rag_regression.py`（7 条 golden：固定语料 + 排序/门限/稳定性）、`test_chat_stream_e2e.py`（7 条真跑：认证/限流/`[DONE]`/降级直答/用量记账）、KaTeX 版本一致性；**M4-3 覆盖率门槛、M4-4 vitest 未做** |
+| M6 安全加固 | ✅ 完成（M6-1/2/3） | `MG_PRINT_OPEN` 不再能绕过本机校验（+3 条测试）、`config.detect_workers()` 启动告警 + `deploy` 写死单 worker 与 `--proxy-headers`、`origin_guard.py` 写操作来源校验（+9 条测试）；**M6-4 每日额度护栏未做** |
+| M3 结构治理 | ⚠️ 部分 | `chat.py` 拆出 `chat_sse.py` / `chat_prompts.py` / `chat_routing.py`（445 行），1875 → 1509 行，`chat.*` 兼容导出保持不断链；**ChatWorkspace / research_corpus / i18n 未动** |
+| M5 产品与研究 | ⏳ 未做 | 见第 9 节（需先补数据再调参） |
 
-**验证结果**：后端 `961 passed, 1 skipped`（基线 944 + 新增 17：契约 5、日志 6、会话 6）；前端 `eslint` 0 违规、`vue-tsc` 通过、21 套自测全通过（新增 i18n、会话恢复两套）、`vite build` 通过；`ruff check backend` 全绿。
+**验证结果**：后端 `988 passed, 1 skipped`（基线 944 → 988，新增契约 5、日志 6、会话 6、RAG golden 7、流式 e2e 7、安全加固 12）；前端 `eslint` 0 违规、`vue-tsc` 通过、21 套自测全通过（新增 i18n、会话恢复）、`vite build` 通过；`ruff check backend` 全绿，`chat.py` 拆分前后**测试数与结果完全一致**。
 
 
 ## 1. 这份方案解决什么
@@ -231,22 +234,27 @@ strategy:
 
 原则：**只搬迁、不改逻辑**。每一步都用"全量测试通过 + 无行为 diff"作为完成条件，一步一个 commit，出问题可单步 revert。
 
-### M3-1 `chat.py` 拆分（2 人日）
+### M3-1 `chat.py` 拆分（2 人日，已完成第一阶段）
 
 现状 1875 行 / 51 个函数，一个模块同时承担 SSE 协议、提示词、角色路由、检索改写、答案复核、图解校验、论文问答、导航、公式澄清、直觉解释。
 
-| 新文件 | 迁入内容 | 说明 |
+**已落地（3 个纯模块，445 行迁出，`chat.py` 1875 → 1509）**：
+
+| 新文件 | 迁入内容 | 依赖 |
 | --- | --- | --- |
-| `chat_sse.py` | `_sse` / `_frames` / `_frame_text_len` / `_with_meta` / `_DONE` | 纯协议层，无业务依赖 |
-| `chat_prompts.py` | `WELCOME_*` / `FALLBACK_*` / `ATTACH_*` / `_INTUITION_SYSTEM_*` / `_CLARIFY_*` | 只有常量，评审时最好 diff |
-| `chat_routing.py` | `_pick_role` / `_chitchat_kind` / `_conversational_reply` / `_normalize_query` / `_retrieval_query` / `_validated_history` | 纯函数，最适合补单测 |
-| `chat_verify.py` | `_verify_answer` / `_diagram_verified` / `_verify_clarify` | 双模型复核 |
-| `chat_paper.py` | `_gen_paper_llm` / `_paper_actions_frame` | 论文问答 |
-| `chat_nav.py` | `_nav_system` / `_nav_guide_system` / `_gen_nav_list` / `_gen_nav_guide` | 导航 |
+| `chat_sse.py` | `CHUNK` / `FRAME_MS` / `_DONE` / `_frame_text_len` / `_with_meta` / `_frames` / `_sse` / `_stream_text` | 只依赖 asyncio / json |
+| `chat_prompts.py` | `WELCOME_*` / `FALLBACK_*` / `ATTACH_*` / `_CLARIFY_*` / `_INTUITION_SYSTEM_*` / `_nav_system` / `_nav_guide_system` | 无 |
+| `chat_routing.py` | `_is_chinese` / `_pick_role` / `_chitchat_kind` / `_normalize_query` / `_retrieval_query` / `_validate_history` / `_compose_direct` / 意图识别一族 | `rag` + `chat_prompts` |
 
-`chat.py` 保留 `chat_stream` / `intuition` / `speech_to_math` 三个路由入口 + 用量记账，并 `from chat_sse import ...` 保持测试里的 `chat._sse` 等引用不破（现有 `test_chat_helpers.py` 直接调私有函数，**不要动这些名字**）。
+做法要点（值得复用）：
 
-验收：`pytest backend/tests` 944 passed 不变；`wc -l backend/chat.py` ≤ 700。
+1. 用脚本**按符号边界抽取**（顶层 `def`/`async def`/`大写常量`），不手抄，避免 1900 行里搬漏；
+2. `chat.py` 用整组 `from chat_* import (...)` 保留**兼容导出**，`chat._sse` / `chat.WELCOME_ZH` 等名字照旧可用（现有测试与 `main.py` 零改动）；
+3. 验证靠三道闸：`ruff`（F821 直接抓出漏导入的符号）+ `compileall` + 全量 pytest（**988 passed，与拆分前完全一致**）；
+4. 已知副作用：`monkeypatch.setattr(chat, "FRAME_MS", 0)` **不再影响流**（`_frames` 读的是 `chat_sse.FRAME_MS`），测试已改到 `chat_sse`。
+
+**第二阶段（未做，约 5 人日）**：`_gen_llm`（344 行）与 `_gen_paper_llm` / `_gen_point_lesson` / `_gen_learning_analysis` 仍在一处；目标是 `chat.py` ≤ 700 行，按 `chat_llm.py` / `chat_paper.py` / `chat_lesson.py` 继续搬，搬法与上面相同。
+
 
 ### M3-2 `ChatWorkspace.vue` 抽 composables（3 人日）
 

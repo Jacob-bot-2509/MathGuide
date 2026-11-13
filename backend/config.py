@@ -93,6 +93,32 @@ def _is_loopback_origin(origin: str) -> bool:
     return bool(parsed.hostname) and parsed.hostname in LOOPBACK_HOSTS
 
 
+def detect_workers(argv: list[str] | None = None) -> int:
+    """uvicorn/gunicorn 的 worker 数(拿不到按 1)。
+
+    为什么专门做这个判断:限流器(`rate_limit`)、会话缓存(`session_cache`)、
+    聊天检索缓存都是**进程内存**。多 worker 会让"每账号 6 次/分"变成 6×N 次、
+    缓存各存一份互不可见。这里只负责报数,由 `main.py` 在启动日志里提示。
+    """
+    args = sys.argv[1:] if argv is None else argv
+    for index, arg in enumerate(args):
+        if arg == "--workers" and index + 1 < len(args):
+            value = args[index + 1].strip()
+        elif arg.startswith("--workers="):
+            value = arg.split("=", 1)[1].strip()
+        else:
+            continue
+        try:
+            return max(1, int(value))
+        except ValueError:
+            return 1
+    raw = os.getenv("WEB_CONCURRENCY", "").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 1
+
+
 def assert_safe_demo_mode(argv: list[str] | None = None) -> None:
     """演示模式只允许本机。公网绑定/公网 CORS 来源直接拒绝启动。
 

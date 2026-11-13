@@ -27,6 +27,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 import analysis_client
+import config
 import research_corpus as rc
 from auth import require_auth
 from http_utils import read_json_object
@@ -1238,16 +1239,25 @@ def _open_in_office(path: Path) -> bool:
         return False
 
 
-def _print_allowed(request: Request) -> bool:
-    """只允许本机页面触发打开本地程序;部署到远端时返回 403。"""
-    if os.getenv("MG_PRINT_OPEN") == "1":
-        return True
+def _request_host(request: Request) -> str:
+    """请求 Host 的主机名部分(去端口,IPv6 去方括号)。"""
     host = (request.headers.get("host") or "").strip().lower()
     if host.startswith("["):
-        name = host[1:host.find("]")] if "]" in host else host
-    else:
-        name = host.split(":")[0]
-    return name in {"localhost", "127.0.0.1", "::1"} or name.endswith(".localhost")
+        return host[1:host.find("]")] if "]" in host else host
+    return host.split(":")[0]
+
+
+def _print_allowed(request: Request) -> bool:
+    """只允许本机页面触发打开本地程序;部署到远端时返回 403。
+
+    `MG_PRINT_OPEN=1` 只是本机演示的便利开关(例如从局域网手机演示),
+    它**不能**在关闭演示模式(`MG_DEMO_MODE=0`,即公网部署)时生效 ——
+    否则一次误配就能让公网访问者在我们的服务器上打开文件/打印机。
+    """
+    name = _request_host(request)
+    if name in config.LOOPBACK_HOSTS or name.endswith(".localhost"):
+        return True
+    return os.getenv("MG_PRINT_OPEN") == "1" and config.demo_mode()
 
 
 # ---------- HTTP ----------
