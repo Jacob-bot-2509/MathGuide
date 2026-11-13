@@ -15,11 +15,11 @@
 | M7 仓库卫生 | ⚠️ 部分 | `releases/` 已加入 `.gitignore` + `NEWRELEASE.md` 说明（停止新增，历史保留）；KaTeX 物理去重**延后**，由 M1 的版本一致性测试守住 |
 | M4 测试补齐 | ✅ 完成（M4-1/2/3/4/4-5） | `test_rag_regression.py`（7 条 golden：固定语料 + 排序/门限/稳定性）、`test_chat_stream_e2e.py`（9 条真跑：认证/限流/`[DONE]`/降级直答/用量记账/每日额度）、KaTeX 版本一致性；**覆盖率门槛**：基线 77%，CI `--cov-fail-under=75` 防倒退；**vitest 落地**（`vitest.config.ts` + `src/services/authService.test.ts`，`npm test` = 脚本套件 + vitest） |
 | M6 安全加固 | ✅ 完成（M6-1/2/3/4） | `MG_PRINT_OPEN` 不再能绕过本机校验（+3 条测试）、`config.detect_workers()` 启动告警 + `deploy` 写死单 worker 与 `--proxy-headers`、`origin_guard.py` 写操作来源校验（+9 条测试）、**每日额度护栏** `quota.py` + `MG_DAILY_LLM_CALLS`（+7 条测试，顺带修掉"问候也记用量"） |
-| M3 结构治理 | ⚠️ 部分 | `chat.py` 拆出 `chat_sse.py` / `chat_prompts.py` / `chat_routing.py`（445 行，1875 → 1509）；`research_corpus.py` 拆出 `research_formats.py`（366 行，2568 → 2202），两处都用整组 `from ... import` 保留兼容导出；**`ChatWorkspace.vue`（3944 行）与 `i18n.ts`（2027 行）未动**，M3-2 已定位到两个可抽块（分栏状态 ~110 行、图解放大 ~310 行）及其依赖 |
+| M3 结构治理 | ⚠️ 部分 | `chat.py` 1875→1509（`chat_sse` / `chat_prompts` / `chat_routing`）；`research_corpus.py` 2568→2202（`research_formats`）；`i18n.ts` 2027→127（词条拆到 `utils/i18n/*.ts`，按 account / chat / common / learn / research 五组，955 条无损）；**`ChatWorkspace.vue`（3944 行）未动**——已定位两个可抽块与依赖，见 §7 M3-2 |
 | M5 产品与研究 | ⏳ 未做 | 见第 9 节（需先补数据再调参） |
 | 仓库卫生（补充） | ✅ 完成 | `.gitignore` 补覆盖率产物与本地临时日志；`.release-notes-v1.5.0.md` 移入 `docs/`；`EVAL_REPORT.md` 加版本时效说明（0.667 是改动前数字）；`RESEARCH_SOURCE_PLAN.md` 标注已被 V2 取代；密钥扫描（`sk-*` / API key / 私钥）无命中；确认 `node_modules` / `dist` / `data` 未被跟踪 |
 
-**验证结果**：后端 `988 passed, 1 skipped`（基线 944 → 988，新增契约 5、日志 6、会话 6、RAG golden 7、流式 e2e 7、安全加固 12）；前端 `eslint` 0 违规、`vue-tsc` 通过、21 套自测全通过（新增 i18n、会话恢复）、`vite build` 通过；`ruff check backend` 全绿，`chat.py` 拆分前后**测试数与结果完全一致**。
+**验证结果**：后端 `995 passed, 1 skipped`（基线 944 → 995），覆盖率 **76.6%**（CI 门槛 75%，防倒退）；前端 `eslint` 0 违规、`vue-tsc` 通过、`vite build` 通过、20 套脚本自测 + vitest 2 个文件 7 条断言全过；`ruff check backend` 全绿。三次拆分（chat.py / research_corpus.py / i18n.ts）前后**测试数与结果完全一致**。
 
 
 ## 1. 这份方案解决什么
@@ -290,6 +290,24 @@ strategy:
 3. `useChatAttachments.ts`：附件/公式导入/剪贴板。
 
 模板部分先不动。目标 ≤ 1200 行（script + template）。风险最高的第 1 项建议单独排一天，做完立刻 `npm test` + 手测"中断/恢复/切会话"三个场景。
+
+**已勘察（本轮未执行，留给下一轮）**：实际读下来，纯几何/手势计算**已经**在 `@/utils/diagramFocus`（`isDoubleTap` / `tapMoved` / `moveFocusPanel` / `resizeFocusPanel` / `clampDiagramSplit`），组件里剩的是**有状态的 UI 布线**。可抽的两块与依赖：
+
+| 块 | 位置 | 行数 | 依赖（需作为参数传入） |
+| --- | --- | --- | --- |
+| 分栏状态 + 拖拽 | `97-103`、`205-285` | ~110 | `workspaceBodyRef`、`SPLIT_MIN_WIDTH`、`searchOpen` |
+| 图解放大（打开/关闭 + 触摸手势 + 窄屏面板 + 焦点恢复） | `286-635` 中的 focus 部分 | ~310 | `workspaceBodyRef`、`listEl`、`searchOpen`、`diagramSplitRatio` |
+
+抽取方式：`useSplitPane({ bodyRef, ... })` / `useDiagramFocus({ bodyRef, listRef, searchOpen })`，返回现有同名绑定（`const { splitRatio, startSplitDrag, ... } = useSplitPane(...)`），模板零改动。
+
+**为什么这轮没做**：这两块是**没有任何自动化测试兜底的触摸/拖拽交互**，唯一验证手段是 `vue-tsc` + build + 人工冒烟；在已经连做 6 项改动的同一批里动它，出问题难定位。建议单独一个 commit、配合 M4-4 已落地的 vitest 先补 2~3 条纯函数级断言（`clampSplit` / `clampDiagramSplitForBody` 的边界值）作为最小回归网。
+
+### M3-4 `i18n.ts` 拆分（已完成）
+
+`src/utils/i18n.ts` **2027 → 127 行**，词条按 key 前缀拆成 `src/utils/i18n/{account,chat,common,learn,research}.ts`（202 / 45 / 10 / 228 / 470 条），`i18n.ts` 只保留合并与 `t()`。
+
+- 拆分用脚本按**条目**切（不是按行：ZH 里有一行写了两个键），拆完断言 `zh + en` 各 955 条，与拆分前逐条对得上；
+- 原来的 `scripts/i18n-test.ts`（解析源码文本）随之失效，已迁到 **vitest**：`src/utils/i18n.test.ts` 直接 import 字典，断言键集合一致、总数 955、`t()` 引用必存在 —— 顺便把 M4-4 的 vitest 用到真实场景里。
 
 ### M3-3 `research_corpus.py` 拆分（2 人日）
 

@@ -126,12 +126,6 @@ const CASES = [
     artifact: '.about-content-test.cjs',
   },
   {
-    name: 'i18n 双语键一致性',
-    bundle: 'npx esbuild scripts/i18n-test.ts --bundle --format=cjs --platform=node --outfile=.i18n-test.cjs',
-    run: 'node .i18n-test.cjs',
-    artifact: '.i18n-test.cjs',
-  },
-  {
     name: '会话恢复与 token 轮换',
     bundle: 'npx esbuild scripts/session-bootstrap-test.ts --bundle --format=cjs --platform=node --define:import.meta.env={} --outfile=.session-bootstrap-test.cjs',
     run: 'node .session-bootstrap-test.cjs',
