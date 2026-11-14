@@ -1,7 +1,7 @@
 # MathGuide 工程优化方案（P0–P5）
 
 日期：2026-11-13
-状态：**M0 / M1 / M2 / M4 / M6 / M7 已完成并验证**；M3 完成 3/4（`ChatWorkspace` 第一阶段见 §7 M3-2）；M5 待立项
+状态：**M0 / M1 / M2 / M4 / M6 / M7 已完成并验证**；M3 完成 4/5（`ChatWorkspace` 已拆两批，见 §7 M3-2）；M5 待立项
 基线：v1.25.0（代码快照 `8475f4a` / 发布提交 `66ead6e`）；后端 944 passed、前端 20 套自测
 关联：[后端 README](../backend/README.md)、[部署清单](../deploy/README.md)、[评测报告](EVAL_REPORT.md)
 
@@ -15,11 +15,11 @@
 | M7 仓库卫生 | ⚠️ 部分 | `releases/` 已加入 `.gitignore` + `NEWRELEASE.md` 说明（停止新增，历史保留）；KaTeX 物理去重**延后**，由 M1 的版本一致性测试守住 |
 | M4 测试补齐 | ✅ 完成（M4-1/2/3/4/4-5） | `test_rag_regression.py`（7 条 golden：固定语料 + 排序/门限/稳定性）、`test_chat_stream_e2e.py`（9 条真跑：认证/限流/`[DONE]`/降级直答/用量记账/每日额度）、KaTeX 版本一致性；**覆盖率门槛**：基线 77%，CI `--cov-fail-under=75` 防倒退；**vitest 落地**（`vitest.config.ts` + `src/services/authService.test.ts`，`npm test` = 脚本套件 + vitest） |
 | M6 安全加固 | ✅ 完成（M6-1/2/3/4） | `MG_PRINT_OPEN` 不再能绕过本机校验（+3 条测试）、`config.detect_workers()` 启动告警 + `deploy` 写死单 worker 与 `--proxy-headers`、`origin_guard.py` 写操作来源校验（+9 条测试）、**每日额度护栏** `quota.py` + `MG_DAILY_LLM_CALLS`（+7 条测试，顺带修掉"问候也记用量"） |
-| M3 结构治理 | ⚠️ 部分（3/4） | `chat.py` 1875→1509（`chat_sse` / `chat_prompts` / `chat_routing`）；`research_corpus.py` 2568→2202（`research_formats`）；`i18n.ts` 2027→127（词条拆到 `utils/i18n/*.ts`，按 account / chat / common / learn / research 五组，955 条无损）；**`ChatWorkspace.vue` 3944→3592**（抽 `useResearchSplit` / `useDiagramFocus` + `utils/splitPane`；第二阶段 `useChatStream` 未做，见 §7 M3-2） |
+| M3 结构治理 | ⚠️ 部分（4/5） | `chat.py` 1875→1509（`chat_sse` / `chat_prompts` / `chat_routing`）；`research_corpus.py` 2568→2202（`research_formats`）；`i18n.ts` 2027→127（词条拆到 `utils/i18n/*.ts`，按 account / chat / common / learn / research 五组，955 条无损）；**`ChatWorkspace.vue` 3944→3251**（第一批抽 `useResearchSplit` / `useDiagramFocus` + `utils/splitPane`；第二批抽 `useChatStream` / `useChatAttachments`，并补上组件测试能力；语音输入待抽，见 §7 M3-2） |
 | M5 产品与研究 | ⏳ 未做 | 见第 9 节（需先补数据再调参） |
 | 仓库卫生（补充） | ✅ 完成 | `.gitignore` 补覆盖率产物与本地临时日志；`.release-notes-v1.5.0.md` 移入 `docs/`；`EVAL_REPORT.md` 加版本时效说明（0.667 是改动前数字）；`RESEARCH_SOURCE_PLAN.md` 标注已被 V2 取代；密钥扫描（`sk-*` / API key / 私钥）无命中；确认 `node_modules` / `dist` / `data` 未被跟踪 |
 
-**验证结果**：后端 `995 passed, 1 skipped`（基线 944 → 995），覆盖率 **76.6%**（CI 门槛 75%，防倒退）；前端 `eslint` 0 违规、`vue-tsc` 通过、`vite build` 通过、20 套脚本自测 + vitest **5 个文件 39 条断言**全过；`ruff check backend` 全绿。四次拆分（chat.py / research_corpus.py / i18n.ts / ChatWorkspace.vue）前后**测试数与结果完全一致**，其中 ChatWorkspace 一轮是**先补测试再拆分**。
+**验证结果**：后端 `995 passed, 1 skipped`（基线 944 → 995），覆盖率 **76.6%**（CI 门槛 75%，防倒退）；前端 `eslint` 0 违规、`vue-tsc` 通过、`vite build` 通过、20 套脚本自测 + vitest **8 个文件 70 条断言**（含组件级挂载与手势）全过；`ruff check backend` 全绿。五次拆分（chat.py / research_corpus.py / i18n.ts / ChatWorkspace 两批）前后**测试数与结果完全一致**，ChatWorkspace 两批都是**先补测试再拆分**。
 
 
 ## 1. 这份方案解决什么
@@ -39,7 +39,7 @@ v1.25.0 的功能与测试水位已经不错（PBKDF2、token 只存哈希、bod
 | `print(` 数量（非测试） | 196 | 0（全部走 logging） | `Select-String` / rg |
 | 接口文档覆盖率 | 49/78 = 63% | 100% + CI 守护 | M1-1 测试 |
 | 会话行为 | 24h 必掉登录 | 30 天滑动（闲置 24h 失效） | `test_auth.py` |
-| 最大单文件行数 | 3592（ChatWorkspace，原 3944） | ≤ 1200 | `wc -l` 排序 |
+| 最大单文件行数 | 3251（ChatWorkspace，原 3944） | ≤ 1200 | `wc -l` 排序 |
 | RAG 检索回归护栏 | 无 | top-k 顺序 golden 测试 | `test_rag_regression.py` |
 | 仓库体积（.git） | 257 MB | 停止增长（历史迁移见 D3） | `git count-objects -vH` |
 | 后端测试数 | 944 | 956（本轮已达） | pytest |
@@ -65,7 +65,7 @@ v1.25.0 的功能与测试水位已经不错（PBKDF2、token 只存哈希、bod
 | M2-5 | requirements 整理 | P1 | 可复现 | 30m | — |
 | M2-6 | CI 加 Windows/3.14 矩阵 | P1 | 跨平台回归 | 3h | M2-1/2 |
 | M3-1 | `chat.py` 按职责拆分 | P2 | 可维护 | 2d | — |
-| M3-2 | `ChatWorkspace` 抽 composables | P2 | 可维护 | 3d | 第一阶段完成：3944→3592，新增 3 个测试文件（33 条断言） |
+| M3-2 | `ChatWorkspace` 抽 composables | P2 | 可维护 | 3d | 两批完成：3944→3251；新增 `useChatStream` / `useChatAttachments` / `useResearchSplit` / `useDiagramFocus` + 组件测试能力（vitest 8 文件 70 条）；语音输入待抽（D6） |
 | M3-3 | `research_corpus.py` 拆分 | P2 | 可维护 | 2d | — |
 | M3-4 | `i18n.ts` 按域拆文件 | P2 | 可维护 | 0.5d | M1-2 |
 | M4-1 | RAG 检索回归测试 | P3 | 防检索退化 | 1d | — |
@@ -310,12 +310,43 @@ strategy:
 用户拖到 0.68、刷新后变回 0.6（看起来像"拖拽没被记住"）。现在宽度未知时只做 0..1 兜底，
 像素夹取留到拿到实测宽度之后（`splitPane.test.ts` 第 1 条锁定）。
 
-**第二阶段（未做）**：`useChatStream` / `useChatPersistence` / `useChatAttachments`。
-这三块与 SSE 协议、localStorage 结构强耦合，建议先补组件测试能力（`@vue/test-utils` + happy-dom）再动。
+**第二阶段（进行中）**：见下方「M3-2 第二阶段」。
 
 抽取方式：`useSplitPane({ bodyRef, ... })` / `useDiagramFocus({ bodyRef, listRef, searchOpen })`，返回现有同名绑定（`const { splitRatio, startSplitDrag, ... } = useSplitPane(...)`），模板零改动。
 
 **为什么这轮没做**：这两块是**没有任何自动化测试兜底的触摸/拖拽交互**，唯一验证手段是 `vue-tsc` + build + 人工冒烟；在已经连做 6 项改动的同一批里动它，出问题难定位。建议单独一个 commit、配合 M4-4 已落地的 vitest 先补 2~3 条纯函数级断言（`clampSplit` / `clampDiagramSplitForBody` 的边界值）作为最小回归网。
+
+### M3-2 第二阶段：`useChatStream` / `useChatAttachments`（已完成 2/3）
+
+先补**组件测试能力**，这是这一轮一切改动的前提：
+
+| 能力 | 做法 |
+| --- | --- |
+| `.vue` 单测 | `vitest.config.ts` 接 `@vitejs/plugin-vue`（原先只跑纯 TS，import 组件会报 "Install @vitejs/plugin-vue"） |
+| DOM 环境 | `happy-dom` + `@vue/test-utils`；默认仍是 `node`，需要的文件头写 `// @vitest-environment happy-dom` |
+| 挂载方式 | `shallowMount`：公式渲染 / three.js 图解全部走桩，只跑组件自身逻辑 |
+| SSE 假响应 | 构造 `body.getReader()` 逐块吐 `data:` 行，末帧 `[DONE]`，不需要起后端 |
+
+`ChatWorkspace.test.ts`（5 条）只驱动**公开面** —— 挂载、改 textarea、按回车、读 localStorage 与 fetch 入参，
+不碰 `<script setup>` 内部状态；因此下面两次抽取**没有改动任何一条测试**。
+
+| 抽出 | 行数 | 注入的依赖 | 单测 |
+| --- | --- | --- | --- |
+| `composables/useChatStream.ts` | 258 | 会话/滚动/落盘/图解追问/发请求函数（13 个 thunk） | 12 条 |
+| `composables/useChatAttachments.ts` | 291 | 工作区/会话写入/流式/落盘/论文暂存/菜单开合（14 项） | 14 条 |
+
+`useChatStream` 钉住的是四条收尾路径（正常 / 断在 `[DONE]` 前 / 429 / 失败后补发的 `onDone`）
+以及停止、续写、卸载；这些平时只能靠拔网线、中途点停止才碰到。
+`useChatAttachments` 钉住扫描版 PDF 无文本层、正文 3 万字截断、科研区论文分流、拖拽 4 个文件上限、粘贴图片。
+
+**结果**：`ChatWorkspace.vue` **3592 → 3251 行**（累计 3944 → 3251，−693）；
+vitest **5 文件 39 条 → 8 文件 70 条**；`vue-tsc` / `eslint` / `vite build` 通过，后端 995 passed 未变。
+
+**第三块（`useChatPersistence`）没按原计划做，理由**：真读下来「持久化」在组件里并不成块 ——
+`deleteHistory` / `newConversation` / `jumpTo` 都是**会话状态迁移**，且各自耦合归纳本提示、回收站、
+面板开关与 toast 文案，硬抽只会得到「把 8 个回调搬进新文件」。建议改为抽**语音输入**
+（`getSR` / `toggleMic` / `startConvert` / `cancelConvert`，约 235 行，含 Web Speech 状态机与
+`utils/speechMath`，边界清晰且完全自足）。是否这样调整见 D6。
 
 ### M3-4 `i18n.ts` 拆分（已完成）
 
@@ -482,6 +513,7 @@ Cookie 用 `samesite=lax`，跨站 POST 已被浏览器挡住；但双域部署�
 | D3 | `releases/` 怎么处理 | A 停止新增 / B 重写历史 / C LFS | **A 先止血**，B 放到测评结束 | M7-1 |
 | D4 | 前端测试是否迁 vitest | 迁 / 不迁 | **迁**（否则大组件永远没测试入口） | M4-4、M3-2 |
 | D5 | 是否上 `__Host-` Cookie | 上 / 不上 | **不上**（与跨子域共享冲突）；先做 Origin 校验 | M6-3 |
+| D6 | M3-2 第三块抽什么 | `useChatPersistence` / `useSpeechInput` / 不抽 | **`useSpeechInput`**（「持久化」在组件里不成块，见 §7 M3-2 第二阶段末段） | M3-2 收尾 |
 
 ## 13. 排期建议（1 人全职口径）
 

@@ -57,7 +57,6 @@ import { isAllSelected, scopeForRequest, selectedSources } from '@/stores/resear
 import {
   MAX_SESSIONS,
   sessionStore,
-  type ChatAttachment,
   type ChatMsg,
   type ChatSession,
   type Workspace,
@@ -65,12 +64,11 @@ import {
 import { addToTrash } from '@/stores/trash'
 import { notebookStore } from '@/stores/notebook'
 import { setTodoWorkspace } from '@/stores/todo'
-import { compressImage } from '@/utils/avatar'
-import { extractPdfText } from '@/utils/fileText'
 import { beautifyMath, cachedConvert, normalizeSpeechCase, saveConvert, speechMathConvert } from '@/utils/speechMath'
 import { showToast } from '@/utils/toast'
 import { chapterNameFromCmd } from '@/utils/cmdLink'
 import { splitStableBlocks } from '@/utils/mathBlocks'
+import { useChatAttachments } from '@/composables/useChatAttachments'
 import { useChatStream } from '@/composables/useChatStream'
 import { useResearchSplit } from '@/composables/useResearchSplit'
 import { useDiagramFocus } from '@/composables/useDiagramFocus'
@@ -286,17 +284,10 @@ function onWorkspaceResize(): void {
 /** 科研区:独占研究检索链路与搜索范围面板;学习区不跨区查文献 */
 const isResearch = computed(() => props.workspace === 'research')
 
-/* 文件导入上限(拖拽一次最多 3 个;粘贴文本截断上限,保护本地存储与请求体积) */
-const MAX_DROP_FILES = 3
-const PASTE_TEXT_MAX = 3000
 
 /** 触屏设备判定:手机/平板用「粘贴导入」替代拖拽(拖拽仅限电脑端) */
 const isTouchDevice = window.matchMedia?.('(pointer: coarse)').matches ?? false
 
-/* 文本/PDF 教材:上传时提取正文随附件保存,章节导航等指令可基于内容工作。
-   上限 3 万字,发挥 QwenLong 长上下文能力(移动端粘贴导入仍 3 千字) */
-const FILE_TEXT_EXT = /\.(txt|md|markdown)$/i
-const FILE_TEXT_MAX = 30000
 
 /* 会话上下文栈:按工作区取独立仓库,两区同号 sessionId 也不会串档 */
 const store = sessionStore(props.workspace)
@@ -1073,73 +1064,34 @@ function pickFile() {
   fileInputEl.value?.click()
 }
 
-async function onImage(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (file) await importImageFile(file)
-}
-
-function onFile(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  if (isResearch.value && isPaperFile(file)) void stagePaperFile(file)
-  else attachFileItem(file)
-}
-
-/** 文件入库:PDF(pdfjs 提取文本层)/ 文本类(.txt/.md)读取正文随附件保存,其余仅元信息 */
-async function attachFileItem(file: File) {
-  if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
-    try {
-      const text = await extractPdfText(file)
-      if (!text) {
-        // 扫描版 PDF(无文本层):按普通文件接收并提示
-        attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name)
-        showToast(t('learn.toastPdfNoText'))
-        return
-      }
-      attachMessage({ kind: 'file', name: file.name, size: file.size, text }, file.name)
-      return
-    } catch {
-      /* 解析失败按普通文件处理 */
-    }
-  }
-  if (FILE_TEXT_EXT.test(file.name)) {
-    try {
-      const raw = await file.text()
-      const capped = raw.trim().slice(0, FILE_TEXT_MAX)
-      attachMessage({ kind: 'file', name: file.name, size: file.size, text: capped }, file.name)
-      return
-    } catch {
-      /* 读取失败按普通文件处理 */
-    }
-  }
-  attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name)
-}
-
-/** PDF 文本提取(pdfjs 懒加载:仅首次传 PDF 时拉取,主包体积不受影响) */
-
-/** 图片统一入库:压缩为缩略 dataURL 后作为图片附件发送(相册/拍照/拖入/粘贴共用) */
-async function importImageFile(file: File) {
-  try {
-    const url = await compressImage(file, 800)
-    attachMessage({ kind: 'image', name: file.name, url, size: file.size }, file.name)
-  } catch {
-    showToast(t('acc.toastAvatarFail'))
-  }
-}
-
-/** 拖入/选择的论文先进入临时语料,解析成功后再询问是否入库。 */
-const PAPER_EXT = /\.(pdf|docx|epub|html?|xml|rtf|tex)$/i
-
-function isPaperFile(file: File): boolean {
-  return file.type === 'application/pdf'
-    || file.type.includes('wordprocessingml')
-    || file.type === 'application/epub+zip'
-    || PAPER_EXT.test(file.name)
-}
+/* 附件接收(文件/拖拽/粘贴/剪贴板)在 composable 里;
+   这里只接管模板要绑的事件与展示,菜单开合仍由组件自己管。 */
+const {
+  dragging,
+  onImage,
+  onFile,
+  onDragOver,
+  onDragLeave,
+  onDropFiles,
+  onPaste,
+  pasteImport,
+  fmtSize,
+} = useChatAttachments({
+  isResearch: () => isResearch.value,
+  isTouchDevice,
+  closeAttachMenu: () => { attachOpen.value = false },
+  activeSession: () => activeSession.value ?? null,
+  createSession,
+  nextMsgId,
+  cancelReply,
+  scheduleStream,
+  history: buildHistory,
+  scrollBottom,
+  pinToBottom: () => { pinnedToBottom = true },
+  flush: () => flushSessions(true),
+  toast: showToast,
+  stagePaper: stagePaperFile,
+})
 
 function findMessage(id: number): ChatMsg | null {
   for (const session of sessions.value) {
@@ -1282,136 +1234,6 @@ function cancelPaperPrompt(): void {
 
 
 
-const dragging = ref(false)
-let dragHideTimer: ReturnType<typeof setTimeout> | null = null
-
-function onDragOver(e: DragEvent) {
-  if (isTouchDevice || !e.dataTransfer?.types.includes('Files')) return
-  e.preventDefault()
-  dragging.value = true
-  if (dragHideTimer) {
-    clearTimeout(dragHideTimer)
-    dragHideTimer = null
-  }
-}
-
-/** dragleave 在子元素间穿梭时会频繁触发:延迟收尾,避免遮罩闪烁 */
-function onDragLeave() {
-  if (dragHideTimer) clearTimeout(dragHideTimer)
-  dragHideTimer = setTimeout(() => (dragging.value = false), 120)
-}
-
-async function onDropFiles(e: DragEvent) {
-  if (isTouchDevice) return
-  if (dragHideTimer) clearTimeout(dragHideTimer)
-  dragging.value = false
-  const files = Array.from(e.dataTransfer?.files ?? [])
-  if (!files.length) return
-  e.preventDefault()
-  if (files.length > MAX_DROP_FILES) {
-    showToast(t('learn.toastDropTooMany'))
-    return
-  }
-  for (const f of files) {
-    if (f.type.startsWith('image/')) await importImageFile(f)
-    else if (isResearch.value && isPaperFile(f)) await stagePaperFile(f)
-    else await attachFileItem(f)
-  }
-}
-
-/* ---------- 粘贴导入(移动端为主:剪贴板图片/文本 → 附件) ---------- */
-
-/** 输入框粘贴到剪贴板文件(截图/复制图片)时:不进输入框,直接作为附件导入 */
-function onPaste(e: ClipboardEvent) {
-  const items = e.clipboardData?.items
-  if (!items) return
-  for (const item of items) {
-    if (item.kind !== 'file') continue
-    const f = item.getAsFile()
-    if (!f) continue
-    e.preventDefault()
-    if (f.type.startsWith('image/')) importImageFile(f)
-    else if (isResearch.value && isPaperFile(f)) void stagePaperFile(f)
-    else attachFileItem(f)
-    return
-  }
-}
-
-/** 移动端「粘贴导入」按钮:优先读剪贴板图片,退而读文本
-    (作为 .txt 附件导入,正文随提示词交给模型阅读理解) */
-async function pasteImport() {
-  attachOpen.value = false
-  // 剪贴板图片(截图/复制的图片)
-  try {
-    if (navigator.clipboard?.read) {
-      const items = await navigator.clipboard.read()
-      for (const item of items) {
-        const imgType = item.types.find((ty) => ty.startsWith('image/'))
-        if (!imgType) continue
-        const blob = await item.getType(imgType)
-        const ext = imgType.split('/')[1] || 'png'
-        await importImageFile(new File([blob], `粘贴图片.${ext}`, { type: imgType }))
-        return
-      }
-    }
-  } catch {
-    /* 无图片或未授权,继续尝试文本 */
-  }
-  // 剪贴板文本(复制的文档/题目/论文片段)
-  try {
-    const text = (await navigator.clipboard.readText()).trim()
-    if (!text) {
-      showToast(t('learn.toastPasteEmpty'))
-      return
-    }
-    const capped = text.slice(0, PASTE_TEXT_MAX)
-    attachMessage(
-      { kind: 'file', name: '粘贴文本.txt', size: new Blob([capped]).size, text: capped },
-      '粘贴文本.txt',
-    )
-  } catch {
-    showToast(t('learn.toastPasteEmpty'))
-  }
-}
-
-/** 附件消息:留在当前会话(未分类会话归入未归类),MG 给出附件接收回复 */
-function attachMessage(attachment: ChatAttachment, content: string) {
-  let session = activeSession.value
-  if (!session) session = createSession(FALLBACK_CATEGORY)
-  if (!session.cat) session.cat = FALLBACK_CATEGORY
-  if (session.messages.some((m) => m.streaming)) {
-    if (!session.messages[0]?.streaming) return
-    cancelReply(session.messages[0].id)
-    session.messages.shift()
-  }
-
-  const userMsg: ChatMsg = { id: nextMsgId(), role: 'user', content, attachment }
-  session.messages.push(userMsg)
-  pinnedToBottom = true
-  scrollBottom()
-  // 图片以 dataURL 随会话持久化:存储超限时明确提示,避免静默丢失记录。
-  // 附件可能很大,必须立即写并拿到真实配额结果,不能等 debounce。
-  if (!flushSessions(true)) showToast(t('learn.toastStorage'))
-
-  const reply: ChatMsg = { id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true }
-  session.messages.push(reply)
-  // 同上:流式期间通过响应式代理更新,界面才能实时刷新
-  const live = session.messages[session.messages.length - 1]
-  // 契约 [attach:image|file]文件名;粘贴导入的文本带正文(空行分隔),后端交 LLM 阅读理解
-  const attachPrompt = `[attach:${attachment.kind}]${attachment.name}${attachment.text ? `\n\n${attachment.text}` : ''}`
-  scheduleStream(session, live, attachPrompt, 450, {
-    sessionId: session.id,
-    categoryKey: session.cat?.key,
-    history: buildHistory(session),
-  })
-}
-
-function fmtSize(bytes?: number): string {
-  if (bytes === undefined) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
 
 /* ---------- 语音输入(浏览器本地识别,Chrome / Edge 可用) ---------- */
 
