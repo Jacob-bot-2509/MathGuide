@@ -96,3 +96,75 @@
 3. **改坏验证**：挑一条断言，把被测分支改坏，测试必须变红；
 4. `ruff check .` 全绿、全量 `pytest -q` 无回归；
 5. 在 `COVERAGE_PLAN.md` §11 追加一行记录（之前→之后 / 测试文件 / 改坏验证）。
+
+---
+
+## 附:执行工单(五大组,可机械照做)
+
+> 现状数值取自首次全量统计(2026-11-14)。**开工前先刷新**:重跑一次 coverage,把下表"现状"换成实测值,
+> 否则你会对着过时数字干活(`COVERAGE_PLAN.md` §3/§4 的台账同理)。
+> 每个文件都走同一套三步:① 取缺口行 ② 写测试 ③ 验收+记录。
+
+### 通用三步(复制即用)
+
+```powershell
+# ① 取缺口行(把 <模块> 换成文件名去扩展名,如 research_formats)
+cd backend; & 'D:\Works\code\.venv\Scripts\python.exe' -m pytest -q --cov=<模块> --cov-report=term-missing
+# ② 写测试:tests/test_<模块>.py(已有同名文件的就追加,不要新建重复文件)
+# ③ 验收:单文件达标 + 改坏验证 + 全量绿 + ruff + 在 COVERAGE_PLAN §11 记一行
+cd backend; & 'D:\Works\code\.venv\Scripts\ruff.exe' check .
+```
+
+### G2 · research 中等(5 个,零网络,建议先做)
+
+| 文件 | 现状 | 线 | 缺行 | 新建/追加测试 | 首批断言要点 |
+| --- | ---: | ---: | ---: | --- | --- |
+| `research_formats.py` | 67.9% | 85 | 108 | 追加 `test_research_formats.py` | `_detect_format` 六格式 + 扩展名/魔数冲突;`_split_long` 边界;`_sections` 无标题文档 |
+| `rag/research/sources.py` | 46.8% | 80 | 100 | 新建 | 每个源的字段归一化(缺失/类型错/重复合并);单源失败不影响其余 |
+| `research_compare.py` | 60.2% | 80 | 53 | 追加 `test_research_compare_report.py` | 全失败 502 / 部分失败 / 字段缺失 / 空选择 |
+| `research_papers.py` | 70.2% | 80 | 65 | 追加 `test_research_papers.py` | 临时论文下载失败 502、非 PDF 拒绝、重复导入 |
+| `research_fulltext.py` | 71.3% | 80 | 66 | 追加 `test_research_fulltext.py` | 无全文降级、许可不允许、OA 链接不可解析 |
+
+### G3 · research 大件(4 个,最慢)
+
+| 文件 | 现状 | 线 | 缺行 | 策略 |
+| --- | ---: | ---: | ---: | --- |
+| `chat.py` | 52.2% | 80 | 415 | **只补决策分支**:`_route_chat` 选型、闲聊直答、澄清、复核三态、图解校验回退。**不补提示词常量** |
+| `research_lit.py` | 65.4% | 80 | 348 | 先做纯映射(查询构造/归一化/去重/许可与撤稿标记),网络部分用 JSON fixture 补 429/超时/畸形 |
+| `research_tables.py` | 77.3% | 80 | 294 | 逐端点补未覆盖分支:`/compute` 非法表达式、`/stats` 空表、`/regression` 样本不足、`/validate-formula` 不匹配 |
+| `research_vision.py` | 52.1% | 80 | 191 | fake httpx:请求体、401/429/5xx、超时、缺字段、非 JSON |
+
+### G5 · 前端大字(8 个,纯函数,node 环境)
+
+| 文件 | 语句 | 现状 | 线 | 测试文件 |
+| --- | ---: | ---: | ---: | --- |
+| `utils/geogebraSpec.ts` | 483 | 0% | 80 | `src/utils/geogebraSpec.test.ts` |
+| `utils/diagramSpec.ts` | 345 | 9% | 80 | `src/utils/diagramSpec.test.ts` |
+| `utils/diagramLabels.ts` | 329 | 1.5% | 80 | `src/utils/diagramLabels.test.ts` |
+| `utils/diagramLayout.ts` | 245 | 1.6% | 80 | `src/utils/diagramLayout.test.ts` |
+| `utils/mathArrays.ts` | 192 | 0% | 80 | `src/utils/mathArrays.test.ts` |
+| `utils/geogebra3dSpec.ts` | 192 | 0% | 80 | 与 geogebraSpec 同文件或独立 |
+| `utils/mathIsolation.ts` | 175 | 12% | 80 | `src/utils/mathIsolation.test.ts` |
+| `utils/speechMath.ts` | 166 | 7% | 80 | `src/utils/speechMath.test.ts` |
+
+> 全部可在 `// @vitest-environment node`(默认)下测,不需要 happy-dom;`speechMath` 涉及 localStorage 时自行 stub(`authService.test.ts` 有范例)。
+
+### G6 · 前端中字 + stores(约 10 个)
+
+顺序按语句数:`paperActions`(83) → `graphLayout`(68) → `avatar`(42) → `fileText`(17) → `aboutContent`(12) →
+`tex2svg`(15) → `fulltextAccess`(24),然后 stores:`settings` `researchScope` `todo` `trash` `notebook` `localData`(线 70)。
+
+### G7 · 前端 services(13 个,线 60)
+
+统一套路:**stub `fetch`,断言请求构造(URL/方法/body)与错误映射(401/404/409/429)**。
+范例照抄 `src/services/authService.test.ts`(已有 4 条,含 stub 写法)。
+
+### 验收记录模板(每个文件都填)
+
+```
+- [x] <文件>  之前% → 之后%  tests/<测试文件>(N 条)
+      改坏验证:把 <某分支> 改坏 → <用例名> 变红 ✅
+```
+
+**红线**:不写只调用不断言的测试;不为凑数测工具脚本;`pragma: no cover` 只用于真不可达;
+难测是设计耦合 → 记结构债,不改产品代码。
