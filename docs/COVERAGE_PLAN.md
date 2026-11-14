@@ -476,6 +476,19 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 `diagramLayout`(245, 1.6%) `mathArrays`(192, 0%) `geogebra3dSpec`(192, 0%) `mathIsolation`(175, 12%)
 `speechMath`(166, 7%) `paperActions`(83, 3.6%) `graphLayout`(68, 0%) `avatar`(42, 2.4%) 等。
 
+### B3 起步：链路裁决与下载白名单
+
+| 文件 | 之前 | 之后 | 线 | 说明 |
+| --- | ---: | ---: | ---: | --- |
+| `rag/route.py` | 60.0% | **100%** | 80 | 四路裁决顺序(研究意图 > 知识命中 > 数学框架 > 会话)、中英研究标记 |
+| `research_urls.py` | 75.0% | **93%** | 80 | https/凭据/控制字符校验、`.local` 与私有 IP 拒绝、可信域后缀伪装拦截、DNS 四态(OSError/仅 IPv6/私有 IPv4/公网) |
+
+测试文件 `tests/test_route_and_urls.py`（29 条）。`research_urls` 剩 4 行是 `is_safe_pdf_url` /
+`resolves_to_public_host` 里的 `urlparse` ValueError 兜底 —— 前面 `is_https_url` 已经先返回 False，
+这两处属不可达防御。
+
+**全量**：`1161 passed`（+28），`ruff` 全绿。
+
 **全量回归**：`1123 passed`（B2 后 1089，+34）。`ruff` 全绿。
 
 
