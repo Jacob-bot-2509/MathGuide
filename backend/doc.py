@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import html as html_mod
 import json
+import os
 import re
 import secrets
 import shutil
@@ -32,11 +33,46 @@ from log import get_logger
 
 log = get_logger(__name__)
 
-# Edge 浏览器(Windows 自带,仅调用不改系统文件)
+# 浏览器:本机 Windows 自带 Edge;Linux 服务器装 chromium。
+# 查找优先级:MG_EDGE_PATH(部署时显式指定)→ 系统已知路径 → PATH 里的常见命令名。
 _EDGE_CANDIDATES = (
     Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"),
     Path("C:/Program Files/Microsoft/Edge/Application/msedge.exe"),
+    # Linux 服务器常见位置(apt / snap / rpm 各不同)
+    Path("/usr/bin/chromium"),
+    Path("/usr/bin/chromium-browser"),
+    Path("/usr/bin/google-chrome"),
+    Path("/usr/bin/microsoft-edge"),
+    Path("/snap/bin/chromium"),
 )
+_EDGE_COMMANDS = (
+    "msedge",
+    "chromium",
+    "chromium-browser",
+    "google-chrome",
+    "microsoft-edge",
+)
+
+
+def _find_edge() -> str | None:
+    """返回可用的 headless 浏览器可执行文件;找不到返回 None。
+
+    `MG_EDGE_PATH` 是部署开关:服务器上指定一次(例如容器内 `/usr/bin/chromium`)即可,
+    不必依赖命令名是否在 PATH 里。**显式配置了但文件不存在时直接返回 None**,
+    不做兜底 —— 否则配错了会悄悄用别的浏览器,产出的 PDF 和预期不一致却查不出原因。
+    """
+    configured = (os.getenv("MG_EDGE_PATH") or "").strip()
+    if configured:
+        path = Path(configured)
+        return str(path) if path.is_file() else None
+    for candidate in _EDGE_CANDIDATES:
+        if candidate.is_file():
+            return str(candidate)
+    for name in _EDGE_COMMANDS:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
 
 # KaTeX 静态资源:优先后端自带副本(便于只部署 backend),否则复用前端 node_modules。
 # 两处目录结构都是 katex.min.css / katex.min.js。
@@ -54,13 +90,6 @@ def _katex_dir() -> Path:
 
 
 CONTENT_MAX = 32000  # 与聊天输入上限一致
-
-
-def _find_edge() -> str | None:
-    for p in _EDGE_CANDIDATES:
-        if p.is_file():
-            return str(p)
-    return shutil.which("msedge")
 
 
 def _system_prompt(lang: str) -> str:
