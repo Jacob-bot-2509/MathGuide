@@ -14,7 +14,7 @@
 | 3 | G2 | `research_papers.py` | 70.2% | 99.5% |
 | 4 | G2 | `research_fulltext.py` | 71.3% | 99.6% |
 | 5 | G2 | `research_compare.py` | 60.2% | 99.2% |
-| 6 | G3 | `chat.py` | 52.2% | 99.4% |
+| 6 | G3 | `chat.py` | 52.2% | 99.5% |
 | 7 | G3 | `research_lit.py` | 65.4% | 98.2% |
 | 8 | G3 | `research_tables.py` | 77.3% | 93.8% |
 | 9 | G3 | `research_vision.py` | 52.1% | 99.2% |

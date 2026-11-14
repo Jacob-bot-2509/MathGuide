@@ -37,13 +37,15 @@ backend/tools/.last_sync
 releases/
 
 # 覆盖率产物(pytest-cov / vitest)
-.coverage
-.coverage.*
+# 注意用 .coverage* 而不是 .coverage.*:后者漏掉 .coverage_del 这类下划线后缀
+.coverage*
 htmlcov/
 coverage/
+coverage-*/
 
-# 本地临时日志(排查/批处理脚本输出,勿入库)
+# 本地临时日志与临时提交信息(排查/批处理脚本输出,勿入库)
 tmp_*.log
+tmp_commit_msg.txt
 
 # 编辑器/编码代理本地配置(Serena,勿入库)
 .serena/

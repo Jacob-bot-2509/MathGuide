@@ -1565,6 +1565,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # 必须先判意图、后检索:深度搜索内部自会检索知识库,
     # 这里若先检一遍,研究型提问就要白付一份 embedding 开销(结果还被丢掉)
     # 只允许科学研究工作区进入该链路:学习辅助区不跨区查文献
+    # 数据表上下文(带 tableId)也一并由此进入研究链路;未配模型时走下面的来源列表。
+    # 不要再为"直答也带表"另开分支:那条分支在本函数里不可达,已于 2026-11-14 删除。
     if workspace == "research" and (
             table_context or rag.route.is_research_intent(question)):
         meta["research"] = True
@@ -1640,12 +1642,6 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                            h.get("text") or h["snippet"]), 6.0)
                 for h in local
             ] + chunks
-
-    if workspace == "research" and table_context:
-        chunks = [
-            (rag.Chunk("research-table", "研究数据表", "",
-                       "用户当前数据表(数值以此为准)", table_context), 7.0),
-        ] + chunks
 
     if rag.llm.is_configured():
         # 双角色验证仅对数学题(命中知识库或题目措辞)开启;闲聊不浪费复核调用。

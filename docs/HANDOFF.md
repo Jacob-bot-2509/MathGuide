@@ -44,7 +44,7 @@ cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
    - `research_lit.py` 的真实外网下载链路（测试只做了 fake client）；
    - 语音输入、会话轮换等需要真设备/真时间的链路。
 2. **部署**：按 `docs/DEPLOY_PLAYBOOK.md` 走前置三件事 → PDF 方案 A → 备份 → 安全开关 → 验收 → 回滚。
-3. **结构债**：`chat.py:1645` 疑似死代码（见 `COVERAGE_PLAN.md` §12.7/§12.10），删不删由评审决定。
+3. ~~**结构债**：`chat.py:1645` 疑似死代码~~ —— **已删除**（2026-11-14，见 `COVERAGE_PLAN.md` §12.10）。
 
 ## 4. 硬规则（每做完一个文件都要过）
 
