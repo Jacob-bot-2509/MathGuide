@@ -408,9 +408,31 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 
 **全量回归**：`1062 passed`（B1 前 995，+67），总覆盖率 **77% → 78%**。
 
-### B2–B5（未开始）
+### B2 拆分出的模块（部分完成：3 / 5）
 
-按第 7 节顺序继续。B2 目标：`research_formats`(67.9) `rag/research/sources`(46.8) `synthesize`(48.1)
-`rerank`(55.4) `diagram_alerts`(42.6) —— 全部零网络，可达性同 B1。
+| 文件 | 之前 | 之后 | 测试 | 改坏验证 |
+| --- | ---: | ---: | --- | --- |
+| `rag/research/rerank.py` | 55.4% | **100%** | `tests/test_research_rerank.py`（14 条，新文件） | 去掉 `except` 回退 → 超时/异常用例红 |
+| `rag/research/synthesize.py` | 48.1% | **100%** | `tests/test_research_synthesize.py`（5 条，新文件） | 引用区改成打印模型输出 → 元数据断言红 |
+| `diagram_alerts.py` | 42.6% | **100%** | `tests/test_diagram_alerts.py`（8 条，新文件） | 去掉冷却判断 → 重复告警用例红 |
+
+**B2 剩下 2 个**（未做）：
+
+| 文件 | 现状 | 线 | 缺口 | 难点 |
+| --- | ---: | ---: | ---: | --- |
+| `research_formats.py` | 67.9% | 85% | 108 行 | 六种格式 × 魔数/扩展名冲突 × 损坏文件,用例量大但零网络 |
+| `rag/research/sources.py` | 46.8% | 80% | 100 行 | 每个源的字段归一化 + 同 key 合并,需要先读各源返回结构 |
+
+**全量回归**：`1089 passed`（B1 后 1062，+27）。
+
+### B3–B5（未开始）
+
+- B3 主链路：`chat`(52.2) `rag/llm`(57.3) `rag/route`(60.0) `research_compare`(60.2) `research_urls`(75.0)
+- B4 外部集成：`research_lit`(65.4) `research_vision`(52.1) `research_papers`(70.2) `research_fulltext`(71.3)
+- B5 前端：utils 25 个 + stores 7 个 + services 13 个
+
+**还差的近线文件**（差 1–8pp，成本低）：`linear_algebra`(83.9→85) `math_table_render`(81.4→85)
+`doc`(72.6→80) `docgen`(78.6→80) `exercise_docgen`(78.8→80) `exercises/build`(75.6→80)
+`evaluation/judges`(77.9→80) `research_tables`(77.3→80)。
 
 
