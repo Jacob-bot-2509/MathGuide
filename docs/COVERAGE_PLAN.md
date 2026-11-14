@@ -49,34 +49,36 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 
 ## 3. 后端逐文件台账（刷新于 2026-11-14，1195 passed）
 
-**受管 91 个文件：达标 81 / 未达标 10**（3 个 omit 不计）。
-含前端 14/55，项目合计 **95/146 达标、51 未达标**。
+**受管 91 个文件：达标 91 / 未达标 0**（3 个 omit 不计）。
+含前端 55/55，项目合计 **146/146 达标、0 未达标**（2026-11-14 G2–G7 收口，实测见 §11）。
 
 | 类 | 线 | 文件数 | 未达标 |
 | --- | ---: | ---: | ---: |
 | A 认证 / 凭据 / 数据写入 | 90 | 13 | 0 |
-| B 计算 / 格式 / 渲染 | 85 | 11 | 1 |
-| C 检索与对话主链路 | 80 | 13 | 2 |
-| D 科研工作台 | 80 | 27 | 7 |
+| B 计算 / 格式 / 渲染 | 85 | 11 | 0 |
+| C 检索与对话主链路 | 80 | 13 | 0 |
+| D 科研工作台 | 80 | 27 | 0 |
 | E 文档生成与导出 | 80 | 3 | 0 |
 | F 题库 | 80 | 16 | 0 |
 | G 装配与入口 | 90 | 1 | 0 |
 | H 评测工具 | 80 | 7 | 0 |
 
-### 未达标的 10 个（逐个处理）
+### 本轮收口的 10 个（之前未达标，现状如下）
 
-| 文件 | 语句 | 现状 | 线 | 缺行 |
+| 文件 | 语句 | 之前 | 之后 | 线 |
 | --- | ---: | ---: | ---: | ---: |
-| `research_formats.py` | 336 | 67.9% | 85 | 108 |
-| `rag/research/__init__.py` | 108 | 45.4% | 80 | 59 |
-| `rag/research/sources.py` | 188 | 46.8% | 80 | 100 |
-| `chat.py` | 869 | 52.2% | 80 | 415 |
-| `research_compare.py` | 133 | 60.2% | 80 | 53 |
-| `research_fulltext.py` | 230 | 71.3% | 80 | 66 |
-| `research_lit.py` | 1005 | 65.4% | 80 | 348 |
-| `research_papers.py` | 218 | 70.2% | 80 | 65 |
-| `research_tables.py` | 1296 | 77.3% | 80 | 294 |
-| `research_vision.py` | 399 | 52.1% | 80 | 191 |
+| `research_formats.py` | 336 | 67.9% | **100.0%** | 85 |
+| `rag/research/__init__.py` | 108 | 45.4% | **100.0%** | 80 |
+| `rag/research/sources.py` | 188 | 46.8% | **100.0%** | 80 |
+| `chat.py` | 869 | 52.2% | **99.4%** | 80 |
+| `research_compare.py` | 133 | 60.2% | **99.2%** | 80 |
+| `research_fulltext.py` | 230 | 71.3% | **99.6%** | 80 |
+| `research_lit.py` | 1005 | 65.4% | **98.2%** | 80 |
+| `research_papers.py` | 218 | 70.2% | **99.5%** | 80 |
+| `research_tables.py` | 1296 | 77.3% | **93.8%** | 80 |
+| `research_vision.py` | 399 | 52.1% | **99.2%** | 80 |
+
+> 数字取自 `pytest --cov=. --cov-report=json`（1504 passed，总覆盖 **90%**），不是分组自测口径。
 
 ### 已达标（冻结，改到相关模块时顺带补，不专门开工）
 
@@ -95,8 +97,12 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 
 > 统计范围 = `src/utils` / `src/stores` / `src/services`（`vitest.config.ts` 的 `coverage.include`）。
 > 组件与模板不在范围内，理由见第 2 节。
+>
+> **本轮（G5/G6/G7）已把 41 个未达标全部收口**：全量 `vitest run --coverage` 为
+> **51 文件 / 1021 条全过，总覆盖 97.7%**（开工基线 12.34%）。下表「现状/判定」是开工基线，
+> 保留用于对比；达标后的实测值见 §11。
 
-### U · utils 纯函数（node 环境即可测） —— 合格线 80%（34 个文件，未达标 25）
+### U · utils 纯函数（node 环境即可测） —— 合格线 80%（34 个文件，未达标 0）
 
 | 文件 | 语句 | 现状 | 判定 |
 | --- | ---: | ---: | --- |
@@ -135,7 +141,7 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 | `src/utils/i18n/research.ts` | 2 | 100% | ✅ 达标 |
 | `src/utils/speechTips.ts` | 1 | 100% | ✅ 达标 |
 
-### S · stores 状态与持久化 —— 合格线 70%（8 个文件，未达标 7）
+### S · stores 状态与持久化 —— 合格线 70%（8 个文件，未达标 0）
 
 | 文件 | 语句 | 现状 | 判定 |
 | --- | ---: | ---: | --- |
@@ -148,7 +154,7 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 | `src/stores/user.ts` | 18 | 66.66% | ❌ 差 3.3pp |
 | `src/stores/settings.ts` | 15 | 73.33% | ✅ 达标 |
 
-### V · services 接口层（需 stub fetch） —— 合格线 60%（13 个文件，未达标 13）
+### V · services 接口层（需 stub fetch） —— 合格线 60%（13 个文件，未达标 0）
 
 | 文件 | 语句 | 现状 | 判定 |
 | --- | ---: | ---: | --- |
@@ -424,4 +430,148 @@ G1 的另一半 `rag/llm.py`(57.3% → 80%,缺 41 行,主要是 112-174 的流�
 > 最要紧的一条:`stream_chat` 只在「一字未出」时允许切 backup。已有输出后重放会让用户看到
 > 「半截 A + 完整 B」,所以那条 `emitted` 判断就是它的护栏。
 
+
+---
+
+## 12. G2–G7 全量收口（2026-11-14，一次做完）
+
+**结论：后端 10 个 + 前端 41 个未达标文件全部达标，未达标数归零。**
+
+| 总量 | 之前 | 之后 |
+| --- | ---: | ---: |
+| 后端 pytest | 1195 passed / 总覆盖 80% | **1504 passed / 90%** |
+| 前端 vitest | 10 文件 94 条 / 12.34% | **51 文件 1021 条 / 97.70%** |
+| 达标文件 | 95 / 146 | **146 / 146** |
+| ruff / eslint / vue-tsc | 0 | **0 / 0 / 0** |
+| 产品代码改动 | — | **0**（`git status` 只有测试文件） |
+
+> 验收口径没变：单文件 ≥ 类别线、主要公开函数被调用、每文件一次改坏验证。
+> 后端数字取自一次完整 `pytest --cov=. --cov-report=json`（不是分组自测口径）。
+
+### 12.1 G2 · research 中等（5 个，零网络）
+
+| 文件 | 之前 | 之后 | 线 | 测试 | 改坏验证（改坏什么 → 哪个用例红） |
+| --- | ---: | ---: | ---: | --- | --- |
+| `research_formats.py` | 67.9 | **100.0** | 85 | `test_research_formats.py`（30） | docx 判据 `"word/document.xml" in names` 改坏 → 3 条红（zip 容器识别 / 多格式合并 / 坏 zip 容忍） |
+| `rag/research/sources.py` | 46.8 | **100.0** | 80 | `test_research_sources_fields.py`（19，新） | `_is_retryable` 去掉 `408/425/429` → `test_is_retryable_only_retries_rate_limit_and_server_errors` 红 |
+| `research_papers.py` | 70.2 | **99.5** | 80 | `test_research_papers.py`（25） | `history_delete` 的 `"days": 0 if hard else TTL` 改恒 0 → 硬/软删除用例红 |
+| `research_fulltext.py` | 71.3 | **99.6** | 80 | `test_research_fulltext.py`（31） | 负结果 TTL 改成与正结果一致 → `test_cache_ttl_differs_for_negative_results` 红 |
+| `research_compare.py` | 60.2 | **99.2** | 80 | `test_research_compare_report.py`（18） | `_verify_numbers` 的缺失数改成恒空 → 2 条红（未核对数字 / 字段缺失） |
+
+### 12.2 G3 · research 大件（4 个）
+
+| 文件 | 之前 | 之后 | 线 | 测试 | 改坏验证 |
+| --- | ---: | ---: | ---: | --- | --- |
+| `chat.py` | 52.2 | **99.4** | 80 | `test_chat_routing_branches.py`（98，新） | 7 处逐条改坏全部变红：复核更正块、图解放行、研究缓存 TTL、澄清触发、复核角色错开、当前论文分支、无上下文数学题 |
+| `research_lit.py` | 65.4 | **98.2** | 80 | `test_research_lit.py`（73） | `_merge` 去重键 DOI→标题 → 1 条红 |
+| `research_vision.py` | 52.1 | **99.2** | 80 | `test_research_vision.py`（37） | `_clean_result` 去掉 `not target` 判断 → 1 条红 |
+| `research_tables.py` | 77.3 | **93.8** | 80 | `test_research_tables.py`（54） | `validate_formula` 的 `error > max_error` 改恒假 → 1 条红 |
+
+`chat.py` 只补**决策分支**（路由选型、闲聊直答、澄清、复核三态与更正块、图解闸门、无上下文降级、论文/数据表并行动作），
+没有为提示词常量写用例。
+
+### 12.3 编排层 `rag/research/__init__.py`（不属于 G2/G3 清单，顺手收口）
+
+| 文件 | 之前 | 之后 | 线 | 测试 | 改坏验证 |
+| --- | ---: | ---: | ---: | --- | --- |
+| `rag/research/__init__.py` | 45.4 | **100.0** | 80 | `test_research_pipeline.py`（18，新） | `chosen = picked or None` 改 `chosen = picked` → `test_all_invalid_scope_falls_back_to_everything` 红 |
+
+覆盖：范围过滤（未勾选的源一个请求都不发）、全非法 scope 退回全平台、单源失败只记名不中断、
+缓存键含范围 + TTL 过期重检 + LRU 逐出、LLM 改写优先与失败回退规则版、`_llm_expand_terms` 的
+200 字截断与 2–60 字过滤、精排只在有外源结果时发生、知识库片段截断 400 字。
+
 **全量**:`1195 passed, 0 failed`(+13),`ruff` 全绿。**G1 两个文件全部达标。**
+
+### 12.4 G5 · 前端大字 utils（8 个，纯函数，node 环境）
+
+| 文件 | 之前 | 之后（语句） | 线 | 测试 | 改坏验证 |
+| --- | ---: | ---: | ---: | --- | --- |
+| `geogebraSpec.ts` | 0 | **97.10** | 80 | `geogebraSpec.test.ts`（51） | 点去重 `has(key)`→`has(key+'#')` → 同坐标去重用例红 |
+| `geogebra3dSpec.ts` | 0 | **94.27** | 80 | `geogebra3dSpec.test.ts`（30） | 包围盒 `*1.4`→`*1` → Line 两点定方向 2 条红 |
+| `diagramSpec.ts` | 8.98 | **99.13** | 80 | `diagramSpec.test.ts`（73） | `>= MAX_DIAGRAMS`→`+1` → 「第三张被拒绝」红 |
+| `diagramLabels.ts` | 1.51 | **99.69** | 80 | `diagramLabels.test.ts`（64） | 越界惩罚 `*1e7`→`*0` → 4 条夹取用例红 |
+| `diagramLayout.ts` | 1.63 | **98.36** | 80 | `diagramLayout.test.ts`（34） | `GAP_Y 26`→`20` → 3 条分层间距红 |
+| `mathArrays.ts` | 0 | **95.83** | 80 | `mathArrays.test.ts`（31） | 双线边框 `3px`→`2px` → 3 条表格边框红 |
+| `mathIsolation.ts` | 12 | **96.00** | 80 | `mathIsolation.test.ts`（50） | 待定公式闸门改恒假 → 6 条红（金额/纯中文/超长…） |
+| `speechMath.ts` | 7.22 | **96.38** | 80 | `speechMath.test.ts`（106） | 平方规则 `'²'`→`'^2'` → 7 条红 |
+
+### 12.5 G6 · 前端中等 utils（13 个）+ stores（8 个）
+
+| 文件 | 之前 | 之后（语句） | 线 | 测试 | 改坏验证 |
+| --- | ---: | ---: | ---: | --- | --- |
+| `paperActions.ts` | 3.61 | **100** | 80 | `paperActions.test.ts`（23） | `MAX_ACTIONS 16→4` → 单帧上限红 |
+| `graphLayout.ts` | 0 | **100** | 80 | `graphLayout.test.ts`（11） | `level+1`→`level` → 5 条红 |
+| `todoTime.ts` | 2.27 | **100** | 80 | `todoTime.test.ts`（19） | `>=`→`>`（到点判定）→ 红 |
+| `avatar.ts` | 2.38 | **100** | 80 | `avatar.test.ts`（10） | 去掉 `Math.min(1,…)` → 红 |
+| `mathBlocks.ts` | 69.04 | **92.85** | 80 | `mathBlocks.test.ts`（15） | 围栏奇偶 `%2===1`→`===0` → 3 条红 |
+| `classifier.ts` | 65.62 | **100** | 80 | `classifier.test.ts`（18） | `MATH_STYLE_RE→true` 短路 → 红 |
+| `ambiguous.ts` | 56 | **100** | 80 | `ambiguous.test.ts`（16） | 上下文判断短路 → 2 条红 |
+| `fulltextAccess.ts` | 0 | **100** | 80 | `fulltextAccess.test.ts`（14） | pdf 拒绝分支放行 → 红 |
+| `i18n.ts` | 77.27 | **100** | 80 | `i18nRuntime.test.ts`（14） | `catName` 恒取中文 → 2 条红 |
+| `fileText.ts` | 5.88 | **100** | 80 | `fileText.test.ts`（10） | 页数上限 80→200 → 红 |
+| `tex2svg.ts` | 0 | **100** | 80 | `tex2svg.test.ts`（6） | `display` 写死 true → 红 |
+| `aboutContent.ts` | 0 | **100** | 80 | `aboutContent.test.ts`（16） | 问题反馈 URL 改错 → 红 |
+| `diagramIntent.ts` | 77.77 | **96.29** | 80 | `diagramIntent.test.ts`（12） | 无消息兜底 null→true → 7 条红 |
+| `todo.ts`（store） | 11.11 | **98.22** | 70 | `stores/todo.test.ts`（40） | `flag === true`→`flag` → 脏 done 容错红 |
+| `sessions.ts` | 56 | **97** | 70 | `stores/sessions.test.ts`（20） | 上限 20→21 才裁剪 → 红 |
+| `trash.ts` | 36.36 | **100** | 70 | `stores/trash.test.ts`（17） | `>= cutoff`→`>` → 边界当天红 |
+| `researchScope.ts` | 36.66 | **100** | 70 | `stores/researchScope.test.ts`（13） | 去掉「至少留一个平台」→ 红 |
+| `notebook.ts` | 46.87 | **100** | 70 | `stores/notebook.test.ts`（13） | `A_MAX 3000→2000` → 红 |
+| `localData.ts` | 52.17 | **100** | 70 | `stores/localData.test.ts`（10） | 换账号判断 `!==`→`===` → 2 条红 |
+| `user.ts` | 66.66 | **100** | 70 | `stores/user.test.ts`（9） | 去掉未登录守卫 → 红 |
+| `settings.ts` | 73.33 | **100** | 70 | `stores/settings.test.ts`（8） | 主题写死 `dark` → 3 条红 |
+
+### 12.6 G7 · 前端 services（13 个）
+
+| 文件 | 之前 | 之后（语句） | 线 | 测试 | 改坏验证 |
+| --- | ---: | ---: | ---: | --- | --- |
+| `geogebraKernel.ts` | 0 | **96.00** | 60 | `geogebraKernel.test.ts`（12） | `setPerspective('G')`→`'T'` → 离屏 applet 用例红 |
+| `geogebra3dKernel.ts` | 0 | **95.83** | 60 | `geogebra3dKernel.test.ts`（10） | `'T'`→`'G'` → 3D 离屏用例红 |
+| `chatService.ts` | 15.27 | **81.94** | 60 | `chatService.test.ts`（19） | `onDone(full, complete)`→`(full,true)` → 断流用例红 |
+| `accountService.ts` | 0 | **100** | 60 | `accountService.test.ts`（11） | `server?'full':'local'`→`'full'` → 3 条本地态红 |
+| `researchService.ts` | 0 | **100** | 60 | `researchService.test.ts`（20） | 列表返回 `[]` → 列表/分页用例红 |
+| `authService.ts` | 18.75 | **100** | 60 | `authService.test.ts`（21） | `409→exists` 改 `→invite` → 状态码映射红 |
+| `researchTableService.ts` | 0 | **100** | 60 | `researchTableService.test.ts`（16） | `hard?'?hard=1':''`→`''` → 硬删除红 |
+| `literatureService.ts` | 0 | **100** | 60 | `literatureService.test.ts`（16） | 默认 `limit 10→20` → 默认参数红 |
+| `docService.ts` | 2.63 | **100** | 60 | `docService.test.ts`（14） | 文件名兜底 `mg-document`→`document` → 回退用例红 |
+| `docgenService.ts` | 0 | **100** | 60 | `docgenService.test.ts`（9） | `slice(-80)`→`slice(-1)` → 会话截断红 |
+| `graphService.ts` | 0 | **100** | 60 | `graphService.test.ts`（12） | `limit=${limit}`→`limit=5` → 条数透传红 |
+| `researchAnnotationService.ts` | 0 | **100** | 60 | `researchAnnotationService.test.ts`（9） | 去掉 `encodeURIComponent` → id 转义红 |
+| `diagramService.ts` | 0 | **100** | 60 | `diagramService.test.ts`（9） | `kind || undefined`→`input.kind` → 空值不进请求红 |
+
+服务层统一覆盖四条非 happy path：非 2xx+JSON 错误体、非 2xx+非 JSON 体、`fetch` 网络异常、
+
+### 12.7 仍未覆盖的行（判定为不可达或低价值，均未用 pragma 掩盖）
+
+| 文件 | 行段 | 判定 |
+| --- | --- | --- |
+| `chat.py` | 385 / 987 | 累积到 4000/300 字后 `break` 的长度保护，不是决策分支 |
+| `chat.py` | 461 | `paper_mode` 追加段是**纯提示词常量**；真实 `_gen_paper_llm` 在用例里被打桩 |
+| `chat.py` | 1198 | **不可达**：`_is_feature_question` 只匹配中文关键词，与 `zh=False`（无汉字）互斥 |
+| `chat.py` | 1645 | **疑似死代码**：同函数前部只要 `table_context` 非空就已 return，走不到这里（建议后续评估删除） |
+| `research_lit.py` | 146-147 / 1470-1471 / 1598-1599 | `urlparse` 极端畸形串、`related` 外层兜底、Windows 上无法稳定构造的删除失败 |
+| `research_lit.py` | 1533-1538 / 1555-1556 / 1579-1584 | 真实外网下载与 302 跟随，**按要求不测**；内部 `_download_pdf/_download_page` 已用 fake client 全分支覆盖 |
+| `research_tables.py` | 剩余 ~108 行 | 多为对称分支（PDF/HTML 双通道同构）与防御性 `except`，已到 93.8% 远超线 |
+| 前端 | 各行 1-7 行零散 | 数据形状兜底（`?? null`）与不可达的 `default` 分支；语句覆盖均 ≥92% |
+
+### 12.8 顺手修掉的三类阻塞项（不修就进不了 CI）
+
+1. **`vue-tsc --noEmit` 65 处类型错误**（全是新测试文件，非产品代码）：
+   - `authMethod: 'password'` 不在 `AuthMethod` 联合（`phone-pass|phone-code|wechat|qq`）里 → 改 `'phone-pass'`；
+   - `vi.fn(async () => …)` 无参导致 `mock.calls[0]` 是空元组，取 `[1]` 报错 → 显式断言成 `[string, RequestInit]`；
+   - `todo.test.ts` 的任务样本缺类型 → 工厂返回 `TodoTask`（`patch` 仍放宽，便于造脏数据）。
+2. **`eslint` 4 处 `prefer-const`**：`let [url, init]` 里 `init` 从不重赋值 → 拆成 `const first` + `let url`。
+3. **`diagramLayout.test.ts` 的脏 kind**（`'geometria'`）→ 显式注解「故意绕过类型走运行期兜底」，而不是删掉用例。
+
+### 12.9 CI 门槛
+
+`--cov-fail-under` 由 **75 → 85**（实测后端 90%）：只防倒退，不当达标依据；
+留 5pp 余量给重构与平台差异（Linux 上 posix 专属分支会多执行几行）。
+
+### 12.10 需要 lead/后续会话决定的两件事（本轮只记录，未改产品代码）
+
+1. `chat.py:1645` 疑似死代码（见 12.7），删不删由结构债评审决定。
+2. `research_lit.py` 的真实下载链路（1533-1584）只做了 fake client 覆盖，
+   **真机外网验证**仍未做 —— 与部署自检一样，属于"测试到此为止、交给真机"的部分。
+
+401 清登录态并跳登录；另有 409/429 映射与二进制响应（`Content-Disposition` 缺失回退）。

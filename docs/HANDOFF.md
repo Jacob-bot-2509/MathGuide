@@ -2,52 +2,49 @@
 
 > 用法：新开一个会话，把这份文件路径发给 Cline，并说"按 docs/HANDOFF.md 继续"。
 > 工作区：`C:\Users\Jacap\.cline\worktrees\c1637\code`（分支 `cline/c1637`，tag `v1.26.0`）
-> 最后更新：2026-11-14 ｜ 最新提交：`2a079fc`
+> 最后更新：2026-11-14 ｜ 最新提交：`test(coverage): G2/G3/G5/G6/G7 全量收口`（见 `git log -1`）
 
 ## 0. 一句话任务
 
-把后端/前端的测试覆盖率按 **`docs/COVERAGE_PLAN.md` 的"按文件定线"** 逐文件做到达标；
-剩余 54 个文件的分组与解法见 **`docs/COVERAGE_REMAINING.md`**；部署事项见 **`docs/DEPLOY_PLAYBOOK.md`**。
+覆盖率已**全部收口**（146/146 达标，后端 1504 passed / 90%，前端 1021 条 / 97.7%）。
+下一阶段的工作重心转为：**真机验证 → 部署上线**（见 `docs/DEPLOY_PLAYBOOK.md`），
+覆盖率只需守住"不倒退"门槛（CI `--cov-fail-under=85`）。
 
 ## 1. ⚠️ 第一件事（不要跳过）
 
-上一轮结束时**全量测试没跑完**就提交了 `2a079fc`（新增 `tests/test_rag_degrade.py` 7 条）。
-**先验证，再继续叠加任何改动**：
+本轮结束时全量已经跑过并全绿，**基线是可信的**：
 
 ```powershell
 cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
-& 'D:\Works\code\.venv\Scripts\python.exe' -m pytest -q      # 期望：1180+ passed，0 failed
+& 'D:\Works\code\.venv\Scripts\python.exe' -m pytest -q      # 期望：1504 passed，0 failed（约 87s）
 ```
 
-- 若红：先修红，别继续做覆盖率。
-- 全量跑一次约 45 秒，**超过单条命令 30 秒上限**，用后台方式跑：
-  `Start-Process` 重定向到 `tmp.log`，再 `Start-Sleep` + 读日志（本会话一直是这么做的）。
+- 改代码后再跑；若红先修红，别继续叠加改动。
+- 全量超过单条命令 30 秒上限，用后台方式跑：
+  `Start-Process` 重定向到 `tmp.log`，再 `Start-Sleep` + 读日志。
 
-## 2. 当前状态（已提交、工作树 clean）
+## 2. 当前状态（覆盖率收口后，工作树 clean）
 
 | 项 | 数值 |
 | --- | --- |
-| 后端测试 | 1175 passed（+ 上一轮 7 条待验证） |
-| 后端覆盖率 | **80%**（16152 语句） |
-| 前端测试 | 脚本套件全过 + vitest 94 条 |
-| 前端覆盖率 | 14.6%（utils/stores/services） |
-| 已达标文件 | **21 / 74**（后端 17 + 前端 4） |
-| ruff / eslint | 0 违规 |
+| 后端测试 | **1504 passed, 0 failed**（约 87s） |
+| 后端覆盖率 | **90%**（16175 语句） |
+| 前端测试 | 脚本套件全过 + vitest **51 文件 / 1021 条** |
+| 前端覆盖率 | **97.70%**（utils/stores/services） |
+| 已达标文件 | **146 / 146**（后端 91 + 前端 55） |
+| ruff / eslint / vue-tsc | 0 违规 / 0 违规 / 0 错误 |
 
-已达标（不要再改）：`analysis_regression` 98 · `main` 100 · `db` 99 · `analysis_client` 94 ·
-`analysis_worker` 95 · `rerank` 100 · `synthesize` 100 · `diagram_alerts` 100 · `math_table_render` 100 ·
-`judges` 90 · `build` 99 · `exercise_docgen` 83 · `docgen` 81 · `linear_algebra` 85.5 ·
-`rag/route` 100 · `research_urls` 93 · `doc` 80 · `cmdLink` 100 · `toast` 100 ·
-`regressionChart` 100 · `workspace` 100
+已达标（不要再改）：全量都达标了。逐文件的「之前→之后 / 测试文件 / 改坏验证」见
+`COVERAGE_PLAN.md` §12（本轮 G2–G7）与 §11（历史批次）。
 
 ## 3. 下一步（严格按顺序）
 
-**G1 剩余**：`rag/llm.py`（57.3% → 80%，缺 41 行：`69, 79, 84, 112-174, 208, 220`）
-- 主体是 112–174 的流式客户端：401 / 429 / 超时 / 空响应 / `fallback` 切 backup
-- 手法：假 `httpx.AsyncClient`（异步上下文 + 行迭代），断言"错误怎么映射"而不是"是否抛异常"
-- 顺带确认 `rag/__init__.py` 是否已 ≥80%：`pytest tests/test_rag_degrade.py tests/test_rag_init.py -q --cov=rag --cov-report=term`（注意 `--cov=` 只能给包名 `rag`，不能给 `rag/__init__.py`）
-
-**然后 G2 → G7**：见 `docs/COVERAGE_REMAINING.md` 的分组表（G2 五个文件零网络，最适合连做）。
+1. **真机验证**（覆盖率覆盖不到的部分）：
+   - `backend/tools/check_pdf.py` 在 Linux + chromium 上跑一次（Windows 已 `RESULT: OK`）；
+   - `research_lit.py` 的真实外网下载链路（测试只做了 fake client）；
+   - 语音输入、会话轮换等需要真设备/真时间的链路。
+2. **部署**：按 `docs/DEPLOY_PLAYBOOK.md` 走前置三件事 → PDF 方案 A → 备份 → 安全开关 → 验收 → 回滚。
+3. **结构债**：`chat.py:1645` 疑似死代码（见 `COVERAGE_PLAN.md` §12.7/§12.10），删不删由评审决定。
 
 ## 4. 硬规则（每做完一个文件都要过）
 

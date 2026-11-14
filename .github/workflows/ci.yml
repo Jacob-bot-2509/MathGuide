@@ -41,9 +41,9 @@ jobs:
         run: python -m compileall -q backend
       - name: Test
         working-directory: backend
-        # 覆盖率门槛只用来**防倒退**(基线 77%,门槛设 75%),
-        # 不要为了数字好看去写无断言的测试。
-        run: python -m pytest -q --cov --cov-report=term-missing --cov-fail-under=75
+        # 覆盖率门槛只用来**防倒退**(实测 90%,门槛设 85%)。
+        # 单文件是否达标看 docs/COVERAGE_PLAN.md §2 的类别线,不看这个总数。
+        run: python -m pytest -q --cov --cov-report=term-missing --cov-fail-under=85
 
   frontend:
     name: frontend (node 22)
