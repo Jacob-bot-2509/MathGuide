@@ -459,6 +459,23 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 
 **近线剩 2 个**：`doc`(72.6，缺 55 行，其中 350-392 依赖 Chromium)、`research_tables`(77.3，缺 35 行)。
 
+### B5 前端（开始：4 个小 utils 达标）
+
+| 文件 | 之前 | 之后 | 线 | 说明 |
+| --- | ---: | ---: | ---: | --- |
+| `src/utils/cmdLink.ts` | 12.5% | **100%** | 80 | 畸形百分号编码退回原文(不抛 URIError)、空前缀返回 null |
+| `src/utils/toast.ts` | 28.6% | **100%** | 80 | 自动消失时长、连续提示清旧定时器 |
+| `src/utils/regressionChart.ts` | 0% | **100%** | 80 | 无拟合曲线(多元回归)返回空段、残差散点横轴用 fitted |
+| `src/utils/workspace.ts` | 0% | **100%** | 80 | 子域→工作区判定、跨子域跳转保留路径并丢掉查询/锚点、单域恒为同区 |
+
+测试文件 `src/utils/pureHelpers.test.ts`（14 条，happy-dom 环境，用 `window.happyDOM.setURL` 切子域）。
+
+**前端全量**：脚本套件「全部通过」+ vitest **94 条**（此前 80），`eslint` 0 违规。
+
+**前端剩余 41 个**：`geogebraSpec`(483, 0%) `diagramSpec`(345, 9%) `diagramLabels`(329, 1.5%)
+`diagramLayout`(245, 1.6%) `mathArrays`(192, 0%) `geogebra3dSpec`(192, 0%) `mathIsolation`(175, 12%)
+`speechMath`(166, 7%) `paperActions`(83, 3.6%) `graphLayout`(68, 0%) `avatar`(42, 2.4%) 等。
+
 **全量回归**：`1123 passed`（B2 后 1089，+34）。`ruff` 全绿。
 
 
