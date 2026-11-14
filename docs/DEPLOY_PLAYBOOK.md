@@ -94,7 +94,7 @@ cd backend && python tools/check_pdf.py           # RESULT: OK
 | Linux + chromium 实机验证 | 未做（只有 Windows Edge 157 实测） |
 | 老版本浏览器缺 `--no-pdf-header-footer` | PDF 可能带页眉（难看，不影响内容）；未做兼容 |
 | 数组公式→Word 图片 | 走 `math_table_render`（同一条浏览器链路），Linux 上会降级为纯文本 |
-| 覆盖率 | 后端 80%、前端 14.6%；剩余 54 个文件见 `COVERAGE_REMAINING.md` |
+| 覆盖率 | 后端 **90%**（1504 passed）、前端 **97.7%**（51 文件 1021 条）；逐文件达标 146/146，口径见 `COVERAGE_PLAN.md` §2 |
 | 单文件最大 | `ChatWorkspace.vue` 3056 行（已从 3944 降） |
 
 ## 七、回滚
