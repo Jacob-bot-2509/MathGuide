@@ -370,4 +370,47 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 
 最后重跑一次 coverage，把本文档第 3/4 节台账的"现状/判定"列刷新 —— 文档与代码不同步，比没有文档更糟。
 
+---
+
+## 11. 执行记录
+
+### B1 零覆盖 + 装配（已完成）
+
+| 文件 | 之前 | 之后 | 测试 | 改坏验证 |
+| --- | ---: | ---: | --- | --- |
+| `analysis_regression.py` | 0% | **98%** | `tests/test_analysis_regression.py`（24 条，新增 18） | 把 `degree not in (2,3,4)` 改成 `> 0` → `test_validate_spec_rejections` 红 |
+| `main.py` | 0% | **100%** | `tests/test_main_app.py`（11 条，新文件） | 去掉 `OriginGuardMiddleware` → 跨站 403 用例红 |
+| `db.py` | 83.5% | **99%** | `tests/test_db.py`（13 条，新文件） | 去掉 `conn.close()` → `test_connect_closes_connection_when_pragma_fails` 红 |
+| `analysis_client.py` | 23.9% | **94%** | `tests/test_analysis_client.py`（12 条，新文件） | 不调 `proc.kill()` → 超时用例红 |
+| `analysis_worker.py` | 43.2% | **95%** | `tests/test_analysis_worker.py`（+4 条） | 主循环不 catch `Exception` → 坏行用例红 |
+
+**这一批暴露的三个真问题**（不是覆盖率问题，是工程问题）：
+
+1. **`analysis_regression` 的 0% 是假象**：它其实有 6 条测试，但文件首行 `pytest.importorskip("statsmodels")`
+   在缺依赖时**静默跳过** —— 看起来"没测试"，实际是"测试被跳过"。而 CI 只装
+   `requirements.txt` + `requirements-dev.txt`，**从不装 `requirements-analysis.txt`**，所以 CI 里永久跳过。
+   已在 CI 补装 analysis 依赖（否则这个文件的覆盖率永远是 0，且没人会发现）。
+2. **`import main` 会写 `backend/data`**：模块级执行 `store.init()` / 迁移 / 留存清理 / `rag.init()`。
+   这就是没人给它写测试的原因。测试改为「先 patch 数据路径再 import」，顺带覆盖了
+   "启动期数据迁移失败只能告警、不能阻断服务"这条真实分支（3 条 OSError 降级路径）。
+3. **本地 venv 的 numpy 是为 cp314 编译的**，3.13 解释器导入即崩 —— 已重装（numpy 2.2.6 / statsmodels 0.14.4 /
+   scipy 1.14.1 / pandas 2.2.3）。这条也解释了为什么"analysis 相关模块覆盖率一直是 0"。
+
+**未覆盖且判定为不可达的 7 行**（已确认不是漏测）：
+
+| 文件 | 行 | 原因 |
+| --- | --- | --- |
+| `analysis_regression.py` | 85 | `_validate_spec` 已保证列都存在,该防御分支进不来 |
+| `analysis_regression.py` | 152 | 常数 X 会先触发 `singular`,进不到 `low == high` |
+| `db.py` | 87 | WAL 重试 10s 超时后的 `raise`,需伪造时钟 |
+| `analysis_client.py` | 14-17, 37 | posix 专属(`resource.setrlimit` / bin/python),Windows 上不执行 |
+| `analysis_worker.py` | 67 | `if __name__ == "__main__"`,import 时不可达 |
+
+**全量回归**：`1062 passed`（B1 前 995，+67），总覆盖率 **77% → 78%**。
+
+### B2–B5（未开始）
+
+按第 7 节顺序继续。B2 目标：`research_formats`(67.9) `rag/research/sources`(46.8) `synthesize`(48.1)
+`rerank`(55.4) `diagram_alerts`(42.6) —— 全部零网络，可达性同 B1。
+
 

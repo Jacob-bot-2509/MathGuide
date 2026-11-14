@@ -31,7 +31,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
-        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+        # analysis 依赖必须装:analysis_regression 的测试用 importorskip 守着,
+        # 不装就整个文件被静默跳过 —— 覆盖率永远是 0 且没人会发现。
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt -r backend/requirements-analysis.txt
       - name: Lint (ruff)
         working-directory: backend
         run: ruff check .
