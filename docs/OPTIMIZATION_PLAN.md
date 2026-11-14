@@ -74,6 +74,29 @@ v1.25.0 的功能与测试水位已经不错（PBKDF2、token 只存哈希、bod
 | RAG 检索回归护栏 | 无 | top-k 顺序 golden 测试 | `test_rag_regression.py` |
 | 仓库体积（.git） | 257 MB | 停止增长（历史迁移见 D3） | `git count-objects -vH` |
 | 后端测试数 | 944 | 956（本轮已达） | pytest |
+| **覆盖率（按文件）** | 见 [覆盖率方案](COVERAGE_PLAN.md) 逐文件台账 | **每个文件达到其类别线**，不看总数 | 单文件 `--cov=<module>` |
+
+### 2.1 覆盖率合格线（按类别，验收单位是文件）
+
+覆盖率**不设统一数字**：同一个百分比对 `quota.py`（10 语句）和 `research_lit.py`（1005 语句）意义完全不同。
+分级定线、逐文件验收，完整台账与执行批次见 **[COVERAGE_PLAN.md](COVERAGE_PLAN.md)**。
+
+| 类别 | 合格线 | 涉及 |
+| --- | ---: | --- |
+| 认证 / 凭据 / 数据写入 | **90%** | `auth` `store` `usage` `db` `session_cache` `quota` `rate_limit` `origin_guard` `config` `log` |
+| 计算 / 格式 / 渲染 | **85%** | `analysis_regression` `linear_algebra` `research_formats` `math_render` `math_table_render` |
+| 检索与对话主链路 | **80%** | `chat` `chat_sse` `chat_routing` `rag/**` `recommendation` `diagnosis` |
+| 科研工作台 | **80%** | `research_*` `diagram_alerts` |
+| 文档生成 / 导出 | **80%** | `doc` `docgen` `exercise_docgen` |
+| 题库 | **80%** | `exercises/**` |
+| 装配与入口 | **90%** | `main.py` |
+| 评测工具 | **80%** | `evaluation/**` |
+| 前端 utils / stores / services | **80% / 70% / 60%** | `src/utils` `src/stores` `src/services` |
+| 前端组件与模板 | **不设线、不纳入统计** | 模板断言需视觉回归，本项目暂无 |
+
+**"达标"两条同时满足**：① 该文件 ≥ 类别线；② 其主要公开函数至少被调用一次。
+**CI 门槛只防倒退**：75% →（B1 后）78% →（B2 后）80% →（B3/B4 后）81%，每次只抬 1–2pp。
+**三个文件永不测**（已 omit）：`dev_reload.py`、`exercises/fetch.py`、`evaluation/runner.py`。
 
 ## 3. 总览
 
@@ -422,9 +445,14 @@ v1.25.0 的发布卖点就是"检索排序与召回"，但后端只有 `test_rag
 2. 正常流 → 帧序列、`[DONE]` 收尾、用量记账各一次（`_meter` 逻辑有 11 处 `to_thread`，很容易改坏）；
 3. 限流触发 → 429 且不写用量。
 
-### M4-3 覆盖率门槛（0.5 人日）
+### M4-3 覆盖率门槛（已完成；逐文件验收见 [COVERAGE_PLAN.md](COVERAGE_PLAN.md)）
 
-`pytest --cov=. --cov-report=term-missing`，先记录基线（估计 70%±），CI 用 `--cov-fail-under=<基线-2>` 做**防倒退**而不是追高。前端覆盖率随 D4 一起定。
+`pytest --cov=. --cov-report=term-missing`，基线实跑 **77%**（16152 语句 / 缺 3782），CI `--cov-fail-under=75` 做**防倒退**而不是追高。
+前端覆盖率用 `npm run coverage`（vitest v8），统计范围限 `src/services` / `src/stores` / `src/utils`。
+
+**后续口径改为逐文件验收**：不设统一数字，按 10 个类别各自定线（认证 90%、计算 85%、主链路 80%、
+装配 90%、前端 utils/stores/services 80/70/60%），每个文件有自己的现状与缺口行，台账见 `COVERAGE_PLAN.md` 第 3/4 节。
+CI 门槛按批次抬升 75 → 78 → 80 → 81，只用来兜住整体不倒退。
 
 ### M4-4 前端测试迁 vitest（2 人日，可选）
 
