@@ -44,6 +44,20 @@ def clean_global_state(monkeypatch):
     diagram_alerts.reset_for_tests()
 
 
+@pytest.fixture(autouse=True)
+def isolate_research_data_dir(tmp_path, monkeypatch):
+    """把科研语料的落盘根目录重定向到 tmp_path。
+
+    `research_corpus.DATA_DIR` 默认是 `backend/data/research`,而研究区端点(文献检索缓存、
+    语料索引)会按 uid 在那个目录下建 `index.sqlite3`。有些用例只打 `monkeypatch` 就调端点,
+    于是把 `u-lit-cache` 这类测试索引写进了真实 data 目录 —— 与本文件开头"不碰 backend/data"
+    的约定相悖,部署前也会变成来路不明的残留。
+
+    统一在这里兜底:用例自己再 `setattr` 的(79 处)会在其后覆盖,行为不变。
+    """
+    monkeypatch.setattr(research_corpus, "DATA_DIR", tmp_path / "research-tmp")
+
+
 @pytest.fixture()
 def temp_store(tmp_path, monkeypatch):
     """独立 SQLite 库 + 旧 JSON 路径;每个测试一个全新库文件。"""
