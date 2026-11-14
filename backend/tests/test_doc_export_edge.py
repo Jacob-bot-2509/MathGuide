@@ -115,6 +115,34 @@ def test_successful_print_uses_headless_flags_and_returns_bytes(tmp_path, monkey
     assert "--virtual-time-budget" in command
 
 
+def test_old_chromium_falls_back_to_plain_headless(tmp_path, monkeypatch):
+    """老版本只认 --headless:第一次不产出文件时必须自动换参数重试,而不是直接判失败。"""
+    monkeypatch.setattr(doc, "_find_edge", lambda: "/usr/bin/chromium")
+    out = tmp_path / "out.pdf"
+    flags: list[str] = []
+
+    def fake_run(cmd, **_kwargs):
+        flags.append(cmd[1])
+        if cmd[1] == "--headless":          # 只有老参数生效
+            out.write_bytes(b"%PDF-1.4 old")
+
+    monkeypatch.setattr(doc.subprocess, "run", fake_run)
+
+    assert doc._html_to_pdf(_html(tmp_path), out) == b"%PDF-1.4 old"
+    assert flags == ["--headless=new", "--headless"]
+
+
+def test_pdf_timeout_is_configurable(monkeypatch):
+    assert doc._pdf_timeout() == doc.PDF_TIMEOUT_DEFAULT
+    monkeypatch.setenv("MG_PDF_TIMEOUT", "300")
+    assert doc._pdf_timeout() == 300.0
+    monkeypatch.setenv("MG_PDF_TIMEOUT", "abc")
+    assert doc._pdf_timeout() == doc.PDF_TIMEOUT_DEFAULT
+    # 下限 10s,防止把超时配成 0 导致必然失败
+    monkeypatch.setenv("MG_PDF_TIMEOUT", "1")
+    assert doc._pdf_timeout() == 10.0
+
+
 # ---------- 对外入口 ----------
 
 def test_render_pdf_bytes_normalizes_language_and_delegates(tmp_path, monkeypatch):

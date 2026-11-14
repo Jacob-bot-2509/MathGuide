@@ -325,30 +325,53 @@ def _render_html(doc: dict, lang: str, katex_dir: Path, brand: str | None = None
 </html>"""
 
 
+PDF_TIMEOUT_DEFAULT = 120.0  # 秒;低配 VPS 上 60s 会误杀长文档,可用 MG_PDF_TIMEOUT 覆盖
+
+
+def _pdf_timeout() -> float:
+    raw = (os.getenv("MG_PDF_TIMEOUT") or "").strip()
+    if not raw:
+        return PDF_TIMEOUT_DEFAULT
+    try:
+        return max(10.0, float(raw))
+    except ValueError:
+        return PDF_TIMEOUT_DEFAULT
+
+
 def _html_to_pdf(html_path: Path, pdf_path: Path) -> bytes | None:
-    """Edge headless 打印 HTML 为 PDF;失败返回 None(由调用方决定兜底)"""
+    """浏览器 headless 打印 HTML 为 PDF;失败返回 None(由调用方决定兜底)。
+
+    `--headless` 参数按"新 → 旧"回退:新版 chromium/Edge 只认 `--headless=new`,
+    部分发行版仍是老的 `--headless`。写死其中一个,会在另一半机型上**静默不产出 PDF**
+    (命令返回 0、没有报错、就是没文件),所以这里逐个尝试。
+    """
     edge = _find_edge()
     if edge is None:
-        log.info("[doc] 未找到 Edge 浏览器")
+        log.info("[doc] 未找到可用的 headless 浏览器(MG_EDGE_PATH / chromium / msedge)")
         return None
-    cmd = [
-        edge, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
-        f"--print-to-pdf={pdf_path}", "--virtual-time-budget=8000",
-        html_path.as_uri(),
-    ]
-    try:
-        subprocess.run(cmd, capture_output=True, timeout=60, check=False)
-    except subprocess.TimeoutExpired:
-        log.warning("[doc] Edge 转 PDF 超时")
-        return None
-    if not pdf_path.is_file():
-        log.info("[doc] Edge 未产出 PDF")
-        return None
-    data = pdf_path.read_bytes()
-    if not data.startswith(b"%PDF"):
-        log.info("[doc] 产物不是合法 PDF")
-        return None
-    return data
+    timeout = _pdf_timeout()
+    for flag in ("--headless=new", "--headless"):
+        pdf_path.unlink(missing_ok=True)
+        cmd = [
+            edge, flag, "--disable-gpu", "--no-pdf-header-footer",
+            f"--print-to-pdf={pdf_path}", "--virtual-time-budget=8000",
+            html_path.as_uri(),
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+        except subprocess.TimeoutExpired:
+            # 超时说明这一档参数被接受了(只是慢),换参数没有意义
+            log.warning(f"[doc] 浏览器转 PDF 超时({timeout:.0f}s,参数 {flag})")
+            return None
+        if not pdf_path.is_file():
+            continue  # 该参数不被支持 → 换下一档
+        data = pdf_path.read_bytes()
+        if not data.startswith(b"%PDF"):
+            log.info(f"[doc] 产物不是合法 PDF(参数 {flag})")
+            continue
+        return data
+    log.info("[doc] 浏览器未产出 PDF(已尝试 --headless=new 与 --headless)")
+    return None
 
 
 def render_pdf_bytes(document: dict, lang: str = "zh", brand: str | None = None) -> bytes | None:

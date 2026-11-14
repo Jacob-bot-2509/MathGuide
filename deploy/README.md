@@ -123,3 +123,38 @@ cd backend && ../.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --p
   MG_USAGE_TTL_DAYS=90      # 过期用量记录(JSONL 与旧备份)
   ```
 - 实验结束按告知的保留期限删除账号数据,或让参与者自行注销。
+
+## 导出 PDF(可选功能)
+
+PDF 导出实现为「HTML + KaTeX → headless 浏览器打印」,因此**依赖服务器上有浏览器**。
+没有浏览器时,`/api/doc/generate`、`/api/doc/qa`、`/api/doc/exercise` 的 PDF 分支返回
+**500 `pdf render failed`**;Word / Markdown 导出不受影响(其中带竖线横线的数组公式会降级为纯文本)。
+
+### 启用步骤(Linux)
+
+```bash
+apt install -y chromium fonts-noto-cjk
+chromium --headless=new --disable-gpu --print-to-pdf=/tmp/t.pdf https://example.com
+file /tmp/t.pdf          # 期望: PDF document
+```
+
+在 `backend/.env.local` 指定(优先级最高,配错不会兜底到别的浏览器):
+
+```
+MG_EDGE_PATH=/usr/bin/chromium
+```
+
+### 三个容易踩的点
+
+1. **中文字体缺失 → PDF 里中文变方块**。必须装 `fonts-noto-cjk`(或 `fonts-wqy-zenhei`)。
+   代码兜不住:字体不在系统里,渲染出来就是豆腐块。
+   → 验收时**肉眼看中文正文**,不要只看“有没有生成 PDF”。
+2. **`--headless` 参数新旧不一**。老发行版只认 `--headless`,新版只认 `--headless=new`;
+   写死一个会**静默不产出 PDF**(返回码 0、无报错、就是没有文件)。
+   → 代码已自动回退:先试 `--headless=new`,没产出文件再试 `--headless`。
+3. **长文档超时**。默认 120 秒(`MG_PDF_TIMEOUT` 可调,下限 10 秒)。低配 VPS 建议 300。
+
+### 部署后必做的一次冒烟
+
+导出一份「含数组公式(竖线横线)+ 中文」的文档,肉眼确认三件事:
+**公式在不在 / 表格线在不在 / 中文有没有变方块**。
