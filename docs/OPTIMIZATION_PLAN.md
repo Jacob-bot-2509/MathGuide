@@ -1,7 +1,7 @@
 # MathGuide 工程优化方案（P0–P5）
 
 日期：2026-11-13
-状态：**M0 / M1 / M2 / M3 / M4 / M6 / M7 已完成并验证**（M3 四块全部拆完，见 §7）；M5 待立项
+状态：**M0 / M1 / M2 / M3 / M4 / M6 / M7 已完成并验证**（M3 四块全部拆完，见 §7；真实环境已起服务跑通，见 §0.1）；M5 待立项
 基线：v1.25.0（代码快照 `8475f4a` / 发布提交 `66ead6e`）；后端 944 passed、前端 20 套自测
 关联：[后端 README](../backend/README.md)、[部署清单](../deploy/README.md)、[评测报告](EVAL_REPORT.md)
 
@@ -20,6 +20,37 @@
 | 仓库卫生（补充） | ✅ 完成 | `.gitignore` 补覆盖率产物与本地临时日志；`.release-notes-v1.5.0.md` 移入 `docs/`；`EVAL_REPORT.md` 加版本时效说明（0.667 是改动前数字）；`RESEARCH_SOURCE_PLAN.md` 标注已被 V2 取代；密钥扫描（`sk-*` / API key / 私钥）无命中；确认 `node_modules` / `dist` / `data` 未被跟踪 |
 
 **验证结果**：后端 `995 passed, 1 skipped`（基线 944 → 995），覆盖率 **76.6%**（CI 门槛 75%，防倒退）；前端 `eslint` 0 违规、`vue-tsc` 通过、`vite build` 通过、20 套脚本自测 + vitest **9 个文件 80 条断言**（含组件级挂载与手势）全过；`ruff check backend` 全绿。五次拆分（chat.py / research_corpus.py / i18n.ts / ChatWorkspace 三批）前后**测试数与结果完全一致**，ChatWorkspace 各批都是**先补测试再拆分**。
+
+### 0.1 真实环境验证（2026-11-14，本机起服务跑通）
+
+不只跑测试：把后端与前端真起起来打真实 HTTP。环境为 Windows 本机、演示模式（`127.0.0.1:8000` + Vite `5173`）。
+
+| 组 | 结果 |
+| --- | --- |
+| 健康与鉴权 | `/api/health` 200；未登录 `/api/auth/session` 401；注册 200 且发 `mg_session`；带 Cookie / 带 Bearer 均 200；登出后 Cookie 与旧 Bearer **双双 401**；重新登录 200 |
+| 会话续期（D1） | 新 token 调 `session` **不返回 token**（未到 20% 轮换窗口）；连调两次仍不轮换（5 分钟节流生效） |
+| 写操作来源校验（M6-3） | `Origin: https://evil.example` 的 POST → **403**；同源 Origin → 200；无 Origin 的脚本客户端 → 200（不误伤自动化） |
+| SSE 链路 | `/api/chat/stream` 空 prompt → 200，帧以 `data: [DONE]` 收尾，且带欢迎语内容 |
+| 打印守卫（M6-1） | `Host: mathguide.example.com` 打 `/api/research/tables/x/print` → **403「打印仅支持本机访问」** |
+| 附件上传（M4/M3 相关） | 原始字节上传 200 且返回 `docId`；同内容再传标 `duplicate`；正文过短（<50 字）**400** 并给出可读原因；`/api/research/storage` 200 |
+| 每日额度（M6-4） | 额度设 1 且当天已有 1 条用量 → 真实 prompt **429「daily quota reached」**；同一额度下空 prompt 罐头欢迎语连发 3 次**全部 200**（证明欢迎语不占额度这条修复真的生效） |
+| 单 worker 约束（M6-2） | `WEB_CONCURRENCY=4` 启动 → 日志出现「检测到 4 个 worker…请保持单 worker」，且 uvicorn 确实起了 4 进程 |
+| 前端 | Vite dev 386ms 就绪；`/` 带 `#app`；`/api/health` 经 vite 代理返回后端 JSON；`ChatWorkspace.vue` 经 vite 编译 200 且产物里含 `useChatStream` / `useSpeechInput` 引用 |
+
+**这轮验证同时纠正了两处认知**：
+
+1. 后端是 **Starlette**（不是 FastAPI）—— `requirements.txt` 里没有 fastapi，现有 venv 不装也能起；早前描述有误，已在此更正。
+2. 首次跑出现的 1 个 502 是**测试端**问题：该请求根本没到服务端（服务端日志无记录），改用 `trust_env=False` 后稳定 403。
+
+**四件本环境验证不了的事（如实标注，靠单测兜底）**：
+
+| 项 | 为何验不了 | 覆盖方式 |
+| --- | --- | --- |
+| 会话**轮换**分支 | 需 token 年龄 > 19.2h（24h 的 80%） | 6 条后端单测（不轮换 / 轮换 / 节流 / 旧 Bearer 回退 / 登出双清 / 过期 401） |
+| 语音输入全链路 | 需真实麦克风 + Chrome/Edge 语音服务 | 10 条 `useSpeechInput` 单测（权限、拼接、点停速转、错误分类、卸载） |
+| LLM 真实回答 | 无 `MG_*_API_KEY` | 额度拦截改用「造当天用量行」触发，绕开模型调用 |
+| 触摸手势 / 拖拽 | 无真实触屏 | 6 条 `useDiagramFocus` 手势单测 + 组件级挂载 |
+
 
 
 ## 1. 这份方案解决什么
