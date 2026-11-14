@@ -23,8 +23,8 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
 import DiagramBoundary from '@/components/diagram/DiagramBoundary.vue'
-import { appendDiagram, parseDiagramEvent, splitMessageBlocks, type DiagramBlock } from '@/utils/diagramSpec'
-import { needsDiagram, planDiagram } from '@/services/diagramService'
+import { appendDiagram, splitMessageBlocks, type DiagramBlock } from '@/utils/diagramSpec'
+import { planDiagram } from '@/services/diagramService'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
 import ResearchArchivePanel from '@/components/chat/ResearchArchivePanel.vue'
@@ -44,7 +44,6 @@ import {
   requestIntuition,
   speechToMath,
   type ChatMeta,
-  type ChatStreamHandle,
 } from '@/services/chatService'
 import { getResearchTable } from '@/services/researchTableService'
 import { getResearchDocMeta, uploadTempPaper, type PaperAction, type ResearchDoc } from '@/services/researchService'
@@ -72,6 +71,7 @@ import { beautifyMath, cachedConvert, normalizeSpeechCase, saveConvert, speechMa
 import { showToast } from '@/utils/toast'
 import { chapterNameFromCmd } from '@/utils/cmdLink'
 import { splitStableBlocks } from '@/utils/mathBlocks'
+import { useChatStream } from '@/composables/useChatStream'
 import { useResearchSplit } from '@/composables/useResearchSplit'
 import { useDiagramFocus } from '@/composables/useDiagramFocus'
 import { SPLIT_MIN_WIDTH } from '@/utils/splitPane'
@@ -366,8 +366,30 @@ const flashMsgId = ref(0)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 
 /* 后台流:不同会话的输出并行生成,切换界面不中断;按消息 id 索引便于精确取消 */
-let streams = new Map<number, ChatStreamHandle>()
-const timers = new Map<number, ReturnType<typeof setTimeout>>()
+/* 一条回复的流式生命周期(排队/节流上屏/收尾/中断)在 composable 里;
+   这里只提供依赖:会话、滚动、落盘、图解追问与真正的发请求函数。 */
+const {
+  streamInto,
+  scheduleStream,
+  cancelReply,
+  stopGenerating,
+  resumeReply,
+  stopAllStreams,
+} = useChatStream({
+  workspace: () => props.workspace,
+  activeSession: () => activeSession.value ?? null,
+  sessions: () => sessions.value,
+  pinnedToBottom: () => pinnedToBottom,
+  pinToBottom: () => { pinnedToBottom = true },
+  scrollBottom,
+  persist: persistSessions,
+  flush: () => flushSessions(true),
+  toast: showToast,
+  history: buildHistory,
+  markPaperImported,
+  requestDiagram,
+  stream: paperChat.stream,
+})
 let flashTimer: ReturnType<typeof setTimeout> | null = null
 
 const activeSession = computed(() => sessions.value.find((s) => s.id === activeId.value))
@@ -414,21 +436,6 @@ function createSession(cat?: ChatSession['cat']): ChatSession {
   activeId.value = s.id
   persistSessions()
   return s
-}
-
-/** 页面卸载时:停止全部后台流与定时器,保留已生成内容 */
-function stopAllStreams() {
-  for (const s of streams.values()) s.cancel()
-  streams.clear()
-  for (const t of timers.values()) clearTimeout(t)
-  timers.clear()
-  for (const s of sessions.value) {
-    for (const m of s.messages) {
-      m.streaming = false
-      m.thinking = false
-    }
-  }
-  flushSessions()  // 离开学习页前立即落盘,不等 debounce
 }
 
 /* ---------- 对话 ---------- */
@@ -657,180 +664,6 @@ function requestIntuitionFor(msg: ChatMsg): void {
   })
 }
 
-/** 让某会话的一条助手消息开始流式接收回复(输出在所属会话内进行,切换界面不中断) */
-function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?: ChatMeta) {
-  // 增量节流:高频 chunk 先攒进 pending,约每 24ms 合并提交一次;
-  // MathText 对已闭合公式有渲染缓存,单次提交开销极小,不会随正文增长变慢
-  let pending = ''
-  let commit: ReturnType<typeof setTimeout> | null = null
-  // 本次流是否已由 onError 收过尾:失败路径 chatService 会补一次 onDone,
-  // 那是幂等清理,不该再叠一层「已中断」标记
-  let failed = false
-  const flush = () => {
-    commit = null
-    if (!pending) return
-    reply.content += pending
-    pending = ''
-    // 贴底才跟随滚动:用户上拉阅读时不打扰
-    if (session === activeSession.value && pinnedToBottom) scrollBottom(false)
-  }
-  const stream = paperChat.stream(prompt, {
-    onMeta: (meta) => {
-      // 后端路由才知道的标记:研究型回答打上 research,导出入口只对它显示
-      const inner = (meta as {
-        mg_meta?: {
-          research?: boolean
-          tableChanged?: boolean
-          paperImported?: {
-            docId: string; title?: string; status?: string; reason?: string
-          }
-        }
-      }).mg_meta
-      if (inner?.research) reply.research = true
-      if (inner?.tableChanged) showToast(t('chat.tableChanged'))
-      if (inner?.paperImported) markPaperImported(inner.paperImported)
-      const diagram = parseDiagramEvent(meta)
-      if (diagram) {
-        reply.diagrams = markRaw(appendDiagram(reply.diagrams, diagram))
-        persistSessions()
-      }
-    },
-    onDelta: (t) => {
-      reply.thinking = false
-      pending += t
-      if (!reply.content) {
-        // 首个增量立即上屏(欢迎语/回复的第一句话即刻出现),后续增量再走节流
-        flush()
-      } else if (!commit) {
-        commit = setTimeout(flush, 24)
-      }
-    },
-    onDone: (_full, complete) => {
-      if (commit) {
-        clearTimeout(commit)
-        commit = null
-      }
-      flush() // 提交最后的残量,避免丢尾
-      reply.streaming = false
-      reply.thinking = false
-      if (!reply.content) {
-        // 一字未出:主动停止给停止提示(此时流已被 cancelReply 移出 streams);
-        // 被中断则给连接失败提示,否则气泡空着,用户以为卡住了
-        if (!streams.has(reply.id)) reply.content = t('learn.stoppedNote')
-        else if (!complete && !failed) reply.content = t('learn.errStream')
-      } else if (!complete && !failed) {
-        // 连接断在后端 [DONE] 之前(后端重启 / 网络中断):手里的字只是半截。
-        // 不标记的话,这半截回答和完整回答在界面上长得一模一样,用户无从察觉
-        reply.interrupted = true
-      }
-      streams.delete(reply.id)
-      persistSessions()
-      if (!failed && complete && reply.content
-        && needsDiagram(prompt, buildHistory(session, reply.id))
-        && !reply.diagrams?.length) {
-        void requestDiagram(reply, prompt, true)
-      }
-    },
-    // 请求失败(典型:后端未启动 / 限流 429)时,若一字未出则显示对应提示,
-    // 避免气泡永远停留在"思考中"且无任何反馈。
-    // 失败路径 onDone 不再触发(settled 拦截),清理须在此完整收尾,
-    // 否则 streaming 永真 → 发送按钮永远"生成中"。
-    onError: (err?: unknown) => {
-      failed = true
-      if (commit) {
-        clearTimeout(commit)
-        commit = null
-      }
-      flush() // 先提交已收到的残量,不丢内容
-      reply.thinking = false
-      if (!reply.content) {
-        reply.content = (err as { status?: number })?.status === 429
-          ? t('learn.toastRateLimit')
-          : t('learn.errStream')
-      } else {
-        // 已经有内容还报错 = 流断在半途(实测后端被杀时是连接重置,不走干净关闭那条路)。
-        // 这半截同样得标记,否则它和完整回答在界面上没有区别
-        reply.interrupted = true
-      }
-      reply.streaming = false
-      streams.delete(reply.id)
-      persistSessions()
-    },
-  }, { workspace: props.workspace, ...meta })
-  streams.set(reply.id, stream)
-}
-
-/** 延迟后开始流式输出(模拟"思考"阶段);定时器按消息 id 记录,便于精确取消 */
-function scheduleStream(session: ChatSession, reply: ChatMsg, prompt: string, delay: number, meta?: ChatMeta) {
-  const timer = setTimeout(() => {
-    timers.delete(reply.id)
-    if (reply.streaming) streamInto(session, reply, prompt, meta)
-  }, delay)
-  timers.set(reply.id, timer)
-}
-
-/** 精确取消一条回复:等待中的定时器与进行中的流一并清理(含尚未启动的孤儿流) */
-function cancelReply(id: number) {
-  const timer = timers.get(id)
-  if (timer) {
-    clearTimeout(timer)
-    timers.delete(id)
-  }
-  const stream = streams.get(id)
-  if (stream) {
-    stream.cancel()
-    streams.delete(id)
-  }
-}
-
-/** 停止当前会话的生成:进行中的流中止后走正常收尾(保留已生成内容),
-    尚未启动的(思考阶段)同步收尾,避免"生成中"卡死 */
-function stopGenerating() {
-  const session = activeSession.value
-  if (!session) return
-  for (const m of session.messages) {
-    if (!m.streaming) continue
-    const hadContent = !!m.content
-    cancelReply(m.id)
-    m.thinking = false
-    if (!streams.has(m.id)) {
-      m.streaming = false
-      if (!m.content) m.content = t('learn.stoppedNote')
-    }
-    // 有已生成内容才允许续写;空回答只显示停止提示
-    m.stopped = hadContent && !!m.content
-  }
-  persistSessions()
-}
-
-/** 续写被「停止生成」截断的回答:原问题 + 已生成正文发给后端,增量追加到同一条消息 */
-function resumeReply(msg: ChatMsg) {
-  const session = activeSession.value
-  if (!session || msg.streaming || !msg.content) return
-  if (session.messages.some((m) => m.streaming)) {
-    showToast(t('learn.toastBusy'))
-    return
-  }
-  const idx = session.messages.findIndex((m) => m.id === msg.id)
-  if (idx < 0) return
-  const question = [...session.messages.slice(0, idx)].reverse().find((m) => m.role === 'user')
-  if (!question) return
-
-  const partial = msg.content
-  msg.stopped = false
-  msg.interrupted = false
-  msg.thinking = true
-  msg.streaming = true
-  streamInto(session, msg, question.content, {
-    sessionId: session.id,
-    categoryKey: session.cat?.key,
-    resume: true,
-    partial,
-  })
-  pinnedToBottom = true
-  scrollBottom()
-  persistSessions()
-}
 
 function send(text?: string, cmd?: string, extra?: { pointId?: string }) {
   let content = (text ?? input.value).trim()
