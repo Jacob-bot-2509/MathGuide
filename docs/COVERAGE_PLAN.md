@@ -435,4 +435,19 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 `doc`(72.6→80) `docgen`(78.6→80) `exercise_docgen`(78.8→80) `exercises/build`(75.6→80)
 `evaluation/judges`(77.9→80) `research_tables`(77.3→80)。
 
+### 近线补齐（8 个中完成 5 个）
+
+| 文件 | 之前 | 之后 | 线 | 测试 | 补的是什么 |
+| --- | ---: | ---: | ---: | --- | --- |
+| `math_table_render.py` | 81.4% | **100%** | 85 | 8 条（新文件） | 渲染失败 / 多页 PDF / KaTeX 错误标记 / 位图模式异常 / 全白空图 / 异常包装 —— 全是"公式会在 Word 里凭空消失"的分支 |
+| `evaluation/judges.py` | 77.9% | **90%** | 80 | 7 条（新文件） | 围栏 ``` 解析、脏 claims 过滤、`supported` 非布尔记 null、旧 `refused` 兼容 |
+| `exercises/build.py` | 75.6% | **99%** | 80 | 4 条（新文件） | CLI 入口 `main()`、未知来源、`--limit 0`、`--source all` |
+| `exercise_docgen.py` | 78.8% | **83%** | 80 | 6 条（新文件） | 难度词映射（难/中/易）、显式字段优先、difficulty/count 脏值回退 |
+| `docgen.py` | 78.6% | **81%** | 80 | 7 条（新文件） | PDF 渲染失败 500、Word 公式不兼容 422、md 分支、无证据时的兜底大纲与分组上限 |
+
+**近线剩 3 个**：`doc`(72.6，缺 55 行，其中 350-392 是依赖 Chromium 的 `render_pdf_bytes`)、
+`linear_algebra`(83.9，缺 14 行才到 85)、`research_tables`(77.3，缺 35 行)。
+
+**全量回归**：`1123 passed`（B2 后 1089，+34）。`ruff` 全绿。
+
 
