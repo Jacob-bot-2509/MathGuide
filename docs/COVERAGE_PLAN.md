@@ -47,149 +47,49 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 
 第 2 条是为了挡住"测了内部小工具函数、主入口没测"这种假达标。
 
-## 3. 后端逐文件台账（94 个文件）
+## 3. 后端逐文件台账（刷新于 2026-11-14，1195 passed）
 
-> 现状 = 本次实跑；缺口行来自 coverage.json 的 `missing_lines`，`…` 表示还有更多段。
-> 判定只针对该文件自己，与项目总数无关。
+**受管 91 个文件：达标 81 / 未达标 10**（3 个 omit 不计）。
+含前端 14/55，项目合计 **95/146 达标、51 未达标**。
 
-### A · 认证 / 凭据 / 数据写入 —— 合格线 90%（13 个文件，未达标 1）
+| 类 | 线 | 文件数 | 未达标 |
+| --- | ---: | ---: | ---: |
+| A 认证 / 凭据 / 数据写入 | 90 | 13 | 0 |
+| B 计算 / 格式 / 渲染 | 85 | 11 | 1 |
+| C 检索与对话主链路 | 80 | 13 | 2 |
+| D 科研工作台 | 80 | 27 | 7 |
+| E 文档生成与导出 | 80 | 3 | 0 |
+| F 题库 | 80 | 16 | 0 |
+| G 装配与入口 | 90 | 1 | 0 |
+| H 评测工具 | 80 | 7 | 0 |
 
-| 文件 | 语句 | 现状 | 判定 | 缺行数 | 缺口行 |
-| --- | ---: | ---: | --- | ---: | --- |
-| `db.py` | 109 | 83.5% | ❌ 差 6.5pp | 18 | 85–88, 91–93, 128–129 … |
-| `config.py` | 81 | 90.1% | ✅ 达标 | 8 | 20–27 |
-| `store.py` | 324 | 91.0% | ✅ 达标 | 29 | 51–52, 54, 90 … |
-| `auth.py` | 293 | 92.8% | ✅ 达标 | 21 | 111–112, 163, 165 … |
-| `usage.py` | 220 | 93.6% | ✅ 达标 | 14 | 36–37, 39, 49–50 … |
-| `session_cache.py` | 84 | 96.4% | ✅ 达标 | 3 | 102, 115, 123 |
-| `origin_guard.py` | 39 | 97.4% | ✅ 达标 | 1 | 35 |
-| `rate_limit.py` | 46 | 97.8% | ✅ 达标 | 1 | 73 |
-| `log.py` | 46 | 100.0% | ✅ 达标 | 0 | — |
-| `http_utils.py` | 36 | 100.0% | ✅ 达标 | 0 | — |
-| `profile.py` | 30 | 100.0% | ✅ 达标 | 0 | — |
-| `security_headers.py` | 23 | 100.0% | ✅ 达标 | 0 | — |
-| `quota.py` | 10 | 100.0% | ✅ 达标 | 0 | — |
+### 未达标的 10 个（逐个处理）
 
-### B · 计算 / 格式 / 渲染 —— 合格线 85%（11 个文件，未达标 6）
+| 文件 | 语句 | 现状 | 线 | 缺行 |
+| --- | ---: | ---: | ---: | ---: |
+| `research_formats.py` | 336 | 67.9% | 85 | 108 |
+| `rag/research/__init__.py` | 108 | 45.4% | 80 | 59 |
+| `rag/research/sources.py` | 188 | 46.8% | 80 | 100 |
+| `chat.py` | 869 | 52.2% | 80 | 415 |
+| `research_compare.py` | 133 | 60.2% | 80 | 53 |
+| `research_fulltext.py` | 230 | 71.3% | 80 | 66 |
+| `research_lit.py` | 1005 | 65.4% | 80 | 348 |
+| `research_papers.py` | 218 | 70.2% | 80 | 65 |
+| `research_tables.py` | 1296 | 77.3% | 80 | 294 |
+| `research_vision.py` | 399 | 52.1% | 80 | 191 |
 
-| 文件 | 语句 | 现状 | 判定 | 缺行数 | 缺口行 |
-| --- | ---: | ---: | --- | ---: | --- |
-| `analysis_regression.py` | 125 | 0.0% | ❌ 差 85.0pp | 125 | 2, 4–5, 7–8 … |
-| `analysis_client.py` | 67 | 23.9% | ❌ 差 61.1pp | 51 | 12–15, 17, 28–38 … |
-| `analysis_worker.py` | 44 | 43.2% | ❌ 差 41.8pp | 25 | 19, 27–28, 30 … |
-| `research_formats.py` | 336 | 67.9% | ❌ 差 17.1pp | 108 | 36, 38–55, 57–61 … |
-| `math_table_render.py` | 59 | 81.4% | ❌ 差 3.6pp | 11 | 39–40, 42, 46 … |
-| `linear_algebra.py` | 1274 | 83.9% | ❌ 差 1.1pp | 205 | 59–60, 62, 72 … |
-| `math_render.py` | 239 | 90.4% | ✅ 达标 | 23 | 49, 51, 53 … |
-| `graph_layout.py` | 52 | 96.2% | ✅ 达标 | 2 | 36–37 |
-| `diagram_taxonomy.py` | 51 | 100.0% | ✅ 达标 | 0 | — |
-| `diagram_metrics.py` | 50 | 100.0% | ✅ 达标 | 0 | — |
-| `analysis_capabilities.py` | 5 | 100.0% | ✅ 达标 | 0 | — |
+### 已达标（冻结，改到相关模块时顺带补，不专门开工）
 
-### C · 检索与对话主链路 —— 合格线 80%（13 个文件，未达标 7）
+- **A**：`auth.py` 92.8% · `config.py` 92.6% · `db.py` 99.1% · `http_utils.py` 100.0% · `log.py` 100.0% · `origin_guard.py` 97.4% · `profile.py` 100.0% · `quota.py` 100.0% · `rate_limit.py` 97.8% · `security_headers.py` 100.0% · `session_cache.py` 96.4% · `store.py` 91.0% · `usage.py` 93.6%
+- **B**：`analysis_capabilities.py` 100.0% · `analysis_client.py` 94.0% · `analysis_regression.py` 98.4% · `analysis_worker.py` 97.7% · `diagram_metrics.py` 100.0% · `diagram_taxonomy.py` 100.0% · `graph_layout.py` 96.2% · `linear_algebra.py` 85.6% · `math_render.py` 90.4% · `math_table_render.py` 100.0%
+- **C**：`knowledge_graph/__init__.py` 95.3% · `rag/__init__.py` 94.1% · `rag/documents.py` 93.6% · `rag/embed.py` 86.7% · `rag/index.py` 87.7% · `rag/llm.py` 93.8% · `rag/research/rank.py` 95.7% · `rag/research/rerank.py` 100.0% · `rag/research/synthesize.py` 100.0% · `rag/research/types.py` 95.7% · `rag/route.py` 100.0%
+- **D**：`chat_prompts.py` 88.2% · `chat_routing.py` 90.5% · `chat_sse.py` 95.1% · `dashboard_data.py` 96.6% · `diagnosis.py` 84.8% · `diagram_alerts.py` 100.0% · `ebbinghaus.py` 94.4% · `graph_api.py` 100.0% · `learning_analysis.py` 88.4% · `recommendation.py` 90.5% · `research_actions.py` 80.4% · `research_corpus.py` 80.5% · `research_diagrams.py` 86.5% · `research_legacy.py` 88.3% · `research_oa.py` 83.1% · `research_report.py` 91.5% · `research_sources.py` 93.9% · `research_urls.py` 93.3% · `research_venues.py` 95.1% · `retention.py` 100.0%
+- **E**：`doc.py` 80.4% · `docgen.py` 82.7% · `exercise_docgen.py` 82.8%
+- **F**：`exercises/__init__.py` 100.0% · `exercises/build.py` 98.7% · `exercises/dedupe.py` 93.8% · `exercises/gate.py` 94.0% · `exercises/importers/__init__.py` 100.0% · `exercises/importers/common.py` 87.5% · `exercises/importers/kuttler.py` 90.3% · `exercises/importers/math_dataset.py` 84.3% · `exercises/importers/numinamath.py` 81.0% · `exercises/importers/olympiadbench.py` 82.1% · `exercises/schema.py` 88.9% · `exercises/source_repairs.py` 82.1% · `exercises/store.py` 92.1% · `exercises/tagging.py` 100.0% · `exercises/taxonomy.py` 96.0% · `exercises/translate.py` 82.7%
+- **G**：`main.py` 100.0%
+- **H**：`evaluation/__init__.py` 100.0% · `evaluation/datasets.py` 83.6% · `evaluation/extract.py` 87.1% · `evaluation/judges.py` 89.6% · `evaluation/metrics.py` 93.5% · `evaluation/report.py` 100.0% · `evaluation/types.py` 100.0%
 
-| 文件 | 语句 | 现状 | 判定 | 缺行数 | 缺口行 |
-| --- | ---: | ---: | --- | ---: | --- |
-| `rag/research/__init__.py` | 108 | 45.4% | ❌ 差 34.6pp | 59 | 73–74, 116, 121–129 … |
-| `rag/research/sources.py` | 188 | 46.8% | ❌ 差 33.2pp | 100 | 45, 49, 65 … |
-| `rag/research/synthesize.py` | 27 | 48.1% | ❌ 差 31.9pp | 14 | 42–44, 54–55, 57 … |
-| `rag/research/rerank.py` | 56 | 55.4% | ❌ 差 24.6pp | 25 | 25–29, 31, 63–67 … |
-| `rag/llm.py` | 96 | 57.3% | ❌ 差 22.7pp | 41 | 69, 112–116, 121–126 … |
-| `rag/route.py` | 15 | 60.0% | ❌ 差 20.0pp | 6 | 36, 45–49 |
-| `rag/__init__.py` | 101 | 74.3% | ❌ 差 5.7pp | 26 | 40, 43, 71–73 … |
-| `rag/embed.py` | 98 | 86.7% | ✅ 达标 | 13 | 56, 100–101, 109–110 … |
-| `rag/index.py` | 106 | 87.7% | ✅ 达标 | 13 | 66, 147, 157–161 … |
-| `rag/documents.py` | 110 | 93.6% | ✅ 达标 | 7 | 67, 71, 77–78 … |
-| `knowledge_graph/__init__.py` | 128 | 95.3% | ✅ 达标 | 6 | 110–111, 113, 117 … |
-| `rag/research/rank.py` | 47 | 95.7% | ✅ 达标 | 2 | 53, 75 |
-| `rag/research/types.py` | 23 | 95.7% | ✅ 达标 | 1 | 34 |
-
-### D · 科研工作台 —— 合格线 80%（27 个文件，未达标 9）
-
-| 文件 | 语句 | 现状 | 判定 | 缺行数 | 缺口行 |
-| --- | ---: | ---: | --- | ---: | --- |
-| `diagram_alerts.py` | 47 | 42.6% | ❌ 差 37.4pp | 27 | 24–27, 48–52, 54–59 … |
-| `research_vision.py` | 399 | 52.1% | ❌ 差 27.9pp | 191 | 70, 79–80, 84–85 … |
-| `chat.py` | 869 | 52.2% | ❌ 差 27.8pp | 415 | 152, 156–157, 159–161 … |
-| `research_compare.py` | 133 | 60.2% | ❌ 差 19.8pp | 53 | 48–55, 59–61, 65 … |
-| `research_lit.py` | 1005 | 65.4% | ❌ 差 14.6pp | 348 | 123, 146–147, 149 … |
-| `research_papers.py` | 218 | 70.2% | ❌ 差 9.8pp | 65 | 62–65, 84–87, 101–105 … |
-| `research_fulltext.py` | 230 | 71.3% | ❌ 差 8.7pp | 66 | 50–51, 105, 118 … |
-| `research_urls.py` | 60 | 75.0% | ❌ 差 5.0pp | 15 | 24–25, 39, 52–53 … |
-| `research_tables.py` | 1296 | 77.3% | ❌ 差 2.7pp | 294 | 77, 98–99, 108–109 … |
-| `research_corpus.py` | 1572 | 80.3% | ✅ 达标 | 309 | 101, 110, 119 … |
-| `research_actions.py` | 189 | 80.4% | ✅ 达标 | 37 | 70–71, 77–78, 89 … |
-| `research_oa.py` | 89 | 83.1% | ✅ 达标 | 15 | 24–25, 36, 51 … |
-| `diagnosis.py` | 184 | 84.8% | ✅ 达标 | 28 | 68–69, 71, 96–97 … |
-| `research_diagrams.py` | 1552 | 86.5% | ✅ 达标 | 209 | 71, 74, 82 … |
-| `chat_prompts.py` | 17 | 88.2% | ✅ 达标 | 2 | 69, 78 |
-| `research_legacy.py` | 77 | 88.3% | ✅ 达标 | 9 | 21, 27, 30 … |
-| `learning_analysis.py` | 164 | 88.4% | ✅ 达标 | 19 | 366, 368, 373 … |
-| `chat_routing.py` | 126 | 90.5% | ✅ 达标 | 12 | 154, 156, 158 … |
-| `recommendation.py` | 63 | 90.5% | ✅ 达标 | 6 | 45–46, 94, 100 … |
-| `research_report.py` | 165 | 91.5% | ✅ 达标 | 14 | 94, 97–98, 105 … |
-| `research_sources.py` | 33 | 93.9% | ✅ 达标 | 2 | 100–101 |
-| `ebbinghaus.py` | 36 | 94.4% | ✅ 达标 | 2 | 22, 33 |
-| `research_venues.py` | 61 | 95.1% | ✅ 达标 | 3 | 38, 72, 82 |
-| `chat_sse.py` | 41 | 95.1% | ✅ 达标 | 2 | 31–32 |
-| `dashboard_data.py` | 29 | 96.6% | ✅ 达标 | 1 | 79 |
-| `graph_api.py` | 53 | 100.0% | ✅ 达标 | 0 | — |
-| `retention.py` | 37 | 100.0% | ✅ 达标 | 0 | — |
-
-### E · 文档生成与导出 —— 合格线 80%（3 个文件，未达标 3）
-
-| 文件 | 语句 | 现状 | 判定 | 缺行数 | 缺口行 |
-| --- | ---: | ---: | --- | ---: | --- |
-| `doc.py` | 201 | 72.6% | ❌ 差 7.4pp | 55 | 53, 63, 67 … |
-| `docgen.py` | 393 | 78.6% | ❌ 差 1.4pp | 84 | 83, 169–173, 179–180 … |
-| `exercise_docgen.py` | 203 | 78.8% | ❌ 差 1.2pp | 43 | 80, 82, 98–106 … |
-
-### F · 题库 —— 合格线 80%（16 个文件，未达标 1）
-
-| 文件 | 语句 | 现状 | 判定 | 缺行数 | 缺口行 |
-| --- | ---: | ---: | --- | ---: | --- |
-| `exercises/build.py` | 78 | 75.6% | ❌ 差 4.4pp | 19 | 66, 114, 116 … |
-| `exercises/importers/numinamath.py` | 42 | 81.0% | ✅ 达标 | 8 | 64, 70, 72 … |
-| `exercises/importers/olympiadbench.py` | 39 | 82.1% | ✅ 达标 | 7 | 56, 72, 90–94 |
-| `exercises/source_repairs.py` | 28 | 82.1% | ✅ 达标 | 5 | 18, 24, 29 … |
-| `exercises/translate.py` | 225 | 82.7% | ✅ 达标 | 39 | 102–104, 157, 162 … |
-| `exercises/importers/math_dataset.py` | 51 | 84.3% | ✅ 达标 | 8 | 41, 56, 61 … |
-| `exercises/importers/common.py` | 56 | 87.5% | ✅ 达标 | 7 | 62, 68, 76 … |
-| `exercises/schema.py` | 171 | 88.9% | ✅ 达标 | 19 | 136, 142, 144 … |
-| `exercises/importers/kuttler.py` | 62 | 90.3% | ✅ 达标 | 6 | 54, 95, 98 … |
-| `exercises/store.py` | 114 | 92.1% | ✅ 达标 | 9 | 44–45, 92, 95 … |
-| `exercises/dedupe.py` | 65 | 93.8% | ✅ 达标 | 4 | 28, 36, 39 … |
-| `exercises/gate.py` | 117 | 94.0% | ✅ 达标 | 7 | 83, 88, 90 … |
-| `exercises/taxonomy.py` | 25 | 96.0% | ✅ 达标 | 1 | 84 |
-| `exercises/tagging.py` | 17 | 100.0% | ✅ 达标 | 0 | — |
-| `exercises/importers/__init__.py` | 4 | 100.0% | ✅ 达标 | 0 | — |
-| `exercises/__init__.py` | 3 | 100.0% | ✅ 达标 | 0 | — |
-
-### G · 装配与入口 —— 合格线 90%（1 个文件，未达标 1）
-
-| 文件 | 语句 | 现状 | 判定 | 缺行数 | 缺口行 |
-| --- | ---: | ---: | --- | ---: | --- |
-| `main.py` | 80 | 0.0% | ❌ 差 90.0pp | 80 | 26, 31–32, 34–36 … |
-
-### H · 评测工具 —— 合格线 80%（7 个文件，未达标 1）
-
-| 文件 | 语句 | 现状 | 判定 | 缺行数 | 缺口行 |
-| --- | ---: | ---: | --- | ---: | --- |
-| `evaluation/judges.py` | 77 | 77.9% | ❌ 差 2.1pp | 17 | 46–49, 55–56, 59 … |
-| `evaluation/datasets.py` | 55 | 83.6% | ✅ 达标 | 9 | 39, 45, 48 … |
-| `evaluation/extract.py` | 132 | 87.1% | ✅ 达标 | 17 | 20–21, 32–33, 47–48 … |
-| `evaluation/metrics.py` | 124 | 93.5% | ✅ 达标 | 8 | 59, 63, 139–143 … |
-| `evaluation/report.py` | 42 | 100.0% | ✅ 达标 | 0 | — |
-| `evaluation/types.py` | 29 | 100.0% | ✅ 达标 | 0 | — |
-| `evaluation/__init__.py` | 0 | 100.0% | ✅ 达标 | 0 | — |
-
-### 归入 omit（不进分母，不写测试）
-
-| 文件 | 语句 | 现状 | 不测的理由 |
-| --- | ---: | ---: | --- |
-| `evaluation/runner.py` | 119 | 0.0% | 评测跑批入口,需真实模型与网络 |
-| `exercises/fetch.py` | 58 | 0.0% | 从 HuggingFace 拉原始数据,离线数据脚本 |
-| `dev_reload.py` | 51 | 0.0% | 开发期热重载守护,运行时不在线上 |
+> 数据来源：`pytest --cov=. --cov-report=json`（1195 passed）。前端台账见 §4（2026-11-14 统计 + 本轮修好 4 个）。
 
 ## 4. 前端逐文件台账（55 个文件）
 
