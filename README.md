@@ -26,6 +26,7 @@ dev.bat
 - [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) — 工程优化方案与落地进度(P0–P5)
 - [docs/COVERAGE_PLAN.md](docs/COVERAGE_PLAN.md) — 覆盖率方案:按类别定线、逐文件台账与执行批次
 - [docs/DEPLOY_PLAYBOOK.md](docs/DEPLOY_PLAYBOOK.md) — **部署待办与已知风险(部署时先读这份)**
+- [docs/HANDOFF.md](docs/HANDOFF.md) — **新会话交接单(换会话时先读这份)**
 - [docs/COVERAGE_REMAINING.md](docs/COVERAGE_REMAINING.md) — 覆盖率剩余工作草稿(54 个文件分 7 组)
 
 ## 测试
