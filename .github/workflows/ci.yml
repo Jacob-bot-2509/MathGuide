@@ -66,7 +66,10 @@ jobs:
         run: npm run lint
       - name: Type check
         run: npx vue-tsc --noEmit
-      - name: Test
+      - name: Test (+ 覆盖率门禁)
+        # `npm test` = 脚本套件 + vitest --coverage;阈值写在 frontend/vitest.config.ts:
+        # 全局 statements 90 / branches 85 / functions 90 / lines 95,另按 COVERAGE_PLAN §2
+        # 的分组线硬卡(utils 80 / stores 70 / services 60)。未达标直接非零退出。
         run: npm test
       - name: Build
         run: npm run build

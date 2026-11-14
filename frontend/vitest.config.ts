@@ -28,6 +28,23 @@ export default defineConfig({
       reporter: ['text'],
       include: ['src/services/**/*.ts', 'src/stores/**/*.ts', 'src/utils/**/*.ts'],
       exclude: ['**/*.test.ts'],
+      /**
+       * 门槛只做两件事:防倒退 + 把 COVERAGE_PLAN §2 的"按文件定线"搬进 CI。
+       * 全局值比现状(97.7 / 92.3 / 97.8 / 99.0)留了余量,避免一次无害重构就红;
+       * 分组 glob 则按类别线硬卡,单个文件掉队会直接失败。
+       */
+      thresholds: {
+        statements: 90,
+        branches: 85,
+        functions: 90,
+        lines: 95,
+        // U 类 · utils 纯函数
+        'src/utils/**': { statements: 80, lines: 80 },
+        // S 类 · stores 状态与持久化
+        'src/stores/**': { statements: 70, lines: 70 },
+        // V 类 · services 接口层
+        'src/services/**': { statements: 60, lines: 60 },
+      },
     },
   },
 })

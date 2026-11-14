@@ -240,14 +240,20 @@ CI 的总覆盖率门槛只有一个用途 —— **防倒退**，不作为"达�
 
 顺序理由：B1/B2 全是零网络，**不会因为环境失败而假绿**；B3 是"一改就容易坏"的地方；B4 成本最高、收益最不确定，允许滞后。
 
-## 8. CI 门槛抬升节奏（只防倒退）
+## 8. CI 门槛（只防倒退，不当达标依据）
 
-| 时点 | `--cov-fail-under` | 说明 |
-| --- | ---: | --- |
-| 现在（v1.26.0） | 75% | 比基线低 2pp，给重构留余量 |
-| B1 合并后 | 78% | 零覆盖三件套吃完 |
-| B2 合并后 | 80% | 拆分模块补齐 |
-| B3/B4 完成后 | 81% | 每次只抬 1pp，宁慢不慌 |
+| 端 | 门槛 | 位置 | 现状 → 余量 |
+| --- | --- | --- | --- |
+| 后端 | `--cov-fail-under=85`（总覆盖） | `.github/workflows/ci.yml` | 90% → 5pp |
+| 前端 | 全局 statements 90 / branches 85 / functions 90 / lines 95 | `frontend/vitest.config.ts` | 97.7 / 92.3 / 97.8 / 99.0 → 4~7pp |
+| 前端 | **分组 glob**：utils 80、stores 70、services 60（statements+lines） | 同上 | 即第 2 节的类别线，单文件掉队直接失败 |
+
+- 前端门禁由 `npm test`（= 脚本套件 + `vitest run --coverage`）触发，CI 的 Test 步骤即等于"跑测试 + 卡门禁"；
+  本地想快速迭代用 `npm run test:unit`（不跑覆盖率）。
+- **验证门禁真的会红**：`npx vitest run --coverage --coverage.thresholds.statements=100`
+  → `ERROR: Coverage for statements (97.7%) does not meet global threshold (100%)`、退出码非零。
+- 后端 `--cov-fail-under` 的历史节奏（v1.26.0 的 75% → 80% → 85%）到此为止：
+  再往上抬收益递减，且会逼着人去测防御性 `except`。
 
 **个体未达标不阻塞合并**：门槛只保证"整体不倒退"。某个文件没到线就挂在批次里，
 **不允许用临时 omit 绕过** —— omit 只有第 9 节列出的三个文件，新增任何条目都要在 PR 里写理由。
