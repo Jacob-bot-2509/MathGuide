@@ -39,7 +39,35 @@ SAMPLE_DOC = {
 def _fail(message: str, fix: str) -> int:
     print(f"[FAIL] {message}")
     print(f"       修复: {fix}")
+    print("RESULT: FAIL")
     return 1
+
+
+def _ensure_utf8_stdout() -> None:
+    """把标准输出切到 UTF-8:Windows 控制台默认 GBK,中文会显示成 `???`。
+
+    这纯粹是显示问题(文件/PDF 内容是好的),但自检输出一旦乱码,人就无法判断
+    "是终端的问题还是 PDF 的问题",所以这里主动修正;失败也不影响检查结果。
+    """
+    stream = sys.stdout
+    if hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
+def _pdf_text(data: bytes) -> str | None:
+    """从 PDF 里提取文本层;没有 pypdf 或提取失败返回 None(不是硬失败)。"""
+    try:
+        import io
+
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(data))
+        return "".join((page.extract_text() or "") for page in reader.pages)
+    except Exception:  # noqa: BLE001 提取失败只影响"内容检查",不影响 PDF 能否生成
+        return None
 
 
 def _browser_version(edge: str) -> str:
@@ -68,6 +96,7 @@ def _has_cjk_font() -> tuple[bool, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_stdout()
     parser = argparse.ArgumentParser(description="导出 PDF 的部署自检")
     parser.add_argument("--out", default="", help="把样例 PDF 保存到该路径")
     args = parser.parse_args(argv)
@@ -112,11 +141,24 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(f"[ OK ] 嵌入 CJK 字体 {cjk_fonts} 个")
 
+    print("== 5. PDF 里的中文内容 ==")
+    text = _pdf_text(data)
+    if text is None:
+        print("[SKIP] 未安装 pypdf,跳过内容检查")
+    elif "极限" in text:
+        print(f"[ OK ] 文本层可读到中文(共 {len(text)} 字符)")
+    else:
+        return _fail(
+            "PDF 文本层读不到中文 —— 字体缺失时 Chromium 会画方块,文字不会丢失但看起来是乱码",
+            "apt install -y fonts-noto-cjk;然后重跑本自检,并肉眼确认一次导出结果。",
+        )
+
     if args.out:
         Path(args.out).write_bytes(data)
         print(f"       样例已保存: {args.out}")
 
     print("\n结论: 这台机器可以导出 PDF。建议再手工导出一份带数组公式的文档,肉眼确认表格线。")
+    print("RESULT: OK")
     return 0
 
 
