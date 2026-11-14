@@ -19,7 +19,6 @@
  * 问题分类由前端关键词预判,后端路由做最终裁决。
  */
 import { computed, defineAsyncComponent, markRaw, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch } from 'vue'
-import type { CSSProperties } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
@@ -73,16 +72,9 @@ import { beautifyMath, cachedConvert, normalizeSpeechCase, saveConvert, speechMa
 import { showToast } from '@/utils/toast'
 import { chapterNameFromCmd } from '@/utils/cmdLink'
 import { splitStableBlocks } from '@/utils/mathBlocks'
-import {
-  clampDiagramSplit as clampDiagramSplitValue,
-  DIAGRAM_SPLIT_DEFAULT,
-  isDoubleTap,
-  tapMoved,
-  moveFocusPanel,
-  resizeFocusPanel,
-  type FocusPanel,
-  type TapPoint,
-} from '@/utils/diagramFocus'
+import { useResearchSplit } from '@/composables/useResearchSplit'
+import { useDiagramFocus } from '@/composables/useDiagramFocus'
+import { SPLIT_MIN_WIDTH } from '@/utils/splitPane'
 
 const props = withDefaults(defineProps<{ workspace?: Workspace }>(), { workspace: 'learn' })
 
@@ -94,16 +86,21 @@ const ResearchSearchView = defineAsyncComponent(
   () => import('@/views/ResearchSearchView.vue'),
 )
 
-const SPLIT_KEY = 'mg-research-split'
-const SPLIT_DEFAULT = 0.4
-const SEARCH_MIN_PX = 320
-const CHAT_MIN_PX = 380
-const SPLIT_MIN_WIDTH = 1100
-
-const searchOpen = ref(false)
-const splitResizing = ref(false)
 const workspaceBodyRef = ref<HTMLElement | null>(null)
-const splitRatio = ref(loadSplitRatio())
+const listEl = ref<HTMLDivElement | null>(null)
+const focusCloseEl = ref<HTMLButtonElement | null>(null)
+
+/* 科研检索右侧分栏:开关、比例、拖拽与本地记忆都交给 composable */
+const {
+  searchOpen,
+  splitResizing,
+  splitRatio,
+  clampSplit,
+  startSplitDrag,
+  nudgeSplit,
+  resetSplit,
+  closeSplitIfNarrow,
+} = useResearchSplit({ bodyRef: workspaceBodyRef })
 const searchPaneRef = ref<{
   locateForQuestion: (q: string) => Promise<void>
   reloadDocs: () => Promise<void>
@@ -202,39 +199,12 @@ async function loadTableContext(): Promise<void> {
   }
 }
 
-function loadSplitRatio(): number {
-  try {
-    const value = Number(localStorage.getItem(SPLIT_KEY))
-    return Number.isFinite(value) && value > 0 ? clampSplit(value) : SPLIT_DEFAULT
-  } catch {
-    return SPLIT_DEFAULT
-  }
-}
-
-function clampSplit(value: number, width = workspaceBodyRef.value?.clientWidth ?? 0): number {
-  if (width >= SEARCH_MIN_PX + CHAT_MIN_PX) {
-    const min = SEARCH_MIN_PX / width
-    const max = 1 - CHAT_MIN_PX / width
-    return Math.min(max, Math.max(min, value))
-  }
-  return Math.min(0.6, Math.max(0.4, value))
-}
-
-function saveSplitRatio(): void {
-  try {
-    localStorage.setItem(SPLIT_KEY, String(splitRatio.value))
-  } catch {
-    /* 忽略 */
-  }
-}
-
 /** 检索按钮:按设置与本机宽度选择分栏或独立页 */
 function openResearchSearch(): void {
   if (!isResearch.value) return
   // 图解放大占用右侧;打开检索前先退出放大,避免两个分栏抢同一侧。
   if (focusDiagram.value) {
-    searchWasOpen.value = false
-    closeDiagramFocus()
+    closeDiagramFocus({ restoreSearch: false })
   }
   if (settingsState.researchSearchMode === 'page' || window.innerWidth < SPLIT_MIN_WIDTH) {
     router.push('/research/search')
@@ -249,353 +219,38 @@ function openResearchSearch(): void {
   }
 }
 
-function startSplitDrag(e: PointerEvent): void {
-  const body = workspaceBodyRef.value
-  if (!body) return
-  e.preventDefault()
-  splitResizing.value = true
-  const rect = body.getBoundingClientRect()
-  const move = (ev: PointerEvent) => {
-    const ratio = (rect.right - ev.clientX) / rect.width
-    splitRatio.value = clampSplit(ratio, rect.width)
-  }
-  const up = () => {
-    splitResizing.value = false
-    window.removeEventListener('pointermove', move)
-    window.removeEventListener('pointerup', up)
-    saveSplitRatio()
-  }
-  window.addEventListener('pointermove', move)
-  window.addEventListener('pointerup', up)
-}
-
-function nudgeSplit(delta: number): void {
-  splitRatio.value = clampSplit(splitRatio.value + delta)
-  saveSplitRatio()
-}
-
-function resetSplit(): void {
-  splitRatio.value = clampSplit(SPLIT_DEFAULT)
-  saveSplitRatio()
-}
-
 function onSplitAsk(prompt: string): void {
   if (prompt) send(prompt)
 }
 
 /* ---------- 图解放大 ---------- */
-const DIAGRAM_SPLIT_KEY = 'mg-diagram-split'
-const focusDiagram = ref<DiagramBlock | null>(null)
-const focusOrigin = ref<{ msgId: number; diagramId: string; scrollTop: number } | null>(null)
-const focusCloseEl = ref<HTMLButtonElement | null>(null)
-const diagramSplitRatio = ref(loadDiagramSplit())
-const diagramSplitResizing = ref(false)
-const searchWasOpen = ref(false)
-const narrowQuery = typeof window.matchMedia === 'function'
-  ? window.matchMedia('(max-width: 899px)') : null
-const isNarrow = ref(narrowQuery?.matches ?? false)
-const focusPanel = ref<FocusPanel>({ x: 0, w: 90, h: 82, fullscreen: false })
-const lastTap = ref<(TapPoint & { diagramId: string; msgId: number }) | null>(null)
-const touchPointers = new Map<number, { x: number; y: number; moved: boolean }>()
-let touchWasMulti = false
-let focusGesture: {
-  pointers: Map<number, { x: number; y: number }>
-  startX: number
-  startY: number
-  startW: number
-  startH: number
-  startPanelX: number
-  startDistance: number
-  fullscreen: boolean
-  sawMulti: boolean
-} | null = null
-const viewport = (): { width: number; height: number } => ({
-  width: window.innerWidth,
-  height: window.innerHeight,
-})
-const focusPaneStyle = computed<CSSProperties>(() => {
-  if (!isNarrow.value) return { width: `${diagramSplitRatio.value * 100}%` }
-  if (focusPanel.value.fullscreen) {
-    return {
-      left: '0',
-      top: '0',
-      width: '100vw',
-      height: '100vh',
-      transform: 'none',
-      borderRadius: '0',
-    }
-  }
-  return {
-    left: `calc(50% + ${focusPanel.value.x}px)`,
-    top: '50%',
-    width: `${focusPanel.value.w}vw`,
-    height: `${focusPanel.value.h}vh`,
-    transform: 'translate(-50%, -50%)',
-  }
-})
-
-function loadDiagramSplit(): number {
-  try {
-    const value = Number(localStorage.getItem(DIAGRAM_SPLIT_KEY))
-    return Number.isFinite(value) && value > 0
-      ? clampDiagramSplitForBody(value)
-      : DIAGRAM_SPLIT_DEFAULT
-  } catch {
-    return DIAGRAM_SPLIT_DEFAULT
-  }
-}
-
-function clampDiagramSplitForBody(value: number): number {
-  return clampDiagramSplitValue(value, workspaceBodyRef.value?.clientWidth ?? 0)
-}
-
-function saveDiagramSplit(): void {
-  try {
-    localStorage.setItem(DIAGRAM_SPLIT_KEY, String(diagramSplitRatio.value))
-  } catch {
-    /* 忽略 */
-  }
-}
-
-function startDiagramSplitDrag(e: PointerEvent): void {
-  const body = workspaceBodyRef.value
-  if (!body) return
-  e.preventDefault()
-  diagramSplitResizing.value = true
-  const rect = body.getBoundingClientRect()
-  const move = (ev: PointerEvent) => {
-    diagramSplitRatio.value = clampDiagramSplitForBody(
-      (rect.right - ev.clientX) / rect.width,
-    )
-  }
-  const up = () => {
-    diagramSplitResizing.value = false
-    window.removeEventListener('pointermove', move)
-    window.removeEventListener('pointerup', up)
-    saveDiagramSplit()
-  }
-  window.addEventListener('pointermove', move)
-  window.addEventListener('pointerup', up)
-}
-
-function nudgeDiagramSplit(delta: number): void {
-  diagramSplitRatio.value = clampDiagramSplitForBody(diagramSplitRatio.value + delta)
-  saveDiagramSplit()
-}
-
-function resetDiagramSplit(): void {
-  diagramSplitRatio.value = clampDiagramSplitForBody(DIAGRAM_SPLIT_DEFAULT)
-  saveDiagramSplit()
-}
-
-function isFocused(block: DiagramBlock): boolean {
-  return focusDiagram.value?.id === block.id
-}
-
-function openDiagramFocus(block: DiagramBlock, msgId: number): void {
-  if (focusDiagram.value?.id === block.id) return
-  focusOrigin.value = {
-    msgId,
-    diagramId: block.id,
-    scrollTop: listEl.value?.scrollTop ?? 0,
-  }
-  searchWasOpen.value = searchOpen.value
-  if (searchOpen.value) searchOpen.value = false
-  if (!isNarrow.value) diagramSplitRatio.value = clampDiagramSplitForBody(diagramSplitRatio.value)
-  if (isNarrow.value) focusPanel.value = { x: 0, w: 90, h: 82, fullscreen: false }
-  lastTap.value = null
-  focusDiagram.value = block
-  nextTick(() => focusCloseEl.value?.focus())
-}
-
-function closeDiagramFocus(): void {
-  if (!focusDiagram.value) return
-  const restoreFocus = !!document.activeElement?.closest('.diagram-focus-pane')
-  focusDiagram.value = null
-  lastTap.value = null
-  touchPointers.clear()
-  touchWasMulti = false
-  focusGesture = null
-  if (searchWasOpen.value && !isNarrow.value) searchOpen.value = true
-  searchWasOpen.value = false
-  const origin = focusOrigin.value
-  focusOrigin.value = null
-  nextTick(() => {
-    if (origin && listEl.value) {
-      listEl.value.scrollTop = origin.scrollTop
-      if (restoreFocus) {
-        const message = listEl.value.querySelector(`[data-msg-id="${origin.msgId}"]`)
-        const diagram = [...(message?.querySelectorAll<HTMLElement>('.diagram-embed') ?? [])]
-          .find((el) => el.dataset.diagramId === origin.diagramId)
-        diagram?.focus({ preventScroll: true })
-      }
-    }
-  })
-}
-
-function onChatPaneClick(): void {
-  if (focusDiagram.value) closeDiagramFocus()
-}
-
-function onRootClick(event: MouseEvent): void {
-  if (!focusDiagram.value) return
-  const target = event.target as HTMLElement | null
-  if (target?.closest('.diagram-focus-pane')) return
-  closeDiagramFocus()
-}
-
-function onFocusKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && focusDiagram.value) {
-    event.preventDefault()
-    closeDiagramFocus()
-  }
-}
-
-function onNarrowChange(event: MediaQueryListEvent): void {
-  isNarrow.value = event.matches
-  if (event.matches) {
-    focusPanel.value = { x: 0, w: 90, h: 82, fullscreen: false }
-  }
-}
-
-function onDiagramPointerDown(event: PointerEvent): void {
-  if (event.pointerType !== 'touch') return
-  touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY, moved: false })
-  if (touchPointers.size > 1) {
-    touchWasMulti = true
-    lastTap.value = null
-  }
-}
-
-function onDiagramPointerMove(event: PointerEvent): void {
-  const start = touchPointers.get(event.pointerId)
-  if (start && tapMoved(start, { x: event.clientX, y: event.clientY })) start.moved = true
-}
-
-function onDiagramPointerCancel(event: PointerEvent): void {
-  touchPointers.delete(event.pointerId)
-  if (!touchPointers.size) touchWasMulti = false
-  lastTap.value = null
-}
-
-function onDiagramPointerUp(
-  event: PointerEvent,
-  block: DiagramBlock,
-  msgId: number,
-): void {
-  if (event.pointerType !== 'touch') return
-  const start = touchPointers.get(event.pointerId)
-  touchPointers.delete(event.pointerId)
-  const invalid = !start || start.moved || tapMoved(start, { x: event.clientX, y: event.clientY })
-    || touchWasMulti || !!focusDiagram.value || !isNarrow.value
-  if (!touchPointers.size) touchWasMulti = false
-  if (invalid) {
-    lastTap.value = null
-    return
-  }
-  const tap = { time: performance.now(), x: event.clientX, y: event.clientY, diagramId: block.id, msgId }
-  if (lastTap.value?.diagramId === block.id && lastTap.value.msgId === msgId
-    && isDoubleTap(lastTap.value, tap)) {
-    lastTap.value = null
-    openDiagramFocus(block, msgId)
-  } else {
-    lastTap.value = tap
-  }
-}
-
-function focusDistance(points: Map<number, { x: number; y: number }>): number {
-  const values = [...points.values()]
-  if (values.length < 2) return 0
-  return Math.hypot(values[0].x - values[1].x, values[0].y - values[1].y)
-}
-
-function onFocusPointerDown(event: PointerEvent): void {
-  if (!isNarrow.value) return
-  event.preventDefault()
-  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
-  if (!focusGesture) {
-    focusGesture = {
-      pointers: new Map(),
-      startX: event.clientX,
-      startY: event.clientY,
-      startW: focusPanel.value.w,
-      startH: focusPanel.value.h,
-      startPanelX: focusPanel.value.x,
-      startDistance: 0,
-      fullscreen: focusPanel.value.fullscreen,
-      sawMulti: false,
-    }
-  }
-  focusGesture.pointers.set(event.pointerId, {
-    x: event.clientX,
-    y: event.clientY,
-  })
-  if (focusGesture.pointers.size === 1) {
-    focusGesture.startX = event.clientX
-    focusGesture.startY = event.clientY
-    focusGesture.startPanelX = focusPanel.value.x
-  } else if (focusGesture.pointers.size === 2) {
-    focusGesture.sawMulti = true
-    focusGesture.startDistance = focusDistance(focusGesture.pointers)
-    focusGesture.startW = focusPanel.value.w
-    focusGesture.startH = focusPanel.value.h
-  }
-}
-
-function onFocusPointerMove(event: PointerEvent): void {
-  if (!focusGesture || !focusGesture.pointers.has(event.pointerId)) return
-  focusGesture.pointers.set(event.pointerId, {
-    x: event.clientX,
-    y: event.clientY,
-  })
-  if (focusGesture.pointers.size >= 2) {
-    if (focusPanel.value.fullscreen || focusGesture.startDistance <= 0) return
-    const scale = focusDistance(focusGesture.pointers) / focusGesture.startDistance
-    focusPanel.value = resizeFocusPanel({
-      x: focusGesture.startPanelX,
-      w: focusGesture.startW,
-      h: focusGesture.startH,
-      fullscreen: false,
-    }, scale, viewport())
-    return
-  }
-  if (focusPanel.value.fullscreen) return
-  const dx = event.clientX - focusGesture.startX
-  focusPanel.value = moveFocusPanel({
-    ...focusPanel.value,
-    x: focusGesture.startPanelX,
-  }, dx, viewport())
-}
-
-function onFocusPointerUp(event: PointerEvent): void {
-  if (!focusGesture) return
-  const gesture = focusGesture
-  const point = gesture.pointers.get(event.pointerId)
-  gesture.pointers.delete(event.pointerId)
-  if (gesture.pointers.size === 1) {
-    const remaining = [...gesture.pointers.values()][0]
-    gesture.startX = remaining.x
-    gesture.startY = remaining.y
-    gesture.startPanelX = focusPanel.value.x
-    gesture.startW = focusPanel.value.w
-    gesture.startH = focusPanel.value.h
-    gesture.sawMulti = true
-  }
-  if (gesture.pointers.size === 0) {
-    focusGesture = null
-    if (gesture.fullscreen && !gesture.sawMulti && point
-      && event.clientY - gesture.startY > 60) {
-      closeDiagramFocus()
-    }
-  }
-}
-
-function onFocusPointerCancel(event: PointerEvent): void {
-  if (!focusGesture) return
-  focusGesture.pointers.delete(event.pointerId)
-  if (focusGesture.pointers.size === 0) focusGesture = null
-}
-
+/* 浮层几何、手势、宽屏分栏与关闭后的焦点还原都在 composable 里;
+   消息列表与检索开关作为依赖注入,组件只做接线。 */
+const {
+  focusDiagram,
+  diagramSplitResizing,
+  searchWasOpen,
+  isNarrow,
+  focusPanel,
+  focusPaneStyle,
+  isFocused,
+  openDiagramFocus,
+  closeDiagramFocus,
+  onChatPaneClick,
+  onRootClick,
+  startDiagramSplitDrag,
+  nudgeDiagramSplit,
+  resetDiagramSplit,
+  reclampSplitIfWide,
+  onDiagramPointerDown,
+  onDiagramPointerMove,
+  onDiagramPointerUp,
+  onDiagramPointerCancel,
+  onFocusPointerDown,
+  onFocusPointerMove,
+  onFocusPointerUp,
+  onFocusPointerCancel,
+} = useDiagramFocus({ bodyRef: workspaceBodyRef, listEl, closeEl: focusCloseEl, searchOpen })
 /** 模型动作到达:确保右侧阅读器存在,再跳页/高亮/批注。
  *  独立页面模式不强行跳转,避免打断当前对话。 */
 async function applyPaperActionsFromModel(
@@ -624,10 +279,8 @@ async function applyPaperActionsFromModel(
 
 /** 窗口变窄时收起分栏,避免聊天区被压到不可用 */
 function onWorkspaceResize(): void {
-  if (searchOpen.value && window.innerWidth < SPLIT_MIN_WIDTH) searchOpen.value = false
-  if (focusDiagram.value && window.innerWidth >= 900) {
-    diagramSplitRatio.value = clampDiagramSplitForBody(diagramSplitRatio.value)
-  }
+  closeSplitIfNarrow()
+  reclampSplitIfWide()
 }
 
 /** 科研区:独占研究检索链路与搜索范围面板;学习区不跨区查文献 */
@@ -711,7 +364,6 @@ function anchorTo(selector: string) {
 const tipsOpen = ref(false)
 const flashMsgId = ref(0)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
-const listEl = ref<HTMLDivElement | null>(null)
 
 /* 后台流:不同会话的输出并行生成,切换界面不中断;按消息 id 索引便于精确取消 */
 let streams = new Map<number, ChatStreamHandle>()
@@ -2190,8 +1842,6 @@ onMounted(() => {
   }
   window.addEventListener('resize', onWorkspaceResize)
   window.addEventListener('beforeunload', warnPendingPapers)
-  window.addEventListener('keydown', onFocusKeydown)
-  narrowQuery?.addEventListener?.('change', onNarrowChange)
 })
 
 onBeforeRouteLeave(async () => {
@@ -2209,8 +1859,6 @@ function warnPendingPapers(event: BeforeUnloadEvent): void {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onWorkspaceResize)
   window.removeEventListener('beforeunload', warnPendingPapers)
-  window.removeEventListener('keydown', onFocusKeydown)
-  narrowQuery?.removeEventListener?.('change', onNarrowChange)
   stopAllStreams()
   sr?.stop()
   cancelConvert()
@@ -2622,7 +2270,7 @@ onBeforeUnmount(() => {
       <div
         v-if="focusDiagram && isNarrow"
         class="diagram-focus-backdrop"
-        @click="closeDiagramFocus"
+        @click="closeDiagramFocus()"
       ></div>
       <aside
         ref="focusPaneEl"
@@ -2651,7 +2299,7 @@ onBeforeUnmount(() => {
             type="button"
             :aria-label="t('common.close')"
             @pointerdown.stop
-            @click="closeDiagramFocus"
+            @click="closeDiagramFocus()"
           >×</button>
         </header>
         <div

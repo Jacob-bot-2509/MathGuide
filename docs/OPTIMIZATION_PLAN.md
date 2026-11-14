@@ -1,7 +1,7 @@
 # MathGuide 工程优化方案（P0–P5）
 
 日期：2026-11-13
-状态：**M0 / M1 / M2 / M7 已完成并验证**（D1 已改为方案 B 并落地，见第 0 节）；M3–M6 待排期
+状态：**M0 / M1 / M2 / M4 / M6 / M7 已完成并验证**；M3 完成 3/4（`ChatWorkspace` 第一阶段见 §7 M3-2）；M5 待立项
 基线：v1.25.0（代码快照 `8475f4a` / 发布提交 `66ead6e`）；后端 944 passed、前端 20 套自测
 关联：[后端 README](../backend/README.md)、[部署清单](../deploy/README.md)、[评测报告](EVAL_REPORT.md)
 
@@ -15,11 +15,11 @@
 | M7 仓库卫生 | ⚠️ 部分 | `releases/` 已加入 `.gitignore` + `NEWRELEASE.md` 说明（停止新增，历史保留）；KaTeX 物理去重**延后**，由 M1 的版本一致性测试守住 |
 | M4 测试补齐 | ✅ 完成（M4-1/2/3/4/4-5） | `test_rag_regression.py`（7 条 golden：固定语料 + 排序/门限/稳定性）、`test_chat_stream_e2e.py`（9 条真跑：认证/限流/`[DONE]`/降级直答/用量记账/每日额度）、KaTeX 版本一致性；**覆盖率门槛**：基线 77%，CI `--cov-fail-under=75` 防倒退；**vitest 落地**（`vitest.config.ts` + `src/services/authService.test.ts`，`npm test` = 脚本套件 + vitest） |
 | M6 安全加固 | ✅ 完成（M6-1/2/3/4） | `MG_PRINT_OPEN` 不再能绕过本机校验（+3 条测试）、`config.detect_workers()` 启动告警 + `deploy` 写死单 worker 与 `--proxy-headers`、`origin_guard.py` 写操作来源校验（+9 条测试）、**每日额度护栏** `quota.py` + `MG_DAILY_LLM_CALLS`（+7 条测试，顺带修掉"问候也记用量"） |
-| M3 结构治理 | ⚠️ 部分 | `chat.py` 1875→1509（`chat_sse` / `chat_prompts` / `chat_routing`）；`research_corpus.py` 2568→2202（`research_formats`）；`i18n.ts` 2027→127（词条拆到 `utils/i18n/*.ts`，按 account / chat / common / learn / research 五组，955 条无损）；**`ChatWorkspace.vue`（3944 行）未动**——已定位两个可抽块与依赖，见 §7 M3-2 |
+| M3 结构治理 | ⚠️ 部分（3/4） | `chat.py` 1875→1509（`chat_sse` / `chat_prompts` / `chat_routing`）；`research_corpus.py` 2568→2202（`research_formats`）；`i18n.ts` 2027→127（词条拆到 `utils/i18n/*.ts`，按 account / chat / common / learn / research 五组，955 条无损）；**`ChatWorkspace.vue` 3944→3592**（抽 `useResearchSplit` / `useDiagramFocus` + `utils/splitPane`；第二阶段 `useChatStream` 未做，见 §7 M3-2） |
 | M5 产品与研究 | ⏳ 未做 | 见第 9 节（需先补数据再调参） |
 | 仓库卫生（补充） | ✅ 完成 | `.gitignore` 补覆盖率产物与本地临时日志；`.release-notes-v1.5.0.md` 移入 `docs/`；`EVAL_REPORT.md` 加版本时效说明（0.667 是改动前数字）；`RESEARCH_SOURCE_PLAN.md` 标注已被 V2 取代；密钥扫描（`sk-*` / API key / 私钥）无命中；确认 `node_modules` / `dist` / `data` 未被跟踪 |
 
-**验证结果**：后端 `995 passed, 1 skipped`（基线 944 → 995），覆盖率 **76.6%**（CI 门槛 75%，防倒退）；前端 `eslint` 0 违规、`vue-tsc` 通过、`vite build` 通过、20 套脚本自测 + vitest 2 个文件 7 条断言全过；`ruff check backend` 全绿。三次拆分（chat.py / research_corpus.py / i18n.ts）前后**测试数与结果完全一致**。
+**验证结果**：后端 `995 passed, 1 skipped`（基线 944 → 995），覆盖率 **76.6%**（CI 门槛 75%，防倒退）；前端 `eslint` 0 违规、`vue-tsc` 通过、`vite build` 通过、20 套脚本自测 + vitest **5 个文件 39 条断言**全过；`ruff check backend` 全绿。四次拆分（chat.py / research_corpus.py / i18n.ts / ChatWorkspace.vue）前后**测试数与结果完全一致**，其中 ChatWorkspace 一轮是**先补测试再拆分**。
 
 
 ## 1. 这份方案解决什么
@@ -39,7 +39,7 @@ v1.25.0 的功能与测试水位已经不错（PBKDF2、token 只存哈希、bod
 | `print(` 数量（非测试） | 196 | 0（全部走 logging） | `Select-String` / rg |
 | 接口文档覆盖率 | 49/78 = 63% | 100% + CI 守护 | M1-1 测试 |
 | 会话行为 | 24h 必掉登录 | 30 天滑动（闲置 24h 失效） | `test_auth.py` |
-| 最大单文件行数 | 3944（ChatWorkspace） | ≤ 1200 | `wc -l` 排序 |
+| 最大单文件行数 | 3592（ChatWorkspace，原 3944） | ≤ 1200 | `wc -l` 排序 |
 | RAG 检索回归护栏 | 无 | top-k 顺序 golden 测试 | `test_rag_regression.py` |
 | 仓库体积（.git） | 257 MB | 停止增长（历史迁移见 D3） | `git count-objects -vH` |
 | 后端测试数 | 944 | 956（本轮已达） | pytest |
@@ -65,7 +65,7 @@ v1.25.0 的功能与测试水位已经不错（PBKDF2、token 只存哈希、bod
 | M2-5 | requirements 整理 | P1 | 可复现 | 30m | — |
 | M2-6 | CI 加 Windows/3.14 矩阵 | P1 | 跨平台回归 | 3h | M2-1/2 |
 | M3-1 | `chat.py` 按职责拆分 | P2 | 可维护 | 2d | — |
-| M3-2 | `ChatWorkspace` 抽 composables | P2 | 可维护 | 3d | — |
+| M3-2 | `ChatWorkspace` 抽 composables | P2 | 可维护 | 3d | 第一阶段完成：3944→3592，新增 3 个测试文件（33 条断言） |
 | M3-3 | `research_corpus.py` 拆分 | P2 | 可维护 | 2d | — |
 | M3-4 | `i18n.ts` 按域拆文件 | P2 | 可维护 | 0.5d | M1-2 |
 | M4-1 | RAG 检索回归测试 | P3 | 防检索退化 | 1d | — |
@@ -281,22 +281,37 @@ strategy:
    最好在 import 上方写明"为什么不能删"。
 
 
-### M3-2 `ChatWorkspace.vue` 抽 composables（3 人日）
+### M3-2 `ChatWorkspace.vue` 抽 composables（第一阶段已完成）
 
-3944 行，其中 script 2221 行、183 个顶层声明。按职责抽 3 个 `composables/`：
+原 3944 行（script 2221 + template 1723）。本轮先抽**两块自成一体的布局逻辑** ——
+它们与「消息 / 发送 / 检索」主链路正交，且几何计算已有纯函数可锚定行为：
 
-1. `useChatStream.ts`：SSE 连接、帧解析、中断与 `[DONE]` 收尾、失败重试（`sse-stream-test.ts` 已有契约，抽完直接复用该测试）；
-2. `useChatPersistence.ts`：会话/消息落本地、回收站、导入导出；
-3. `useChatAttachments.ts`：附件/公式导入/剪贴板。
-
-模板部分先不动。目标 ≤ 1200 行（script + template）。风险最高的第 1 项建议单独排一天，做完立刻 `npm test` + 手测"中断/恢复/切会话"三个场景。
-
-**已勘察（本轮未执行，留给下一轮）**：实际读下来，纯几何/手势计算**已经**在 `@/utils/diagramFocus`（`isDoubleTap` / `tapMoved` / `moveFocusPanel` / `resizeFocusPanel` / `clampDiagramSplit`），组件里剩的是**有状态的 UI 布线**。可抽的两块与依赖：
-
-| 块 | 位置 | 行数 | 依赖（需作为参数传入） |
+| 抽出 | 新位置 | 内容 | 行数 |
 | --- | --- | --- | --- |
-| 分栏状态 + 拖拽 | `97-103`、`205-285` | ~110 | `workspaceBodyRef`、`SPLIT_MIN_WIDTH`、`searchOpen` |
-| 图解放大（打开/关闭 + 触摸手势 + 窄屏面板 + 焦点恢复） | `286-635` 中的 focus 部分 | ~310 | `workspaceBodyRef`、`listEl`、`searchOpen`、`diagramSplitRatio` |
+| 检索分栏 | `composables/useResearchSplit.ts` | 开关、比例、拖拽、微调、重置、本地记忆、窄屏收起 | ~120 |
+| 图解放大 | `composables/useDiagramFocus.ts` | 窄屏浮层几何、单指拖动 / 双指缩放 / 下滑关闭、宽屏右栏比例、关闭后滚动与焦点还原、Esc 与 media query 监听 | ~437 |
+
+顺带把分栏比例的换算从组件函数提到 `utils/splitPane.ts`（`clampSplitRatio` / `parseStoredRatio`）：
+`clampSplit` 与 `clampDiagramSplit` 本是同一件事，之前各写了一份。
+
+**依赖注入而非反向引用**：`useDiagramFocus({ bodyRef, listEl, closeEl, searchOpen })`、
+`useResearchSplit({ bodyRef })` —— 组件持有 DOM ref，composable 只管行为，不反向 import 组件。
+
+**安全网（先写测试再动手）**：
+
+- `utils/splitPane.test.ts`：宽度未知只做 0..1 兜底、700px 临界点两栏保底、脏值回退默认；
+- `utils/diagramFocus.test.ts`：分栏比例边界、浮层夹取、缩放吸附全屏、8px 拖动阈值、300ms / 10px 双击阈值；
+- `composables/useDiagramFocus.test.ts`：双指放大到全屏、全屏后单指锁死、下滑 40px 不关 / 100px 关闭、连点两次才放大、双指操作不算双击。
+
+**结果**：`ChatWorkspace.vue` **3944 → 3592 行**（−352：删 400 行、新增 50 行接线）；
+`vue-tsc` / `eslint` / `vite build` 通过；vitest 由 2 文件 7 条 → **5 文件 39 条**。
+
+**同时修掉一个真实 UX 缺陷**：`loadSplitRatio()` 在容器还没量到宽度时也按 `[0.4, 0.6]` 夹，
+用户拖到 0.68、刷新后变回 0.6（看起来像"拖拽没被记住"）。现在宽度未知时只做 0..1 兜底，
+像素夹取留到拿到实测宽度之后（`splitPane.test.ts` 第 1 条锁定）。
+
+**第二阶段（未做）**：`useChatStream` / `useChatPersistence` / `useChatAttachments`。
+这三块与 SSE 协议、localStorage 结构强耦合，建议先补组件测试能力（`@vue/test-utils` + happy-dom）再动。
 
 抽取方式：`useSplitPane({ bodyRef, ... })` / `useDiagramFocus({ bodyRef, listRef, searchOpen })`，返回现有同名绑定（`const { splitRatio, startSplitDrag, ... } = useSplitPane(...)`），模板零改动。
 
