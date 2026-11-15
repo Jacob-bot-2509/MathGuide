@@ -270,12 +270,19 @@ class Ctx:
                 return response.status, dict(response.headers), response.read()
         except urllib.error.HTTPError as exc:
             return exc.code, dict(exc.headers or {}), exc.read() or b""
+        except OSError as exc:
+            # 连接被拒/读超时:交给调用方记成一条结果,别在登录环节直接抛栈
+            return 0, {}, str(exc).encode("utf-8", "replace")
 
 
 def login(ctx: Ctx, phone: str, password: str) -> bool:
     """用已有账号换 token(不注册:探测脚本不该往线上库塞账号)。"""
     status, _headers, body = ctx.call("POST", "/api/auth/login",
                                       {"phone": phone, "password": password}, timeout=20)
+    if status == 0:
+        print(f"{RED}[FAIL]{RESET} 连不上 {ctx.base}: {body[:120].decode('utf-8', 'replace')}")
+        print(f"        {YELLOW}修复:先确认服务在跑(curl {ctx.base}/api/health)")
+        return False
     if status != 200:
         print(f"{RED}[FAIL]{RESET} 登录失败({status}): {body[:160]!r}")
         print(f"        {YELLOW}修复:--phone/--password 用线上已有账号;或直接给 --token{RESET}")

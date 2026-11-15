@@ -92,6 +92,20 @@ def test_classify_429_ignores_case_and_extra_text():
     assert load_probe.classify_429(b'{"detail":"Rate Limited"}') == "ratelimit"
 
 
+def test_login_reports_connection_failure_without_traceback(capsys):
+    """连不上时要给一条人话结论,而不是在主线程抛 URLError(那会吞掉整轮探测)。"""
+
+    class DeadCtx:
+        base = "http://127.0.0.1:8099"
+
+        def call(self, method, path, body=None, timeout=None):
+            return 0, {}, b"connection refused"
+
+    assert load_probe.login(DeadCtx(), "13900000000", "x") is False
+    out = capsys.readouterr().out
+    assert "连不上" in out and "api/health" in out
+
+
 def test_rss_sampler_without_pid_stays_silent():
     with load_probe.RssSampler(0) as sampler:
         pass

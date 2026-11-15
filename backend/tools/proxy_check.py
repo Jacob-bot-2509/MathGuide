@@ -155,8 +155,9 @@ class Probe:
                 return Resp(response.status, dict(response.headers), response.read())
         except urllib.error.HTTPError as exc:
             return Resp(exc.code, dict(exc.headers or {}), exc.read() or b"")
-        except urllib.error.URLError as exc:
-            # 连不上/TLS 失败也要落成一条结果,否则整轮自检会被一个 URLError 打断
+        except OSError as exc:
+            # 连不上/TLS 失败/读超时(socket.timeout 也是 OSError)都要落成一条结果,
+            # 否则整轮自检会被一个异常打断 —— 而"断了"本身就是最该报告的信息。
             return Resp(0, {}, str(exc).encode("utf-8", "replace"))
 
 
