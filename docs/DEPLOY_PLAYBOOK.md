@@ -186,7 +186,7 @@ cd backend && python tools/check_pdf.py           # RESULT: OK
 
 ## 七、回滚
 
-- 代码：`git checkout v1.26.1`（当前发布，代码快照 `1176a11`）或上一 tag `v1.26.0`；**无接口路径变更、无数据表结构变更**，
+- 代码：`git checkout v1.27.0`（当前发布）或上一 tag `v1.26.1`；**无接口路径变更、无数据表结构变更**，
   回滚不需要动数据库。
 - 数据：`cd backend && python tools/db_restore.py --from data/backups/mg-<时间戳>.db --yes`
   （脚本会先给当前库留 `mg-prerestore-*.db` 安全副本，并打印"万一要退回去"的命令）；

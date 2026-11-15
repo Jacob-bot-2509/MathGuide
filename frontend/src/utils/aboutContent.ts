@@ -6,8 +6,8 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.26.1'
-export const APP_STABLE_VERSION = 'v1.26.1'
+export const APP_VERSION = 'v1.27.0'
+export const APP_STABLE_VERSION = 'v1.27.0'
 export const APP_STABLE_DATE = '2026-11-15'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
@@ -51,6 +51,29 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '部署验收不再靠手敲命令:新增 5 个执行器 —— 25 项上机自检(smoke_deploy)、四类模型角色与故障切换(check_llm)、长文档/并发/首字延迟(load_probe)、TLS/安全头/Cookie 与告警投递(proxy_check)、数据库备份并当场演练恢复(db_backup --drill)。每一项都以明确的 PASS / FAIL / SKIP 收尾,不再靠“看着像好了”。',
+        en: 'Deployment acceptance no longer means hand-typed commands: five executors were added — a 25-item on-host self-check (smoke_deploy), the four model roles plus failover (check_llm), long documents / concurrency / time-to-first-token (load_probe), TLS, security headers, cookies and alert delivery (proxy_check), and a database backup that rehearses the restore on the spot (db_backup --drill). Every item ends in an explicit PASS / FAIL / SKIP instead of “looks fine”.',
+      },
+      {
+        zh: '导出 PDF 加了并发闸门:同时在渲染的浏览器有上限,满了直接回 429 并带 Retry-After,不再靠起第 N 个浏览器把整台机器拖到卡死;界面按提示稍后重试即可。',
+        en: 'PDF export is now gated: the number of concurrent browser renders is capped, and beyond it the server answers 429 with Retry-After instead of spawning yet another browser until the host stalls; the UI simply retries after the hinted delay.',
+      },
+      {
+        zh: '公网模式下多 worker 直接拒绝启动:限流、会话缓存与告警冷却都按进程内存实现,多 worker 会让它们各自为政(限流变成 N 份、会话时有时无);与其上线后查不出原因,不如启动时就说清楚。',
+        en: 'Multiple workers are now refused in public mode: rate limiting, the session cache and alert cooldowns live in process memory, so several workers silently multiply them (N copies of the limit, sessions that come and go); the server now says so at startup instead of failing mysteriously later.',
+      },
+      {
+        zh: '部署文档拆成「部署前能做完的」与「上服务器才能做的」两半,上机窗口估算 75 分钟,每一项都附了对应命令与判据;跨平台 CI 增加 macOS 线,并新增一条静态守卫:进程内不得修改自身资源限制 —— 上一版的 Linux 无声挂起正是这类问题。',
+        en: 'The deployment docs are split into “doable before” and “only on the server”, the on-host window is estimated at 75 minutes, and every item carries its command and pass criteria; CI gained a macOS line plus a static guard that the process must not change its own resource limits — the class of bug behind the previous Linux-only hang.',
+      },
+    ],
+  },
+  {
+    version: 'v1.26.1',
+    date: '2026-11-15',
+    status: 'released',
     items: [
       {
         zh: '修掉后端测试在 Linux 上的无声挂起:一条资源限制用例把 512MB 地址空间上限套到了测试进程自己身上,之后任何线程创建都会永久卡住;Windows 上那个函数本就是空操作,所以问题一直被“Windows 线是绿的”掩盖。',
