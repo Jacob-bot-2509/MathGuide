@@ -144,6 +144,17 @@ file /tmp/t.pdf          # 期望: PDF document
 MG_EDGE_PATH=/usr/bin/chromium
 ```
 
+**沙箱受限的机器**(LXC/Docker 容器、Ubuntu 23.10+ 默认 `kernel.apparmor_restrict_unprivileged_userns=1`)
+会「有 chromium 但打印不出 PDF」,这时才需要放开沙箱:
+
+```
+# MG_EDGE_NO_SANDBOX=1
+```
+
+生产渲染的是模型生成内容,沙箱该留着,所以**默认关闭**,只做显式开关。
+该不该开不要猜 —— 下面的自检会在两种设置下各印一次,直接给结论;
+若结论是「必须开」,生产配置必须同为 1,否则线上导出仍是 500。
+
 ### 版本要求
 
 **装新版,不要刻意装旧版。** 推荐 chromium ≥ 120(或 Chrome/Edge ≥ 109);≥ 132 时 `--headless` 已等价于 `--headless=new`。
@@ -160,7 +171,7 @@ chromium --version        # 期望 >= 120
 代价是一次重试(仅在 `--headless=new` 不产出文件时触发),收益是把"静默 500"变成"照样能用"。
 在镜像里固定了浏览器版本时,这层回退可视为纯保险,无需额外维护。
 
-### 三个容易踩的点
+### 四个容易踩的点
 
 1. **中文字体缺失 → PDF 里中文变方块**。必须装 `fonts-noto-cjk`(或 `fonts-wqy-zenhei`)。
    代码兜不住:字体不在系统里,渲染出来就是豆腐块。
@@ -169,6 +180,8 @@ chromium --version        # 期望 >= 120
    写死一个会**静默不产出 PDF**(返回码 0、无报错、就是没有文件)。
    → 代码已自动回退:先试 `--headless=new`,没产出文件再试 `--headless`。
 3. **长文档超时**。默认 120 秒(`MG_PDF_TIMEOUT` 可调,下限 10 秒)。低配 VPS 建议 300。
+4. **沙箱起不来**。容器 / Ubuntu 23.10+ 上 chromium 可能起来了却打不出 PDF(非 root 无法初始化 sandbox)。
+   → 自检会判定「要不要开 `MG_EDGE_NO_SANDBOX=1`」;**自检时开了、生产忘开 = 线上照样 500**,两处必须一致。
 
 ### 上线前先跑自检(一条命令)
 
@@ -176,8 +189,9 @@ chromium --version        # 期望 >= 120
 cd backend && python tools/check_pdf.py --out /tmp/selfcheck.pdf
 ```
 
-依次检查四项:浏览器能否发现(含版本号)、系统是否有中文字体、能否真的打印出 PDF
-(含 `--headless` 参数回退)、PDF 里是否嵌入了 CJK 字体。任一项失败都会打印**具体修复建议**
+依次检查五项:浏览器能否发现(含版本号)、系统是否有中文字体、能否真的打印出 PDF
+(含 `--headless` 参数回退,并在 `MG_EDGE_NO_SANDBOX` 两种取值下各印一次以判定要不要放开沙箱)、
+PDF 里是否嵌入了 CJK 字体、PDF 文本层能否读到中文。任一项失败都会打印**具体修复建议**
 并以退出码 1 结束 —— 比等到用户点「导出」才发现要早得多。
 
 > 自检通过只能证明"机器能出 PDF",**证明不了"公式印对了"**。所以下面这次眼验仍然要做。

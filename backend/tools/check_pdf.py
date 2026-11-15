@@ -4,19 +4,25 @@
     python tools/check_pdf.py            # 自检
     python tools/check_pdf.py --out x.pdf  # 顺便留下一份样例
 
-检查四项,任一失败都给出可执行的修复建议并以退出码 1 结束:
+检查五项,任一失败都给出可执行的修复建议并以退出码 1 结束:
     1. 浏览器是否可发现(含版本号);
     2. 系统是否有中文字体(缺了 PDF 里中文会变方块,代码兜不住);
-    3. 能否真的打印出 PDF(含 headless 参数回退);
-    4. PDF 里是否嵌入了 CJK 字体(否则仍是方块)。
+    3. 能否真的打印出 PDF(含 headless 参数回退),并回答**要不要放开沙箱**;
+    4. PDF 里是否嵌入了 CJK 字体(否则仍是方块);
+    5. PDF 文本层能不能读到中文。
 
 为什么需要它:`_html_to_pdf` 失败时**完全静默**(返回 None,不抛异常),
-部署后往往要等用户点「导出」才发现。把上面四项压成一条命令,
-上线前跑一次就能定位是"没装浏览器""没装字体"还是"参数不兼容"。
+部署后往往要等用户点「导出」才发现。把上面五项压成一条命令,
+上线前跑一次就能定位是"没装浏览器""没装字体""参数不兼容"还是"沙箱起不来"。
+
+第 3 项会把样张在 `MG_EDGE_NO_SANDBOX` 的两种取值下各印一次:沙箱起不来时
+浏览器只返回非 0、什么都不说,所以只有真的再印一次才能确定该不该开这个开关。
+自检通过 ≠ 生产可用 —— 若结论是"必须开",生产配置里也必须留着那一行。
 """
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -95,6 +101,27 @@ def _has_cjk_font() -> tuple[bool, str]:
         return False, "没有 fc-list,无法确认中文字体"
 
 
+def _render_with_env(value: str | None) -> bytes | None:
+    """按指定的 `MG_EDGE_NO_SANDBOX` 值打印一次,结束后恢复原环境。
+
+    value=None 表示强制走"保留沙箱"的默认档。用来回答"这台机器到底要不要放开沙箱":
+    同一个样张在两种设置下各印一次,比看日志可靠 —— 沙箱起不来时浏览器只返回非 0。
+    """
+    key = "MG_EDGE_NO_SANDBOX"
+    saved = os.environ.get(key)
+    try:
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+        return doc.render_pdf_bytes(SAMPLE_DOC, "zh", "自检")
+    finally:
+        if saved is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = saved
+
+
 def main(argv: list[str] | None = None) -> int:
     _ensure_utf8_stdout()
     parser = argparse.ArgumentParser(description="导出 PDF 的部署自检")
@@ -123,14 +150,39 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[ OK ] {detail}")
 
     print("== 3. 打印 PDF ==")
+    opt_out = bool(doc._edge_compat_flags())
+    print(
+        "       沙箱: "
+        + ("已放开(MG_EDGE_NO_SANDBOX 生效,--no-sandbox 兜底档可用)" if opt_out else "保留(默认)")
+    )
     data = doc.render_pdf_bytes(SAMPLE_DOC, "zh", "自检")
     if not data or not data.startswith(b"%PDF"):
+        if not opt_out:
+            # 默认档打不出来 → 再试一次放开沙箱,区分"参数/浏览器问题"和"沙箱起不来"
+            relaxed = _render_with_env("1")
+            if relaxed and relaxed.startswith(b"%PDF"):
+                return _fail(
+                    "浏览器沙箱起不来(保留沙箱时打印不出 PDF,放开后可打印)",
+                    "在 backend/.env.local 写 MG_EDGE_NO_SANDBOX=1 后重跑本自检;"
+                    "生产必须保留同一行,否则线上导出仍是 500 pdf render failed。",
+                )
         return _fail(
             "浏览器没有产出合法 PDF",
             "手工验证命令行:chromium --headless=new --disable-gpu "
             "--print-to-pdf=/tmp/t.pdf https://example.com;若提示未知参数,说明版本过旧。",
         )
     print(f"[ OK ] {len(data)} 字节")
+
+    if opt_out:
+        # 当前已放开沙箱:反过来验证"其实能不能不放开",结论直接决定生产配置
+        strict = _render_with_env(None)
+        if strict and strict.startswith(b"%PDF"):
+            print("[注意] 保留沙箱也能打印:建议去掉 MG_EDGE_NO_SANDBOX(生产开沙箱更安全)。")
+        else:
+            print(
+                "[注意] 这台机器只有放开沙箱才能打印。生产环境的 MG_EDGE_NO_SANDBOX 必须同为 1,\n"
+                "       否则线上导出是 500 pdf render failed —— 自检通过不代表生产可用。"
+            )
 
     print("== 4. PDF 内字体嵌入 ==")
     cjk_fonts = data.count(b"/Type0")
