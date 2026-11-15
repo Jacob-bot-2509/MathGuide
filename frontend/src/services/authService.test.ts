@@ -332,5 +332,51 @@ describe('logout', () => {
     expect(user.userState.info).toBeNull()
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
+
+  it('登出不删本机学习数据,归属标记留着(否则同一账号重登就永久丢失)', async () => {
+    memory.set('mg-data-owner', 'acct-A')
+    memory.set('mg-learn-sessions', '[{"id":"s1"}]')
+    const user = await import('@/stores/user')
+    user.login({ ...AUTH_USER, token: 'tk-old' })
+    stubFetch({ ok: true })
+    const auth = await import('@/services/authService')
+    const removeSpy = vi.spyOn(localStorage, 'removeItem')
+
+    auth.logout()
+
+    // 只摘掉登录档案,学习数据一个键都不许动
+    expect(removeSpy.mock.calls.map((c) => c[0])).toEqual(['mg-user'])
+    expect(memory.get('mg-learn-sessions')).toBe('[{"id":"s1"}]')
+    expect(memory.get('mg-data-owner')).toBe('acct-A')
+  })
+
+  it('同一账号退出再登入:数据原样保留(这是用户报的"数据全被清除")', async () => {
+    memory.set('mg-data-owner', 'acct-A')
+    memory.set('mg-learn-sessions', '[{"id":"s1"}]')
+    const user = await import('@/stores/user')
+    user.login({ ...AUTH_USER, token: 'tk-old' })
+    stubFetch({ ok: true })
+    const auth = await import('@/services/authService')
+    auth.logout()
+
+    stubFetch(LOGIN_OK)
+    await auth.loginWithPassword('13800000000', 'pw-123456')
+
+    expect(memory.get('mg-learn-sessions')).toBe('[{"id":"s1"}]')
+    expect(memory.get('mg-data-owner')).toBe('acct-A')
+    expect(user.userState.info?.accountKey).toBe('acct-A')
+  })
+
+  it('换另一个账号登录:仍然清空上一位用户的数据(不串号)', async () => {
+    memory.set('mg-data-owner', 'acct-A')
+    memory.set('mg-learn-sessions', '[{"id":"s1"}]')
+    stubFetch({ user: { ...AUTH_USER, accountKey: 'acct-B' }, token: 'tk-b' })
+    const auth = await import('@/services/authService')
+
+    await auth.loginWithPassword('13900000000', 'pw-654321')
+
+    expect(memory.has('mg-learn-sessions')).toBe(false)
+    expect(memory.get('mg-data-owner')).toBe('acct-B')
+  })
 })
 

@@ -123,7 +123,7 @@ P2 = 可以带着未做完上线，但要写进已知限制。
 | 决策 | 选项 | 现状 |
 | --- | --- | --- |
 | PDF 沙箱 | A. 若自检要求就开 `MG_EDGE_NO_SANDBOX=1`；B. 给 PDF 单跑一个低权限用户/带 seccomp 的容器 | 代码侧已就绪：自检直接给结论、生产必须与自检一致；**开不开由 2.1/2.2 的实机结论定** |
-| PDF 并发闸门 | N=2、排队 8（建议）；或 N=1 直接串行 | **已实现且可调**：`MG_PDF_CONCURRENCY` / `MG_PDF_QUEUE` / `MG_PDF_QUEUE_WAIT`；阈值仍按 2.4 的实测确认（1GB 机器建议 1） |
+| PDF 并发闸门 | N=2、排队 8（建议）；或 N=1 直接串行 | **已实现且可调**：`MG_PDF_CONCURRENCY` / `MG_PDF_QUEUE` / `MG_PDF_QUEUE_WAIT`；阈值仍按 2.4 的实测确认（1GB 机器建议 1；目标机型 4C8G 可到 3，先量 RSS） |
 | macOS 门禁 | 加 / 不加 | **已加**（`macos-latest` py3.13，门槛同 85）。若长期飘红再评估是否转 `experimental` |
 | 3.14 的 analysis 依赖 | 装（覆盖率盲区消失、CI 变慢）/ 记豁免 | **记豁免 + 监控**：`COVERAGE_PLAN.md` §2 写明原因，CI 里加了非阻塞探测，出 wheel 会自动提示摘豁免 |
 

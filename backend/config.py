@@ -27,6 +27,21 @@ def load_env() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def env_number(name: str, default: float, minimum: float) -> float:
+    """读取数值环境变量;非法/小于下限都回退默认值。
+
+    限流这类保护参数的读取口径:配置写错(拼错、留空、负数)绝不能等于
+    "把保护关掉",所以一律回退默认,而不是当成 0 / 无限。
+    需要"显式关闭"的开关请单独给语义(见 chat.configure_rate_limit 的 0)。
+    """
+    raw = os.getenv(name, "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
 # ---------- 部署安全 ----------
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}

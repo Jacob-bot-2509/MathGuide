@@ -106,7 +106,7 @@ from chat_sse import (  # noqa: F401
 from http_utils import read_json_object
 from log import get_logger
 from rag.research.types import SearchHit
-from rate_limit import SlidingWindowLimiter
+from rate_limit import NullLimiter, SlidingWindowLimiter
 from session_cache import (
     TEXTBOOK_CAP,
     bump_tick,
@@ -222,14 +222,45 @@ PAPER_CONTEXT_CHARS = 20000  # 当前论文问答带入的正文上限:足够覆
 
 # 限流:每用户滑动窗口(防脚本刷接口烧 token 费;正常学习节奏碰不到上限)。
 # 公共实现会清理不活跃 key,游客登录不断产生新 uid 也不会让内存无界增长。
+# 数值可配(MG_CHAT_RATE_MAX / MG_CHAT_RATE_WINDOW),默认 6 次/60 秒不变;
+# 0 = 关闭,只给压测「测天花板」用(见 configure_rate_limit 的说明)。
 _RATE_LIMIT_MAX = 6
 _RATE_WINDOW = 60.0
-_rate_limiter = SlidingWindowLimiter(_RATE_LIMIT_MAX, _RATE_WINDOW)
+_rate_limiter: SlidingWindowLimiter | NullLimiter = SlidingWindowLimiter(_RATE_LIMIT_MAX, _RATE_WINDOW)
+
+
+def configure_rate_limit() -> None:
+    """按环境变量重建每用户限流器(main.py 在 env 装载后调用,与 auth 同一口径)。
+
+    MG_CHAT_RATE_MAX     默认 6 次;0 = 关闭限流
+    MG_CHAT_RATE_WINDOW  默认 60 秒
+
+    为什么允许 0:这条限流在**贵的活之前**判定(chat 入口、导出入口都是),
+    默认 6 次/分时,同一账号发 7 个并发请求,第 7 个撞到的是 `rate limited`,
+    不是导出闸门的 `pdf export busy` —— 也就是说**限流会先于并发闸门触发,
+    量到的是限流口径而不是机器上限**。压测要测容量时先把它关掉,测完立刻恢复:
+
+        MG_CHAT_RATE_MAX=0  →  量 QPS / 延迟 / 闸门拒绝率(= 天花板)
+        恢复默认 6           →  验证保护是否按预期咬住(别让 0 留在生产)
+
+    坏值(拼错、负数)回退默认 6,不会意外关闭。
+    """
+    global _RATE_LIMIT_MAX, _RATE_WINDOW, _rate_limiter
+    _RATE_LIMIT_MAX = int(config.env_number("MG_CHAT_RATE_MAX", 6, 0))
+    _RATE_WINDOW = config.env_number("MG_CHAT_RATE_WINDOW", 60.0, 1.0)
+    _rate_limiter = (
+        SlidingWindowLimiter(_RATE_LIMIT_MAX, _RATE_WINDOW)
+        if _RATE_LIMIT_MAX > 0
+        else NullLimiter()
+    )
 
 
 def _rate_check(uid: str) -> None:
     if not _rate_limiter.allow(uid or "anonymous"):
-        raise HTTPException(429, "rate limited")
+        # Retry-After 与导出闸门同一口径:客户端/压测脚本据此把两种 429 分开
+        # (限流 = 测法太密,闸门 = 容量上限),见 tools/locustfile.py 的分类计数
+        raise HTTPException(429, "rate limited",
+                            headers={"Retry-After": str(int(_RATE_WINDOW) or 60)})
 
 
 

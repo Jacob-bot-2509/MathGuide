@@ -1,8 +1,8 @@
 # 新会话交接单（HANDOFF）
 
 > 用法：新开一个会话，把这份文件路径发给 Cline，并说"按 docs/HANDOFF.md 继续"。
-> 工作区：`C:\Users\Jacap\.cline\worktrees\c1637\code`（分支 `cline/c1637`，tag `v1.27.0`）
-> 最后更新：2026-11-15 ｜ 最新提交：`release: v1.27.0 发布说明与 MANIFEST`（见 `git log -1`）
+> 工作区：`C:\Users\Jacap\.cline\worktrees\c1637\code`（分支 `cline/c1637`，tag `v1.27.0`，v1.27.1 待发）
+> 最后更新：2026-11-15 ｜ 最新提交：`release: v1.27.1 发布说明（机房双闸 / 真实 IP / 登出不删数据）`（见 `git log -1`）
 
 ## 0. 一句话任务
 
@@ -49,7 +49,7 @@ cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
    - `backend/tools/check_pdf.py` 在 Linux + chromium 上跑一次（Windows 已 `RESULT: OK`）；
    - `research_lit.py` 的真实外网下载链路（测试只做了 fake client）；
    - 语音输入、会话轮换等需要真设备/真时间的链路。
-2. **部署**：按 `docs/DEPLOY_PLAYBOOK.md` 走前置三件事 → PDF 方案 A → 备份 → 安全开关 → 验收 → 回滚。
+2. **部署**：按 `docs/DEPLOY_PLAYBOOK.md` 走前置四件事 → PDF 方案 A → 备份 → 安全开关 → 验收 → 回滚。
 3. ~~**结构债**：`chat.py:1645` 疑似死代码~~ —— **已删除**（2026-11-14，见 `COVERAGE_PLAN.md` §12.10）。
 
 ## 4. 硬规则（每做完一个文件都要过）
@@ -77,17 +77,23 @@ cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
 
 ## 6. 部署侧（本轮已做完，勿重复）
 
-- `docs/DEPLOY_PLAYBOOK.md`：部署唯一真源（前置三件事 / PDF 方案 A / 备份 / 安全开关 / 验收 / 回滚）
+- `docs/DEPLOY_PLAYBOOK.md`：部署唯一真源（前置四件事 / PDF 方案 A / 备份 / 安全开关 / 验收 / 回滚）
 - `backend/tools/check_pdf.py`：上线前自检五项（浏览器 → 中文字体 → 真打印 → CJK 字体嵌入 → 文本层中文），
   本机 Windows + Edge 157 实测 `RESULT: OK`；**Linux chromium 尚未实测**
 - 待用户执行：服务器上 `apt install -y chromium fonts-noto-cjk` → `python tools/check_pdf.py` → 眼验一份含数组公式+中文的 PDF
 - **§2 的执行器（本轮新增，见 `DEPLOY_SPLIT_PLAN.md` §1bis）**：`tools/check_llm.py`（2.5，含 `--failover`
   打坏主用验异平台接管）、`tools/load_probe.py`（2.3/2.4/2.12，长文档耗时 / 并发导出 RSS / 并发首字）、
-  `tools/proxy_check.py`（2.7/2.8/2.13，证书 / HSTS / `X-Forwarded-Proto` / Cookie 三属性 / 麦克风策略 / webhook）、
+  `tools/proxy_check.py`（2.7/2.8/2.13 + 真实 IP 链路，证书 / HSTS / `X-Forwarded-Proto` /
+  Cookie 三属性 / 麦克风策略 / webhook / 伪造 XFF 是否生效）、
   `db_backup.py --drill`（2.10，备份后立刻恢复副本）
 - 工具脚本的测试**例外条款**：§4 的"不为工具脚本写测试"针对的是行覆盖凑数；这 4 个脚本的 40 条用例只钉
   **判定逻辑**（429 归类 / 百分位 / 末位采样 / Cookie 属性 / HSTS / 容灾接管），因为它们判错会让部署结论**反向**，
   比覆盖率数字危险得多。`tools/` 仍不进覆盖率分母（`pyproject.toml` omit）。
+- **集中使用（考试/机房）**：登录限流按 IP 10 次/60 秒，聊天按账号 6 次/60 秒。共出口 IP 的机房
+  即使反代配对也会撞 IP 桶——两条正解：①学生进场时打开页面（`/api/auth/session` 不限流且自动续期，
+  24h）；②打开双闸 `MG_AUTH_DUAL_BUCKET=1`（`MG_AUTH_RATE_MAX` 变单账号额度、`MG_AUTH_IP_RATE_MAX`
+  是整间机房天花板，默认 120），见 `DEPLOY_PLAYBOOK.md` §五之三。撞上时的文案是「登录太频繁」并带
+  `Retry-After`，**不是**「连不上服务器」（v1.27.1 修正了这条误报——旧文案会让老师去重启后端）。
 
 
 ## 7. 常用命令

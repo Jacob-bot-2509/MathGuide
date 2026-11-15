@@ -5,7 +5,10 @@
   * HSTS 该不该发(HTTPS 下不发 = 没有钉子;HTTP 下发了 = scheme 判定有问题);
   * 会话 Cookie 的 `Secure` / `SameSite` / `HttpOnly` / `Domain` 是否真的对;
   * 反代有没有把 `X-Forwarded-Proto` 递到应用手里 —— 没递到时,HTTPS 站点会下发
-    不带 Secure 的 cookie,用户看到的是「登录成功,刷新就掉线」。
+    不带 Secure 的 cookie,用户看到的是「登录成功,刷新就掉线」;
+  * 真实客户端 IP 是否真的到了应用手里(`X-Forwarded-For` + `MG_TRUSTED_PROXIES`) ——
+    配错时不是报错,而是**全员塌成一个 IP 桶**(全站共享登录 10 次/分)或
+    **伪造的 XFF 生效**(限流等于不存在)。这一项要临时设 `MG_DIAG_CLIENT_IP=1`。
 
 前四项错起来的症状都指向别处,所以固定成脚本,装机时跑一次。
 
@@ -276,6 +279,62 @@ def check_forwarded_proto(probe: Probe, report: Report, *, https: bool) -> None:
                     "不带 Secure 的 cookie,表现为「登录成功,刷新掉线」")
 
 
+def check_client_ip_chain(probe: Probe, report: Report, *, local_direct: bool) -> None:
+    """§一.4 真实 IP 链路:塌陷(全员一个桶)与绕过(伪造 XFF 生效)都必须当场看见。
+
+    只读 /api/health 的诊断字段(`MG_DIAG_CLIENT_IP=1` 才有:12 位哈希 + 来源),
+    不带账号、不写数据。两次请求带**不同**的伪造 XFF:
+      * 两次 ref 不同 → 伪造生效,「10 次/分/IP」等于不存在(最严重);
+      * 两次 ref 相同且 via=forwarded → 正常(反代追加的地址压住了伪造值);
+      * 两次 ref 相同但 via=peer-untrusted → 反代对端不在白名单,全员一个桶;
+      * via=uvicorn → uvicorn 的代理头中间件(默认开启)抢在应用之前改写了客户端地址,
+        后端无从校验;单层反代可用、多挂 CDN 会按节点分桶,给出迁移提示(WARN)。
+    塌陷只能在「对域名跑」时判定:直连本机时 via=peer 是正常状态。
+    """
+    spoof_a = probe.call("GET", "/api/health", headers={"X-Forwarded-For": "203.0.113.7"})
+    spoof_b = probe.call("GET", "/api/health", headers={"X-Forwarded-For": "203.0.113.9"})
+    seen = []
+    for resp in (spoof_a, spoof_b):
+        try:
+            seen.append(json.loads((resp.body or b"{}").decode("utf-8", "replace")).get("client"))
+        except ValueError:
+            seen.append(None)
+    if not all(seen):
+        report.warn("真实 IP 链路(后端未开 MG_DIAG_CLIENT_IP=1,外部无法验证;"
+                    "部署验收时临时打开再跑一次)")
+        return
+    via = seen[0]["via"]
+    differ = seen[0]["ref"] != seen[1]["ref"]
+    if via == "uvicorn":
+        # uvicorn 的代理头中间件还开着:真实 IP 是它按自己白名单算的,后端无法校验。
+        if differ and not local_direct:
+            report.fail("伪造的 X-Forwarded-For 生效了:uvicorn 的代理头中间件按自己的白名单"
+                        "直接采信了客户端头 → 按 IP 限流可被绕过",
+                        "启动命令加 --no-proxy-headers,并用 MG_TRUSTED_PROXIES=<反代地址>"
+                        " 让后端自己判定")
+        else:
+            report.warn("真实 IP 仍由 uvicorn 的代理头中间件改写(没加 --no-proxy-headers):"
+                        "单层反代可用,多挂一层 CDN 会按 CDN 节点分桶,后端也无法再校验链路")
+        return
+    if differ:
+        report.fail(f"伪造的 X-Forwarded-For 生效了(ref {seen[0]['ref']} ≠ {seen[1]['ref']}):"
+                    "按 IP 限流可被绕过",
+                    "检查后端 MG_TRUSTED_PROXIES 是否写成了 * 或过宽网段;"
+                    "白名单只写反代实际地址,并删掉 uvicorn 的 --forwarded-allow-ips=*")
+    elif local_direct:
+        report.ok("伪造 X-Forwarded-For 未生效(直连本机,不判断是否塌陷)")
+    elif via == "forwarded":
+        report.ok("真实 IP 链路有效 · 伪造 X-Forwarded-For 被忽略(按反代追加的地址分桶)")
+    elif via == "peer-untrusted":
+        report.fail("反代对端不在 MG_TRUSTED_PROXIES 里,X-Forwarded-For 被忽略 → 全员塌成一个 IP 桶",
+                    "把反代地址填进 .env.local 的 MG_TRUSTED_PROXIES(如 127.0.0.1 或 "
+                    "172.17.0.1/32)后重启后端")
+    else:
+        report.fail("后端没收到 X-Forwarded-For(按反代 IP 计 → 全员一个桶)",
+                    "反代要 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"
+                    "并把反代地址填进 MG_TRUSTED_PROXIES")
+
+
 def check_cookie(probe: Probe, report: Report, *, https: bool, phone: str,
                  password: str, cookie_domain: str) -> None:
     if not (phone and password):
@@ -383,6 +442,8 @@ def run(probe: Probe, args: argparse.Namespace) -> int:
         report.skip("TLS 证书(HTTP 直连;真实域名请对 https:// 跑一遍)")
     check_hsts(probe, report, https=https)
     check_forwarded_proto(probe, report, https=https)
+    check_client_ip_chain(probe, report,
+                          local_direct=host in {"127.0.0.1", "localhost", "::1"})
     check_cookie(probe, report, https=https, phone=args.phone,
                  password=args.password, cookie_domain=args.cookie_domain)
     check_permissions_policy(probe, report)

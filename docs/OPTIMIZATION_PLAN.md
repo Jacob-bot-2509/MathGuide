@@ -556,6 +556,14 @@ math 只有 10%，而数学是主打学科；math 的 oa（可获取全文比例
 > **2026-11-15 更新**：第 3 条已从"告警"升级为**硬校验** —— `MG_DEMO_MODE=0`（公网模式）下检测到多 worker
 > 直接 `RuntimeError` 拒绝启动（`config.assert_single_worker`），演示模式仍只告警。原因很简单：
 > 日志里的 WARNING 在部署窗口里几乎没人会看，而额度翻倍/缓存分裂是**静默**发生的语义错误。
+>
+> **同日更新（第 2 条作废）**：`--proxy-headers --forwarded-allow-ips` 这条路整条撤掉，改由
+> `backend/client_ip.py` + `MG_TRUSTED_PROXIES` 在应用内判定，启动命令改成 `--no-proxy-headers`。
+> 原因是实测发现 **uvicorn 的 `--proxy-headers` 默认就是开着的**（白名单默认 `127.0.0.1`）：
+> 只要对端命中它自己的白名单，它就会抢在应用之前改写 `scope["client"]`，后端根本看不到真实对端
+> —— 单层反代碰巧正确、多挂一层 CDN 就按节点分桶，而这两种情况都**没有任何日志**。
+> 现在：通配白名单/空白名单（公网绑回环）拒绝启动；对端不在白名单时忽略 XFF 并打限频 ERROR；
+> `MG_DIAG_CLIENT_IP=1` 时 `/api/health` 给出客户端 IP 摘要，`tools/proxy_check.py` 可验收。
 
 ### M6-3 写操作来源校验
 

@@ -293,6 +293,101 @@ def test_auth_rate_limit(client, monkeypatch):
     res = client.post("/api/auth/register", json={
         "phone": "13800138002", "password": PASSWORD})
     assert res.status_code == 429
+    # Retry-After 必须给出:前端靠它区分「限流」与「连不上服务器」,
+    # 否则考场上 429 会被显示成「后端没启动」,老师重启后端等于全员掉线
+    assert res.headers.get("Retry-After") == "60"
+
+
+@pytest.fixture()
+def rate_config():
+    """按用例重建认证限流器,结束后回到默认(单桶)。
+
+    限流器是模块级全局:只 `setenv` 不调 `configure_rate_limit()` 等于什么都没改
+    —— 这是这类用例最容易写出"假绿"的地方,所以把两件事绑在一起。
+    """
+    mp = pytest.MonkeyPatch()
+
+    def configure(**env) -> None:
+        for name, value in env.items():
+            mp.setenv(name, str(value))
+        auth.configure_rate_limit()
+
+    yield configure
+    mp.undo()
+    auth.configure_rate_limit()  # 收尾回到默认单桶,别污染后续用例
+
+
+def test_dual_bucket_lets_different_accounts_share_one_ip(client, rate_config):
+    """双闸的核心承诺:同一个出口 IP 后面,不同账号互不影响(机房 40 人同时登录)。
+
+    单桶时 2 次就封顶;双闸下 IP 桶是天花板(20)、账号桶才是额度(2)。
+    """
+    rate_config(MG_AUTH_DUAL_BUCKET="1", MG_AUTH_RATE_MAX=2, MG_AUTH_IP_RATE_MAX=20)
+    for i in range(3):
+        _register(client, phone=f"1380013800{i}")
+
+
+def test_dual_bucket_still_blocks_one_account(client, rate_config):
+    """同一手机号连续试超限仍 429:双闸不是把爆破防护关掉,只是换了计费口径。"""
+    rate_config(MG_AUTH_DUAL_BUCKET="1", MG_AUTH_RATE_MAX=2, MG_AUTH_IP_RATE_MAX=20)
+    payload = {"phone": PHONE, "password": PASSWORD}
+    _register(client)  # 1 次
+    # 已存在(409)也消耗一次额度:否则"注册撞库"可以无限探测手机号是否存在
+    assert client.post("/api/auth/register", json=payload).status_code == 409
+    res = client.post("/api/auth/register", json=payload)
+    assert res.status_code == 429
+    assert res.headers.get("Retry-After") == "60"
+
+
+def test_dual_bucket_ip_ceiling_still_applies(client, rate_config):
+    """IP 桶没被绕开:账号额度还富裕时,同一 IP 超过天花板一样 429。"""
+    # 账号 1 次(每人都还没用完)、IP 天花板 2 次 → 第 3 个账号被 IP 桶拦住
+    rate_config(MG_AUTH_DUAL_BUCKET="1", MG_AUTH_RATE_MAX=1, MG_AUTH_IP_RATE_MAX=2)
+    for i in range(2):
+        _register(client, phone=f"1380013800{i}")
+    res = client.post("/api/auth/register",
+                      json={"phone": "13800138002", "password": PASSWORD})
+    assert res.status_code == 429
+
+
+def test_dual_bucket_off_keeps_single_ip_bucket(client, rate_config):
+    """默认关:行为与旧版一致(不同账号也共用同一个 IP 桶),不能默默放宽。"""
+    rate_config(MG_AUTH_RATE_MAX=2)
+    _register(client, phone="13800138001")
+    _register(client, phone="13800138002")
+    assert client.post("/api/auth/register",
+                       json={"phone": "13800138003", "password": PASSWORD}
+                       ).status_code == 429
+    assert auth._auth_id_limiter is None
+
+
+def test_dual_bucket_clamps_ip_max_below_account_max(client, rate_config):
+    """配置写反(IP 桶 < 账号桶)时按账号上限纠正:错配置不能变成更小的桶。"""
+    rate_config(MG_AUTH_DUAL_BUCKET="1", MG_AUTH_RATE_MAX=10, MG_AUTH_IP_RATE_MAX=3)
+    assert auth._AUTH_IP_RATE_MAX == 10
+    assert auth._auth_limiter.max_hits == 10
+
+
+def test_dual_bucket_does_not_key_garbage_phone(client, rate_config):
+    """垃圾手机号只受 IP 桶约束:不给随手编的字符串建账号桶(否则 key 空间无界)。"""
+    rate_config(MG_AUTH_DUAL_BUCKET="1", MG_AUTH_RATE_MAX=1, MG_AUTH_IP_RATE_MAX=50)
+    for _ in range(3):
+        # 每次都是 404(账号不存在),不是 429 —— 说明没有被账号桶计数
+        res = client.post("/api/auth/login",
+                          json={"method": "password", "phone": "abc", "password": PASSWORD})
+        assert res.status_code == 404
+
+
+def test_dual_bucket_counts_export_by_uid(client, rate_config):
+    """导出走 uid 账号桶:双闸把 IP 桶放宽后,仍需兜住"登录一次后无限导出"。"""
+    rate_config(MG_AUTH_DUAL_BUCKET="1", MG_AUTH_RATE_MAX=2, MG_AUTH_IP_RATE_MAX=20)
+    body = _register(client)
+    headers = {"Authorization": f"Bearer {body['token']}"}
+    assert client.post("/api/account/export", json={}, headers=headers).status_code == 200
+    assert client.post("/api/account/export", json={}, headers=headers).status_code == 200
+    res = client.post("/api/account/export", json={}, headers=headers)
+    assert res.status_code == 429
+    assert res.headers.get("Retry-After") == "60"
 
 
 def test_guest_limit_rejects_when_all_active(client, monkeypatch):

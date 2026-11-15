@@ -87,7 +87,10 @@ async function doPhoneLogin() {
     await loginWithCode(phone.value, code.value)
     entered()
   } catch (err) {
-    if (statusOf(err) === 400) showToast(t('login.toastDemoOff'))
+    // 429 是「同一出口 IP 登录太密」,不是服务不可用:必须分开说,
+    // 否则考场上会被当成后端挂了,去重启后端 = 正在答题的人全部掉线
+    if (statusOf(err) === 429) showToast(t('login.toastBusy'), 4000)
+    else if (statusOf(err) === 400) showToast(t('login.toastDemoOff'))
     else showToast(t('login.toastNet'))
   }
 }
@@ -124,8 +127,10 @@ async function doRegister() {
     }
     showToast(t('login.toastCreated'))
     entered()
-  } catch {
-    showToast(t('login.toastNet'))
+  } catch (err) {
+    // 注册也走同一套按 IP 限流(见 auth.py _auth_rate_check)
+    if (statusOf(err) === 429) showToast(t('login.toastBusy'), 4000)
+    else showToast(t('login.toastNet'))
   }
 }
 
@@ -138,7 +143,8 @@ function thirdAuth(kind: 'wechat' | 'qq') {
       await loginWithThirdParty(kind)
       entered()
     } catch (err) {
-      if (statusOf(err) === 400) showToast(t('login.toastDemoOff'))
+      if (statusOf(err) === 429) showToast(t('login.toastBusy'), 4000)
+      else if (statusOf(err) === 400) showToast(t('login.toastDemoOff'))
       else showToast(t('login.toastNet'))
     } finally {
       authing.value = ''

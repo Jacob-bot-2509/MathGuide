@@ -16,10 +16,18 @@ User=mathguide
 Group=mathguide
 WorkingDirectory=/srv/mathguide/backend
 EnvironmentFile=/srv/mathguide/backend/.env.local
+# 真实客户端 IP 的唯一开关(按 IP 限流靠它):写反代的实际地址,可逗号分隔多个/CIDR。
+# 反代不在本机(Docker/另一台机器)时改成它的地址,如 172.17.0.1/32;前面挂 CDN 时
+# 把 CDN 回源网段也加上。规则是「直连对端不在白名单 → X-Forwarded-For 一律忽略」,
+# 所以白名单写错不会报错、而是全员塌成一个桶;写成 * 则直接拒绝启动。
+# 详见 docs/DEPLOY_PLAYBOOK.md §一 第 4 条。
+Environment=MG_TRUSTED_PROXIES=127.0.0.1
 # 必须单进程(--workers 不要加):限流器、会话缓存、检索缓存都是进程内存,
 # 多 worker 会让"每账号 N 次/分"变成 N×worker 倍且缓存各自分裂。
-# --proxy-headers 让 request.client.host 取 nginx/caddy 传来的真实 IP(按 IP 限流依赖它)。
-ExecStart=/srv/mathguide/.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+# --no-proxy-headers 不能省:uvicorn 的 --proxy-headers **默认开启**(白名单默认 127.0.0.1),
+# 只要对端命中它自己的白名单就会先改写 scope["client"],后端就看不到真实对端、也无法校验
+# 信任链(单层反代碰巧对,多挂 CDN 会按节点分桶)。关掉它,判定权才归 MG_TRUSTED_PROXIES。
+ExecStart=/srv/mathguide/.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000 --no-proxy-headers
 Restart=on-failure
 RestartSec=3
 UMask=0077

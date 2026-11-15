@@ -76,3 +76,23 @@ class SlidingWindowLimiter:
                 key=lambda k: self._hits[k][-1] if self._hits[k] else float("-inf"),
             )
             del self._hits[victim]
+
+
+class NullLimiter:
+    """不限制(显式实现,而不是把 max_hits=0 塞进上面那个类)。
+
+    用途只有一个:`MG_CHAT_RATE_MAX=0` 时关闭每用户限流,好让压测量到**真容量**
+    而不是"每用户 6 次/分"。把 0 做成开关而不是让 SlidingWindowLimiter 接受 0,
+    是为了让「配置写错」和「有意关闭」在代码里长得不一样:前者回退默认,
+    后者必须显式走到这里。
+    """
+
+    max_hits = 0
+    window = 0.0
+
+    def allow(self, key: str, now: float | None = None) -> bool:
+        return True
+
+    def reset(self, key: str | None = None) -> None:
+        return None
+

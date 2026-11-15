@@ -80,6 +80,11 @@ MG_COOKIE_DOMAIN=.example.com
 # MG_CORS_ORIGINS=https://learn.example.com,https://research.example.com
 MG_AUTH_RATE_MAX=30
 MG_AUTH_RATE_WINDOW=60
+# 机房/单位 NAT 共用一个出口 IP 时打开双闸:MG_AUTH_RATE_MAX 变成单账号额度,
+# MG_AUTH_IP_RATE_MAX 是整间机房每分钟过多少人(按 人数 × 3 估)。
+# 比把 MG_AUTH_RATE_MAX 调大更安全(单账号爆破仍被锁住),见 docs/DEPLOY_PLAYBOOK.md §五之三
+# MG_AUTH_DUAL_BUCKET=1
+# MG_AUTH_IP_RATE_MAX=120
 # 管理员白名单,否则 /api/stats 无人可访问,留存清理也不会保护管理员
 MG_ADMIN_PHONES=你的手机号
 # 可选:自动留存清理(0=关闭)
@@ -94,7 +99,9 @@ MG_EXERCISE_TIERS=safe,research
 - `MG_DEMO_MODE=0` 后固定验证码、微信/QQ 游客登录、开放注册全部关闭。
 - 测评同学用 `MG_INVITE_CODES` 中的邀请码注册;邀请码共享,按批次轮换。
 - 后端只监听 `127.0.0.1:8000`,不要直接暴露公网端口。
-- 若多人共用实验室出口 IP,把 `MG_AUTH_RATE_MAX` 调大。
+- 若多人共用实验室出口 IP,优先打开双闸 `MG_AUTH_DUAL_BUCKET=1`(单账号仍是
+  `MG_AUTH_RATE_MAX` 次/窗口,整间机房的上限由 `MG_AUTH_IP_RATE_MAX` 决定);
+  把 `MG_AUTH_RATE_MAX` 直接调大等于同时削弱单账号的爆破防护,只作一次性应急。
 
 ## 2. 前端构建
 
@@ -162,6 +169,9 @@ python tools/check_llm.py --failover          # 四个角色各打一句;再打�
 python tools/load_probe.py --long-doc 100     # ≈60 页样张的真实渲染耗时(2.3)
 python tools/load_probe.py --export 2 --pid $(pgrep -f 'uvicorn main:app')   # 并发导出 + RSS 峰值
 python tools/db_backup.py --drill             # 备份后立刻恢复一份副本,证明这份备份能恢复
+pip install locust                            # 可选:要吞吐曲线/QPS 时(不进 requirements)
+python -m locust -f tools/locustfile.py --headless -u 50 -r 10 -t 30s \
+    --tags static --host http://127.0.0.1:8000  # 静态基线;chat/export 场景与读法见 DEPLOY_PLAYBOOK §五之二
 ```
 
 两点容易误判:
@@ -189,9 +199,22 @@ python tools/db_backup.py --drill             # 备份后立刻恢复一份副�
   缓存互相看不见(同一用户切到别的 worker 就像换了台机器)。
   **现在是硬校验**:`MG_DEMO_MODE=0` 时检测到 `--workers N` / `WEB_CONCURRENCY>1`
   直接拒绝启动;演示模式仍只打 WARNING(方便本机反复起停)。
-- **必须传 `--proxy-headers --forwarded-allow-ips=127.0.0.1`**:反向代理已带
-  `X-Forwarded-For`,不显式声明时能否取到真实客户端 IP 取决于 uvicorn 版本默认值,
-  而按 IP 限流与日志都依赖它。
+- **真实 IP 由 `MG_TRUSTED_PROXIES` 决定**(写进 `.env.local` 或 unit 的 `Environment=`)。
+  后端自己从 `X-Forwarded-For` 取客户端地址(`client_ip.py`,唯一决策点):
+  直连对端不在白名单 → XFF **一律忽略**(客户端伪造无效);在 → 从右往左取第一个
+  不在白名单里的地址(nginx 追加的那个)。
+  - 反代不在 `127.0.0.1`(Docker/另一台机器)时填反代的实际地址,如 `172.17.0.1/32`;
+    前面再挂 CDN 时把回源网段一起加上。填错不会报错,而是**全员塌成一个 IP**
+    (全站共享 10 次/分登录限流)—— 所以后端在两种情况下**直接拒绝启动**:
+    白名单写成 `*`/`0.0.0.0/0`,或 `MG_DEMO_MODE=0` 绑 `127.0.0.1` 但白名单为空。
+    运行时若收到 XFF 而白名单没命中,还会打一条 60 秒限频的 ERROR。
+  - **启动命令必须加 `--no-proxy-headers`**(uvicorn 的 `--proxy-headers` 默认就开着):
+    否则它会在应用之前改写 `scope["client"]`,后端看不到真实对端、也无法校验链路
+    (单层反代碰巧对,多挂 CDN 会按节点分桶)。检测到仍开着时后端只打 WARN 并在
+    `/api/health` 标记 `via=uvicorn`;`--forwarded-allow-ips=*` 直接拒绝启动。
+  - 验收:`MG_DIAG_CLIENT_IP=1` 临时打开后跑 `python tools/proxy_check.py`,
+    看「真实 IP 链路」一项(两次不同伪造 XFF 必须得到同一个 `ref`)。
+  详见 `docs/DEPLOY_PLAYBOOK.md` §一 第 4 条。
 - 参考 `deploy/logrotate.conf` 轮转 `/var/log/mathguide/*.log`(默认保留 14 天)。
 - 如果使用 journald,改用 journald 的 `SystemMaxUse` / `MaxRetentionSec`。
 - 日志级别用 `MG_LOG_LEVEL`(默认 INFO);每条带 `request_id`,同一次回答的多条

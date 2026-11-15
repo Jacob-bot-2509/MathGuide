@@ -1,7 +1,7 @@
 """rate_limit.py:滑动窗口边界、过期清理与内存上限。"""
 from __future__ import annotations
 
-from rate_limit import SlidingWindowLimiter
+from rate_limit import NullLimiter, SlidingWindowLimiter
 
 
 def test_allow_and_limit():
@@ -64,3 +64,14 @@ def test_rejects_invalid_config():
             pass
         else:  # pragma: no cover
             raise AssertionError(f"expected ValueError for {args}")
+
+
+def test_null_limiter_always_allows():
+    """NullLimiter 是「显式关闭」,不是「配置写错」的兜底(后者回退默认)。"""
+    limiter = NullLimiter()
+    for _ in range(1000):
+        assert limiter.allow("u") is True
+    limiter.reset()          # 与 SlidingWindowLimiter 同签名,调用方无需分支
+    limiter.reset("u")
+    assert limiter.allow("u") is True
+    assert limiter.max_hits == 0

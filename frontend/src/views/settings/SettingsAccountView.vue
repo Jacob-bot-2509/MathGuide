@@ -8,6 +8,7 @@ import { useRouter } from 'vue-router'
 import UserAvatar from '@/components/common/UserAvatar.vue'
 import { updateUser, userState } from '@/stores/user'
 import { clearAllTodoData } from '@/stores/todo'
+import { clearLearningData } from '@/stores/localData'
 import { settingsState } from '@/stores/settings'
 import { deleteAccount, exportAccountData } from '@/services/accountService'
 import { logout } from '@/services/authService'
@@ -135,7 +136,10 @@ async function confirmDelete() {
       showToast(t('acc.deleteWrong'))
       return
     }
-    // 后端已删除账号与全部 token;本机学习数据也要一起清掉
+    // 后端已删除账号与全部 token;本机学习数据也要一起清掉。
+    // 注意不能只靠 logout():登出为了「同一账号重登还在」已不再删数据,
+    // 而注销之后这个 accountKey 再也不会有 login 来认领,只能在这里显式清。
+    clearLearningData()
     logout()
     clearAllTodoData()
     deleting.value = false

@@ -43,6 +43,7 @@ from starlette.routing import Route
 
 import auth
 import chat
+import client_ip
 import config
 import diagnosis
 import doc
@@ -78,9 +79,13 @@ log = get_logger(__name__)
 config.assert_safe_demo_mode()
 # .env.local 装载后再读限流配置(模块导入时 env 还没加载)
 auth.configure_rate_limit()
+chat.configure_rate_limit()
 # 限流器与会话缓存是进程内存:多 worker 会让额度翻 N 倍、缓存各存一份。
 # 演示模式只提示,公网模式直接拒绝启动(见 config.assert_single_worker)
 config.assert_single_worker()
+# 真实 IP 链路:MG_TRUSTED_PROXIES 是唯一开关。配成 * / 空着绑 127.0.0.1(公网)
+# 都会让「10 次/分/IP」静默变形(全员一个桶或被伪造绕过),所以启动即校验。
+client_ip.configure(demo=config.demo_mode(), bound=config.bound_host())
 
 
 def _cors_origins() -> list[str]:
@@ -90,12 +95,16 @@ def _cors_origins() -> list[str]:
 
 async def health(request) -> JSONResponse:
     # demo/invite 供登录页隐藏演示通道;不涉及账号或密钥
-    return JSONResponse({
+    payload = {
         "ok": True,
         "service": "mg-backend",
         "demo": config.demo_mode(),
         "invite": bool(config.invite_codes()),
-    })
+    }
+    # client 只在 MG_DIAG_CLIENT_IP=1 时出现(12 位哈希 + 来源),供 proxy_check.py
+    # 验收真实 IP 链路;默认关闭,公开接口不长期暴露这条信息
+    payload.update(client_ip.health_hint(request))
+    return JSONResponse(payload)
 
 
 async def stats(request) -> JSONResponse:

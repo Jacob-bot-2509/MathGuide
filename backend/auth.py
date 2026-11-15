@@ -41,6 +41,7 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import client_ip
 import config
 import session_cache
 import store
@@ -70,32 +71,78 @@ AVATAR_MAX = 500
 PASSWORD_MAX = 1024  # 只防超长输入刷内存/CPU;旧账号可能设置过更长口令,不要误锁
 GUEST_MAX_DEFAULT = 500
 
-# 认证接口限流:登录/注册共用,按客户端 IP;演示期也不会误伤正常操作
+# 认证接口限流:登录/注册/登出/导出/注销共用,按客户端 IP;演示期也不会误伤正常操作
 _AUTH_RATE_MAX = 10
 _AUTH_RATE_WINDOW = 60.0
+# 双闸(MG_AUTH_DUAL_BUCKET=1,默认关)下 IP 桶的默认上限。它不再是"每个账号能试几次",
+# 而是"一个出口 IP 后面整间机房一分钟最多过多少人":40 人同时点登录 ≈ 80 次/分,
+# 取 120 留出每人再重试一次的余量。
+DUAL_IP_RATE_DEFAULT = 120
+_AUTH_IP_RATE_MAX = _AUTH_RATE_MAX  # 双闸关闭时,IP 桶就是唯一那个桶
+_AUTH_DUAL = False
 _auth_limiter = SlidingWindowLimiter(_AUTH_RATE_MAX, _AUTH_RATE_WINDOW)
+# 只在双闸开启时存在(None = 关闭):按手机号 / uid 的账号桶
+_auth_id_limiter: SlidingWindowLimiter | None = None
 
 
 def _env_number(name: str, default: float, minimum: float) -> float:
-    """读取数值环境变量;非法/过小回退默认,不让配置错误把限流关掉。"""
-    raw = os.getenv(name, "").strip()
-    try:
-        value = float(raw)
-    except ValueError:
-        return default
-    return value if value >= minimum else default
+    """读取数值环境变量;非法/过小回退默认,不让配置错误把限流关掉。
+
+    实现放在 `config.env_number`(chat 的每用户限流用同一套口径,避免两处
+    各写一份"坏值怎么办")。
+    """
+    return config.env_number(name, default, minimum)
+
+
+def _env_flag(name: str) -> bool:
+    """读取布尔开关:只有 1 / true / on / yes 算打开(默认关)。
+
+    与 `config.demo_mode`(默认开、显式关)方向相反,所以不复用那套写法:
+    这里的开关一旦漏读就会放宽防护,缺省必须是关。
+    """
+    return os.getenv(name, "").strip().lower() in ("1", "true", "on", "yes")
 
 
 def configure_rate_limit() -> None:
-    """按环境变量重建认证限流器(测评多人共用一个出口 IP 时调大)。
+    """按环境变量重建认证限流器。
 
-    MG_AUTH_RATE_MAX     默认 10 次
+    MG_AUTH_RATE_MAX     单账号(同一手机号/uid)上限,默认 10 次;双闸关闭时就是每 IP 上限
     MG_AUTH_RATE_WINDOW  默认 60 秒
+    MG_AUTH_DUAL_BUCKET  1 = 打开「IP 桶 + 账号桶」双闸(默认关)
+    MG_AUTH_IP_RATE_MAX  双闸下每个 IP 的上限,默认 120;按「人数 × 3 / 分钟」估
+
+    为什么需要两档:只按 IP,机房(一个出口 IP)会把 40 个学生算成一个人,第 11 个就
+    429;只按账号,攻击者换手机号就能继续爆破。双闸各管一头 —— IP 桶当机房天花板,
+    账号桶才是爆破防护。默认关:它放宽的是"一个 IP 一分钟能过多少人",不该替所有人
+    默认放宽,考试当天加一个环境变量即可(见 docs/DEPLOY_PLAYBOOK.md §五之三)。
     """
-    global _AUTH_RATE_MAX, _AUTH_RATE_WINDOW, _auth_limiter
+    global _AUTH_RATE_MAX, _AUTH_RATE_WINDOW, _AUTH_IP_RATE_MAX, _AUTH_DUAL
+    global _auth_limiter, _auth_id_limiter
     _AUTH_RATE_MAX = int(_env_number("MG_AUTH_RATE_MAX", 10, 1))
     _AUTH_RATE_WINDOW = _env_number("MG_AUTH_RATE_WINDOW", 60.0, 1.0)
-    _auth_limiter = SlidingWindowLimiter(_AUTH_RATE_MAX, _AUTH_RATE_WINDOW)
+    _AUTH_DUAL = _env_flag("MG_AUTH_DUAL_BUCKET")
+    _AUTH_IP_RATE_MAX = _AUTH_RATE_MAX
+    if _AUTH_DUAL:
+        _AUTH_IP_RATE_MAX = int(_env_number("MG_AUTH_IP_RATE_MAX", DUAL_IP_RATE_DEFAULT, 1))
+        if _AUTH_IP_RATE_MAX < _AUTH_RATE_MAX:
+            # 写反了:IP 桶比单账号额度还小,每个人的额度都会被它压住,双闸退化成
+            # 一个更小的单桶。按账号上限纠正 —— 配置写错绝不能变成更弱的保护
+            log.warning(
+                f"[auth] MG_AUTH_IP_RATE_MAX={_AUTH_IP_RATE_MAX} 小于 MG_AUTH_RATE_MAX="
+                f"{_AUTH_RATE_MAX}:IP 桶是「整间机房每分钟过多少人」的天花板,不应小于"
+                f"单账号额度,已按 {_AUTH_RATE_MAX} 处理"
+            )
+            _AUTH_IP_RATE_MAX = _AUTH_RATE_MAX
+    _auth_limiter = SlidingWindowLimiter(_AUTH_IP_RATE_MAX, _AUTH_RATE_WINDOW)
+    _auth_id_limiter = (
+        SlidingWindowLimiter(_AUTH_RATE_MAX, _AUTH_RATE_WINDOW) if _AUTH_DUAL else None
+    )
+    if _AUTH_DUAL:
+        log.info(
+            f"[auth] 认证限流双闸:IP {_AUTH_IP_RATE_MAX} 次/{_AUTH_RATE_WINDOW:g}s"
+            f" + 账号 {_AUTH_RATE_MAX} 次/{_AUTH_RATE_WINDOW:g}s"
+            "(同一出口的不同账号互不影响,单账号爆破仍被拦)"
+        )
 
 
 def _demo_mode() -> bool:
@@ -113,13 +160,53 @@ def _guest_max() -> int:
 
 
 def _client_key(request: Request) -> str:
-    client = request.client
-    return client.host if client and client.host else "unknown"
+    """按 IP 限流用的 key:信任链判定统一交给 client_ip(见 docs/DEPLOY_PLAYBOOK.md §一.4)。
+
+    这里不再直接读 request.client.host —— 那个值对不对取决于 uvicorn 参数与反代头
+    是否同时正确,配错时会静默变成「全站一个桶」或「伪造 XFF 生效」。client_ip
+    会在对端不可信时忽略 XFF,并在塌陷时打一条可执行的 ERROR。
+    """
+    return client_ip.client_key(request)
+
+
+def reset_rate_limits() -> None:
+    """清空两个桶(测试基座用;`configure_rate_limit` 负责重建它们)。"""
+    _auth_limiter.reset()
+    if _auth_id_limiter is not None:
+        _auth_id_limiter.reset()
+
+
+def _too_many() -> HTTPException:
+    """429 的统一出口,带 Retry-After。
+
+    前端据此提示「稍等 N 秒」而不是「连不上服务器」—— 考场上那条误报会让老师去
+    重启后端,把正在答题的人一起掉线(与 chat.py 的 _rate_check 同一口径)。
+    """
+    return HTTPException(429, "rate limited",
+                         headers={"Retry-After": str(int(_AUTH_RATE_WINDOW) or 60)})
 
 
 def _auth_rate_check(request: Request) -> None:
+    """第一个桶:按客户端 IP。双闸关闭时它就是唯一的桶(10 次/60 秒)。"""
     if not _auth_limiter.allow(_client_key(request)):
-        raise HTTPException(429, "rate limited")
+        raise _too_many()
+
+
+def _auth_account_check(ident: str) -> None:
+    """第二个桶:按账号(手机号 / uid)。只在双闸开启时生效,关闭时是纯 no-op。
+
+    与 IP 桶分开,为的是「同一个出口 IP 后面 40 个学生互不影响」:IP 桶只当天花板
+    (MG_AUTH_IP_RATE_MAX),爆破防护落在单账号额度上。没有账号标识的请求(游客登录、
+    手机号格式非法)只受 IP 桶约束 —— 调用点自己决定传什么,不要拿原始输入当 key。
+    """
+    if _auth_id_limiter is None:
+        return
+    who = (ident or "").strip()
+    if not who:
+        return
+    if not _auth_id_limiter.allow(who):
+        log.warning("[auth] 同一账号的认证请求过密,已限流(IP 桶未触及)")
+        raise _too_many()
 
 
 def is_admin(rec: dict) -> bool:
@@ -290,6 +377,8 @@ async def register(request: Request) -> JSONResponse:
         raise HTTPException(400, "invalid password")
     if not _valid_phone(phone):
         raise HTTPException(400, "invalid phone")
+    # 双闸:手机号格式合法才建账号桶 —— 拿原始输入当 key 会让随机串撑大 key 空间
+    _auth_account_check(phone)
     if len(password) < 6:
         raise HTTPException(400, "weak password")
     if len(password) > PASSWORD_MAX:
@@ -316,6 +405,10 @@ async def login(request: Request) -> JSONResponse:
     if method in ("password", "code"):
         raw_phone = body.get("phone", "")
         phone = raw_phone.strip() if isinstance(raw_phone, str) else ""
+        if _valid_phone(phone):
+            # 双闸:只有手机号格式合法才算"某个账号";否则(垃圾输入)只按 IP 计,
+            # 避免给每个随手编的字符串都建一个桶
+            _auth_account_check(phone)
         found = store.find_user_by_phone(phone)
 
         if method == "password":
@@ -440,6 +533,8 @@ async def session(request: Request) -> JSONResponse:
 async def logout(request: Request) -> JSONResponse:
     # 登出与登录共用同一套按 IP 限流:否则伪造 token 刷这里可以无限触发
     # store 的写盘路径(即使 revoke_token 已改成「没删到不写」,也没有理由白跑)
+    # 双闸下这里只走 IP 桶,不加账号桶:登出没有账号可爆破,而「下课全班同时登出」
+    # 恰恰需要 IP 桶足够大(MG_AUTH_IP_RATE_MAX 就是那个天花板)。
     _auth_rate_check(request)
     # Bearer 与 Cookie 都清:轮换后两者可能不是同一个 token,只删一个会留下
     # 仍然可用的凭据(用户以为已登出,Cookie 还能继续用)
@@ -461,6 +556,9 @@ async def export_account(request: Request) -> JSONResponse:
     """导出后端持有的账号与用量元数据(学习正文在浏览器,由前端合并导出)。"""
     _auth_rate_check(request)
     rec = require_auth(request)
+    # 双闸:导出的成本比登录高,双闸开启后 IP 桶放宽到「机房天花板」,这里改用
+    # 账号桶(uid)兜住"登录一次后无限导出"
+    _auth_account_check(str(rec.get("uid") or ""))
     uid = str(rec.get("uid") or "")
     phone = str(rec.get("phone") or "")
     account = user_dto(rec)
@@ -492,6 +590,7 @@ async def delete_account(request: Request) -> JSONResponse:
     """
     _auth_rate_check(request)
     rec = require_auth(request)
+    _auth_account_check(str(rec.get("uid") or ""))
     body = await read_json_object(request)
     stored_password = rec.get("password_hash")
     if stored_password:

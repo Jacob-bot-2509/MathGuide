@@ -32,13 +32,13 @@ def clean_global_state(monkeypatch):
     # 图解语义校验会调真实模型;测试默认关闭,需要时在用例里显式开启。
     monkeypatch.setenv("MG_DIAGRAM_VERIFY", "0")
     session_cache.reset()
-    auth._auth_limiter.reset()
+    auth.reset_rate_limits()
     research_diagrams.reset_planner_breaker()
     diagram_metrics.reset()
     diagram_alerts.reset_for_tests()
     yield
     session_cache.reset()
-    auth._auth_limiter.reset()
+    auth.reset_rate_limits()
     research_diagrams.reset_planner_breaker()
     diagram_metrics.reset()
     diagram_alerts.reset_for_tests()

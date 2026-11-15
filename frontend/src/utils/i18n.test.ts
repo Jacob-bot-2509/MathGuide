@@ -56,9 +56,9 @@ describe('i18n 词条', () => {
     expect(zhKeys).toEqual(enKeys)
   })
 
-  it('词条总数与拆分前一致(955)', () => {
-    expect(Object.keys(ZH)).toHaveLength(955)
-    expect(Object.keys(EN)).toHaveLength(955)
+  it('词条总数与拆分前一致(956)', () => {
+    expect(Object.keys(ZH)).toHaveLength(956)
+    expect(Object.keys(EN)).toHaveLength(956)
   })
 
   it('源码 t() 引用的键都已定义', () => {

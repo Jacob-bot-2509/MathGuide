@@ -4,7 +4,7 @@
  */
 import type { UserInfo } from '@/stores/user'
 import { getToken, login as setUser, logout as clearUser } from '@/stores/user'
-import { claimLocalData, clearLearningData } from '@/stores/localData'
+import { claimLocalData } from '@/stores/localData'
 import type { AuthUserDto, LoginResponse } from '@/api/types'
 import { get, post, statusOf } from '@/api/http'
 import { AVATAR_PRESETS } from '@/utils/avatar'
@@ -123,7 +123,9 @@ export function logout(): void {
     })
   }
   clearUser()
-  // 会话/归纳本/回收站/语音缓存只存在本机:不清掉的话,
-  // 同一台设备换账号登录会看到上一位用户的学习数据
-  clearLearningData()
+  // 登出**不删**本机学习数据(会话/归纳本/回收站/语音缓存):
+  // 那些数据没有服务端副本,删了就是永久丢失 —— 同一账号重登必须原样看到自己的历史。
+  // 不串号靠的是 mg-data-owner 归属标记 + claimLocalData:
+  // 同一账号重登 → 标记相同,保留;换了另一个账号登录 → 登录时先清空上一位用户的。
+  // 共用设备要当场抹掉,走 设置 → 隐私与安全 → 清除本地数据(或注销账号,那里会显式清)。
 }

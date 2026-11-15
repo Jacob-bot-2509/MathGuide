@@ -6,8 +6,8 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.27.0'
-export const APP_STABLE_VERSION = 'v1.27.0'
+export const APP_VERSION = 'v1.27.1'
+export const APP_STABLE_VERSION = 'v1.27.1'
 export const APP_STABLE_DATE = '2026-11-15'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
@@ -51,6 +51,29 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '一个出口 IP 不再等于一个用户:新增双闸开关(默认关)。打开后「每 IP 10 次/分」拆成两层 —— 每个 IP 每分钟能过多少人(整间机房的天花板)与每个账号的额度分开计。40 人同时点登录时,默认单桶只有 10 个人进得去,双闸下 40 人全部通过,而单个账号的爆破防护仍是 10 次/分、一点没放宽;把上限直接调大则等于把每个人的保护一起削弱。',
+        en: 'One egress IP no longer means one user: an opt-in dual-bucket switch (off by default) splits “10 attempts per minute per IP” into a room-wide ceiling per IP and a separate per-account allowance. With the default single bucket only 10 of 40 students get in when a class taps “sign in” at once; with the switch all 40 pass while brute-force protection stays at 10 per minute per account. Simply raising the limit would weaken everyone’s protection instead.',
+      },
+      {
+        zh: '真实客户端 IP 收归一处判定,配错不再静默变形:配了反向代理却在配置里留空信任地址(于是全站共享一个 10 次/分的桶)、或写成通配符(等于把限流关掉,客户端可自行伪造)时,后端现在直接拒绝启动并说明该填什么;启动命令也必须关掉 uvicorn 自带的代理头改写,否则多挂一层 CDN 会按节点分桶。',
+        en: 'Real client IP is now decided in one place, and a wrong setting no longer deforms silently: leaving the trusted-proxy list empty behind a reverse proxy (everyone sharing one 10-per-minute bucket) or using a wildcard (which effectively disables the limit, letting clients forge their address) now makes the backend refuse to start and say what to fill in. The start command must also disable uvicorn’s own proxy-header rewriting, or a second layer such as a CDN buckets users by node.',
+      },
+      {
+        zh: '登录被限流时不再说“连不上服务器”:以前 429 与网络故障共用一条提示,考场上的第一反应是去重启后端,而重启会让正在答题的人全部掉线。现在明说“登录太频繁,请约 1 分钟后再试”,并提示同一网络里多人同时登录会排队;注册与第三方登录同样覆盖。',
+        en: 'Being rate-limited no longer reads as “cannot reach the server”: a 429 used to share one message with network failures, and the natural reaction in a lab was to restart the backend, which drops everyone who is answering. It now says “too many login attempts — wait about a minute” and explains that a whole room signing in at once queues up; registration and third-party sign-in are covered too.',
+      },
+      {
+        zh: '退出登录不再删除本机学习数据:会话、归纳本、回收站与语音缓存都没有服务端副本,删掉就是永久丢失,而用户以为它们在账号里。数据只在换另一个账号登录(先清上一位用户的,避免串号)、主动“清除本地数据”或注销账号时才删除;隐私说明与退出确认文案同步改写。',
+        en: 'Signing out no longer deletes local study data: conversations, the notebook, the trash and the speech cache have no server-side copy, so deleting them loses them for good while users assume they live in their account. Data is now removed only when another account signs in on the device (clearing the previous user’s, which is what actually prevented mix-ups), when the user clears local data, or on account deletion; the privacy text and the sign-out confirmation were rewritten to match.',
+      },
+    ],
+  },
+  {
+    version: 'v1.27.0',
+    date: '2026-11-15',
+    status: 'released',
     items: [
       {
         zh: '部署验收不再靠手敲命令:新增 5 个执行器 —— 25 项上机自检(smoke_deploy)、四类模型角色与故障切换(check_llm)、长文档/并发/首字延迟(load_probe)、TLS/安全头/Cookie 与告警投递(proxy_check)、数据库备份并当场演练恢复(db_backup --drill)。每一项都以明确的 PASS / FAIL / SKIP 收尾,不再靠“看着像好了”。',
@@ -625,8 +648,8 @@ export const PRIVACY: LegalDoc = {
       title: { zh: '保存期限', en: 'Retention' },
       bullets: [
         {
-          zh: '浏览器数据:保留到你清除或退出登录。退出登录会清理本机会话、归纳、回收站与语音缓存;待办按账号分桶保留,可在「隐私与安全」一键清除。',
-          en: 'Browser data: kept until you clear it or sign out. Signing out clears local conversations, notebook, trash and speech cache; to-dos remain in their account bucket and can be cleared under Privacy & Security.',
+          zh: '浏览器数据:保留到你主动清除,或换另一个账号登录时自动清空上一位用户的数据。退出登录不删本机会话、归纳、回收站与语音缓存(同一账号重登仍在);待办按账号分桶保留,可在「隐私与安全」一键清除。',
+          en: 'Browser data: kept until you clear it or another account signs in on this device. Signing out does not delete local conversations, notebook, trash or speech cache (the same account sees them again after signing in); to-dos remain in their account bucket and can be cleared under Privacy & Security.',
         },
         {
           zh: '登录令牌:24 小时后失效。',
@@ -658,8 +681,8 @@ export const PRIVACY: LegalDoc = {
           en: 'Settings → Privacy & Security: manage album, voice and personalization switches, and clear local learning data.',
         },
         {
-          zh: '退出登录:清除本机学习数据并吊销当前令牌。',
-          en: 'Sign out: clears local learning data and revokes the current token.',
+          zh: '退出登录:吊销当前令牌,本机学习数据保留(同一账号重登仍在;换账号登录时自动清空上一位用户的数据),共用设备请再点「清除本地数据」。',
+          en: 'Sign out: revokes the current token and keeps local learning data (the same account sees it again; another account signing in clears it), so on a shared device also use Clear local data.',
         },
         {
           zh: '搜索范围:关闭不想查询的检索平台。',

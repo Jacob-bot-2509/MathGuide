@@ -71,6 +71,7 @@ backend/
   session_cache.py # 教材/摘要缓存,键 = (uid, sessionId),防止跨用户撞号
   http_utils.py    # JSON 请求体解析:2 MiB 上限(413)与 400 语义
   rate_limit.py    # 滑动窗口限流(聊天/认证共用,自动清理不活跃 key)
+  client_ip.py     # 真实客户端 IP 的唯一判定点(MG_TRUSTED_PROXIES 白名单 + 伪造 XFF + 塌陷告警)
   chat.py      # POST /api/chat/stream:SSE 流式下发 + RAG 编排
                # (安全外壳:输入上限/限流/用量记账 → 路由 → LLM/直答)
   usage.py     # 用量统计(电表):按 uid 记账、旧记录 PII 迁移、按账号导出/删除
@@ -380,15 +381,22 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
   白名单;未配置则默认无人可访问(403)。
 - **请求体上限**:所有 JSON 接口 2 MiB,超限 413;昵称/头像/密码等字段另有长度上限。
 - **认证限流**:登录/注册按客户端 IP 60 秒 10 次;聊天/语音/导出按用户 60 秒 6 次。
-  反向代理部署时需让 uvicorn 正确获取客户端 IP(`--proxy-headers` 且仅信任自家代理),
-  否则所有请求会被当成同一个 IP。
+  反代部署时客户端 IP 由 `MG_TRUSTED_PROXIES` 决定(`client_ip.py` 是唯一判定点:
+  对端不在白名单 → `X-Forwarded-For` 一律忽略;在 → 取右起第一个非受信地址),
+  启动命令要加 `--no-proxy-headers`(uvicorn 的 `--proxy-headers` 默认开着,会抢先改写)。
+  配错时不会报错而是**全员塌成一个桶**,所以通配/空白名单会拒绝启动、运行时打 ERROR,
+  详见 `docs/DEPLOY_PLAYBOOK.md` §一.4。
 - **密码**:新账号用 PBKDF2-HMAC-SHA256(20 万轮);旧版单轮 SHA-256 记录在登录成功后
   自动升级,并全程用 `secrets.compare_digest` 比较。
 - **token 落盘**:SQLite `tokens` 表只存 token 的 SHA-256(`sha256:` 前缀),不存明文;
   旧 `tokens.json` 在首次建库时导入一次并保留备份,可能含明文令牌,应限制文件访问;已签发 token 不需要重新登录。
 - **测评注册**:`MG_DEMO_MODE=0` 后开放注册关闭;配置 `MG_INVITE_CODES` 后,
   持邀请码的手机号仍可注册。固定验证码与游客登录保持关闭。
-- **认证限流**:`MG_AUTH_RATE_MAX` / `MG_AUTH_RATE_WINDOW` 可调;多人共用出口 IP 时调大。
+- **认证限流**:`MG_AUTH_RATE_MAX` / `MG_AUTH_RATE_WINDOW` 可调;多人共用出口 IP 时
+  打开双闸 `MG_AUTH_DUAL_BUCKET=1` —— `MG_AUTH_RATE_MAX` 变成**单账号**(同一手机号/uid)
+  的额度,`MG_AUTH_IP_RATE_MAX`(默认 120)是**每个 IP 的整间机房天花板**。这样同一出口的
+  不同账号互不影响,而单账号爆破仍被锁住;比直接调大 `MG_AUTH_RATE_MAX` 安全。
+  超限统一回 429 + `Retry-After`。
 - **留存清理**:`MG_ACCOUNT_TTL_DAYS` 删除长期未登录账号(管理员白名单保留),
   `MG_USAGE_TTL_DAYS` 清理过期用量;默认 `0` 关闭,启动时执行。清理会同步处理旧备份;
   备份无法读取或修改时保留账号以便修复后重试。
