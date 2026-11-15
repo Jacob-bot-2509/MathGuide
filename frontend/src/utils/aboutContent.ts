@@ -6,9 +6,9 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.26.0'
-export const APP_STABLE_VERSION = 'v1.26.0'
-export const APP_STABLE_DATE = '2026-11-14'
+export const APP_VERSION = 'v1.26.1'
+export const APP_STABLE_VERSION = 'v1.26.1'
+export const APP_STABLE_DATE = '2026-11-15'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
 export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
@@ -51,6 +51,29 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '修掉后端测试在 Linux 上的无声挂起:一条资源限制用例把 512MB 地址空间上限套到了测试进程自己身上,之后任何线程创建都会永久卡住;Windows 上那个函数本就是空操作,所以问题一直被“Windows 线是绿的”掩盖。',
+        en: 'Fixed a silent hang in the backend test suite on Linux: a resource-limit test was putting a 512 MB address-space ceiling on the test process itself, so any later thread creation blocked forever; that function is a no-op on Windows, which is why a green Windows job kept hiding it.',
+      },
+      {
+        zh: '导出 PDF 失败不再静默:日志会带浏览器最后一次 stderr 尾部,而不是只说“未产出 PDF”;容器或 Ubuntu 23.10+ 这类沙箱受限环境可用 MG_EDGE_NO_SANDBOX=1 显式放开(默认关闭,生产仍保留沙箱);另加“这台机器真的能打印出 PDF 吗”的探针,测试不再把环境缺能力报成渲染回归。',
+        en: 'PDF export failures are no longer silent: the log carries the tail of the browser stderr instead of just “no PDF produced”; sandbox-restricted hosts such as containers or Ubuntu 23.10+ can opt in with MG_EDGE_NO_SANDBOX=1 (off by default, production keeps the sandbox); a new probe answers whether the machine can really print a PDF, so tests no longer report a missing environment capability as a rendering regression.',
+      },
+      {
+        zh: '修掉开机后第一条图解读取告警被吞掉:此前用 0.0 当“从未发送”的哨兵,而 Windows 上的单调时钟是开机秒数,刚开机的机器会把冷却窗口内的首条告警静默丢弃。',
+        en: 'Fixed the first diagram alert being swallowed right after boot: “never sent” used 0.0 as its sentinel, and on Windows the monotonic clock counts seconds since boot, so a freshly started machine silently dropped the first alert that fell inside the cooldown window.',
+      },
+      {
+        zh: 'CI 从“看着绿”变成“真的绿”:Python 3.14 线由“只报信号、不拦合并”转为正式门禁(它曾在同一条流水线上失败却没人拦);后端 job 加 20 分钟超时,挂起时自动打印所有线程的调用栈,不再出现挂 6 小时还查不到卡在哪。',
+        en: 'CI went from “looks green” to “is green”: the Python 3.14 line is now a real gate instead of a signal-only job that never blocked a merge (it had been failing on the very same pipeline); the backend job has a 20-minute timeout and dumps every thread stack automatically on a hang, instead of six hours of silence with no clue where it stalled.',
+      },
+    ],
+  },
+  {
+    version: 'v1.26.0',
+    date: '2026-11-14',
+    status: 'released',
     items: [
       {
         zh: '登录不再每天掉线:会话改为滑动续期 —— Cookie 记 30 天,token 24 小时硬上限,剩余不足 20% 时静默换新(同一账号 5 分钟内不重复换),登出时同时吊销 Cookie 与 Bearer。',
