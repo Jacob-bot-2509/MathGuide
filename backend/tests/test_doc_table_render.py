@@ -11,7 +11,8 @@ import docgen
 import math_render
 
 
-@pytest.mark.skipif(not doc._find_edge(), reason="Edge is unavailable")
+@pytest.mark.skipif(not doc.pdf_render_available(),
+                    reason="浏览器无法产出 PDF(环境缺渲染能力)")
 def test_word_ruled_array_keeps_borders_and_neighboring_math():
     tex = r"\begin{array}{c|c}x&y\\\hline 2&-5\\p&-14\end{array}"
     document = {"title": "Math", "sections": [{"heading": "H", "paragraphs": [

@@ -114,8 +114,8 @@ def test_pdf_renders_real_math_with_edge():
 
     import pytest
     from pypdf import PdfReader
-    if not doc._find_edge():
-        pytest.skip("Edge is unavailable")
+    if not doc.pdf_render_available():
+        pytest.skip("浏览器无法产出 PDF,环境缺渲染能力")
     document = {"title": "Test", "sections": [{"heading": "Math", "paragraphs": [
         r"Inline $x^2$; \[\frac{1}{2}\] and \begin{align*}a&=b\\c&=d\end{align*}",
         "\u7b54\u6848: " + r"\frac{10}{11}",
@@ -137,8 +137,8 @@ def test_pdf_renders_source_cross_reference_macro():
 
     import pytest
     from pypdf import PdfReader
-    if not doc._find_edge():
-        pytest.skip("Edge is unavailable")
+    if not doc.pdf_render_available():
+        pytest.skip("浏览器无法产出 PDF,环境缺渲染能力")
     text = r"\begin{align*}x&=\knowl{./ref/path}{\text{4.1.3}}\end{align*}"
     document = {"title": "T", "sections": [{"heading": "H", "paragraphs": [text]}]}
     data = doc.render_pdf_bytes(document)
@@ -153,8 +153,8 @@ def test_pdf_renders_markdown_escaped_ams_environment():
 
     import pytest
     from pypdf import PdfReader
-    if not doc._find_edge():
-        pytest.skip("Edge is unavailable")
+    if not doc.pdf_render_available():
+        pytest.skip("浏览器无法产出 PDF,环境缺渲染能力")
     text = r"\begin{align\*}\dblInt\_{\cS_t}\\,\dee{x}\\\ &=15\pi\end{align\*}"
     document = {"title": "T", "sections": [{"heading": "H", "paragraphs": [text]}]}
     data = doc.render_pdf_bytes(document)
@@ -169,8 +169,8 @@ def test_pdf_renders_doubly_escaped_formulas_and_preserves_failed_source():
 
     import pytest
     from pypdf import PdfReader
-    if not doc._find_edge():
-        pytest.skip("Edge is unavailable")
+    if not doc.pdf_render_available():
+        pytest.skip("浏览器无法产出 PDF,环境缺渲染能力")
     document = {"title": "Test", "sections": [{"heading": "H", "paragraphs": [
         r"Plane \\(\alpha\\), lines \\(a\\), \\(b\\), angle \\(30^{\circ}\\).",
         r"Triangle $\triangle\(\triangle ABC\\)$; choice $\($ $\)$; $\frac{\cancelto{2}{10}}{\cancelto{3}{12}}$",

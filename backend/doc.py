@@ -11,6 +11,7 @@ frontend/node_modules 里的同一份,渲染行为与聊天页完全一致。
 from __future__ import annotations
 
 import asyncio
+import functools
 import html as html_mod
 import json
 import os
@@ -338,40 +339,92 @@ def _pdf_timeout() -> float:
         return PDF_TIMEOUT_DEFAULT
 
 
+def _edge_compat_flags() -> tuple[str, ...]:
+    """容器/CI 上 Chromium"有二进制但打印不出 PDF"的补救参数。
+
+    Ubuntu 23.10+ 默认 `kernel.apparmor_restrict_unprivileged_userns=1`,非 root 起不来
+    sandbox,浏览器直接退出(命令返回非 0、没有产物)。生产渲染的是模型生成内容,
+    沙箱该留着,所以**不默认关**,只留显式开关。
+    """
+    raw = (os.getenv("MG_EDGE_NO_SANDBOX") or "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return ("--no-sandbox", "--disable-dev-shm-usage")
+    return ()
+
+
+def _stderr_tail(proc: object, limit: int = 300) -> str:
+    """取浏览器 stderr 尾部:不产出 PDF 时,真正的原因只在这里。"""
+    raw = getattr(proc, "stderr", None) or b""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    return " ".join(str(raw).split())[-limit:]
+
+
 def _html_to_pdf(html_path: Path, pdf_path: Path) -> bytes | None:
     """浏览器 headless 打印 HTML 为 PDF;失败返回 None(由调用方决定兜底)。
 
     `--headless` 参数按"新 → 旧"回退:新版 chromium/Edge 只认 `--headless=new`,
     部分发行版仍是老的 `--headless`。写死其中一个,会在另一半机型上**静默不产出 PDF**
     (命令返回 0、没有报错、就是没文件),所以这里逐个尝试。
+
+    沙箱受限的环境(容器 / Ubuntu 23.10+ 的 CI 镜像)连 headless 都起不来,只有
+    `MG_EDGE_NO_SANDBOX=1` 时才追加 `--no-sandbox` 那一档。
     """
     edge = _find_edge()
     if edge is None:
         log.info("[doc] 未找到可用的 headless 浏览器(MG_EDGE_PATH / chromium / msedge)")
         return None
     timeout = _pdf_timeout()
-    for flag in ("--headless=new", "--headless"):
+    compat = _edge_compat_flags()
+    attempts = [("--headless=new",), ("--headless",)]
+    if compat:
+        attempts += [("--headless=new", *compat), ("--headless", *compat)]
+    stderr_tail = ""
+    for flags in attempts:
         pdf_path.unlink(missing_ok=True)
         cmd = [
-            edge, flag, "--disable-gpu", "--no-pdf-header-footer",
+            edge, *flags, "--disable-gpu", "--no-pdf-header-footer",
             f"--print-to-pdf={pdf_path}", "--virtual-time-budget=8000",
             html_path.as_uri(),
         ]
         try:
-            subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+            proc = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
             # 超时说明这一档参数被接受了(只是慢),换参数没有意义
-            log.warning(f"[doc] 浏览器转 PDF 超时({timeout:.0f}s,参数 {flag})")
+            log.warning(f"[doc] 浏览器转 PDF 超时({timeout:.0f}s,参数 {' '.join(flags)})")
             return None
+        stderr_tail = _stderr_tail(proc) or stderr_tail
         if not pdf_path.is_file():
             continue  # 该参数不被支持 → 换下一档
         data = pdf_path.read_bytes()
         if not data.startswith(b"%PDF"):
-            log.info(f"[doc] 产物不是合法 PDF(参数 {flag})")
+            log.info(f"[doc] 产物不是合法 PDF(参数 {' '.join(flags)})")
             continue
+        if flags != attempts[0]:
+            log.info(f"[doc] 浏览器需要兼容参数才能产出 PDF: {' '.join(flags)}")
         return data
-    log.info("[doc] 浏览器未产出 PDF(已尝试 --headless=new 与 --headless)")
+    tried = " / ".join(" ".join(flags) for flags in attempts)
+    log.info(f"[doc] 浏览器未产出 PDF(已尝试 {tried});"
+             f"最后一次 stderr 尾部: {stderr_tail or '空'}")
     return None
+
+
+@functools.lru_cache(maxsize=1)
+def pdf_render_available() -> bool:
+    """这台机器能不能**真的**产出 PDF(有浏览器二进制 ≠ 能打印)。
+
+    用例用它决定 skip:CI 镜像里 chromium 往往在,但沙箱/内核限制让它打印不出来 ——
+    那是环境缺能力,不是渲染回归。探测只做一次,结果进日志。
+    """
+    if _find_edge() is None:
+        return False
+    with tempfile.TemporaryDirectory(prefix="mg-doc-probe-") as tmp:
+        base = Path(tmp).resolve()
+        html_path = base / "probe.html"
+        pdf_path = base / "probe.pdf"
+        html_path.write_text("<!doctype html><html><body>probe</body></html>",
+                             encoding="utf-8")
+        return _html_to_pdf(html_path, pdf_path) is not None
 
 
 def render_pdf_bytes(document: dict, lang: str = "zh", brand: str | None = None) -> bytes | None:
