@@ -183,6 +183,7 @@ cd backend && python tools/check_pdf.py           # RESULT: OK
 | 3.14 的 analysis 依赖 | scipy/pandas/statsmodels 无 cp314 wheel → 该解释器下 `analysis_regression` 整模块 skip；CI 有非阻塞探测，出 wheel 会提示摘豁免 |
 | 覆盖率 | 后端 **90.06%**（1537 passed）、前端 **97.7%**（51 文件 1021 条）；逐文件达标 146/146，口径见 `COVERAGE_PLAN.md` §2 |
 | 单文件最大 | `ChatWorkspace.vue` 3056 行（已从 3944 降） |
+| 题库搬上去却出不了题 | 6,776 题全部标在 `research` 层，而 `MG_EXERCISE_TIERS` 默认 `safe` → 计划接口 `available` 三项全 0、组卷回 422 `no_evidence`，**无报错无日志**。投放后按 `deploy/README.md` §0 核对（需 `MG_EXERCISE_TIERS=safe,research`） |
 
 ## 七、回滚
 

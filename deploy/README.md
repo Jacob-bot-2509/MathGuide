@@ -2,6 +2,71 @@
 
 目标:公网 HTTPS + 关闭演示通道 + 保留测评注册入口 + CSP。
 
+## 0. 搬运清单:源码包里没有的东西
+
+Release 的源码包是 `git archive` 产物,`.gitignore` 里的内容一律不在包内
+(`backend/data/`、`.env.local`、`frontend/dist`、`node_modules`、`releases/`)。
+所以「解压完能跑」不等于「解压完功能齐全」:下面这些要**另外搬**,而且**缺了都不报错**。
+
+| 物 | 目标路径 | 体积 | 缺了会怎样 | 怎么搬 |
+| --- | --- | --- | --- | --- |
+| 习题题库 6,776 题 | `backend/data/exercises/bilingual/all.jsonl` | 20.3 MiB | 有两层静默:①文件不存在时 `exercise_docgen._store()` 退回 `data/exercises/staging/`(同样不在包里)→ 空库;②**即使文件在**,6,776 题也全是 `research` 层,而 `MG_EXERCISE_TIERS` 默认 `safe` → 仍然是 0 题。表现是组卷接口回 **422 `no_evidence`**(不是 500,日志也没有告警),25 项验收不覆盖这条 | `scp` / `rsync -a` 拷文件,**并在 `.env.local` 设 `MG_EXERCISE_TIERS=safe,research`**(见 §1),两条缺一不可 |
+| 环境变量与密钥 | `backend/.env.local` | — | 演示通道照旧、邀请码与额度缺失;LLM 无 key 时问答**静默退化**为「知识库直答」——不报错,但答不了知识库以外的问题 | 按 §1 在服务器上**新建**;别整份拷本机的(那份多半是 demo 配置) |
+| 前端产物 | `frontend/dist/` | 约 6 MB | 反代没有文件可发,首页 404 | 在服务器上 `npm ci && npm run build`(§2);不要把另一台机器编出来的包拷来混用 |
+| 账号库(仅迁移旧环境) | `backend/data/mathguide.db` | 视账号量 | 全新部署**不需要**:首次启动自动建库 | 用 `python tools/db_backup.py` 出一致性快照再搬;**不要 `cp`**,WAL 里的最后一段会丢 |
+| 文献与上传件(仅迁移) | `backend/data/research/` | 视上传量 | 检索历史与用户上传的 PDF 全部丢失 | `rsync -a` |
+| embedding 缓存(可选) | `backend/knowledge/.embeddings.json` | 视知识量 | 不搬也能用:首次装载自动重建,但要**重新计费** | 只在启用 `MG_EMBED_*` 时有意义;知识库改过则不必搬,反正会重算 |
+
+### 解包:Windows 上别用自带 `tar`
+
+`backend/knowledge/` 里有一个含希腊字母的文件名(`Bound-sets-for-a-class-of-φ-Laplacian-op.md`,U+03C6)。
+Windows 自带的 bsdtar 会按本地代码页改写文件名 —— 实测:
+
+```text
+$ tar -xzf MathGuide-v1.27.0-source.tar.gz -C tmp
+$ python verify_manifest.py tmp/MathGuide-v1.27.0
+MISSING  backend/knowledge/Bound-sets-for-a-class-of-??-Laplacian-op.md
+checked=632 failures=1
+```
+
+内容没问题,只是名字被改写。同一份包改用 Python 的 `tarfile`(或 Linux 的 GNU tar,按 UTF-8 处理):
+
+```bash
+python -c "import tarfile,sys; tarfile.open(sys.argv[1]).extractall('.')" MathGuide-v<版本>-source.tar.gz
+python verify_manifest.py MathGuide-v<版本>      # 期望: checked=<MANIFEST 条数> failures=0
+```
+
+Python 3.14 会给 `DeprecationWarning`(要求显式 `filter=`),加 `filter='data'` 即可,校验结果不变。
+
+### 搬完核对(30 秒)
+
+```bash
+cd backend
+python -c "print(sum(1 for l in open('data/exercises/bilingual/all.jsonl',encoding='utf-8') if l.strip()))"
+# 期望: 6776
+ls knowledge/*.md | wc -l
+# 期望: 24
+
+# 分层是否生效:计划接口的 available 就是「当前配置下能出多少题」
+curl -s -X POST http://127.0.0.1:8000/api/doc/exercise/plan \
+     -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
+     -d '{"count":10}'
+# 期望 "available":{"zh":6776,"en":6776,"both":6776};三项都是 0 就是文件没放对、或 MG_EXERCISE_TIERS 没设成 safe,research
+```
+
+题库是**热加载**的:`_store()` 按 `(mtime, size)` 判断要不要重读,所以拷进去**不用重启进程**
+(改 `MG_EXERCISE_TIERS` 要重启 —— 那是启动时读的环境变量)。
+
+请在「第一个人点习题」之前把这三条跑掉 —— 空库是静默的,等到用户报「没有题目」才查就晚了。
+
+### 两个容易漏的写权限
+
+- systemd 模板里 `ProtectSystem=strict` + `ReadWritePaths=.../backend/data`,**默认只有 `data/` 可写**。
+- 启用 `MG_EMBED_*`(向量检索)时,Embedder 要把缓存写到 `backend/knowledge/.embeddings.json`:
+  那个目录默认只读,写入失败只打一条 WARN(`缓存写不进去不影响本次检索,但要让人知道`),
+  后果是**每次重启都重新向量化、重复计费**。要用 embedding 就在 unit 里加一行
+  `ReadWritePaths=/srv/mathguide/backend/knowledge`,要么明确不启用。
+
 ## 1. 后端配置
 
 在 `backend/.env.local` 至少设置:
@@ -20,6 +85,8 @@ MG_ADMIN_PHONES=你的手机号
 # 可选:自动留存清理(0=关闭)
 # MG_ACCOUNT_TTL_DAYS=180
 # MG_USAGE_TTL_DAYS=90
+# 组卷题库分层:现题库 6,776 题全在 research 层,默认只加载 safe → 不设这项就一题也出不了(§0)
+MG_EXERCISE_TIERS=safe,research
 # 反向代理时由 Caddy/Nginx 传 X-Forwarded-Proto,后端会按 HTTPS 发 HSTS
 # MG_ENABLE_HSTS=1
 ```
@@ -115,7 +182,8 @@ python tools/db_backup.py --drill             # 备份后立刻恢复一份副�
 
 ## 5. 进程与日志
 
-- 参考 `deploy/mathguide.service` 用 systemd 托管后端;`data/` 是唯一可写目录。
+- 参考 `deploy/mathguide.service` 用 systemd 托管后端;默认只有 `data/` 可写
+  (启用 `MG_EMBED_*` 时 `knowledge/` 也要,否则向量缓存写不进去、每次重启重算,见 §0)。
 - **必须单 worker**:限流器(`rate_limit`)、会话缓存(`session_cache`)、聊天检索缓存
   都放在进程内存里。加 `--workers 4` 会让"每账号 6 次/分"变成 24 次/分、
   缓存互相看不见(同一用户切到别的 worker 就像换了台机器)。

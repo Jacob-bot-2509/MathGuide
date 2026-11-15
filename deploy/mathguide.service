@@ -1,6 +1,7 @@
 # MathGuide 后端 systemd 示例。
 # 路径按实际部署修改:User / WorkingDirectory / EnvironmentFile / ExecStart。
 # data/ 是唯一需要写的目录,其余只读;umask 让数据文件默认不对其他用户开放。
+# 例外:启用 MG_EMBED_*(向量检索)时 knowledge/ 也要可写,见下面的 ReadWritePaths。
 # 双域部署时在 EnvironmentFile(.env.local)里设置:
 #   MG_COOKIE_DOMAIN=.example.com
 # 否则两个子域各自登录,共享登录不生效。
@@ -27,6 +28,9 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/srv/mathguide/backend/data
+# 启用 MG_EMBED_*(向量检索)时取消下面这行注释:否则 knowledge/.embeddings.json 写不进去,
+# 每次重启都要重新向量化全部知识片段(日志只有一条 WARN,账单上看不出原因)。
+# ReadWritePaths=/srv/mathguide/backend/knowledge
 StandardOutput=append:/var/log/mathguide/backend.log
 StandardError=append:/var/log/mathguide/backend.log
 
