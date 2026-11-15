@@ -15,7 +15,9 @@ jobs:
     # 兜底:Linux 线曾出现过持仓 6 小时(默认上限)的情况,超过 20 分钟直接判失败,
     # 别再让一条挂死的 job 卡住整条流水线与 PR 状态。
     timeout-minutes: 20
-    # 前瞻线只提供信号,不阻塞合并(见 matrix 里 3.14 项的说明)。
+    # 逃生闸门,给**未来的**前瞻解释器(如 3.15)用:新增矩阵项时写 `experimental: true`,
+    # 该 job 失败只作信号、不阻塞合并。固定基线(3.13 / 3.14)不加这个标记 —— 红了就是真红。
+    # 教训:一个"红着也没人管"的 job 等于没有这条线(v1.26.0 曾靠 Windows 线的假绿掩盖 Linux 挂起)。
     continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
@@ -25,18 +27,19 @@ jobs:
           - os: ubuntu-latest
             python: "3.13"
             cov_floor: 85
-          # 前瞻环境:本地开发已在 3.14 上跑,提前发现解释器差异。
+          # 3.14 是本地开发在用的解释器,这条线必须当真:它红了就说明本机能跑的东西 CI 跑不了。
           # analysis 三件套(scipy 1.14.1 / pandas 2.2.3 / statsmodels 0.14.4)没有 cp314 wheel,
           # pip 会退化成源码编译,再因缺 OpenBLAS 报 "Dependency OpenBLAS not found" 直接失败,
           # 整条线连测试都跑不起来。所以这里只装主依赖与测试依赖:analysis_regression 被
           # importorskip 跳过,它的覆盖由两条 3.13 基线守着;覆盖率不可比,故不设门槛。
-          # 实测该线还有 8 条环境性失败(缺 numpy / 无浏览器 / 线程受限),因此标为 experimental
-          # ——信号照收,但不阻塞合并。
+          # 2026-11-15:此前挂着 8 条"环境性失败"、故标 experimental;今天两类缺口都补上了
+          # (缺 numpy 的 worker 用例改 pytest.importorskip,浏览器打印由 pdf_render_available
+          # 区分"有二进制"与"真能出 PDF"),该线已全绿,因此摘掉 experimental 转为门禁。
+          # 将来要前瞻 3.15 时:新增一条矩阵项并写 `experimental: true`,不要动这一条。
           - os: ubuntu-latest
             python: "3.14"
             skip_analysis: true
             cov_floor: 0
-            experimental: true
           # 项目是 Windows 优先(dev.bat / GBK 控制台 / 路径处理),必须有一条 Windows 线
           - os: windows-latest
             python: "3.13"
