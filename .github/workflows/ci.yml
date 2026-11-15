@@ -19,12 +19,20 @@ jobs:
           # 主环境:CI 基线
           - os: ubuntu-latest
             python: "3.13"
-          # 前瞻环境:本地开发已在 3.14 上跑,提前发现解释器差异
+            cov_floor: 85
+          # 前瞻环境:本地开发已在 3.14 上跑,提前发现解释器差异。
+          # analysis 三件套(scipy 1.14.1 / pandas 2.2.3 / statsmodels 0.14.4)没有 cp314 wheel,
+          # pip 会退化成源码编译,再因缺 OpenBLAS 报 "Dependency OpenBLAS not found" 直接失败,
+          # 整条线连测试都跑不起来。所以这里只装主依赖与测试依赖:analysis_regression 被
+          # importorskip 跳过,它的覆盖由两条 3.13 基线守着;覆盖率不可比,故不设门槛。
           - os: ubuntu-latest
             python: "3.14"
+            skip_analysis: true
+            cov_floor: 0
           # 项目是 Windows 优先(dev.bat / GBK 控制台 / 路径处理),必须有一条 Windows 线
           - os: windows-latest
             python: "3.13"
+            cov_floor: 85
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,7 +41,11 @@ jobs:
       - name: Install dependencies
         # analysis 依赖必须装:analysis_regression 的测试用 importorskip 守着,
         # 不装就整个文件被静默跳过 —— 覆盖率永远是 0 且没人会发现。
+        if: ${{ !matrix.skip_analysis }}
         run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt -r backend/requirements-analysis.txt
+      - name: Install dependencies (preview, 跳过 analysis)
+        if: ${{ matrix.skip_analysis }}
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
       - name: Lint (ruff)
         working-directory: backend
         run: ruff check .
@@ -43,7 +55,8 @@ jobs:
         working-directory: backend
         # 覆盖率门槛只用来**防倒退**(实测 90%,门槛设 85%)。
         # 单文件是否达标看 docs/COVERAGE_PLAN.md §2 的类别线,不看这个总数。
-        run: python -m pytest -q --cov --cov-report=term-missing --cov-fail-under=85
+        # 门槛按矩阵项取值:3.14 前瞻线缺 analysis 依赖,覆盖率不可比,取 0(即不设门槛)。
+        run: python -m pytest -q --cov --cov-report=term-missing --cov-fail-under=${{ matrix.cov_floor }}
 
   frontend:
     name: frontend (node 22)
