@@ -165,6 +165,16 @@ def _docx_bytes(document: dict, lang: str) -> bytes:
 
 
 async def _render(document: dict, lang: str, fmt: str, prefix: str) -> Response:
+    """导出总入口:把"并发已满"翻成 429,其余失败沿用原语义(不吞)。"""
+    try:
+        return await _render_inner(document, lang, fmt, prefix)
+    except doc.PdfBusy as exc:
+        log.info(f"[docgen] 导出被并发闸门拒绝({fmt}): {exc}")
+        raise HTTPException(429, "pdf export busy, retry later",
+                            headers={"Retry-After": str(doc.PdfBusy.retry_after)}) from exc
+
+
+async def _render_inner(document: dict, lang: str, fmt: str, prefix: str) -> Response:
     if fmt == "pdf":
         brand = "问题解答 / Q&A" if prefix == "mg-qa" else "文档 / DOCUMENT"
         data = await asyncio.to_thread(doc.render_pdf_bytes, document, lang, brand)

@@ -11,6 +11,7 @@ frontend/node_modules 里的同一份,渲染行为与聊天页完全一致。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import html as html_mod
 import json
@@ -20,6 +21,7 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -360,8 +362,144 @@ def _stderr_tail(proc: object, limit: int = 300) -> str:
     return " ".join(str(raw).split())[-limit:]
 
 
-def _html_to_pdf(html_path: Path, pdf_path: Path) -> bytes | None:
+# --- 导出并发闸门 -----------------------------------------------------------
+# 每次导出都会起一个 headless 浏览器进程(实测单个常驻/峰值 100–300MB)。N 个用户
+# 同时点导出 = N 个浏览器,低配 VPS 会被直接打穿 —— 表现不是"导出变慢",而是 OOM
+# 把整个 uvicorn 带走,所有人都用不了。所以给"同时启动的浏览器数"设硬上限:
+# 超出的请求进有限队列,队列也满就**立刻**回 429(带 Retry-After),绝不无限排队
+# (排队不花内存,但用户的连接会挂住,到最后还是超时,不如早点说清楚)。
+#
+# 为什么闸门放在 `_html_to_pdf` 里面:它是所有导出路径(综述导出、问答/组卷导出、
+# Word 数组公式转图)唯一的浏览器出口。放在路由上,新加一条导出接口就会漏。
+PDF_CONCURRENCY_DEFAULT = 2
+PDF_QUEUE_DEFAULT = 8
+PDF_QUEUE_WAIT_DEFAULT = 15.0
+
+
+class PdfBusy(RuntimeError):
+    """导出并发已满:调用方应回 429(带 Retry-After),不要继续起浏览器。
+
+    刻意**不**返回 None:None 在调用链里等于"渲染失败"(各调用方会降级/报 500),
+    而这里既不是渲染失败、也不该降级 —— 用户等一会儿重试就能成。
+    """
+
+    retry_after = 20  # 秒;给前端/运维一个明确的"多久后再试"
+
+
+def _env_number(name: str, default: float, low: float, high: float) -> float:
+    """读数值型环境变量并夹到 [low, high];写错(拼错/负数)按默认值处理。"""
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning(f"[doc] {name}={raw!r} 不是数字,按默认 {default} 处理")
+        return default
+    return min(max(value, low), high)
+
+
+def pdf_concurrency_limit() -> int:
+    """同时允许启动的浏览器数(MG_PDF_CONCURRENCY,默认 2,夹到 1–8)。"""
+    return int(_env_number("MG_PDF_CONCURRENCY", PDF_CONCURRENCY_DEFAULT, 1, 8))
+
+
+def pdf_queue_limit() -> int:
+    """允许排队等浏览器的请求数(MG_PDF_QUEUE,默认 8,夹到 0–32;0 = 不排队)。"""
+    return int(_env_number("MG_PDF_QUEUE", PDF_QUEUE_DEFAULT, 0, 32))
+
+
+def pdf_queue_wait() -> float:
+    """单个请求最多排队等多少秒(MG_PDF_QUEUE_WAIT,默认 15,夹到 0–120)。"""
+    return _env_number("MG_PDF_QUEUE_WAIT", PDF_QUEUE_WAIT_DEFAULT, 0.0, 120.0)
+
+
+class _PdfGate:
+    """计数型信号量 + 有限队列(标准库没有"队列满了直接拒绝"的原语)。
+
+    `active` 是正在跑的浏览器数,`waiting` 是正在排队等槽位的请求数。
+    判定顺序:有空槽 → 进;没空槽但还能排队 → 等(带截止时间);队列满或等超时 → PdfBusy。
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._active = 0
+        self._waiting = 0
+
+    def snapshot(self) -> tuple[int, int]:
+        with self._cond:
+            return self._active, self._waiting
+
+    def acquire(self) -> None:
+        limit = pdf_concurrency_limit()
+        queue = pdf_queue_limit()
+        with self._cond:
+            if self._active < limit:
+                self._active += 1
+                return
+            if self._waiting >= queue:
+                raise PdfBusy(
+                    f"导出并发已满(同时 {self._active} 个,上限 {limit};"
+                    f"排队 {self._waiting} 个,上限 {queue})"
+                )
+            self._waiting += 1
+            try:
+                deadline = time.monotonic() + pdf_queue_wait()
+                while self._active >= limit:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise PdfBusy(
+                            f"导出排队超过 {pdf_queue_wait():.0f}s 仍未轮到"
+                            f"(同时 {self._active} 个,上限 {limit})"
+                        )
+                    self._cond.wait(remaining)
+            finally:
+                self._waiting -= 1
+            self._active += 1
+
+    def release(self) -> None:
+        with self._cond:
+            self._active = max(0, self._active - 1)
+            self._cond.notify()
+
+
+_gate = _PdfGate()
+
+
+@contextlib.contextmanager
+def pdf_slot():
+    """占用一个浏览器槽位;满了抛 PdfBusy。调用方负责把它翻成 429。"""
+    _gate.acquire()
+    try:
+        yield
+    finally:
+        _gate.release()
+
+
+def _pdf_gate_reset() -> None:
+    """测试用:把闸门计数清零(正常运行时没人会调它)。"""
+    with _gate._cond:  # noqa: SLF001 测试专用,必须拿到同一把锁
+        _gate._active = 0
+        _gate._waiting = 0
+
+
+def _html_to_pdf(html_path: Path, pdf_path: Path, *, gated: bool = True) -> bytes | None:
     """浏览器 headless 打印 HTML 为 PDF;失败返回 None(由调用方决定兜底)。
+
+    并发已满时抛 `PdfBusy`(不是返回 None):这两种失败的用户动作完全不同 ——
+    满了应该"过 20 秒重试"并拿到 429,渲染坏了才该降级/报错。
+
+    `gated=False` 只给能力探测用(启动期一次性判断"这台机器能不能出 PDF"),
+    它不该跟真实用户抢槽位,也不该因为"正好有人在导出"就被误判成"不能出 PDF"。
+    """
+    if not gated:
+        return _html_to_pdf_ungated(html_path, pdf_path)
+    with pdf_slot():
+        return _html_to_pdf_ungated(html_path, pdf_path)
+
+
+def _html_to_pdf_ungated(html_path: Path, pdf_path: Path) -> bytes | None:
+    """真正的浏览器调用(不做并发控制,别直接调;走 `_html_to_pdf`)。
 
     `--headless` 参数按"新 → 旧"回退:新版 chromium/Edge 只认 `--headless=new`,
     部分发行版仍是老的 `--headless`。写死其中一个,会在另一半机型上**静默不产出 PDF**
@@ -424,7 +562,8 @@ def pdf_render_available() -> bool:
         pdf_path = base / "probe.pdf"
         html_path.write_text("<!doctype html><html><body>probe</body></html>",
                              encoding="utf-8")
-        return _html_to_pdf(html_path, pdf_path) is not None
+        # 探测不占并发槽位:它只跑一次,且不该因为"此刻正好有人在导出"而被判成不能出 PDF
+        return _html_to_pdf(html_path, pdf_path, gated=False) is not None
 
 
 def render_pdf_bytes(document: dict, lang: str = "zh", brand: str | None = None) -> bytes | None:
@@ -482,7 +621,15 @@ async def export_pdf(request: Request) -> Response | JSONResponse:
         html_path = Path(tmp) / "doc.html"
         pdf_path = Path(tmp) / "out.pdf"
         html_path.write_text(_render_html(doc, lang, katex_dir), encoding="utf-8")
-        pdf = await asyncio.to_thread(_html_to_pdf, html_path, pdf_path)
+        try:
+            pdf = await asyncio.to_thread(_html_to_pdf, html_path, pdf_path)
+        except PdfBusy as exc:
+            # 并发满了不是"渲染失败":不该降级、不该记成一次成功导出。
+            # 429 而不是 503 —— 这是本服务的资源上限,重试同一个请求即可。
+            log.info(f"[doc] 导出被并发闸门拒绝: {exc}")
+            return JSONResponse(
+                {"detail": "pdf export busy, retry later"}, status_code=429,
+                headers={"Retry-After": str(PdfBusy.retry_after)})
         if pdf is None:
             return JSONResponse({"detail": "pdf render failed"}, status_code=500)
 
