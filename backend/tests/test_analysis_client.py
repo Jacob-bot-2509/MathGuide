@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
+import types
 
 import pytest
 
@@ -73,9 +76,53 @@ def test_analysis_python_falls_back_to_path_python(tmp_path, monkeypatch):
     assert ac.analysis_python() == "python"
 
 
-def test_posix_limits_is_noop_on_windows():
-    # 非 posix 平台直接返回;posix 上才设 rlimit
+def test_posix_limits_sets_caps_on_posix_only(monkeypatch):
+    """`_posix_limits` 是**子进程**的 preexec_fn,只能改 fork 出来那份地址空间。
+
+    历史上这里直接调 `ac._posix_limits()`,在 Linux 上等于给 pytest 进程本身设
+    `RLIMIT_AS=512MB` + `RLIMIT_CPU=30s` —— 硬限制、且不可逆。之后 analysis 三件套
+    (numpy/scipy/statsmodels)一导入,地址空间就顶到 512MB 之上,再往后第一个
+    `threading.Thread.start()`(典型是 starlette TestClient 的 portal 线程)会因为拿不到
+    线程栈在内核里失败:新线程在 `_bootstrap_inner` 早早死掉,永远执行不到 `_started.set()`,
+    父线程就卡死在 `start()` 里 —— 这正是 CI Linux 线"Test 步骤无声挂起六小时"的根因。
+    Windows 上 `resource` 模块不存在、函数真是 no-op,所以那条线一直是绿的,问题被掩盖了。
+
+    所以这里用假的 resource 模块观察调用,**绝不碰真实 rlimit**。
+    """
+    if os.name == "posix":
+        import resource as real_resource
+
+        before = real_resource.getrlimit(real_resource.RLIMIT_AS)
+    else:  # pragma: no cover - Windows 没有 resource 模块
+        real_resource = None
+        before = None
+
+    calls = []
+
+    def fake_setrlimit(which, limits):
+        calls.append((which, limits))
+
+    monkeypatch.setitem(sys.modules, "resource", types.SimpleNamespace(
+        RLIMIT_AS="RLIMIT_AS",
+        RLIMIT_CPU="RLIMIT_CPU",
+        setrlimit=fake_setrlimit,
+    ))
+    monkeypatch.setattr(os, "name", "posix")
+
     assert ac._posix_limits() is None
+    assert calls == [
+        ("RLIMIT_AS", (512 * 1024 * 1024, 512 * 1024 * 1024)),
+        ("RLIMIT_CPU", (30, 30)),
+    ]
+
+    # 非 posix 平台直接返回,一条都不许调
+    monkeypatch.setattr(os, "name", "nt")
+    assert ac._posix_limits() is None
+    assert len(calls) == 2
+
+    # 真实上限必须原封不动:一旦被改,后面的用例会以"挂起"的形式失败
+    if real_resource is not None:
+        assert real_resource.getrlimit(real_resource.RLIMIT_AS) == before
 
 
 # ---------- 协议正常路径 ----------

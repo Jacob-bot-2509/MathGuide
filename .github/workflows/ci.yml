@@ -68,6 +68,10 @@ jobs:
         # 关掉缓冲后,取消 job 拿到的部分日志能直接指出卡在哪个用例。
         env:
           PYTHONUNBUFFERED: "1"
+          # Ubuntu 23.10+ 默认 kernel.apparmor_restrict_unprivileged_userns=1,非 root 起不来
+          # Chromium 沙箱 → 浏览器在、却打印不出 PDF(doc 导出相关用例会因此挂)。
+          # 只在测试环境放开;生产不设这个变量,沙箱保持开启。
+          MG_EDGE_NO_SANDBOX: "1"
         # 用 -v 而不是 -q:Linux 线出现过"Test 步骤无声挂起",-v + 无缓冲后即便中途取消 job,
         # 部分日志也能直接指出最后一条未完成的用例。
         run: python -m pytest -v --cov --cov-report=term-missing --cov-fail-under=${{ matrix.cov_floor }}
