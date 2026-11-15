@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from analysis_worker import handle_request
 
 
@@ -34,6 +36,10 @@ def test_worker_capabilities_reports_packs():
 
 def test_worker_surfaces_validation_error_code():
     """回归参数非法时,错误码直接给前端看(bad_column),而不是 500。"""
+    # bad_column 来自 analysis_regression 的列校验,而它在模块级就 import pandas。
+    # 3.14 前瞻线不装 analysis 三件套(无 cp314 wheel),缺 pandas 时抛出的是
+    # ModuleNotFoundError 而非 bad_column —— 这是环境缺口,不该算成回归失败。
+    pytest.importorskip("pandas", reason="未装 analysis 依赖(pandas),列校验无从触发")
     response = handle_request({
         "id": "3", "op": "regression",
         "payload": {"columns": [{"key": "X"}, {"key": "Y"}], "rows": [["1", "2"]],
