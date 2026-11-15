@@ -6,7 +6,7 @@
 
 ## 0. 一句话任务
 
-覆盖率已**全部收口**（146/146 达标，后端 1576 passed / 90.06%，前端 1021 条 / 97.7%）。
+覆盖率已**全部收口**（146/146 达标，后端 1577 passed / 90.06%，前端 1021 条 / 97.7%）。
 下一阶段的工作重心转为：**真机验证 → 部署上线**（见 `docs/DEPLOY_PLAYBOOK.md`）。
 「部署前能做完」与「上服务器才能做」的完整拆分见 [`docs/DEPLOY_SPLIT_PLAN.md`](DEPLOY_SPLIT_PLAN.md)；
 其中 **§1 的 13 项 + 1bis 的 4 个执行器（1.14–1.17）已全部做完**（并发闸门 / rlimit 守卫 /
@@ -21,7 +21,7 @@ robots / `check_llm.py` / `load_probe.py` / `proxy_check.py` / `db_backup.py --d
 
 ```powershell
 cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
-& 'D:\Works\code\.venv\Scripts\python.exe' -m pytest -q      # 期望：1576 passed，0 failed（约 86s）
+& 'D:\Works\code\.venv\Scripts\python.exe' -m pytest -q      # 期望：1577 passed，0 failed（约 90s）
 ```
 
 - 改代码后再跑；若红先修红，别继续叠加改动。
@@ -32,7 +32,7 @@ cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
 
 | 项 | 数值 |
 | --- | --- |
-| 后端测试 | **1576 passed, 0 failed**（约 86s） |
+| 后端测试 | **1577 passed, 0 failed**（约 90s） |
 | 后端覆盖率 | **90.06%**（16291 语句，未覆盖 1620） |
 | 前端测试 | 脚本套件全过 + vitest **51 文件 / 1021 条** |
 | 前端覆盖率 | **97.70%**（utils/stores/services） |
@@ -85,7 +85,7 @@ cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
   打坏主用验异平台接管）、`tools/load_probe.py`（2.3/2.4/2.12，长文档耗时 / 并发导出 RSS / 并发首字）、
   `tools/proxy_check.py`（2.7/2.8/2.13，证书 / HSTS / `X-Forwarded-Proto` / Cookie 三属性 / 麦克风策略 / webhook）、
   `db_backup.py --drill`（2.10，备份后立刻恢复副本）
-- 工具脚本的测试**例外条款**：§4 的"不为工具脚本写测试"针对的是行覆盖凑数；这 4 个脚本的 39 条用例只钉
+- 工具脚本的测试**例外条款**：§4 的"不为工具脚本写测试"针对的是行覆盖凑数；这 4 个脚本的 40 条用例只钉
   **判定逻辑**（429 归类 / 百分位 / 末位采样 / Cookie 属性 / HSTS / 容灾接管），因为它们判错会让部署结论**反向**，
   比覆盖率数字危险得多。`tools/` 仍不进覆盖率分母（`pyproject.toml` omit）。
 

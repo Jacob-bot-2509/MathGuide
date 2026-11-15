@@ -44,7 +44,7 @@
 | # | 脚本 | 覆盖 §2 | 本机验证 |
 | --- | --- | --- | --- |
 | 1.14 | `tools/check_llm.py` | 2.5 | 12 条用例；`--failover` 临时打坏主用 key，用真实 `stream_chat(fallback=True)` 验证**异平台备胎是否真的接管**（同平台重试判失败）；key 用完即还原 |
-| 1.15 | `tools/load_probe.py` | 2.3 / 2.4 / 2.12 | 13 条用例；本机 `--long-doc 100` = 61 页 / 2.1s；`--export 2 --chat 4` 双账号实测 0 限流全通过 |
+| 1.15 | `tools/load_probe.py` | 2.3 / 2.4 / 2.12 | 14 条用例；本机 `--long-doc 100` = 61 页 / 2.1s；`--export 2 --chat 4` 双账号实测 0 限流全通过 |
 | 1.16 | `tools/proxy_check.py` | 2.7 / 2.8 / 2.13 | 12 条用例；对本地 8011 实测 **PASS 4 · SKIP 3**（HTTP 直连下 TLS/前端/webhook 正确 SKIP）；连不上时只报一条 FAIL（不刷"安全头缺失"） |
 | 1.17 | `db_backup.py --drill` | 2.10 | 2 条用例；真库演练「备份 → 用 `db_restore` 恢复副本 → 行数一致」，临时库用完即删 |
 
