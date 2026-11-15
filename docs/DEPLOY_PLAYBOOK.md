@@ -145,6 +145,30 @@ cd backend && python tools/check_pdf.py           # RESULT: OK
 
 更细的逐条预期见 `docs/OPTIMIZATION_PLAN.md` §0.1。
 
+### 五之二、上机专项自检（LLM / 反代 / 负载 / 备份演练）
+
+25 项验收验的是「接口按契约应答」；下面这几项验的是**只有目标机能回答**的问题，
+各有独立脚本，FAIL 会直接打印"下一步查什么"：
+
+| 专项（§2） | 命令（`backend/` 下） | 判据 |
+| --- | --- | --- |
+| LLM 连通 + 异平台容灾（2.5） | `python tools/check_llm.py --failover` | 已配置角色全 `[ OK ]`；`failover` 显示「A 失败 → B 接管」 |
+| 反代/证书/Cookie/HSTS（2.7） | `python tools/proxy_check.py --base-url https://<域名> --phone <账号> --password <密码>` | FAIL 0；HTTPS 下 cookie 有 `Secure/HttpOnly/SameSite=lax` |
+| 语音入口前置（2.8） | 同上（`Permissions-Policy` 一项） | `microphone=(self)` |
+| 告警出口（2.13） | `python tools/proxy_check.py … --webhook <地址>` | 「告警 webhook 可投递 · HTTP 2xx」 |
+| 长文档耗时（2.3） | `python tools/load_probe.py --long-doc 100` | 渲染 < `MG_PDF_TIMEOUT` 的 60%（≈60 页样张） |
+| 并发导出内存（2.4） | `python tools/load_probe.py --export 2 --pid $(pgrep -f 'uvicorn main:app')` | RSS 峰值 < 可用内存 70% |
+| 并发问答首字（2.12） | `python tools/load_probe.py --chat 10 --pid … --phone … --password …` | 无 FAIL；首字 p95 可接受 |
+| 备份可恢复（2.10） | `python tools/db_backup.py --drill` | 「[OK] 演练: 已恢复一份副本 · 行数一致」 |
+
+**429 要看内容分两种**（`load_probe.py` 已经分开计数）：
+
+- `pdf export busy` + `Retry-After`：导出并发闸门，**容量信号**，说明当前并发已经压到上限；
+- `rate limited`：**每用户 6 次/分**的接口限流（`chat`/`doc`/`docgen` 共用同一个滑动窗口）。
+  它只说明压测太密，**不代表机器不行**；10 并发请准备 ≥2 个账号（`--phone/--password` 可重复）。
+
+> webhook 与证书两项必须在**目标网络里**跑；本机跑出来的结论只代表本机。
+
 ## 六、已知限制（部署时别踩，也不必现在修）
 
 | 项 | 现状 |
@@ -154,6 +178,7 @@ cd backend && python tools/check_pdf.py           # RESULT: OK
 | 老版本浏览器缺 `--no-pdf-header-footer` | PDF 可能带页眉（难看，不影响内容）；未做兼容 |
 | 数组公式→Word 图片 | 走 `math_table_render`（同一条浏览器链路），Linux 上会降级为纯文本 |
 | 导出 429 | 并发闸门生效时返回 429 + `Retry-After: 20`，属预期行为；频繁出现才需要调 `MG_PDF_CONCURRENCY` |
+| 接口限流 6 次/分/用户 | `chat`/`doc`/`docgen` 共用同一个滑动窗口。验收/压测时十并发只用 1 个账号会先撞它（429 `rate limited`），不代表机器扛不住；`load_probe.py` 会分开计数并要求加账号 |
 | macOS | 已加 `macos-latest` CI 线守路径/字体差异，但**没有**在真 Mac 上做过人工验收 |
 | 3.14 的 analysis 依赖 | scipy/pandas/statsmodels 无 cp314 wheel → 该解释器下 `analysis_regression` 整模块 skip；CI 有非阻塞探测，出 wheel 会提示摘豁免 |
 | 覆盖率 | 后端 **90.06%**（1537 passed）、前端 **97.7%**（51 文件 1021 条）；逐文件达标 146/146，口径见 `COVERAGE_PLAN.md` §2 |

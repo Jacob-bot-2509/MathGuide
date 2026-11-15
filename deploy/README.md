@@ -85,6 +85,24 @@ python tools/smoke_deploy.py --base-url http://127.0.0.1:8000 --invite <码>
 # 期望结尾:PASS 25 · FAIL 0
 ```
 
+**只有目标机能回答的四件事**,各有脚本(FAIL 项会直接打印"下一步查什么"):
+
+```bash
+cd backend
+python tools/proxy_check.py --base-url https://mg.example.com --phone <账号> --password <密码> \
+    --webhook <MG_DIAGRAM_ALERT_WEBHOOK>      # 证书/HTTPS/cookie 属性/HSTS/麦克风策略/webhook
+python tools/check_llm.py --failover          # 四个角色各打一句;再打坏主用看备胎是否接管
+python tools/load_probe.py --long-doc 100     # ≈60 页样张的真实渲染耗时(2.3)
+python tools/load_probe.py --export 2 --pid $(pgrep -f 'uvicorn main:app')   # 并发导出 + RSS 峰值
+python tools/db_backup.py --drill             # 备份后立刻恢复一份副本,证明这份备份能恢复
+```
+
+两点容易误判:
+- **429 有两种**:导出闸门的 `pdf export busy`(容量信号,带 `Retry-After`)与
+  **每用户 6 次/分**的接口限流 `rate limited`(说明压测太密,不是机器不行)。
+  `load_probe.py` 会把后者单独计数并判失败 —— 加账号(`--phone/--password` 可重复)再跑。
+- 这四项**必须在这台机器上跑**:证书链、出口 IP、内核沙箱、内存余量都换不了地方测。
+
 浏览器检查:
 
 - `https://mg.example.com` 证书有效,HSTS 存在

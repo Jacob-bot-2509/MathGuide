@@ -6,11 +6,13 @@
 
 ## 0. 一句话任务
 
-覆盖率已**全部收口**（146/146 达标，后端 1537 passed / 90.06%，前端 1021 条 / 97.7%）。
+覆盖率已**全部收口**（146/146 达标，后端 1576 passed / 90.06%，前端 1021 条 / 97.7%）。
 下一阶段的工作重心转为：**真机验证 → 部署上线**（见 `docs/DEPLOY_PLAYBOOK.md`）。
 「部署前能做完」与「上服务器才能做」的完整拆分见 [`docs/DEPLOY_SPLIT_PLAN.md`](DEPLOY_SPLIT_PLAN.md)；
-其中 **§1 的 13 项已全部做完**（并发闸门 / rlimit 守卫 / 单 worker 硬校验 / 25 项验收脚本 /
-备份恢复脚本 / macOS CI / 前端产物检查 / 投放幂等性 / robots），只剩 §2 的上机项。
+其中 **§1 的 13 项 + 1bis 的 4 个执行器（1.14–1.17）已全部做完**（并发闸门 / rlimit 守卫 /
+单 worker 硬校验 / 25 项验收脚本 / 备份恢复脚本 / macOS CI / 前端产物检查 / 投放幂等性 /
+robots / `check_llm.py` / `load_probe.py` / `proxy_check.py` / `db_backup.py --drill`），
+只剩 §2 的上机项 —— 而且每项现在都有命令，上机不用再手敲。
 覆盖率只需守住"不倒退"门槛（CI `--cov-fail-under=85`）。
 
 ## 1. ⚠️ 第一件事（不要跳过）
@@ -19,7 +21,7 @@
 
 ```powershell
 cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
-& 'D:\Works\code\.venv\Scripts\python.exe' -m pytest -q      # 期望：1537 passed，0 failed（约 86s）
+& 'D:\Works\code\.venv\Scripts\python.exe' -m pytest -q      # 期望：1576 passed，0 failed（约 86s）
 ```
 
 - 改代码后再跑；若红先修红，别继续叠加改动。
@@ -30,7 +32,7 @@ cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
 
 | 项 | 数值 |
 | --- | --- |
-| 后端测试 | **1537 passed, 0 failed**（约 86s） |
+| 后端测试 | **1576 passed, 0 failed**（约 86s） |
 | 后端覆盖率 | **90.06%**（16291 语句，未覆盖 1620） |
 | 前端测试 | 脚本套件全过 + vitest **51 文件 / 1021 条** |
 | 前端覆盖率 | **97.70%**（utils/stores/services） |
@@ -79,6 +81,14 @@ cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
 - `backend/tools/check_pdf.py`：上线前自检五项（浏览器 → 中文字体 → 真打印 → CJK 字体嵌入 → 文本层中文），
   本机 Windows + Edge 157 实测 `RESULT: OK`；**Linux chromium 尚未实测**
 - 待用户执行：服务器上 `apt install -y chromium fonts-noto-cjk` → `python tools/check_pdf.py` → 眼验一份含数组公式+中文的 PDF
+- **§2 的执行器（本轮新增，见 `DEPLOY_SPLIT_PLAN.md` §1bis）**：`tools/check_llm.py`（2.5，含 `--failover`
+  打坏主用验异平台接管）、`tools/load_probe.py`（2.3/2.4/2.12，长文档耗时 / 并发导出 RSS / 并发首字）、
+  `tools/proxy_check.py`（2.7/2.8/2.13，证书 / HSTS / `X-Forwarded-Proto` / Cookie 三属性 / 麦克风策略 / webhook）、
+  `db_backup.py --drill`（2.10，备份后立刻恢复副本）
+- 工具脚本的测试**例外条款**：§4 的"不为工具脚本写测试"针对的是行覆盖凑数；这 4 个脚本的 39 条用例只钉
+  **判定逻辑**（429 归类 / 百分位 / 末位采样 / Cookie 属性 / HSTS / 容灾接管），因为它们判错会让部署结论**反向**，
+  比覆盖率数字危险得多。`tools/` 仍不进覆盖率分母（`pyproject.toml` omit）。
+
 
 ## 7. 常用命令
 
@@ -96,4 +106,10 @@ cd frontend; & cmd /c "npx eslint src"
 cd frontend; & cmd /c "npx vitest run"
 # PDF 自检
 cd backend; & 'D:\Works\code\.venv\Scripts\python.exe' tools/check_pdf.py
+# 部署专项（项目 2.3/2.4/2.5/2.7/2.10/2.12/2.13;真结论必须在目标机跑）
+cd backend; & 'D:\Works\code\.venv\Scripts\python.exe' tools/check_llm.py --failover
+& 'D:\Works\code\.venv\Scripts\python.exe' tools/load_probe.py --long-doc 100
+& 'D:\Works\code\.venv\Scripts\python.exe' tools/load_probe.py --export 2 --pid 0 --phone <号> --password <密码>
+& 'D:\Works\code\.venv\Scripts\python.exe' tools/proxy_check.py --base-url https://<域名>
+& 'D:\Works\code\.venv\Scripts\python.exe' tools/db_backup.py --drill
 ```

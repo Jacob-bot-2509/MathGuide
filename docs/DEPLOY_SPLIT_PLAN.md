@@ -36,12 +36,43 @@
 每项都留下了可重复跑的验证入口：`pytest` 用例、`tools/lint_rlimits.py`、`tools/smoke_deploy.py`、
 `tools/db_backup.py`、`npm run check:build`。部署当天**不需要**在没有验证手段的情况下临场判断。
 
+### 1bis. 追加：§2 各项的执行器（2026-11-15）
+
+§2 里有 7 项以前只能"上机后手敲命令"，本轮把它们变成脚本 —— **脚本本身在本机就能验证**，
+上机只剩跑一条命令、看结论。这也是"现在就能做"的部分：
+
+| # | 脚本 | 覆盖 §2 | 本机验证 |
+| --- | --- | --- | --- |
+| 1.14 | `tools/check_llm.py` | 2.5 | 12 条用例；`--failover` 临时打坏主用 key，用真实 `stream_chat(fallback=True)` 验证**异平台备胎是否真的接管**（同平台重试判失败）；key 用完即还原 |
+| 1.15 | `tools/load_probe.py` | 2.3 / 2.4 / 2.12 | 13 条用例；本机 `--long-doc 100` = 61 页 / 2.1s；`--export 2 --chat 4` 双账号实测 0 限流全通过 |
+| 1.16 | `tools/proxy_check.py` | 2.7 / 2.8 / 2.13 | 12 条用例；对本地 8011 实测 **PASS 4 · SKIP 3**（HTTP 直连下 TLS/前端/webhook 正确 SKIP）；连不上时只报一条 FAIL（不刷"安全头缺失"） |
+| 1.17 | `db_backup.py --drill` | 2.10 | 2 条用例；真库演练「备份 → 用 `db_restore` 恢复副本 → 行数一致」，临时库用完即删 |
+
+两条**写进脚本的行为约定**（都是现场踩过才发现的）：
+
+- **429 有两种，结论相反**：导出并发闸门回 `pdf export busy`（带 `Retry-After`，是容量信号，不算失败）；
+  而 `doc`/`docgen` 复用 chat 的**每用户 6 次/分**滑动窗口限流，回 `rate limited`，它只说明"这次测法太密"，
+  会让测量无效 —— `load_probe.py` 分开计数并判失败，提示加账号重跑。
+- **十并发不能只靠多线程**：正因为上面那条 6 次/分，2.12 的 10 并发要准备 ≥2 个账号
+  （`--phone/--password` 可重复，脚本按请求轮询）。
+
 **优先级说明**：P1 = 部署前必须做完（否则上线当天会产生"说不清原因"的故障或无法复现）；
 P2 = 可以带着未做完上线，但要写进已知限制。
 
 ## 2. 必须上服务器才能做
 
 判断依据同上：这些任务的结论**取决于目标机器/目标网络/真实时间**，本机跑一百遍也不算数。
+不过每一项现在都有执行器（1.14–1.17），上机只需要跑命令 + 判读结论：
+
+| 项 | 命令（都在 `backend/` 下） | 项 | 命令 |
+| --- | --- | --- | --- |
+| 2.1 / 2.2 | `python tools/check_pdf.py --out /tmp/mg.pdf` | 2.7 / 2.8 | `python tools/proxy_check.py --base-url https://<域名> --phone <账号> --password <密码>` |
+| 2.3 | `python tools/load_probe.py --long-doc 100` | 2.10 | `python tools/db_backup.py --drill` |
+| 2.4 | `python tools/load_probe.py --export 2 --pid $(pgrep -f 'uvicorn main:app')` | 2.11 | `python tools/smoke_deploy.py --base-url https://<域名> --invite <码>` |
+| 2.5 | `python tools/check_llm.py --failover` | 2.12 | `python tools/load_probe.py --chat 10 --pid … --phone … --password …`（账号可重复） |
+| 2.6 | `python tools/lit_smoke.py` | 2.13 | `python tools/proxy_check.py … --webhook <地址>` |
+| 2.9 | 只能隔天回看（无脚本） | 2.14 / 2.15 | `systemctl restart` + `kill -9`；导入脚本计时 |
+
 
 | # | 任务 | 为什么本地做不了 | 上机判据 | 失败时怎么办 |
 | --- | --- | --- | --- | --- |
@@ -61,7 +92,7 @@ P2 = 可以带着未做完上线，但要写进已知限制。
 | 2.14 | systemd 守护/开机自启/崩溃重启 | 服务器特有能力 | `kill -9` 后自动拉起；重启机器后服务可用 | 用模板（1.12） |
 | 2.15 | 教材/题库导入真实耗时 | 真实数据量，本机没有投放数据 | 导入耗时可接受、可中断可重入 | 依赖 1.11 的幂等性 |
 
-## 3. 部署窗口内的顺序（约 60 分钟）
+## 3. 部署窗口内的顺序（约 75 分钟）
 
 | 时间 | 动作 | 判据 | 对应本文件 |
 | --- | --- | --- | --- |
@@ -69,8 +100,10 @@ P2 = 可以带着未做完上线，但要写进已知限制。
 | 10–20m | 填 `backend/.env.local`（demo=0、CORS 真域名、邀请码、额度） | 与 playbook §一/§四 逐项对齐 | 2.7 |
 | 20–30m | `python tools/check_pdf.py`；按结论决定 `MG_EDGE_NO_SANDBOX` | `RESULT: OK` + 沙箱结论落地到 env | 2.1 / 2.2 |
 | 30–40m | `python tools/smoke_deploy.py --base-url http://127.0.0.1:8000 --invite <码>` | **25 项全 PASS**（SKIP 要能解释） | 2.11 |
-| 40–50m | 真实链路：一次问答、一次导出、一次文献检索 | 三件事都成 | 2.5 / 2.6 / 2.3 |
-| 50–60m | `python tools/db_backup.py` → `python tools/db_restore.py --from <备份>` → `--yes` 演练；记下回滚命令 | 备份过 `integrity_check`；恢复后行数一致；安全副本存在 | 2.10 |
+| 40–50m | `python tools/check_llm.py --failover`；`python tools/proxy_check.py --base-url https://<域名> --phone … --password …`（含 `--webhook`） | 两个脚本 FAIL 0；主用 → 备胎真有接管；HTTPS 下 cookie 带 `Secure` | 2.5 / 2.7 / 2.8 / 2.13 |
+| 50–60m | `python tools/load_probe.py --long-doc 100`；再 `--export 2 --pid $(pgrep -f 'uvicorn main:app')` | 长文档 < `MG_PDF_TIMEOUT` 的 60%；RSS 峰值 < 可用内存 70% | 2.3 / 2.4 |
+| 60–70m | `python tools/db_backup.py --drill`；一次真实问答 + 一次导出 + 一次文献检索 | 演练「已恢复一份副本 · 行数一致」；三件事都成 | 2.10 / 2.6 |
+| 70–75m | 把各脚本输出的数字与 SKIP 项抄进部署记录 | 下次换机器可对照；SKIP 项进 playbook §六 | 全部 |
 
 > 窗口里**不写代码、不改仓库**。任何"顺手修一下"都会让线上与 tag 对不上，回滚时无从下手。
 

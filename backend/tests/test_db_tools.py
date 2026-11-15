@@ -115,3 +115,30 @@ def test_restore_missing_snapshot_exits_2(tmp_path):
     conn = _make_db(src, 1)
     conn.close()
     assert db_restore.main(["--from", str(tmp_path / "nope.db"), "--db", str(src)]) == 2
+
+
+def test_backup_drill_restores_a_copy_and_cleans_up(tmp_path):
+    """--drill 的价值:把「备份能打开」升级为「备份能恢复」,而且不碰线上库。"""
+    src = tmp_path / "mathguide.db"
+    conn = _make_db(src, 4)
+    conn.close()
+    out = tmp_path / "backups"
+
+    assert db_backup.main(["--db", str(src), "--out", str(out), "--drill"]) == 0
+    assert len(list(out.glob("mg-*.db"))) == 1
+    # 演练产物必须删掉,否则备份目录里会混进一个"看起来像备份"的临时库
+    assert not list(out.glob("drill-*.db"))
+    assert _count(src, "users") == 4
+
+
+def test_backup_drill_reports_failure_on_corrupt_snapshot(tmp_path, monkeypatch):
+    """快照突然读不了(磁盘/权限)时,--drill 必须报失败而不是静默通过。"""
+    src = tmp_path / "mathguide.db"
+    conn = _make_db(src, 1)
+    conn.close()
+    out = tmp_path / "backups"
+
+    monkeypatch.setattr(db_backup, "table_counts", lambda path, _orig=db_backup.table_counts: (
+        {"users": 99} if "drill-" in str(path) else _orig(path)))
+    assert db_backup.main(["--db", str(src), "--out", str(out), "--drill"]) == 1
+
