@@ -19,6 +19,10 @@ from pathlib import Path
 
 import httpx
 
+from log import get_logger
+
+log = get_logger(__name__)
+
 CACHE_PATH = Path(__file__).resolve().parent.parent / "knowledge" / ".embeddings.json"
 _BATCH = 10  # 单次 /embeddings 批量上限(阿里云百炼上限 10,实测确认)
 
@@ -91,7 +95,7 @@ class Embedder:
                         else:
                             dropped += 1
                     if dropped:
-                        print(f"[embed] 向量缓存有 {dropped} 条损坏记录,已丢弃并将在下次重算")
+                        log.warning(f"[embed] 向量缓存有 {dropped} 条损坏记录,已丢弃并将在下次重算")
                     self._cache = kept
         except (OSError, json.JSONDecodeError):
             self._cache = {}
@@ -103,7 +107,7 @@ class Embedder:
             tmp.write_text(json.dumps(self._cache), encoding="utf-8")
             tmp.replace(self._cache_path)  # 原子替换:崩溃不会留下半截 JSON
         except OSError as exc:  # noqa: BLE001 缓存写不进去不影响本次检索,但要让人知道
-            print(f"[embed] 向量缓存写盘失败(下次启动会重新计费): {exc}")
+            log.warning(f"[embed] 向量缓存写盘失败(下次启动会重新计费): {exc}")
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         """OpenAI 兼容 /embeddings 批量接口(同步调用,启动期一次)"""
@@ -147,7 +151,7 @@ class Embedder:
             del self._cache[k]
         if to_embed:
             # 计费可见:新增/改稿/换模型才调接口,命中缓存的零成本
-            print(f"[embed] 向量接口调用 {len(to_embed)} 条,缓存命中 {len(chunks) - len(to_embed)} 条")
+            log.info(f"[embed] 向量接口调用 {len(to_embed)} 条,缓存命中 {len(chunks) - len(to_embed)} 条")
         if to_embed or stale:
             self._save_cache()
         missing = [k for k in keys if k not in self._cache]

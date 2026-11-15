@@ -1,8 +1,8 @@
 """graph_layout:NetworkX 分层布局的确定性、分层正确性与间距。"""
 from __future__ import annotations
 
-from knowledge_graph import KnowledgeGraph, KnowledgePoint, load_graph
 from graph_layout import layout_points
+from knowledge_graph import KnowledgeGraph, KnowledgePoint, load_graph
 
 
 def _graph() -> KnowledgeGraph:

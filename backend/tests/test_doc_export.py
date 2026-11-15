@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import html as html_mod
 
-import doc
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
+
+import doc
 
 
 def test_safe_url_only_allows_http_schemes():
@@ -109,8 +110,9 @@ def test_render_math_supports_display_environments_and_escapes_html():
 
 
 def test_pdf_renders_real_math_with_edge():
-    import pytest
     from io import BytesIO
+
+    import pytest
     from pypdf import PdfReader
     if not doc._find_edge():
         pytest.skip("Edge is unavailable")
@@ -131,8 +133,9 @@ def test_pdf_renders_real_math_with_edge():
 
 
 def test_pdf_renders_source_cross_reference_macro():
-    import pytest
     from io import BytesIO
+
+    import pytest
     from pypdf import PdfReader
     if not doc._find_edge():
         pytest.skip("Edge is unavailable")
@@ -146,8 +149,9 @@ def test_pdf_renders_source_cross_reference_macro():
 
 
 def test_pdf_renders_markdown_escaped_ams_environment():
-    import pytest
     from io import BytesIO
+
+    import pytest
     from pypdf import PdfReader
     if not doc._find_edge():
         pytest.skip("Edge is unavailable")
@@ -161,8 +165,9 @@ def test_pdf_renders_markdown_escaped_ams_environment():
 
 
 def test_pdf_renders_doubly_escaped_formulas_and_preserves_failed_source():
-    import pytest
     from io import BytesIO
+
+    import pytest
     from pypdf import PdfReader
     if not doc._find_edge():
         pytest.skip("Edge is unavailable")

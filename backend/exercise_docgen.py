@@ -7,14 +7,13 @@
 """
 from __future__ import annotations
 
-import math_render
-
-from collections import Counter
 from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import math_render
+import quota
 from chat import _rate_check, require_auth
 from exercises.schema import SchemaError
 from exercises.store import ExerciseStore, tiers_from_env
@@ -310,6 +309,7 @@ def _document(items, lang: str, mode: str, allow_partial: bool, filters: dict) -
 
 async def plan(request: Request) -> JSONResponse:
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
     body = await read_json_object(request)
     filters = _filters(body)
@@ -330,6 +330,7 @@ async def plan(request: Request) -> JSONResponse:
 
 async def generate(request: Request) -> JSONResponse:
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
     body = await read_json_object(request)
     filters = _filters(body)

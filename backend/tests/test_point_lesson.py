@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 import json
 
-import chat
 import pytest
+
+import chat
 from knowledge_graph import KnowledgeGraph, KnowledgePoint
 
 

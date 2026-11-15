@@ -1,24 +1,25 @@
 """
-MathGuide 后端(RAG 检索增强生成骨架)
+MathGuide 后端(Starlette):RAG 检索增强生成 + 科研工作台。
+
 启动:python -m uvicorn main:app --host 127.0.0.1 --port 8000
 (MG_DEMO_MODE=1 时只允许本机绑定;公网部署先设 MG_DEMO_MODE=0)
 
-接口一览(契约详见各模块注释与 backend/README.md):
-    GET  /api/health                         健康检查
-    POST /api/auth/register                  注册(手机号 + 密码)
-    POST /api/auth/login                     登录(password / code / wechat / qq)
-    GET  /api/auth/session                   当前登录态(Cookie 共享登录)
-    POST /api/auth/logout                    登出(需 token)
-    POST /api/account/export                 导出账号与用量元数据(需 token)
-    POST /api/account/delete                 注销账号并级联删除令牌/用量(需 token)
-    POST /api/chat/stream                    聊天流式回复(需 token,OpenAI 兼容 SSE)
-    POST /api/chat/intuition                 按需生成直观解释(需 token;默认走缓存)
-    POST /api/diagnosis                      掌握度诊断(需 token;答题或自评)
-    GET  /api/diagnosis/report               薄弱点报告(需 token)
-    GET  /api/recommendation                 学习路径推荐(需 token)
-    GET  /api/graph                          知识图谱节点/边/掌握度(需 token)
-    GET  /api/profile                        学习画像聚合(需 token)
-    GET  /api/profile/analysis               掌握度分析快照(需 token)
+接口全表(方法 / 鉴权 / 限流 / 落盘副作用)见 backend/README.md 的「接口」一节,
+并由 tests/test_api_contract.py 强制与真实路由保持一致 —— 这里只留分组概览,
+不要再维护第二份逐条清单:
+
+    /api/health                     健康检查(公开)
+    /api/auth/*                     注册 / 登录 / 会话 / 登出
+    /api/account/*                  导出 / 注销(级联删除)
+    /api/chat/*                     流式问答 / 直观解释
+    /api/research/*                 论文库、检索、文献、数据表、图解、导出
+    /api/diagnosis                   掌握度诊断
+    /api/recommendation              学习路径推荐
+    /api/graph                       知识图谱(含导出)
+    /api/profile                     学习画像与分析快照
+    /api/doc/*                      综述、组卷生成与排版(PDF/Markdown/Word)
+    /api/speech/math                语音 → 数学符号
+    /api/stats                      用量统计(管理员)
 
 知识库:knowledge/*.md → rag 切片索引 → 检索 → LLM(未配置则直答)。
 """
@@ -31,9 +32,9 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 import asyncio
+import profile
 from contextlib import asynccontextmanager, suppress
 
-import store
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
@@ -49,30 +50,41 @@ import docgen
 import exercise_docgen
 import graph_api
 import learning_analysis
-import profile
 import rag
 import recommendation
+import research_compare
 import research_corpus
 import research_diagrams
 import research_fulltext
-import research_compare
-import research_tables
+import research_legacy
 import research_lit
 import research_papers
 import research_report
+import research_tables
 import research_vision
-import research_legacy
 import retention
+import store
 import usage
+from log import RequestIdMiddleware, get_logger
+from origin_guard import OriginGuardMiddleware
 from security_headers import SecurityHeadersMiddleware
 
 # 先装载本地配置(.env.local,key 不入库),再构造 app/CORS 与数据、知识库。
 # 必须早于 app 构造:MG_CORS_ORIGINS 等配置来自 .env.local。
 config.load_env()
+# 日志在 env 装载后再初始化:MG_LOG_LEVEL 才能生效(日志 handler 只装一次)
+log = get_logger(__name__)
 # 演示模式默认只允许本机;`--host 0.0.0.0` 或公网 CORS 来源会直接拒绝启动
 config.assert_safe_demo_mode()
 # .env.local 装载后再读限流配置(模块导入时 env 还没加载)
 auth.configure_rate_limit()
+# 限流器与会话缓存是进程内存:多 worker 会让额度翻 N 倍、缓存各存一份
+_workers = config.detect_workers()
+if _workers > 1:
+    log.warning(
+        f"[config] 检测到 {_workers} 个 worker:限流与会话缓存按进程内存实现,"
+        "多 worker 会让额度变成 N 倍且缓存分裂;请保持单 worker(见 deploy/README.md)"
+    )
 
 
 def _cors_origins() -> list[str]:
@@ -212,6 +224,10 @@ app = Starlette(
             allow_headers=["*"],
         ),
         Middleware(SecurityHeadersMiddleware),
+        # 给每个请求生成 request_id,日志靠它串起同一次回答的十几条记录
+        Middleware(RequestIdMiddleware),
+        # 写操作的来源校验:双域共享 Cookie 时,任一子域被 XSS 不至于全站可写
+        Middleware(OriginGuardMiddleware, allowed_origins=_cors_origins()),
     ],
 )
 
@@ -221,17 +237,17 @@ store.init()
 try:
     usage.migrate_identity(store.phone_uid_map())
 except OSError as exc:
-    print(f"[usage] 旧用量身份迁移失败(不影响启动): {exc}")
+    log.warning(f"[usage] 旧用量身份迁移失败(不影响启动): {exc}")
 try:
     pruned = retention.run()
     if pruned["accounts"] or pruned["usage"]:
-        print(f"[retention] 已清理账号 {pruned['accounts']} 个、用量 {pruned['usage']} 条")
+        log.info(f"[retention] 已清理账号 {pruned['accounts']} 个、用量 {pruned['usage']} 条")
 except OSError as exc:
-    print(f"[retention] 留存清理失败(不影响启动): {exc}")
+    log.warning(f"[retention] 留存清理失败(不影响启动): {exc}")
 try:
     purged = research_corpus.purge_expired_history_all()
     if purged:
-        print(f"[retention] 已清理过期浏览历史 {purged} 条")
+        log.info(f"[retention] 已清理过期浏览历史 {purged} 条")
 except OSError as exc:
-    print(f"[retention] 浏览历史清理失败(不影响启动): {exc}")
+    log.warning(f"[retention] 浏览历史清理失败(不影响启动): {exc}")
 rag.init()

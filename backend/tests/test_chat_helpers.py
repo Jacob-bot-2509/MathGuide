@@ -64,6 +64,18 @@ def test_strip_meta():
     assert chat._strip_meta("什么是极限", None) == "什么是极限"
 
 
+def test_normalize_query_fullwidth_and_filler():
+    assert chat._normalize_query("请问 什么是极限？") == "什么是极限?"
+    assert chat._normalize_query("\\left(x\\right)") == "(x)"
+
+
+def test_pick_role_routes_hard_questions_to_deep(monkeypatch):
+    monkeypatch.setattr(chat.rag.llm, "pick", lambda role: role)
+    assert chat._pick_role("证明这个不等式") == "deep"
+    assert chat._pick_role("(1) 求极限 (2) 求导数") == "deep"
+    assert chat._pick_role("什么是极限") == "main"
+
+
 def test_clean_scope():
     assert chat._clean_scope(None) is None
     assert chat._clean_scope("arXiv") is None

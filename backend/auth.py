@@ -12,12 +12,20 @@
     {method: "wechat" | "qq", nickname?, avatar?}
         访客式登录(演示:模拟与设备账号授权交接),创建 guest 用户
     统一返回 200 {token, user}
-- POST /api/auth/session  (Bearer 或 Cookie) → 200 {user} | 401
+- GET  /api/auth/session  (Bearer 或 Cookie) → 200 {user} | 401
 - POST /api/auth/logout  (Bearer 或 Cookie) → 200 {ok: true}
 
 双域部署:登录成功同时下发 HttpOnly 会话 Cookie(mg_session,作用域由
 MG_COOKIE_DOMAIN 控制);learn/research 两个子域共享登录,浏览器存储仍按
 origin 各自隔离。Authorization: Bearer 继续兼容,旧客户端不需要改。
+请求鉴权先试 Bearer、失效再退回 Cookie(多标签页轮换后旧 Bearer 不会误判未登录)。
+
+会话有效期(滑动续期):token 硬上限 24h,Cookie 记 30 天;每次
+GET /api/auth/session 在 token 剩余寿命不足 20% 时轮换新 token,并把新 token
+放在响应体 `token` 字段里(前端写回 localStorage),Cookie 同步换成新的。
+结果是「30 天内来过就一直登录」,而长期不用的会话最多 24h 后失效。
+轮换不吊销旧 token(表里没有退役时间字段,且多标签页可能仍持有),旧 token
+会随自己的 24h 到期被清理,暴露窗口不超过原 TTL。
 
 演示模式:MG_DEMO_MODE 默认 1,允许固定验证码、访客登录与开放注册;设为 0/off 后
 这些演示通道与 /register 直接拒绝,真实部署必须关闭。认证接口按客户端 IP 限流。
@@ -38,14 +46,23 @@ import session_cache
 import store
 import usage
 from http_utils import read_json_object
+from log import get_logger
 from rate_limit import SlidingWindowLimiter
+
+log = get_logger(__name__)
 
 DEMO_CODE = "123456"
 
 # 跨子域共享登录:Cookie 作用域设为父域(MG_COOKIE_DOMAIN),learn/research
 # 两个子域都能读到;localStorage 仍按 origin 各自隔离,数据不会因此串区。
 COOKIE_NAME = "mg_session"
-COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 天,与 token 的实际留存策略同量级
+# 滑动续期(D1 方案 B):Cookie 记 30 天,真正的有效期看 token。
+# token 仍是 24h 硬上限,但每次 /api/auth/session 在剩余寿命不足 20% 时轮换新 token,
+# Cookie 同步刷新 —— "30 天内来过就一直是登录态",长期不用则最多 24h 后失效。
+COOKIE_MAX_AGE = 30 * 24 * 3600
+RENEW_AFTER_RATIO = 0.8  # 已用掉 TTL 的 80%(剩 20%)才轮换,避免每次启动都写库
+RENEW_MIN_INTERVAL = 300.0  # 同一账号 5 分钟内不重复轮换(客户端没写回新 token 时防抖)
+TOKEN_SCOPE_KEY = "mg.token"  # 请求实际生效的 token,放在 request.scope 里供 session() 复用
 
 DEFAULT_AVATAR = "preset:sum"  # 与前端 AVATAR_PRESETS[0] 对应
 NICKNAME_MAX = 40
@@ -178,16 +195,28 @@ def _password_matches(password: str, stored: object) -> tuple[bool, bool]:
     return secrets.compare_digest(expected, digest), store.is_legacy_hash(salt_spec)
 
 
-def _bearer_token(request: Request) -> str:
-    """取登录 token:优先 Authorization 头,其次 HttpOnly 会话 Cookie。
+def _tokens_in_play(request: Request) -> list[str]:
+    """本次请求可用的凭据列表:Authorization 优先,其次 HttpOnly Cookie。
 
-    双域部署下 Cookie 由父域共享,两个子域自动同登录;旧的 Bearer 方式
-    保留,既有客户端与本地开发不需要改。
+    两级都试、而不是只认第一个:Bearer 来自 localStorage,可能是上一次轮换前的
+    旧 token(另一个标签页已经刷新过 Cookie),只认它会把用户白白踢回登录页。
     """
+    tokens: list[str] = []
     header = request.headers.get("authorization", "")
     if header.lower().startswith("bearer "):
-        return header[7:]
-    return request.cookies.get(COOKIE_NAME, "")
+        token = header[7:].strip()
+        if token:
+            tokens.append(token)
+    cookie = request.cookies.get(COOKIE_NAME, "")
+    if cookie and cookie not in tokens:
+        tokens.append(cookie)
+    return tokens
+
+
+def _bearer_token(request: Request) -> str:
+    """当前请求的首选凭据(Bearer 优先);仅用于清理类操作。"""
+    tokens = _tokens_in_play(request)
+    return tokens[0] if tokens else ""
 
 
 def _cookie_domain() -> str | None:
@@ -225,12 +254,17 @@ def _auth_json(payload: dict, request: Request, token: str) -> JSONResponse:
 
 
 def require_auth(request: Request) -> dict:
-    """取当前登录用户;未认证抛 401(Starlette 默认转 JSON {"detail": ...})"""
-    token = _bearer_token(request)
-    rec = store.resolve_token(token) if token else None
-    if not rec:
-        raise HTTPException(401, "unauthorized")
-    return rec
+    """取当前登录用户;未认证抛 401(Starlette 默认转 JSON {"detail": ...})。
+
+    先试 Bearer、失效再退回 Cookie:轮换后旧标签页手里的 Bearer 会过期,
+    但 Cookie 可能已经是新 token,不该因此判定"未登录"。
+    """
+    for token in _tokens_in_play(request):
+        rec = store.resolve_token(token)
+        if rec:
+            request.scope[TOKEN_SCOPE_KEY] = token
+            return rec
+    raise HTTPException(401, "unauthorized")
 
 
 def _valid_phone(phone: str) -> bool:
@@ -302,7 +336,7 @@ async def login(request: Request) -> JSONResponse:
                 try:
                     store.update_password_hash(uid, store.hash_password(password))
                 except OSError as exc:
-                    print(f"[auth] 密码哈希升级失败(不影响本次登录): {exc}")
+                    log.warning(f"[auth] 密码哈希升级失败(不影响本次登录): {exc}")
         else:  # code
             if not _demo_mode():
                 raise HTTPException(400, "code login disabled")
@@ -358,18 +392,48 @@ async def login(request: Request) -> JSONResponse:
     raise HTTPException(400, "unknown method")
 
 
+def _should_renew(token: str) -> bool:
+    """剩余寿命不足 20% 时返回 True(见 RENEW_AFTER_RATIO)。
+
+    轮换**不吊销**旧 token:tokens 表没有"退役时间"字段(本轮不改表结构),
+    而多标签页与长连接可能仍持有旧 token;它会在自己的 24h 到期时被
+    `issue_token` 里的 sweep 清掉,暴露窗口不超过原 TTL。
+    """
+    age = store.token_age(token)
+    if age is None:
+        return False
+    return age >= store.TOKEN_TTL_HOURS * 3600 * RENEW_AFTER_RATIO
+
+
+def _renewed_recently(uid: str) -> bool:
+    """同一账号刚轮换过就跳过:客户端可能不写回新 token,否则每次启动都会签发一个。"""
+    newest = store.newest_token_age(uid)
+    return newest is not None and newest < RENEW_MIN_INTERVAL
+
+
 async def session(request: Request) -> JSONResponse:
     """当前登录态(供跨子域启动时恢复登录):
 
-    - Cookie 有效 → 返回 user,并顺带续期 Cookie(共享登录保持滑动有效);
+    - 凭据有效 → 返回 user;接近过期时轮换 token 并在响应体里带回新 token;
     - 只有旧 Bearer token → 补发 Cookie,升级到跨子域登录;
     - 都没有 → 401,前端回登录页。
     """
     rec = require_auth(request)
-    token = _bearer_token(request)
-    response = JSONResponse({"user": user_dto(rec)}, headers={"Cache-Control": "no-store"})
-    if token:
-        _set_session_cookie(response, token, request)
+    uid = str(rec.get("uid") or "")
+    used = str(request.scope.get(TOKEN_SCOPE_KEY) or "")
+    payload: dict = {"user": user_dto(rec)}
+    response_token = used
+    if used and _should_renew(used) and not _renewed_recently(uid):
+        try:
+            response_token = store.issue_token(uid)
+            payload["token"] = response_token
+        except OSError as exc:
+            # 写库失败不影响本次请求:继续用旧 token,Cookie 也不动
+            log.warning(f"[auth] 会话续期失败(本次沿用旧 token): {exc}")
+            response_token = used
+    response = JSONResponse(payload, headers={"Cache-Control": "no-store"})
+    if response_token:
+        _set_session_cookie(response, response_token, request)
     return response
 
 
@@ -377,13 +441,16 @@ async def logout(request: Request) -> JSONResponse:
     # 登出与登录共用同一套按 IP 限流:否则伪造 token 刷这里可以无限触发
     # store 的写盘路径(即使 revoke_token 已改成「没删到不写」,也没有理由白跑)
     _auth_rate_check(request)
-    token = _bearer_token(request)
-    if token:
-        rec = store.resolve_token(token)
+    # Bearer 与 Cookie 都清:轮换后两者可能不是同一个 token,只删一个会留下
+    # 仍然可用的凭据(用户以为已登出,Cookie 还能继续用)
+    rec = None
+    for token in _tokens_in_play(request):
+        found = store.resolve_token(token)
         store.revoke_token(token)
-        if rec:
-            # 会话级教材/摘要缓存按 uid 存,登出即清理,避免残留
-            session_cache.clear_user(rec.get("uid"))
+        rec = rec or found
+    if rec:
+        # 会话级教材/摘要缓存按 uid 存,登出即清理,避免残留
+        session_cache.clear_user(rec.get("uid"))
     response = JSONResponse({"ok": True})
     # 共享登录 Cookie 一并失效;Bearer token 删除逻辑保持不变
     response.delete_cookie(COOKIE_NAME, domain=_cookie_domain(), path="/")
@@ -445,7 +512,7 @@ async def delete_account(request: Request) -> JSONResponse:
     import diagnosis
 
     diagnosis.delete_user(uid)
-    # ?????????,???????
+    # 科研文档/项目/表格随账号一并删除,避免留下孤儿数据
     import research_corpus
 
     research_corpus.delete_user(uid)

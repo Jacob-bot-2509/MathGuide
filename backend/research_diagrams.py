@@ -14,17 +14,17 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 
-import research_corpus as rc
-import research_tables
 import analysis_client
-from auth import require_auth
-from http_utils import read_json_object
-from rag import llm
-from rate_limit import SlidingWindowLimiter
 import diagram_alerts
 import diagram_metrics
 import diagram_taxonomy as taxonomy
 import linear_algebra
+import research_corpus as rc
+import research_tables
+from auth import require_auth
+from http_utils import read_json_object
+from rag import llm
+from rate_limit import SlidingWindowLimiter
 
 PREFIX = "[[MG_DIAGRAM:"
 _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]")

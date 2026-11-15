@@ -7,10 +7,11 @@ def test_capabilities_default_false_without_packages(monkeypatch):
 
 
 def test_capabilities_endpoint_defaults_false(monkeypatch):
-    import research_tables as rt
     from starlette.applications import Starlette
     from starlette.routing import Route
     from starlette.testclient import TestClient
+
+    import research_tables as rt
 
     async def fake_caps():
         return {"rdkit": False, "biopython": False,

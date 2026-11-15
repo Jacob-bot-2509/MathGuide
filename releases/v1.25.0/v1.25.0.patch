@@ -1,0 +1,2087 @@
+diff --git a/.gitignore b/.gitignore
+index 0d19f01..c4f6536 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -35,3 +35,15 @@ backend/tools/.last_sync
+ 
+ # 独立分析 worker 的本地虚拟环境
+ backend/.venv-analysis/
++
++# 教材扫描与内部提取数据：仅内部使用，不入库/不发布
++_analysis_book.pdf
++review_packets/_book_pages/
++review_packets/_vision_*.json
++review_packets/book_extract/pilot*/
++review_packets/book_extract/full*/
++
++review_packets/_incoming_zip/
++review_packets/book_extract/_*.txt
++_zip_p006.jpg
++_our_p006.jpg
+diff --git a/backend/chat.py b/backend/chat.py
+index 20d6226..868ef4b 100644
+--- a/backend/chat.py
++++ b/backend/chat.py
+@@ -29,6 +29,7 @@ import random
+ import re
+ import secrets
+ import time
++import unicodedata
+ from collections import OrderedDict
+ 
+ from starlette.exceptions import HTTPException
+@@ -64,6 +65,9 @@ from session_cache import (
+ CHUNK = 6          # 直答模式每帧字符数(配合浏览器端 ~24ms 渲染节流)
+ FRAME_MS = 0.02    # 帧间隔(秒),模拟真实模型逐字输出
+ DIAGRAM_TIMEOUT = 45.0  # 单张图规划上限(秒);3D 采样较慢,但不能无限拖住回答
++# 普通问答检索条数:前 3 条在 prompt 里标「重点」,后 2 条标「备选」。
++# top5 比 top3 多召回金标(旧 48 题:0.667→0.75),但不会全部当同等依据。
++RETRIEVAL_TOP_K = 5
+ _DONE = "data: [DONE]\n\n"  # SSE 收尾标记(由 _sse 统一补,生成器不再各自 yield)
+ 
+ WELCOME_ZH = (
+@@ -133,13 +137,22 @@ def _is_chinese(text: str) -> bool:
+ 
+ # 深答路由触发词:证明 / 竞赛类问题交给 deep 强模型(未配置自动回退 main)
+ _DEEP_MARKERS = ("证明", "求证", "竞赛", "奥数", "难题", "prove", "proof", "olympiad")
++# 多小问标记:一道题里出现 2 个以上,通常比单问计算更吃推理
++_MULTI_PART_RE = re.compile(r"[（(]\s*[1-9一二三四五六七八九]\s*[)）]|[①②③④⑤⑥⑦⑧⑨]")
+ 
+ 
+ def _pick_role(question: str) -> str:
+-    """按需路由 LLM 角色:证明/竞赛 → deep,其余 main(节省成本,好钢用在刀刃上)"""
++    """按需路由 LLM 角色:证明/竞赛/多小问/长综合题 → deep,其余 main。
++    只按规则路由,不做模型分类:规则离线可解释,且不会把简单题误送贵模型。"""
+     q = question.lower()
+-    role = rag.llm.pick("deep") if any(m in q for m in _DEEP_MARKERS) else "main"
+-    print(f"[chat] 角色路由 {role} | 问题长度 {len(question)}")
++    parts = len(_MULTI_PART_RE.findall(question))
++    hard = (
++        any(m in q for m in _DEEP_MARKERS)
++        or parts >= 2
++        or len(question) >= 300
++    )
++    role = rag.llm.pick("deep") if hard else "main"
++    print(f"[chat] 角色路由 {role} | 问题长度 {len(question)} | 小问数 {parts}")
+     return role
+ 
+ 
+@@ -328,11 +341,29 @@ _FOLLOWUP_RE = re.compile(
+ )
+ 
+ 
++# 检索专用口语前缀:只影响检索词,不改发给模型的 prompt
++_QUERY_FILLER_RE = re.compile(
++    r"^(?:请问|请帮我|帮我|麻烦(?:你)?|我想问(?:一下)?|求解一下|解一下)[,，:：\s]*"
++)
++
++
++def _normalize_query(text: str) -> str:
++    """检索前归一化:全角转半角、LaTeX 定界命令去噪、空白压缩、去口语前缀。
++    只做等价变换,不删题目里的数学内容。"""
++    value = unicodedata.normalize("NFKC", str(text or ""))
++    value = re.sub(r"\\(?:left|right)(?![A-Za-z])", "", value)
++    value = value.replace("−", "-").replace("–", "-")
++    value = re.sub(r"\s+", " ", value).strip()
++    value = _QUERY_FILLER_RE.sub("", value)
++    return value[:500]
++
++
+ def _retrieval_query(question: str, history: list[dict] | None) -> str:
+     """普通问答的检索词:追问时拼上一轮用户问题,避免「它和积分有什么关系」只检索“积分”。
+ 
+     只影响检索,不改发给模型的 prompt;历史仍按原样交给 LLM。
+     """
++    question = _normalize_query(question)
+     if not history or not _FOLLOWUP_RE.search(question):
+         return question
+     previous = next(
+@@ -341,7 +372,7 @@ def _retrieval_query(question: str, history: list[dict] | None) -> str:
+     )
+     if not previous:
+         return question
+-    return f"{previous} {question}"[:500]
++    return f"{_normalize_query(previous)} {question}"[:500]
+ 
+ 
+ # 会话滚动摘要:每 8 次请求压缩一次旧对话(便宜模型,失败静默),长对话保持早期上下文。
+@@ -636,24 +667,49 @@ def _stream_text(text: str) -> StreamingResponse:
+     return _sse(_frames(text))
+ 
+ 
+-async def _verify_answer(question: str, answer: str, role: str) -> str | None:
+-    """双角色验证:解答生成后用另一角色复核,返回一句复核结论(失败返回 None,不打断主回答)"""
++async def _verify_answer(question: str, answer: str, role: str) -> dict | None:
++    """双角色验证:解答生成后用另一角色复核。
++    返回 {"verdict": correct|wrong|uncertain, "issue": ..., "correction": ...};
++    复核不可用时返回 None,不打断主回答。"""
+     system = (
+-        "你是数学解答复核员。请核查用户问题与给出的解答:判断结论是否正确"
+-        "(结论:正确 / 有误 / 需人工复核),并用一句话说明依据。"
+-        "不要重算过程,不要输出除结论和一句话依据以外的任何内容。"
++        "你是数学解答复核员。请核查用户问题与给出的解答,只输出一个 JSON 对象,"
++        "不要 Markdown、不要解释。字段:\n"
++        '{"verdict":"correct|wrong|uncertain","issue":"一句话指出问题或依据",'
++        '"correction":"若 verdict=wrong,给出可替换的更正解答;否则留空"}\n'
++        "判断以题目条件和数学定义为准;过程省略但结论正确也算 correct;"
++        "不确定时用 uncertain,不要强行判错。"
+     )
+-    user = f"问题:{question[:300]}\n\n解答:\n{answer[:1500]}"
++    user = f"问题:{question[:500]}\n\n解答:\n{answer[:4000]}"
+     parts: list[str] = []
+     try:
+-        async for delta in rag.llm.stream_chat(system, user, role=role, thinking=False):
++        async for delta in rag.llm.stream_chat(
++                system, user, role=role, thinking=False, max_tokens=1600,
++                temperature=0):
+             parts.append(delta)
+-            if sum(len(p) for p in parts) >= 300:
++            if sum(len(p) for p in parts) >= 4000:
+                 break
+     except Exception:  # noqa: BLE001 复核失败静默跳过,不影响主回答
+         return None
+     text = "".join(parts).strip()
+-    return text[:200] or None
++    if not text:
++        return None
++    start, end = text.find("{"), text.rfind("}")
++    if start >= 0 and end > start:
++        try:
++            data = json.loads(text[start:end + 1])
++        except json.JSONDecodeError:
++            data = None
++        if isinstance(data, dict):
++            verdict = str(data.get("verdict", "")).strip().lower()
++            if verdict not in {"correct", "wrong", "uncertain"}:
++                verdict = "uncertain"
++            return {
++                "verdict": verdict,
++                "issue": str(data.get("issue", "")).strip()[:300],
++                "correction": str(data.get("correction", "")).strip()[:4000],
++            }
++    # 兼容模型只给一句话的情况:不把它当判错
++    return {"verdict": "uncertain", "issue": text[:300], "correction": ""}
+ 
+ 
+ async def _diagram_verified(question: str, context: str, diagram: dict) -> bool:
+@@ -680,7 +736,8 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
+                    diagram_mode: bool = False, diagram_allowed: bool = True,
+                    diagram_question: str = "",
+                    diagram_excerpts: list[dict] | None = None,
+-                   diagram_request_id: str = ""):
++                   diagram_request_id: str = "",
++                   temperature: float | None = None):
+     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
+     verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过);
+     summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)。
+@@ -822,8 +879,11 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
+             return research_diagrams.diagram_event(
+                 diagram, markers.request_id,
+                 marker.anchor_id, marker.anchor_index)
++        stream_kwargs = {"history": history, "role": role}
++        if temperature is not None:
++            stream_kwargs["temperature"] = temperature
+         if markers is None:
+-            async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
++            async for delta in rag.llm.stream_chat(system, prompt, **stream_kwargs):
+                 answer.append(delta)
+                 yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
+         else:
+@@ -833,7 +893,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
+                     {"section": chunk.section, "text": chunk.text}
+                     for chunk, _score in chunks
+                 ]
+-            async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
++            async for delta in rag.llm.stream_chat(system, prompt, **stream_kwargs):
+                 clean = markers.feed(delta)
+                 if clean:
+                     answer.append(clean)
+@@ -964,8 +1024,16 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
+             vrole = "main" if role == "deep" else rag.llm.pick("deep")
+             verdict = await _verify_answer(prompt, "".join(answer), vrole)
+             if verdict:
+-                print(f"[chat] 复核({vrole}): {len(verdict)} 字")
+-                yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
++                label = {"correct": "正确", "wrong": "有误",
++                         "uncertain": "需人工复核"}.get(verdict["verdict"], "需人工复核")
++                print(f"[chat] 复核({vrole}): {label} | {len(verdict['issue'])} 字")
++                correction = verdict.get("correction", "")
++                if verdict["verdict"] == "wrong" and correction:
++                    # 更正放在复核行之前:_clean_answer 只剥末尾复核行,更正会保留给评测
++                    yield (f"data: {json.dumps(f'**更正**\n\n{correction}', ensure_ascii=False)}\n\n")
++                issue = verdict.get("issue", "")
++                suffix = f":{issue}" if issue else ""
++                yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}):{label}{suffix}', ensure_ascii=False)}\n\n"
+             # 解答完询问是否收录进问题记录(归纳本):前端渲染为「是/否」按钮。
+             # 科研区不设问题归纳,不追加该入口。
+             if workspace == "learn":
+@@ -1919,7 +1987,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
+     retrieval_query = _retrieval_query(question, history)
+     # 检索含 embedding 请求(同步、冷启动可达数十秒)→ 线程池执行,
+     # 不阻塞事件循环(否则这段等待会冻住所有并发会话)
+-    chunks = await asyncio.to_thread(rag.search, retrieval_query, 3)
++    chunks = await asyncio.to_thread(rag.search, retrieval_query, RETRIEVAL_TOP_K)
+ 
+     # 图谱知识点会话:追问仍带上摘要与要点,排在普通检索资料之前
+     if workspace == "learn":
+@@ -1959,6 +2027,13 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
+         # 公式手册第二步(上一条用户消息带澄清标记)强制开启:公式定理作答必须有独立复核
+         role = _pick_role(question)
+         meta["role"] = role
++        # 评测可显式传 temperature=0 固定随机性;普通请求不传,沿用平台默认
++        raw_temperature = body.get("temperature")
++        temperature = (
++            min(2.0, max(0.0, float(raw_temperature)))
++            if isinstance(raw_temperature, (int, float)) and not isinstance(raw_temperature, bool)
++            else None
++        )
+         sid = valid_session_id(body.get("sessionId"))
+         verify = bool(chunks) or rag.is_math_question(question) or _is_formula_followup(history)
+         summary = get_summary(uid, sid, workspace=workspace) if sid is not None else ""
+@@ -1973,7 +2048,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
+                 {"section": chunk.section, "text": chunk.text}
+                 for chunk, _score in chunks
+             ],
+-            diagram_request_id=secrets.token_hex(8)))
++            diagram_request_id=secrets.token_hex(8),
++            temperature=temperature))
+     # 直答模式:
+     # ① 检索到相关知识 → 知识直答(专业问询专业回答);
+     # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架;
+diff --git a/backend/doc.py b/backend/doc.py
+index ef27a83..5c6969f 100644
+--- a/backend/doc.py
++++ b/backend/doc.py
+@@ -187,6 +187,7 @@ def _render_html(doc: dict, lang: str, katex_dir: Path, brand: str | None = None
+     zh = lang != "en"
+     css = (katex_dir / "katex.min.css").as_uri()
+     js = (katex_dir / "katex.min.js").as_uri()
++    array_js = (katex_dir.parent / "math_arrays.js").as_uri()
+     nonce = secrets.token_hex(16)  # 只放行本页内联脚本;注入的 <script> 没有 nonce
+     render_macros = {**math_render.MACROS, r"\knowl": r"\def\mgIgnore##1{}\mgIgnore{#1}#2"}
+ 
+@@ -270,18 +271,23 @@ def _render_html(doc: dict, lang: str, katex_dir: Path, brand: str | None = None
+   {''.join(secs)}
+   {refs}
+   <script nonce="{nonce}" src="{js}"></script>
++  <script nonce="{nonce}" src="{array_js}"></script>
+   <script nonce="{nonce}">
+     const mathMacros = {json.dumps(render_macros, ensure_ascii=True)};
+-    document.querySelectorAll('.mg-math').forEach(function (el) {{
++    function renderFormula(el, display) {{
+       const source = el.textContent;
+-      try {{ katex.render(source, el, {{ throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
+-      catch (e) {{ el.textContent = source; }}
+-    }});
+-    document.querySelectorAll('.mg-mathd').forEach(function (el) {{
+-      const source = el.textContent;
+-      try {{ katex.render(source, el, {{ displayMode: true, throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
+-      catch (e) {{ el.textContent = source; }}
+-    }});
++      try {{ katex.render(source, el, {{ displayMode: display, throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
++      catch (e) {{
++        try {{
++          const table = MGMathArrays.renderMathArray(source, cell => katex.renderToString(cell,
++            {{throwOnError: true, macros: Object.assign({{}}, mathMacros)}}));
++          if (table) {{ el.innerHTML = table; return; }}
++        }} catch (ignored) {{}}
++        el.textContent = source;
++      }}
++    }}
++    document.querySelectorAll('.mg-math').forEach(el => renderFormula(el, false));
++    document.querySelectorAll('.mg-mathd').forEach(el => renderFormula(el, true));
+   </script>
+ </body>
+ </html>"""
+diff --git a/backend/docgen.py b/backend/docgen.py
+index 9f2f588..5248037 100644
+--- a/backend/docgen.py
++++ b/backend/docgen.py
+@@ -20,6 +20,7 @@ from starlette.responses import JSONResponse, Response
+ 
+ import doc
+ import math_render
++import math_table_render
+ import rag
+ from chat import _rate_check, _record, require_auth
+ from http_utils import read_json_object
+@@ -119,15 +120,24 @@ def _markdown(document: dict, lang: str) -> str:
+ 
+ def _docx_bytes(document: dict, lang: str) -> bytes:
+     from docx import Document
++    from docx.shared import Inches
+ 
+     d = doc._normalize_doc(document, "", lang)
+     out = Document()
++    images: dict[str, tuple[bytes, float]] = {}
+ 
+     def add_text(paragraph, text):
+         for is_math, _display, value in math_render.segments(text):
+             if is_math:
+                 try:
+-                    paragraph._p.append(math_render.to_omml(value))
++                    if math_render.requires_table_image(math_render.prepare(value)):
++                        if value not in images:
++                            images[value] = math_table_render.render_table_image(value)
++                        picture, width = images[value]
++                        shape = paragraph.add_run().add_picture(BytesIO(picture), width=Inches(width))
++                        shape._inline.docPr.set("descr", value)
++                    else:
++                        paragraph._p.append(math_render.to_omml(value))
+                 except (ValueError, KeyError, IndexError):
+                     paragraph.add_run(value)
+             else:
+diff --git a/backend/evaluation/README.md b/backend/evaluation/README.md
+index 0f96f69..b5e72ee 100644
+--- a/backend/evaluation/README.md
++++ b/backend/evaluation/README.md
+@@ -27,9 +27,10 @@ python tools/eval_qa.py --data evaluation/data/sample.jsonl --stage answer --no-
+ 
+ | 指标 | 定义 |
+ |---|---|
+-| 正确率 | 判为正确的可答题 / 已判可答题 |
+-| 答案级幻觉率 | 至少 1 条无依据断言的回答 / 有断言且可判的回答 |
+-| 断言级幻觉率 | 无依据断言数 / 总断言数 |
++| 正确率 | 判为正确的可答题 / 已判可答题（优先严格客观判分：数值题只认 `\boxed{}` 或最后一个数字） |
++| 宽松正确率 | 旧 numeric 规则（回答任意位置出现标准数字即算对），仅用于对照 |
++| 答案级幻觉率 | 存在明确编造或矛盾断言的回答 / 可判定的回答 |
++| 断言级幻觉率 | 明确编造或矛盾断言数 / 可判定断言数 |
+ | 不可答编造率 | 不可答题中未拒答的比例 |
+ | hit@k | top-k 命中任一金标片段的问题比例 |
+ | recall@k | top-k 命中的金标片段数 / 金标总数 |
+@@ -46,6 +47,7 @@ JSONL,每行一条:
+   "id": "kb-taylor-01",
+   "question": "什么是泰勒展开？",
+   "reference_answer": "……",
++  "reference_solution": "完整推导（可选，证明题判分用）",
+   "answer_type": "concept",
+   "domain": "泰勒展开",
+   "difficulty": 2,
+@@ -57,21 +59,26 @@ JSONL,每行一条:
+ 
+ - `answer_type`: `concept|numeric|expr|choice|proof|unanswerable`。
+ - `numeric`/`expr`/`choice`: 先走机器判分(`sympy`、数值容差、选项匹配);解析失败才交给 LLM 评审。
+-- `answerable: false`: 不可答题,`reference_answer` 留空;评审判“是否拒答”。
++- `reference_solution`: 完整解答。有它时评委以完整推导为准,且**不让检索片段参与判分**(内部正确率集不把无关片段当依据)。
++- `answerable: false`: 不可答题,`reference_answer` 留空;评审判”是否拒答”。
+ - `gold_chunk_ids`: 留空则不参与检索召回统计。
+ 
++内部 400 道正确率集由 `review_packets/book_extract/build_eval_dataset.py` 生成:
++`eval_correctness_400_eval.jsonl`(全量)、`eval_correctness_dev_120.jsonl`(开发集)、
++`eval_correctness_test_280.jsonl`(锁定集)。评测统一传 `temperature=0`。
++
+ ## 评审可信度
+ 
+-- 默认评审角色 `backup`(glm),与生成角色 `main`(qwen)异源;同源自评不可信。
++- 默认请求评审角色 `backup`;其不可用时可能回退到 `deep` 或 `main`。报告列出实际角色;角色不同不保证模型或提供商异源,必须核对配置。
+ - 评审输出 JSON,失败会记入 `health.judge_errors`,不会伪造判分。
+ - 评审只是模型判分。写论文/答辩前,必须人工盲标 50~100 条,算 Cohen's kappa;
+   `kappa < 0.6` 时不要引用这些数字。
+-- 评审提示明确禁止用“数学常识”给断言背书:标准答案和检索资料没写的,一律算无依据。
++- 评审可依据标准解答、题目条件或可验证的数学推导判定断言;证据不足时标记 `null`,单独统计,不自动视为正确或编造。旧版 `supported=false` 包含“未找到依据”,重新汇总时按无法判定处理;新旧口径不可直接比较。
+ 
+ ## 当前限制
+ 
+ - 研究型问题默认跳过(需要外部检索源,评测不稳定);加 `--include-research` 才跑。
+ - 回答阶段串行执行(`rag.search` 捕获需要全进程 monkeypatch),检索阶段可并发。
+-- 数值题只比较最后一个数字;复杂公式建议用 `expr` + `\boxed{}`。
++- 数值题支持简单分数;其他复杂表达式可能无法自动判分并需评审。没有 `\boxed{}` 时仍可能依赖最后一个数字,无法保证准确。
+ - 证明题仍靠 LLM 评审,没有符号证明器。
+ - 样本集很小,当前只用于框架冒烟,不能对外报准确率。
+diff --git a/backend/evaluation/datasets.py b/backend/evaluation/datasets.py
+index 5bc8c01..343c9e5 100644
+--- a/backend/evaluation/datasets.py
++++ b/backend/evaluation/datasets.py
+@@ -53,6 +53,7 @@ def parse_item(raw: dict, line_no: int = 0) -> EvalItem:
+         id=item_id,
+         question=question,
+         reference_answer=_as_str(raw.get("reference_answer")),
++        reference_solution=_as_str(raw.get("reference_solution")),
+         answer_type=answer_type,
+         domain=_as_str(raw.get("domain"), "other") or "other",
+         difficulty=_as_int(raw.get("difficulty")),
+@@ -92,6 +93,7 @@ def dataset_hash(items: list[EvalItem]) -> str:
+             "id": i.id,
+             "question": i.question,
+             "reference_answer": i.reference_answer,
++            "reference_solution": i.reference_solution,
+             "answer_type": i.answer_type,
+             "answerable": i.answerable,
+             "gold_chunk_ids": i.gold_chunk_ids,
+diff --git a/backend/evaluation/extract.py b/backend/evaluation/extract.py
+index 59397f4..44854c2 100644
+--- a/backend/evaluation/extract.py
++++ b/backend/evaluation/extract.py
+@@ -9,7 +9,6 @@ import re
+ 
+ from .types import EvalItem
+ 
+-_BOXED_RE = re.compile(r"\\boxed\s*\{([^{}]+)\}")
+ _NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+ _ANSWER_CHOICE_RE = re.compile(
+     r"(?:正确答案|答案)\s*(?:是|为)?\s*[:：]?\s*([A-Da-d])\b")
+@@ -23,8 +22,20 @@ except Exception:  # noqa: BLE001
+ 
+ 
+ def extract_boxed(text: str) -> str:
+-    matches = _BOXED_RE.findall(text)
+-    return matches[-1].strip() if matches else ""
++    result = ""
++    for match in re.finditer(r"\\boxed\s*\{", text):
++        result = ""
++        depth = 1
++        pos = match.end()
++        while pos < len(text) and depth:
++            if text[pos] == "\\" and pos + 1 < len(text) and text[pos + 1] in "{}":
++                pos += 2
++                continue
++            depth += (text[pos] == "{") - (text[pos] == "}")
++            pos += 1
++        if depth == 0:
++            result = text[match.end():pos - 1].strip()
++    return result
+ 
+ 
+ def extract_numbers(text: str) -> list[float]:
+@@ -83,8 +94,37 @@ def _sympy_equal(a: str, b: str) -> bool | None:
+         return None
+ 
+ 
+-def objective_check(item: EvalItem, answer: str) -> tuple[bool | None, str]:
+-    """返回 (是否正确, 判分说明)。None 表示无法客观判定。"""
++def _strict_scalar(value: str) -> float | None:
++    """Parse a complete numeric value without treating a fraction's denominator as its answer."""
++    import math
++
++    value = value.strip().strip("$").strip()
++    number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
++    frac = re.fullmatch(rf"([+-]?)\\(?:d|t)?frac\s*\{{\s*({number})\s*\}}\s*\{{\s*({number})\s*\}}", value)
++    slash = re.fullmatch(rf"({number})\s*/\s*({number})", value)
++    try:
++        if frac:
++            result = float(frac.group(2)) / float(frac.group(3))
++            if frac.group(1) == "-":
++                result = -result
++        elif slash:
++            result = float(slash.group(1)) / float(slash.group(2))
++        elif re.fullmatch(number, value):
++            result = float(value)
++        else:
++            return None
++        return result if math.isfinite(result) else None
++    except (ValueError, ZeroDivisionError, OverflowError):
++        return None
++
++
++def objective_check(item: EvalItem, answer: str,
++                    strict: bool = False) -> tuple[bool | None, str]:
++    """返回 (是否正确, 判分说明)。None 表示无法客观判定。
++
++    strict=True 用于评测口径:数值题只认 \boxed{} 或最后一个数字,
++    避免「回答任意位置出现标准数字」把错误答案判对。默认 False 保持旧行为。
++    """
+     ref = item.reference_answer.strip()
+     if not ref:
+         return None, "无标准答案"
+@@ -96,6 +136,22 @@ def objective_check(item: EvalItem, answer: str) -> tuple[bool | None, str]:
+         return None, "选项无法解析"
+ 
+     if item.answer_type == "numeric":
++        if strict:
++            want = _strict_scalar(extract_boxed(ref) or ref)
++            boxed = extract_boxed(answer)
++            if boxed:
++                got = _strict_scalar(boxed)
++            elif r"\boxed" in answer:
++                got = None
++            elif re.search(r"\\(?:d|t)?frac\b|\d\s*/\s*\d", answer):
++                got = _strict_scalar(answer)
++            else:
++                got = extract_number(answer)
++            if want is None or got is None:
++                return None, "数值无法可靠解析"
++            approximate = any(marker in ref or marker in answer for marker in ("约", "大约", "≈", "~"))
++            tolerance = (0.01 if approximate else 1e-6) * max(1.0, abs(want))
++            return abs(got - want) <= tolerance, f"numeric-strict: ref={want}, got={got}"
+         want = extract_number(ref)
+         # 不只看最后一个数字:答案里可能后出现 "2σ""区间端点" 等噪声。
+         # 标准答案的数字出现在回答任意位置即判对;这偏宽松,但避免解析假阴性。
+diff --git a/backend/evaluation/judges.py b/backend/evaluation/judges.py
+index 1354ba1..3df6fc5 100644
+--- a/backend/evaluation/judges.py
++++ b/backend/evaluation/judges.py
+@@ -8,6 +8,8 @@ from __future__ import annotations
+ import json
+ import re
+ 
++import httpx
++
+ from rag import llm
+ 
+ from .types import ChunkTrace, EvalItem
+@@ -19,19 +21,22 @@ JUDGE_SYSTEM = (
+     '  "correct": true/false,\n'
+     '  "score": 0 | 0.5 | 1,\n'
+     '  "refused": true/false,\n'
+-    '  "claims": [{"text": "关键断言", "supported": true/false, "reason": "依据"}],\n'
++    '  "claims": [{"text": "关键断言", "supported": true/false/null, "reason": "依据"}],\n'
+     '  "rationale": "一句话"\n'
+     "}\n"
+     "规则:\n"
+     "1. correct 表示最终结论是否与标准答案一致;等价形式也算正确。\n"
+     "2. refused 表示待评答案是否明确拒答或声明资料不足。\n"
+-    "3. claims 取最多 8 条关键断言;supported 仅当该断言能被标准答案或检索资料直接支持,"
+-    "或属于题目给出的条件。无依据、与资料矛盾、把猜测说成事实,都记 false。"
+-    "不得以「数学常识」「众所周知」为由判 supported:标准答案和检索资料都没写的,一律 false。\n"
++    "3. claims 取最多 8 条关键断言。supported=true 表示被题目、标准解答或检索资料支持,"
++    "或者可用明确的数学定义及推导验证;false 表示有明确矛盾或编造的依据;"
++    "资料未提及、无法验证或不确定时必须为 null,不得仅因标准解答未逐字提及就判 false。"
++    "reason 应说明依据或不确定原因。\n"
+     "4. 标准答案为空(不可答题)时,correct 表示是否恰当处理:明确拒答、声明资料不足,"
+     "或正确指出所请求的对象不存在、条件矛盾、题目超出可答范围,均判 true;"
+     "编造一个不存在的对象、给出具体数值或构造,判 false。\n"
+-    "5. 计算错误但没编造事实:correct=false,但对应断言的 supported 仍可为 true。\n"
++    "5. 单纯计算失误但没有编造事实时,correct=false;对应断言若无法归类为编造则 supported=null。\n"
++    "6. 证明题必须给出足以推出结论的有效论证;仅复述结论或缺少关键证明步骤,correct=false。"
++    "证明方法无需与标准解答相同,逻辑有效的其他方法也应认可。\n"
+ )
+ 
+ 
+@@ -70,7 +75,7 @@ def _normalize(data: dict, item: EvalItem) -> dict:
+                 continue
+             claims.append({
+                 "text": text[:300],
+-                "supported": bool(c.get("supported", False)),
++                "supported": c.get("supported") if isinstance(c.get("supported"), bool) else None,
+                 "reason": str(c.get("reason", ""))[:200],
+             })
+     correct = data.get("correct")
+@@ -84,37 +89,64 @@ def _normalize(data: dict, item: EvalItem) -> dict:
+         "score": data.get("score") if data.get("score") in (0, 0.5, 1, 0.0, 1.0) else None,
+         "refused": bool(data.get("refused")) if isinstance(data.get("refused"), bool) else None,
+         "claims": claims,
++        "claim_schema": "truth-v2",
+         "rationale": str(data.get("rationale", ""))[:300],
+     }
+ 
+ 
+ async def judge_answer(item: EvalItem, answer: str, chunks: list[ChunkTrace],
+-                       role: str = "backup") -> dict:
+-    """返回评审 JSON;失败时返回 {"error": ...},调用方需计入 judge_errors。"""
+-    if not llm.is_configured(role):
+-        return {"error": f"评审角色 {role} 未配置"}
++                       role: str = "backup", ground_truth_only: bool = False) -> dict:
++    """返回评审 JSON;失败时返回 {"error": ...},调用方需计入 judge_errors。
++
++    ground_truth_only=True 时不让检索片段参与判分:内部正确率集以标准解答为金标,
++    无关片段不应给错误断言背书。"""
++    if not any(llm.is_configured(r) for r in (role, "deep", "main")):
++        return {"error": f"评审角色 {role} 未配置,且没有可回退的评审角色"}
++    context = "(本次判分不使用检索资料)" if ground_truth_only else _context(chunks)
++    solution = (
++        f"\n标准解答:\n{item.reference_solution[:6000]}\n"
++        if item.reference_solution else ""
++    )
+     prompt = (
+         f"题目:\n{item.question}\n\n"
+-        f"标准答案:\n{item.reference_answer or '(不可答题,无标准答案)'}\n\n"
+-        f"检索资料:\n{_context(chunks)}\n\n"
+-        f"待评答案:\n{answer[:3000]}"
++        f"标准答案:\n{item.reference_answer or '(不可答题,无标准答案)'}\n"
++        f"{solution}"
++        f"检索资料:\n{context}\n\n"
++        f"待评答案:\n{answer[:8000]}"
+     )
+     last_error = "评审失败"
+     last_raw = ""
+-    # 评审模型偶发超时或被 max_tokens 截断;重试一次,仍失败才计入 judge_errors
+-    for _ in range(2):
+-        parts: list[str] = []
+-        try:
+-            async for delta in llm.stream_chat(JUDGE_SYSTEM, prompt, role=role,
+-                                               fallback=False, thinking=False,
+-                                               max_tokens=2000):
+-                parts.append(delta)
+-        except Exception as exc:  # noqa: BLE001 评审失败不伪造结果
+-            last_error = f"{type(exc).__name__}: {exc}"
++    # 评审角色可能因平台未开通直接 401/403(实测 aliyun 备胎会这样);
++    # 这种情况下换下一个已配置角色,不让整批评测因一个平台不可用而报废。
++    roles = [role] + [alt for alt in ("deep", "main")
++                      if alt != role and llm.is_configured(alt)]
++    for candidate in roles:
++        if not llm.is_configured(candidate):
+             continue
+-        try:
+-            return _normalize(_parse_json("".join(parts)), item)
+-        except Exception as exc:  # noqa: BLE001
+-            last_error = f"评审输出解析失败: {type(exc).__name__}: {exc}"
+-            last_raw = "".join(parts)[:500]
++        switch_role = False
++        # 评审模型偶发超时或被 max_tokens 截断;重试一次,仍失败才换角色/计入 judge_errors
++        for _ in range(2):
++            parts: list[str] = []
++            try:
++                async for delta in llm.stream_chat(
++                        JUDGE_SYSTEM, prompt, role=candidate,
++                        fallback=False, thinking=False,
++                        max_tokens=2000, temperature=0):
++                    parts.append(delta)
++            except Exception as exc:  # noqa: BLE001 评审失败不伪造结果
++                last_error = f"{type(exc).__name__}: {exc}"
++                if (isinstance(exc, httpx.HTTPStatusError)
++                        and exc.response.status_code in (401, 403, 404)):
++                    switch_role = True
++                    break  # 该平台不可用,换下一个角色
++                continue
++            try:
++                result = _normalize(_parse_json("".join(parts)), item)
++                result["judge_role"] = candidate
++                return result
++            except Exception as exc:  # noqa: BLE001
++                last_error = f"评审输出解析失败: {type(exc).__name__}: {exc}"
++                last_raw = "".join(parts)[:500]
++        if not switch_role:
++            break
+     return {"error": last_error, "raw": last_raw}
+diff --git a/backend/evaluation/metrics.py b/backend/evaluation/metrics.py
+index a432a0f..83822f7 100644
+--- a/backend/evaluation/metrics.py
++++ b/backend/evaluation/metrics.py
+@@ -2,8 +2,8 @@
+ 
+ 口径:
+ - accuracy       = 判为正确的可答题 / 已判可答题
+-- answer_halluc  = 至少 1 条无依据断言的回答 / 有断言且可判的回答
+-- claim_halluc   = 无依据断言数 / 总断言数
++- answer_halluc  = 至少 1 条明确错误或编造断言的回答 / 可判定的回答
++- claim_halluc   = 明确错误或编造断言数 / 可判定断言数
+ - fabrication    = 不可答题中未拒答的比例
+ - hit@k          = top-k 命中任一金标片段的问题比例
+ - recall@k       = top-k 命中的金标片段数 / 金标片段总数(按题平均)
+@@ -31,17 +31,54 @@ def _rate(k: int, n: int) -> dict:
+ 
+ 
+ def _answer_correct(record: dict) -> bool | None:
+-    judge = record.get("judge") or {}
++    """严格口径不可解析时交给评审,旧记录保留原有口径。"""
++    if "objective_correct_strict" in record:
++        strict = record["objective_correct_strict"]
++        if isinstance(strict, bool):
++            return strict
++        correct = (record.get("judge") or {}).get("correct")
++        return correct if isinstance(correct, bool) else None
+     if "objective_correct" in record and record["objective_correct"] is not None:
+         return bool(record["objective_correct"])
++    judge = record.get("judge") or {}
+     correct = judge.get("correct")
+     return bool(correct) if isinstance(correct, bool) else None
+ 
+ 
+-def _claims(record: dict) -> list[dict]:
++def _answer_correct_lenient(record: dict) -> bool | None:
++    """宽松口径:旧 numeric 规则(回答任意位置出现标准数字即算对)。"""
++    if record.get("objective_correct") is not None:
++        return bool(record["objective_correct"])
++    return _answer_correct(record)
++
++
++def _claim_states(record: dict) -> list[bool | None]:
+     judge = record.get("judge") or {}
+     claims = judge.get("claims") or []
+-    return [c for c in claims if isinstance(c, dict) and isinstance(c.get("supported"), bool)]
++    if not isinstance(claims, list):
++        return []
++    states = []
++    for claim in claims:
++        if not isinstance(claim, dict):
++            continue
++        value = claim.get("supported")
++        if value is True:
++            states.append(True)
++        elif value is False and judge.get("claim_schema") == "truth-v2":
++            states.append(False)
++        else:
++            # Legacy false meant unsupported, which is not necessarily false.
++            states.append(None)
++    return states
++
++
++def _claim_verdict(record: dict) -> bool | None:
++    states = _claim_states(record)
++    if any(state is False for state in states):
++        return False
++    if states and all(state is True for state in states):
++        return True
++    return None
+ 
+ 
+ def retrieval_metrics(records: list[dict]) -> dict:
+@@ -70,10 +107,19 @@ def retrieval_metrics(records: list[dict]) -> dict:
+ def compute_metrics(records: list[dict]) -> dict:
+     answerable = [r for r in records if r.get("answerable", True) and _answer_correct(r) is not None]
+     correct = [r for r in answerable if _answer_correct(r)]
+-    judged = [r for r in records if r.get("answerable", True) and _claims(r)]
+-    halluc_answers = [r for r in judged if any(not c["supported"] for c in _claims(r))]
+-    total_claims = sum(len(_claims(r)) for r in judged)
+-    bad_claims = sum(sum(1 for c in _claims(r) if not c["supported"]) for r in judged)
++    lenient_answerable = [
++        r for r in records
++        if r.get("answerable", True) and _answer_correct_lenient(r) is not None
++    ]
++    lenient_correct = [r for r in lenient_answerable if _answer_correct_lenient(r)]
++    claim_records = [r for r in records if r.get("answerable", True) and _claim_states(r)]
++    judged = [r for r in claim_records if _claim_verdict(r) is not None]
++    halluc_answers = [r for r in judged if _claim_verdict(r) is False]
++    states = [state for r in claim_records for state in _claim_states(r)]
++    total_claims = sum(state is not None for state in states)
++    bad_claims = sum(state is False for state in states)
++    unknown_claims = sum(state is None for state in states)
++    unknown_answers = sum(_claim_verdict(r) is None for r in claim_records)
+ 
+     unanswerable = [r for r in records if not r.get("answerable", True)]
+     judged_unanswerable = [
+@@ -99,6 +145,10 @@ def compute_metrics(records: list[dict]) -> dict:
+             fabricated.append(r)
+ 
+     judged_all = [r for r in records if r.get("judge") and not (r["judge"].get("error"))]
++    judge_roles = {}
++    for record in judged_all:
++        role = str(record["judge"].get("judge_role") or "unknown")
++        judge_roles[role] = judge_roles.get(role, 0) + 1
+     run_errors = [r for r in records if r.get("error")]
+     judge_errors = [r for r in records if (r.get("judge") or {}).get("error")]
+     degraded = [r for r in records if r.get("degraded")]
+@@ -109,11 +159,14 @@ def compute_metrics(records: list[dict]) -> dict:
+         "answers": {
+             "n_judged_answerable": len(answerable),
+             "accuracy": _rate(len(correct), len(answerable)),
++            "accuracy_lenient": _rate(len(lenient_correct), len(lenient_answerable)),
+             "n_judged_claims": len(judged),
+             "answer_hallucination": _rate(len(halluc_answers), len(judged)),
+             "claim_hallucination": {
+                 "bad_claims": bad_claims,
+                 "total_claims": total_claims,
++                "unknown_claims": unknown_claims,
++                "unknown_answers": unknown_answers,
+                 "rate": (bad_claims / total_claims) if total_claims else None,
+             },
+         },
+@@ -125,6 +178,7 @@ def compute_metrics(records: list[dict]) -> dict:
+             "run_errors": len(run_errors),
+             "judge_errors": len(judge_errors),
+             "judged": len(judged_all),
++            "judge_roles": judge_roles,
+             "degraded": len(degraded),
+             "degraded_rate": (len(degraded) / len(records)) if records else None,
+         },
+@@ -143,11 +197,17 @@ def _group(records: list[dict], key: str) -> dict:
+     for name, rows in sorted(groups.items()):
+         answerable = [r for r in rows if r.get("answerable", True) and _answer_correct(r) is not None]
+         correct = [r for r in answerable if _answer_correct(r)]
+-        judged = [r for r in rows if r.get("answerable", True) and _claims(r)]
+-        halluc = [r for r in judged if any(not c["supported"] for c in _claims(r))]
++        lenient_answerable = [
++            r for r in rows
++            if r.get("answerable", True) and _answer_correct_lenient(r) is not None
++        ]
++        lenient_correct = [r for r in lenient_answerable if _answer_correct_lenient(r)]
++        judged = [r for r in rows if r.get("answerable", True) and _claim_verdict(r) is not None]
++        halluc = [r for r in judged if _claim_verdict(r) is False]
+         out[name] = {
+             "n": len(rows),
+             "accuracy": _rate(len(correct), len(answerable)),
++            "accuracy_lenient": _rate(len(lenient_correct), len(lenient_answerable)),
+             "answer_hallucination": _rate(len(halluc), len(judged)),
+         }
+     return out
+diff --git a/backend/evaluation/report.py b/backend/evaluation/report.py
+index d9349e3..49e3dcf 100644
+--- a/backend/evaluation/report.py
++++ b/backend/evaluation/report.py
+@@ -5,6 +5,8 @@ import json
+ import time
+ from pathlib import Path
+ 
++from .metrics import _answer_correct
++
+ 
+ def _fmt_rate(block: dict | None) -> str:
+     if not block or block.get("rate") is None:
+@@ -53,8 +55,10 @@ def write_outputs(out_dir: str | Path, records: list[dict], summary: dict,
+     lines += [
+         "## 断言级幻觉",
+         "",
+-        f"- 无依据断言:{claim.get('bad_claims', 0)} / {claim.get('total_claims', 0)}",
++        f"- 明确错误或编造的断言:{claim.get('bad_claims', 0)} / {claim.get('total_claims', 0)}",
++        f"- 未能判定的断言:{claim.get('unknown_claims', 0)};无法判定答案级指标的回答:{claim.get('unknown_answers', 0)}",
+         f"- 比例:{claim.get('rate') if claim.get('rate') is not None else '—'}",
++        "- 旧版评审中的无依据断言按无法判定处理;结果需经人工复核。",
+         "",
+     ]
+     health = summary.get("health") or {}
+@@ -63,6 +67,7 @@ def write_outputs(out_dir: str | Path, records: list[dict], summary: dict,
+         "",
+         f"- 运行错误:{health.get('run_errors', 0)}",
+         f"- 评审失败:{health.get('judge_errors', 0)}",
++        f"- 实际评审角色:{health.get('judge_roles', {})};回退可能与生成模型同源,需核对独立性。",
+         f"- 降级回答:{health.get('degraded', 0)} / {summary.get('n_items', 0)}",
+         "",
+     ]
+@@ -76,16 +81,16 @@ def write_outputs(out_dir: str | Path, records: list[dict], summary: dict,
+                 f"{_fmt_rate(row.get('answer_hallucination'))} |")
+         lines.append("")
+ 
+-    failures = [r for r in records if r.get("objective_correct") is False
+-                or (r.get("judge") or {}).get("correct") is False
+-                or r.get("error")]
++    failures = [r for r in records if r.get("error") or _answer_correct(r) is False]
+     lines += ["## 失败样本(前 20)", ""]
+     if not failures:
+         lines.append("无。")
+     else:
+         for r in failures[:20]:
+-            reason = r.get("error") or r.get("objective_detail") or \
+-                (r.get("judge") or {}).get("rationale") or "判错"
++            reason = r.get("error") or (
++                r.get("objective_detail_strict") if r.get("objective_correct_strict") is False
++                else (r.get("judge") or {}).get("rationale")
++            ) or r.get("objective_detail") or "判错"
+             lines.append(f"- `{r['id']}` {r['question']} — {str(reason)[:200]}")
+     lines.append("")
+ 
+diff --git a/backend/evaluation/runner.py b/backend/evaluation/runner.py
+index 6e868c4..81598b1 100644
+--- a/backend/evaluation/runner.py
++++ b/backend/evaluation/runner.py
+@@ -105,7 +105,8 @@ async def run_answer(item: EvalItem, top_k: int = 3,
+         t0 = time.monotonic()
+         try:
+             resp = await chat_module._route_chat(
+-                item.question, None, {}, {"uid": "eval", "nickname": "eval"}, {})
++                item.question, None, {"temperature": 0},
++                {"uid": "eval", "nickname": "eval"}, {})
+             text, meta = await asyncio.wait_for(_consume_stream_async(resp), timeout=300)
+         except Exception as exc:  # noqa: BLE001
+             return AnswerTrace(error=f"{type(exc).__name__}: {exc}",
+@@ -136,6 +137,7 @@ async def run_item(item: EvalItem, *, stage: str = "all", top_k: int = 3,
+         "answerable": item.answerable,
+         "gold_chunk_ids": item.gold_chunk_ids,
+         "reference_answer": item.reference_answer,
++        "reference_solution": item.reference_solution,
+     }
+     if stage == "retrieval":
+         # 只测检索:单独跑一次 search,不生成、不评审
+@@ -163,11 +165,16 @@ async def run_item(item: EvalItem, *, stage: str = "all", top_k: int = 3,
+         return record
+ 
+     objective, detail = objective_check(item, answer.text)
++    strict_objective, strict_detail = objective_check(item, answer.text, strict=True)
+     record["objective_correct"] = objective
++    record["objective_correct_strict"] = strict_objective
+     record["objective_detail"] = detail
++    record["objective_detail_strict"] = strict_detail
+ 
+     if use_judge:
+-        record["judge"] = await judges.judge_answer(item, answer.text, answer.chunks, judge_role)
++        record["judge"] = await judges.judge_answer(
++            item, answer.text, answer.chunks, judge_role,
++            ground_truth_only=bool(item.reference_solution))
+     return record
+ 
+ 
+diff --git a/backend/evaluation/types.py b/backend/evaluation/types.py
+index 8247640..66875e0 100644
+--- a/backend/evaluation/types.py
++++ b/backend/evaluation/types.py
+@@ -11,6 +11,7 @@ class EvalItem:
+     id: str
+     question: str
+     reference_answer: str = ""
++    reference_solution: str = ""   # 完整解答(证明题判分/幻觉判定的金标)
+     answer_type: str = "concept"   # concept / numeric / expr / choice / proof / unanswerable
+     domain: str = "other"
+     difficulty: int = 1
+diff --git a/backend/exercises/source_repairs.py b/backend/exercises/source_repairs.py
+new file mode 100644
+index 0000000..8f9f990
+--- /dev/null
++++ b/backend/exercises/source_repairs.py
+@@ -0,0 +1,40 @@
++"""Evidence-based repairs applied on read; original source records remain intact."""
++from __future__ import annotations
++
++from collections.abc import Mapping
++from typing import Any
++
++
++# For f(x)=2x^3-3x, f'(x_0)=6x_0^2-3. Substitution into the tangent
++# equation gives 4x_0^3-6x_0^2+t+3=0. The upstream transcription lost ^.
++_TANGENT_REPAIRS = (
++    ("y-y\u2092=(6x_2_0-3)(x-x\u2092)", "y-y_0=(6x_0^2-3)(x-x_0)"),
++    ("t-y\u2092=(6x_2_0-3)(1-x\u2092)", "t-y_0=(6x_0^2-3)(1-x_0)"),
++    ("4x_3_0-6x_2_0+t+3=0", "4x_0^3-6x_0^2+t+3=0"),
++)
++
++
++def repair_source(value: Any) -> Any:
++    if not isinstance(value, Mapping):
++        return value
++    if value.get("id") != "olympiadbench:OE_TO_maths_zh_CEE:3163":
++        return value
++    source = value.get("source")
++    content = value.get("content")
++    if not isinstance(source, Mapping) or source.get("name") != "OlympiadBench" or not isinstance(content, Mapping):
++        return value
++    repaired_content = dict(content)
++    changed = False
++    for language, block in content.items():
++        if not isinstance(block, Mapping):
++            continue
++        question, solution = block.get("question"), block.get("solution")
++        if not isinstance(question, str) or "f(x)=2x^3-3x" not in question or not isinstance(solution, str):
++            continue
++        if not all(old in solution for old, _ in _TANGENT_REPAIRS):
++            continue
++        for old, new in _TANGENT_REPAIRS:
++            solution = solution.replace(old, new)
++        repaired_content[language] = {**block, "solution": solution}
++        changed = True
++    return {**value, "content": repaired_content} if changed else value
+diff --git a/backend/exercises/store.py b/backend/exercises/store.py
+index 283f45c..7879fad 100644
+--- a/backend/exercises/store.py
++++ b/backend/exercises/store.py
+@@ -9,6 +9,7 @@ from collections.abc import Iterable
+ from pathlib import Path
+ 
+ from .schema import EXERCISE_TYPES, Exercise, SchemaError, parse_exercise
++from .source_repairs import repair_source
+ from .taxonomy import CATEGORY_KEYS, CROSS_TOPIC_IDS
+ 
+ DEFAULT_TIERS: tuple[str, ...] = ("safe",)
+@@ -39,7 +40,7 @@ def load_jsonl(path: Path) -> tuple[Exercise, ...]:
+         except json.JSONDecodeError as exc:
+             raise SchemaError(f"{path.name} 第 {lineno} 行: JSON 无效 ({exc.msg})") from exc
+         try:
+-            exercises.append(parse_exercise(value))
++            exercises.append(parse_exercise(repair_source(value)))
+         except SchemaError as exc:
+             raise SchemaError(f"{path.name} 第 {lineno} 行: {exc}") from exc
+     return tuple(exercises)
+diff --git a/backend/math_render.py b/backend/math_render.py
+index 3f18b3b..50fd106 100644
+--- a/backend/math_render.py
++++ b/backend/math_render.py
+@@ -253,6 +253,11 @@ def markdown(text: str) -> str:
+     return "".join(result)
+ 
+ 
++def requires_table_image(tex: str) -> bool:
++    """Word's MathML converter discards array rules, so they need visual rendering."""
++    return bool(re.search(r"\\(?:hline|cline)\b|\\begin\{array\}\s*\{[^{}]*\|", tex))
++
++
+ def to_omml(tex: str):
+     from latex2mathml.converter import convert
+     import mathml2omml
+@@ -260,6 +265,8 @@ def to_omml(tex: str):
+     from docx.oxml import parse_xml
+ 
+     tex = prepare(tex).replace(r"\begin{aligned}", r"\begin{align*}").replace(r"\end{aligned}", r"\end{align*}")
++    if requires_table_image(tex):
++        raise ValueError("Word array rules require visual rendering")
+     # The Word converter supports align but not alignat's spacing argument.
+     tex = re.sub(r"\\begin\{(?:alignat\*?|alignedat)\}\s*\{\d+\}", lambda _: r"\begin{align*}", tex)
+     tex = re.sub(r"\\end\{(?:alignat\*?|alignedat)\}", lambda _: r"\end{align*}", tex)
+diff --git a/backend/math_table_render.py b/backend/math_table_render.py
+new file mode 100644
+index 0000000..4b1ea47
+--- /dev/null
++++ b/backend/math_table_render.py
+@@ -0,0 +1,78 @@
++"""Render ruled mathematical arrays for Word without losing their borders."""
++from __future__ import annotations
++
++import html
++import json
++import struct
++import tempfile
++from pathlib import Path
++
++import doc
++import math_render
++
++
++def render_table_image(tex: str) -> tuple[bytes, float]:
++    """Return a lossless BMP and its width in inches, or fail without altering the formula."""
++    import pypdfium2
++
++    katex_dir = doc._katex_dir()
++    css = (katex_dir / "katex.min.css").as_uri()
++    script = (katex_dir / "katex.min.js").as_uri()
++    macros = {**math_render.MACROS, r"\knowl": r"\def\mgIgnore##1{}\mgIgnore{#1}#2"}
++    content = html.escape(math_render.prepare(tex))
++    page_html = f"""<!doctype html><meta charset="utf-8">
++<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' file:; style-src 'unsafe-inline' file:; font-src file:">
++<link rel="stylesheet" href="{css}"><style>@page{{size:A4;margin:0}}body{{margin:12px;font-size:18px}}</style>
++<div id="formula">{content}</div><div id="error">MGFORMULARENDERFAILED</div>
++<script src="{script}"></script><script>
++try {{ katex.render(document.getElementById('formula').textContent, document.getElementById('formula'),
++  {{throwOnError:true, trust:false, macros:{json.dumps(macros, ensure_ascii=True)}}});
++  document.getElementById('error').remove(); }}
++catch(e) {{ document.getElementById('formula').remove(); }}
++</script>"""
++    try:
++        with tempfile.TemporaryDirectory(prefix="mg-formula-") as tmp:
++            path = Path(tmp)
++            source = path / "formula.html"
++            source.write_text(page_html, encoding="utf8")
++            pdf = doc._html_to_pdf(source, path / "formula.pdf")
++    except OSError as exc:
++        raise ValueError("Unable to render Word array") from exc
++    if not pdf:
++        raise ValueError("Unable to render Word array")
++    try:
++        document = pypdfium2.PdfDocument(pdf)
++        if len(document) != 1:
++            raise ValueError("Word array does not fit one page")
++        page = document[0]
++        if "MGFORMULARENDERFAILED" in page.get_textpage().get_text_range():
++            raise ValueError("Unsupported Word array syntax")
++        bitmap = page.render(scale=2)
++        if bitmap.mode != "BGR":
++            raise ValueError("Unsupported Word array image format")
++        width, height, stride = bitmap.width, bitmap.height, bitmap.stride
++        pixels = bytes(bitmap.buffer)
++        left, top, right, bottom = width, height, 0, 0
++        for y in range(height):
++            row = pixels[y * stride:y * stride + width * 3]
++            if row.strip(b"\xff"):
++                left = min(left, (len(row) - len(row.lstrip(b"\xff"))) // 3)
++                right = max(right, (len(row.rstrip(b"\xff")) + 2) // 3)
++                top = min(top, y)
++                bottom = y + 1
++        if right <= left or bottom <= top or right >= width - 2 or bottom >= height - 2:
++            raise ValueError("Empty or clipped Word array")
++        left, top = max(0, left - 4), max(0, top - 4)
++        right, bottom = min(width, right + 4), min(height, bottom + 4)
++        cropped_width, cropped_height = right - left, bottom - top
++        padding = b"\x00" * ((-cropped_width * 3) % 4)
++        data = b"".join(pixels[y * stride + left * 3:y * stride + right * 3] + padding
++                        for y in range(bottom - 1, top - 1, -1))
++        header = (struct.pack("<2sIHHI", b"BM", 54 + len(data), 0, 0, 54)
++                  + struct.pack("<IiiHHIIiiII", 40, cropped_width, cropped_height,
++                                1, 24, 0, len(data), 5669, 5669, 0, 0))
++        return header + data, min(5.8, cropped_width / 144.0)
++    except ValueError:
++        raise
++    except Exception as exc:
++        raise ValueError("Unable to render Word array") from exc
+diff --git a/backend/rag/__init__.py b/backend/rag/__init__.py
+index 390cf8a..b0b721a 100644
+--- a/backend/rag/__init__.py
++++ b/backend/rag/__init__.py
+@@ -94,6 +94,12 @@ def _warm_embedder() -> None:
+         print(f"[rag] embedding 预热失败(不影响启动): {exc}")
+ 
+ 
++# 数学题专用向量门限:比闲聊门限低,让具体习题也能召回同主题的概念/方法片段。
++# 0.50 取自 course-50 实测:命中率 top3 0.667→0.708、top5 0.708→0.792;
++# 闲聊句仍在 0.36~0.46,不会越过这条线。换 embedding 模型必须重标。
++MATH_VECTOR_ONLY_MIN = 0.50
++
++
+ def search(query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
+     """检索相关片段;知识库文件有增删改时自动重建索引后返回。
+     重建时 embedding 失败同样降级关键词模式,检索链路永不因向量服务崩断。
+@@ -111,7 +117,10 @@ def search(query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
+                     _index = _load_index_or_empty()
+                 _stamp = _dir_stamp()
+                 _terms = _collect_terms(_index)
+-    return _index.search(query, top_k)
++    # 数学题放宽向量门限:具体习题常与概念文档语义相关但措辞差异大;
++    # 闲聊/非数学问句仍走严格门限,避免凭空命中知识库。
++    vector_floor = MATH_VECTOR_ONLY_MIN if is_math_question(query) else None
++    return _index.search(query, top_k, vector_only_min=vector_floor)
+ 
+ 
+ def terms() -> frozenset[str]:
+@@ -169,22 +178,29 @@ def build_system(chunks: list[tuple[Chunk, float]], cmd: str | None, zh: bool =
+         "输出规范:"
+         "解题时只给推导过程与最终结论,末尾另起一段「**参考思路**」"
+         "(2~4 句,讲关键思路与可推广点),不要写形象化类比;"
++        "计算、求值、化简类题目在最后单独一行用 \\boxed{...} 给出最终答案;"
+         "解释概念时给定义、成立条件、关键性质和一个最小例子,不主动打比方;"
+         "只有用户明确要求通俗、直观、举例或\"听不懂\"时,才使用生活化类比。"
+         "语气自然,但不客套、不重复题干、不写与问题无关的铺垫。"
+         "对寒暄、闲聊、倾诉等一般对话,像正常人一样回应,不要总把话题拽回数学;"
+-        "只有用户明确在问数学问题时,才给出专业解答。",
++        "只有用户明确在问数学问题时,才给出专业解答。"
++        "如果题目引用的定理或对象不存在、条件互相矛盾,直接指出,"
++        "不得编造定义、数值、反例或构造。",
+         "一次提问包含若干道题时,逐题给出解答,每题的参考思路紧随该题。",
+         "",
+-        "以下是从知识库检索到的参考资料,请优先依据它们回答;"
+-        "资料不足以回答时,可结合自身数学知识补充,并注明「以下内容超出知识库,仅供参考」。",
++        "以下是检索到的参考资料,可能相关也可能无关:"
++        "与题目无关时直接忽略,不要为了用资料而强行套用;"
++        "确实用到资料时按编号注明。资料不足时,可基于数学定义独立推导;"
++        "使用自身知识补充的部分,注明「以下内容超出知识库,仅供参考」。",
+         "",
+     ]
+     if cmd:
+         parts.append(f"用户使用了指令「{cmd}」,请按该指令的功能形态组织回答。")
+         parts.append("")
+     for i, (c, score) in enumerate(chunks, 1):
+-        parts.append(f"【资料{i}】{c.title} · {c.section}(相关度 {score:.1f})")
++        # 前 3 条是排序最高的重点资料,其余是补齐召回的备选;不把 5 条都当同等依据
++        tier = "重点" if i <= 3 else "备选"
++        parts.append(f"【资料{i}·{tier}】{c.title} · {c.section}(相关度 {score:.1f})")
+         parts.append(c.text)
+         parts.append("")
+     return "\n".join(parts).strip()
+diff --git a/backend/rag/index.py b/backend/rag/index.py
+index f9d1acf..0f156e1 100644
+--- a/backend/rag/index.py
++++ b/backend/rag/index.py
+@@ -5,15 +5,19 @@
+ 向量相似度与关键词打分混合排序,语义化提问召回率大幅提升;
+ 未配置时行为与纯关键词模式完全一致。
+ """
++import math
+ import re
++from collections import Counter
+ from typing import Optional
+ 
+ from .documents import Chunk
+ from .embed import Embedder
+ 
+-# 打分权重:关键词命中 > 标题重合 > 正文 bigram 重合
+-W_KEYWORD = 3.0
++# 打分权重:关键词命中 > 标题重合 > 章节标题重合 > 正文 bigram 重合。
++# 关键词是人工维护的强触发词,必须压过正文里偶发的二元组重合。
++W_KEYWORD = 5.0
+ W_TITLE = 2.0
++W_SECTION = 1.5
+ W_BODY = 1.0
+ # 向量相似度权重(embedding 启用时生效)
+ W_VECTOR = 5.0
+@@ -47,19 +51,38 @@ def _bigrams(text: str) -> set[str]:
+     return {s[i:i + 2] for i in range(len(s) - 1)}
+ 
+ 
+-def _overlap(q_grams: set[str], t_grams: set[str]) -> float:
++def _overlap(q_grams: set[str], t_grams: set[str],
++             idf: dict[str, float] | None = None) -> float:
+     """重合二元组计分:只计含 CJK 字符的二元组。
+     纯 ASCII 二元组噪声极大(LaTeX 符号如 \\forall/\\varepsilon 与英文单词频繁撞车),
+-    英文相关性完全交给 keywords 词表与 token 匹配承担。"""
+-    return float(len({b for b in (q_grams & t_grams) if not b.isascii()}))
++    英文相关性完全交给 keywords 词表与 token 匹配承担。
++    传入 idf 时按逆文档频率加权,压住「函数/性质/定理」这类高频二元组。"""
++    grams = {b for b in (q_grams & t_grams) if not b.isascii()}
++    if idf is None:
++        return float(len(grams))
++    return sum(idf.get(b, 1.0) for b in grams)
+ 
+ 
+ class KnowledgeIndex:
+     def __init__(self, chunks: list[Chunk], embedder: Optional[Embedder] = None):
+-        # 预计算每个 chunk 的标题/正文 bigram(检索时不再重复切分)
++        # 预计算每个 chunk 的标题/章节/正文 bigram(检索时不再重复切分)
+         self._entries = [
+-            (c, _bigrams(c.title + c.title_en), _bigrams(c.text)) for c in chunks
++            (c, _bigrams(c.title + c.title_en), _bigrams(c.section), _bigrams(c.text))
++            for c in chunks
+         ]
++        # IDF:同一批知识片段内的文档频率。只统计 CJK 二元组,与 _overlap 口径一致。
++        df: Counter[str] = Counter()
++        for _c, title_grams, section_grams, body_grams in self._entries:
++            for gram in (title_grams | section_grams | body_grams):
++                if not gram.isascii():
++                    df[gram] += 1
++        total = max(1, len(chunks))
++        # 归一化到 [1, 2]:保留稀有词权重,但单个二元组不能压过人工关键词。
++        scale = math.log(total + 1) or 1.0
++        self._idf = {
++            gram: 1.0 + math.log((total + 1) / (count + 1)) / scale
++            for gram, count in df.items()
++        }
+         self._embedder = embedder
+         self._vectors: list[Optional[list[float]]] = [None] * len(chunks)
+         if embedder is not None:
+@@ -68,14 +91,15 @@ class KnowledgeIndex:
+ 
+     @staticmethod
+     def _embed_text(c: Chunk) -> str:
+-        """向量化的文本口径(标题 + 中英标题 + 正文):集中一处,
+-        避免装载与重算用了不同拼法导致缓存指纹不匹配"""
+-        return f"{c.title} {c.title_en} {c.text}"
++        """向量化的文本口径(标题 + 中英标题 + 章节标题 + 正文):集中一处,
++        避免装载与重算用了不同拼法导致缓存指纹不匹配。
++        章节标题必须进来:长节被切成多片后,单片正文未必重复章节主题词。"""
++        return f"{c.title} {c.title_en} {c.section} {c.text}"
+ 
+     @property
+     def chunks(self) -> list[Chunk]:
+         """已装载的全部片段(供上层收集触发词等,免去二次解析知识库)"""
+-        return [c for c, _, _ in self._entries]
++        return [entry[0] for entry in self._entries]
+ 
+     def _keyword_score(self, chunk: Chunk, q: str) -> float:
+         score = 0.0
+@@ -119,9 +143,11 @@ class KnowledgeIndex:
+             chosen.extend(deferred[:top_k - len(chosen)])
+         return chosen
+ 
+-    def search(self, query: str, top_k: int = 3) -> list[tuple[Chunk, float]]:
++    def search(self, query: str, top_k: int = 3,
++               vector_only_min: float | None = None) -> list[tuple[Chunk, float]]:
+         q = query.lower()
+         q_grams = _bigrams(q)
++        floor = VECTOR_ONLY_MIN if vector_only_min is None else vector_only_min
+         q_vec = None
+         if self._embedder is not None:
+             try:
+@@ -131,11 +157,12 @@ class KnowledgeIndex:
+                 q_vec = None
+ 
+         scored: list[tuple[Chunk, float]] = []
+-        for i, (c, title_grams, body_grams) in enumerate(self._entries):
++        for i, (c, title_grams, section_grams, body_grams) in enumerate(self._entries):
+             kw = self._keyword_score(c, q)
+             score = kw
+-            score += W_TITLE * _overlap(q_grams, title_grams)
+-            score += W_BODY * _overlap(q_grams, body_grams)
++            score += W_TITLE * _overlap(q_grams, title_grams, self._idf)
++            score += W_SECTION * _overlap(q_grams, section_grams, self._idf)
++            score += W_BODY * _overlap(q_grams, body_grams, self._idf)
+ 
+             if self._embedder is not None and q_vec is not None and self._vectors[i] is not None:
+                 cosine = Embedder.cosine(q_vec, self._vectors[i])
+@@ -143,7 +170,7 @@ class KnowledgeIndex:
+                 if cosine < MIN_COSINE and kw < W_KEYWORD:
+                     continue
+                 # 无关键词命中 = 只有语义相似度在支撑,需要更强置信度,拦住闲聊噪声
+-                if kw <= 0 and cosine < VECTOR_ONLY_MIN:
++                if kw <= 0 and cosine < floor:
+                     continue
+                 score += W_VECTOR * cosine
+ 
+diff --git a/backend/rag/llm.py b/backend/rag/llm.py
+index 7787da5..0c6ad3b 100644
+--- a/backend/rag/llm.py
++++ b/backend/rag/llm.py
+@@ -102,7 +102,8 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
+                        history: list[dict] | None = None,
+                        max_tokens: int | None = None,
+                        first_token_secs: float = 20.0,
+-                       thinking: bool = True) -> AsyncIterator[str]:
++                       thinking: bool = True,
++                       temperature: float | None = None) -> AsyncIterator[str]:
+     messages: list[dict] = [{"role": "system", "content": system}]
+     if history:
+         messages.extend(history)
+@@ -114,6 +115,8 @@ async def _stream_once(base: str, key: str, model: str, system: str, user: str,
+     }
+     if max_tokens:
+         payload["max_tokens"] = max_tokens
++    if temperature is not None:
++        payload["temperature"] = temperature
+     payload.update(_thinking_param(model, thinking))
+     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+     # trust_env=False 强制直连:阿里云/智谱 API 国内直连可达,走系统代理
+@@ -171,12 +174,14 @@ async def stream_chat(system: str, user: str, role: str = "main",
+                       fallback: bool = True,
+                       history: list[dict] | None = None,
+                       max_tokens: int | None = None,
+-                      thinking: bool | None = None) -> AsyncIterator[str]:
++                      thinking: bool | None = None,
++                      temperature: float | None = None) -> AsyncIterator[str]:
+     """流式对话;role 失败且 fallback 时自动切 backup(异平台容灾)。
+     history:最近几轮对话 [{role, content}](调用方已校验/截断);
+     max_tokens:约束输出长度(短任务转写/复核用,更快收尾);
+     thinking:是否允许模型思考。None=按角色默认(main/backup 关,deep/long 开);
+               复核/摘要/导航/综合等机械任务传 False,省掉整段思考延迟。
++    temperature:None=平台默认;评测传 0 可降低采样波动,不保证完全可复现。
+ 
+     重要:只有「一字未出」时才允许切 backup。已经向调用方 yield 过内容后再
+     从头重放,会让用户看到「半截 A + 完整 B」的拼接答案;此时直接把异常抛给
+@@ -193,9 +198,12 @@ async def stream_chat(system: str, user: str, role: str = "main",
+     if thinking is None:
+         thinking = role in ("deep", "long")
+     emitted = False
++    extra = {"thinking": thinking}
++    if temperature is not None:
++        extra["temperature"] = temperature
+     try:
+         async for delta in _stream_once(*spec, system, user, history, max_tokens, ttft,
+-                                        thinking=thinking):
++                                        **extra):
+             emitted = True
+             yield delta
+         return
+@@ -207,5 +215,5 @@ async def stream_chat(system: str, user: str, role: str = "main",
+             raise
+         print(f"[llm] {role} 调用失败,切换到 backup")
+         async for delta in _stream_once(*backup, system, user, history, max_tokens, ttft,
+-                                        thinking=thinking):
++                                        **extra):
+             yield delta
+diff --git a/backend/static/math_arrays.js b/backend/static/math_arrays.js
+new file mode 100644
+index 0000000..a1c5ea2
+--- /dev/null
++++ b/backend/static/math_arrays.js
+@@ -0,0 +1 @@
++"use strict";var MGMathArrays=(()=>{var x=Object.defineProperty;var C=Object.getOwnPropertyDescriptor;var N=Object.getOwnPropertyNames;var R=Object.prototype.hasOwnProperty;var B=(e,l)=>{for(var r in l)x(e,r,{get:l[r],enumerable:!0})},S=(e,l,r,t)=>{if(l&&typeof l=="object"||typeof l=="function")for(let i of N(l))!R.call(e,i)&&i!==r&&x(e,i,{get:()=>l[i],enumerable:!(t=C(l,i))||t.enumerable});return e};var k=e=>S(x({},"__esModule",{value:!0}),e);var O={};B(O,{renderMathArray:()=>M});function v(e,l){for(;/\s/.test(e[l]||"");)l++;if(e[l]!=="{")return null;let r=1;for(let t=l+1;t<e.length;t++){if(e[t]==="\\"&&/[{}\\]/.test(e[t+1]||"")){t++;continue}if(e[t]==="{"&&r++,e[t]==="}"&&--r===0)return{value:e.slice(l+1,t),end:t+1}}return null}function W(e,l=0){if(l>4)return null;let r="";for(let t=0;t<e.length;t++){if(e[t]!=="*"){r+=e[t];continue}let i=e.slice(t+1).match(/^\s*(\d+)/);if(!i||Number(i[1])<1||Number(i[1])>20)return null;let n=v(e,t+1+i[0].length);if(!n)return null;let u=W(n.value,l+1);if(u===null)return null;r+=u.repeat(Number(i[1])),t=n.end-1}return r}function q(e){let l=W(e);if(l===null)return null;let r=[],t=[{rule:0,space:1}],i={"":0,"~":.3333,"\\,":.1667,"\\;":.2778,"\\quad":1};for(let n=0;n<l.length;n++){let u=l[n];if(!/\s/.test(u)){if(u==="|"){t[r.length].rule++;continue}if(u==="@"){let s=v(l,n+1);if(!s||!(s.value.trim()in i))return null;t[r.length].space=i[s.value.trim()],n=s.end-1;continue}if(!"lcr".includes(u)||(r.push(u),r.length>30))return null;t.push({rule:0,space:1})}}return r.length?{aligns:r,boundaries:t}:null}function $(e,l){let r=[],t=0,i=0;for(let n=0;n<e.length;n++){let u=e[n];if(u==="\\"){if(e.startsWith(l,n)&&i===0){r.push(e.slice(t,n)),n+=l.length-1,t=n+1;continue}/[{}\\&]/.test(e[n+1]||"")&&n++;continue}if(u==="{"&&i++,u==="}"&&--i<0)return null;u===l&&i===0&&(r.push(e.slice(t,n)),t=n+1)}return i!==0?null:(r.push(e.slice(t)),r)}function A(e,l,r){let t=$(e,"\\\\");if(!t)return null;let i=[];for(let n of t){for(n=n.trim();n.startsWith("\\hline")||n.startsWith("\\cline");){if(/^\\hline\b/.test(n)){i.push({rule:[1,l.length]}),n=n.replace(/^\\hline\b\s*/,"");continue}let h=n.match(/^\\cline\s*\{\s*(\d+)\s*-\s*(\d+)\s*\}\s*/);if(!h)return null;let c=Number(h[1]),o=Number(h[2]);if(c<1||o<c||o>l.length)return null;i.push({rule:[c,o]}),n=n.slice(h[0].length)}if(!n&&t[t.length-1]===n)continue;let u=$(n,"&");if(!u)return null;let s=0,d=[];for(let h of u){let c=h.trim(),o=1,f=l[s],p=r[s]?.rule||0,a=0;if(/^\\multicolumn\b/.test(c)){let g=c.indexOf("\\multicolumn")+12,m=v(c,g);if(!m||!/^\d+$/.test(m.value.trim()))return null;o=Number(m.value.trim()),g=m.end;let b=v(c,g);if(!b||!/^\|*[lcr]\|*$/.test(b.value.trim()))return null;g=b.end;let w=v(c,g);if(!w||c.slice(w.end).trim())return null;let y=b.value.trim();f=y.match(/[lcr]/)[0],p=y.startsWith("|")?y.startsWith("||")?2:1:0,a=y.endsWith("|")?y.endsWith("||")?2:1:0,c=w.value}else a=r[s+1]?.rule||0;if(o<1||s+o>l.length||!f)return null;d.push({value:c,span:o,align:f,left:p,right:a}),s+=o}for(;s<l.length;)d.push({value:"",span:1,align:l[s],left:r[s].rule,right:r[s+1].rule}),s++;i.push({cells:d})}return i}function M(e,l){let r=e.trim(),t="\\begin{array}",i="\\end{array}";if(!r.startsWith(t)||!r.endsWith(i))return null;let n=v(r,t.length);if(!n||n.end>r.length-i.length)return null;let u=q(n.value);if(!u)return null;let s=r.slice(n.end,-i.length);if(/\\(?:begin|end)\s*\{/.test(s))return null;let d=A(s,u.aligns,u.boundaries);if(!d)return null;let h=f=>f>1?"3px double currentColor":f?"1px solid currentColor":"none",c=f=>({l:"left",c:"center",r:"right"})[f]||"center",o='<span class="mg-array" style="display:inline-block;max-width:100%;overflow-x:auto;vertical-align:middle"><table style="border-collapse:collapse;border-spacing:0;display:inline-table;vertical-align:middle">';for(let f of d){if("rule"in f){o+='<tr aria-hidden="true">';for(let a=0;a<u.aligns.length;a++){let g=a+1>=f.rule[0]&&a+1<=f.rule[1]?"1px solid currentColor":"none";o+=`<td style="padding:0;height:0;line-height:0;border-top:${g}"></td>`}o+="</tr>";continue}let p=0;o+="<tr>";for(let a of f.cells){let g=u.boundaries[p].space/2,m=u.boundaries[p+a.span].space/2,b=a.value?l(a.value):"";o+=`<td colspan="${a.span}" style="padding:0 ${m}em 0 ${g}em;text-align:${c(a.align)};border-left:${h(a.left)};border-right:${h(a.right)}">${b}</td>`,p+=a.span}o+="</tr>"}return o+"</table></span>"}return k(O);})();
+diff --git a/backend/tests/test_chat_helpers.py b/backend/tests/test_chat_helpers.py
+index 577ed25..438f4e8 100644
+--- a/backend/tests/test_chat_helpers.py
++++ b/backend/tests/test_chat_helpers.py
+@@ -64,6 +64,18 @@ def test_strip_meta():
+     assert chat._strip_meta("什么是极限", None) == "什么是极限"
+ 
+ 
++def test_normalize_query_fullwidth_and_filler():
++    assert chat._normalize_query("请问 什么是极限？") == "什么是极限?"
++    assert chat._normalize_query("\\left(x\\right)") == "(x)"
++
++
++def test_pick_role_routes_hard_questions_to_deep(monkeypatch):
++    monkeypatch.setattr(chat.rag.llm, "pick", lambda role: role)
++    assert chat._pick_role("证明这个不等式") == "deep"
++    assert chat._pick_role("(1) 求极限 (2) 求导数") == "deep"
++    assert chat._pick_role("什么是极限") == "main"
++
++
+ def test_clean_scope():
+     assert chat._clean_scope(None) is None
+     assert chat._clean_scope("arXiv") is None
+diff --git a/backend/tests/test_doc_table_render.py b/backend/tests/test_doc_table_render.py
+new file mode 100644
+index 0000000..328d501
+--- /dev/null
++++ b/backend/tests/test_doc_table_render.py
+@@ -0,0 +1,53 @@
++"""Ruled arrays must keep their lines in PDF and Word export."""
++from io import BytesIO
++from zipfile import ZipFile
++import struct
++
++import pytest
++from lxml import etree
++
++import doc
++import docgen
++import math_render
++
++
++@pytest.mark.skipif(not doc._find_edge(), reason="Edge is unavailable")
++def test_word_ruled_array_keeps_borders_and_neighboring_math():
++    tex = r"\begin{array}{c|c}x&y\\\hline 2&-5\\p&-14\end{array}"
++    document = {"title": "Math", "sections": [{"heading": "H", "paragraphs": [
++        "Before $" + tex + "$ after $x^2$.",
++    ]}]}
++    with pytest.raises(ValueError, match="require visual rendering"):
++        math_render.to_omml(tex)
++    data = docgen._docx_bytes(document, "en")
++    with ZipFile(BytesIO(data)) as archive:
++        image_name = next(name for name in archive.namelist() if name.startswith("word/media/"))
++        bitmap = archive.read(image_name)
++        xml = etree.fromstring(archive.read("word/document.xml"))
++    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
++          "m": "http://schemas.openxmlformats.org/officeDocument/2006/math",
++          "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"}
++    assert xml.xpath("count(//w:drawing)", namespaces=ns) == 1
++    assert xml.xpath("count(//m:oMath)", namespaces=ns) == 1
++    assert xml.xpath("string(//wp:docPr/@descr)", namespaces=ns) == tex
++    visible = "".join(xml.xpath("//w:t/text()", namespaces=ns))
++    assert "Before " in visible and " after " in visible and r"\hline" not in visible
++    assert bitmap[:2] == b"BM"
++    width, height = struct.unpack_from("<ii", bitmap, 18)
++    stride = (width * 3 + 3) & ~3
++    rows = [bitmap[54 + y * stride:54 + y * stride + width * 3] for y in range(height)]
++    dark = lambda row, x: max(row[x * 3:x * 3 + 3]) < 128
++    assert max(sum(dark(row, x) for x in range(width)) for row in rows) > width * 0.6
++    assert max(sum(dark(row, x) for row in rows) for x in range(width)) > height * 0.6
++
++
++def test_failed_table_renderer_preserves_original_source(monkeypatch):
++    import math_table_render
++
++    tex = r"\begin{array}{c|c}x&y\\\hline 2&-5\end{array}"
++    monkeypatch.setattr(math_table_render, "render_table_image", lambda _tex: (_ for _ in ()).throw(ValueError("failed")))
++    document = {"title": "Math", "sections": [{"heading": "H", "paragraphs": ["$" + tex + "$"]}]}
++    with ZipFile(BytesIO(docgen._docx_bytes(document, "en"))) as archive:
++        xml = etree.fromstring(archive.read("word/document.xml"))
++    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
++    assert tex in "".join(xml.xpath("//w:t/text()", namespaces=ns))
+diff --git a/backend/tests/test_eval_claim_uncertainty.py b/backend/tests/test_eval_claim_uncertainty.py
+new file mode 100644
+index 0000000..eb1fe35
+--- /dev/null
++++ b/backend/tests/test_eval_claim_uncertainty.py
+@@ -0,0 +1,51 @@
++from evaluation.judges import _normalize
++from evaluation.metrics import compute_metrics
++from evaluation.report import write_outputs
++from evaluation.types import EvalItem
++
++
++def test_judge_claim_values_require_actual_booleans():
++    item = EvalItem(id="x", question="q")
++    data = {"claims": [
++        {"text": "supported", "supported": True},
++        {"text": "wrong", "supported": False},
++        {"text": "unknown", "supported": None},
++        {"text": "invalid", "supported": "false"},
++    ]}
++    result = _normalize(data, item)
++    assert [c["supported"] for c in result["claims"]] == [True, False, None, None]
++    assert result["claim_schema"] == "truth-v2"
++
++
++def test_report_failures_follow_strict_accuracy(tmp_path):
++    records = [
++        {"id": "strict-correct", "question": "q", "objective_correct_strict": True, "objective_correct": False},
++        {"id": "strict-wrong", "question": "q", "objective_correct_strict": False, "objective_correct": True,
++         "objective_detail_strict": "strict failure"},
++    ]
++    _, _, path = write_outputs(tmp_path, records, compute_metrics(records), {})
++    report = path.read_text(encoding="utf8")
++    assert "strict-wrong" in report and "strict failure" in report
++    assert "strict-correct" not in report
++
++
++def test_unknown_and_legacy_claims_are_not_fabricated_or_silently_omitted(tmp_path):
++    records = [
++        {"id": "a", "question": "q", "judge": {"claim_schema": "truth-v2", "judge_role": "deep", "claims": [
++            {"text": "verified", "supported": True}, {"text": "unknown", "supported": None}]}},
++        {"id": "b", "question": "q", "judge": {"claim_schema": "truth-v2", "judge_role": "backup", "claims": [
++            {"text": "wrong", "supported": False}, {"text": "unknown", "supported": None}]}},
++        {"id": "c", "question": "q", "judge": {"claims": [{"text": "legacy unsupported", "supported": False}]}},
++        {"id": "d", "question": "q", "judge": {"claim_schema": "truth-v2", "claims": [{"text": "verified", "supported": True}]}},
++    ]
++    summary = compute_metrics(records)
++    claims = summary["answers"]["claim_hallucination"]
++    assert (claims["bad_claims"], claims["total_claims"], claims["unknown_claims"]) == (1, 3, 3)
++    assert claims["unknown_answers"] == 2
++    assert summary["answers"]["answer_hallucination"]["k"] == 1
++    assert summary["answers"]["answer_hallucination"]["n"] == 2
++    assert summary["health"]["judge_roles"] == {"deep": 1, "backup": 1, "unknown": 2}
++    _, _, path = write_outputs(tmp_path, records, summary, {"judge_role": "backup"})
++    report = path.read_text(encoding="utf8")
++    assert "未能判定的断言:3" in report
++    assert "deep" in report and "独立性" in report
+diff --git a/backend/tests/test_eval_dataset.py b/backend/tests/test_eval_dataset.py
+index 754ecff..4b608f3 100644
+--- a/backend/tests/test_eval_dataset.py
++++ b/backend/tests/test_eval_dataset.py
+@@ -60,3 +60,15 @@ def test_hallucination_set_has_50_unanswerable_items():
+         assert item.reference_answer == ""
+         assert item.gold_chunk_ids == []
+         assert 1 <= item.difficulty <= 5
++
++
++def test_reference_solution_round_trip(tmp_path):
++    path = tmp_path / "solution.jsonl"
++    path.write_text(
++        '{"id":"p","question":"证明","answer_type":"proof",'
++        '"reference_answer":"Proof","reference_solution":"完整推导"}\n',
++        encoding="utf-8",
++    )
++    item = load_items(path)[0]
++    assert item.reference_solution == "完整推导"
++    assert item.reference_answer == "Proof"
+diff --git a/backend/tests/test_eval_extract.py b/backend/tests/test_eval_extract.py
+index e3a0342..4489113 100644
+--- a/backend/tests/test_eval_extract.py
++++ b/backend/tests/test_eval_extract.py
+@@ -38,6 +38,15 @@ def test_objective_numeric_and_choice():
+     assert objective_check(item, "答案：A")[0] is False
+ 
+ 
++def test_objective_numeric_strict_uses_final_answer():
++    item = EvalItem(id="n", question="q", reference_answer="9", answer_type="numeric")
++    # 中间过程出现 9,最终答案写 8:宽松口径会误判对,严格口径必须判错
++    answer = "中间算到 9,最后结果是 8。"
++    assert objective_check(item, answer)[0] is True
++    assert objective_check(item, answer, strict=True)[0] is False
++    assert objective_check(item, "整理得 \\boxed{9}", strict=True)[0] is True
++
++
+ def test_objective_numeric_accepts_approximate_reference():
+     item = EvalItem(id="a", question="q", reference_answer="约 0.6827",
+                     answer_type="numeric")
+diff --git a/backend/tests/test_eval_fraction_regression.py b/backend/tests/test_eval_fraction_regression.py
+new file mode 100644
+index 0000000..115e112
+--- /dev/null
++++ b/backend/tests/test_eval_fraction_regression.py
+@@ -0,0 +1,30 @@
++from evaluation.extract import extract_boxed, objective_check
++from evaluation.types import EvalItem
++
++
++def test_strict_numeric_handles_nested_boxed_fraction_without_guessing():
++    item = EvalItem(id="fraction", question="q", reference_answer="0.5", answer_type="numeric")
++    answer = r"\boxed{\frac{1}{2}}"
++    assert extract_boxed(answer) == r"\frac{1}{2}"
++    assert objective_check(item, answer, strict=True)[0] is True
++    item.reference_answer = "2"
++    assert objective_check(item, answer, strict=True)[0] is False
++    assert objective_check(item, r"\boxed{\sqrt{2}}", strict=True)[0] is None
++    assert objective_check(item, r"\boxed{\frac{1}{0}}", strict=True)[0] is None
++    assert objective_check(item, r"\boxed{2} then \boxed{", strict=True)[0] is None
++
++
++def test_strict_metrics_do_not_silently_fall_back_to_lenient_result():
++    from evaluation.metrics import _answer_correct, _answer_correct_lenient
++
++    record = {"objective_correct_strict": None, "objective_correct": True, "judge": {"correct": False}}
++    assert _answer_correct(record) is False
++    assert _answer_correct_lenient(record) is True
++    record["judge"] = {}
++    assert _answer_correct(record) is None
++    assert _answer_correct({"objective_correct": True}) is True
++
++
++def test_nested_boxed_expression_is_compared_as_an_expression():
++    item = EvalItem(id="expr", question="q", reference_answer=r"\frac{1}{2}", answer_type="expr")
++    assert objective_check(item, r"\boxed{\frac{1}{2}}")[0] is True
+diff --git a/backend/tests/test_eval_judges.py b/backend/tests/test_eval_judges.py
+index f307a17..e5fa157 100644
+--- a/backend/tests/test_eval_judges.py
++++ b/backend/tests/test_eval_judges.py
+@@ -56,3 +56,21 @@ def test_judge_stops_after_two_attempts(monkeypatch):
+ 
+     assert "error" in result
+     assert calls["n"] == 2
++
++
++def test_judge_uses_reference_solution_and_can_ignore_chunks(monkeypatch):
++    item = EvalItem(id="p", question="证明", answer_type="proof",
++                    reference_answer="Proof", reference_solution="标准推导步骤")
++    captured: dict[str, str] = {}
++
++    async def fake_stream(system, user, **kwargs):
++        captured["user"] = user
++        yield '{"correct": true, "score": 1, "refused": false, "claims": []}'
++
++    monkeypatch.setattr(judges.llm, "is_configured", lambda role: True)
++    monkeypatch.setattr(judges.llm, "stream_chat", fake_stream)
++    asyncio.run(judges.judge_answer(item, "答案", [], role="backup",
++                                    ground_truth_only=True))
++
++    assert "标准推导步骤" in captured["user"]
++    assert "本次判分不使用检索资料" in captured["user"]
+diff --git a/backend/tests/test_eval_metrics.py b/backend/tests/test_eval_metrics.py
+index f5cd44e..8fa0f28 100644
+--- a/backend/tests/test_eval_metrics.py
++++ b/backend/tests/test_eval_metrics.py
+@@ -33,6 +33,7 @@ def test_metrics_accuracy_hallucination_retrieval():
+             "retrieval": {"chunks": [{"id": "c1"}]},
+             "judge": {
+                 "correct": False,
++                "claim_schema": "truth-v2",
+                 "claims": [
+                     {"text": "u", "supported": False},
+                     {"text": "v", "supported": True},
+diff --git a/backend/tests/test_exercise_source_repairs.py b/backend/tests/test_exercise_source_repairs.py
+new file mode 100644
+index 0000000..d4288f4
+--- /dev/null
++++ b/backend/tests/test_exercise_source_repairs.py
+@@ -0,0 +1,40 @@
++"""Source corrections are evidence-based and never mutate the source record."""
++import json
++from fractions import Fraction
++
++from exercises.source_repairs import repair_source
++from exercises.store import load_jsonl
++
++
++def test_tangent_source_repair_is_guarded_and_loaded_without_changing_source(tmp_path):
++    solution = ("$y-y\u2092=(6x_2_0-3)(x-x\u2092)$; "
++                "$t-y\u2092=(6x_2_0-3)(1-x\u2092)$; "
++                "$4x_3_0-6x_2_0+t+3=0$")
++    row = {
++        "id": "olympiadbench:OE_TO_maths_zh_CEE:3163",
++        "source": {"name": "OlympiadBench", "tier": "research", "license": "MIT",
++                   "url": "https://example.com", "attribution": "source"},
++        "original_language": "zh",
++        "content": {"zh": {"question": "f(x)=2x^3-3x", "answer": "(-3,-1)", "solution": solution}},
++        "type": "compute", "difficulty": 3, "difficulty_source": "source",
++        "primary_topic": "analysis", "topics": ["analysis"], "cross_topics": [], "tag_source": "rule",
++    }
++    fixed = repair_source(row)
++    assert row["content"]["zh"]["solution"] == solution
++    assert "x_2_0" not in fixed["content"]["zh"]["solution"]
++    assert "x_0^2" in fixed["content"]["zh"]["solution"]
++    assert "x_0^3" in fixed["content"]["zh"]["solution"]
++    assert repair_source({**row, "id": "other"})["content"]["zh"]["solution"] == solution
++    path = tmp_path / "items.jsonl"
++    path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf8")
++    loaded = load_jsonl(path)[0]
++    assert loaded.content["zh"].solution == fixed["content"]["zh"]["solution"]
++    assert "x_2_0" in path.read_text(encoding="utf8")
++
++
++def test_tangent_equation_correction_follows_from_the_given_function():
++    for x in map(Fraction, (-2, -1, 0, 1, 2)):
++        for t in map(Fraction, (-3, 0, 5)):
++            y = 2 * x**3 - 3 * x
++            slope = 6 * x**2 - 3
++            assert t - y - slope * (1 - x) == 4 * x**3 - 6 * x**2 + t + 3
+diff --git a/backend/tests/test_formula_render_audit.py b/backend/tests/test_formula_render_audit.py
+index 7fc53b7..a87a856 100644
+--- a/backend/tests/test_formula_render_audit.py
++++ b/backend/tests/test_formula_render_audit.py
+@@ -5,9 +5,10 @@ import runpy
+ from pathlib import Path
+ 
+ 
+-def test_formula_audit_reports_failures_without_changing_source():
++def test_formula_audit_reports_failures_without_changing_source(monkeypatch):
+     path = Path(__file__).resolve().parents[2] / "scripts" / "audit" / "formula_render_audit.py"
+     module = runpy.run_path(str(path))
++    monkeypatch.setattr(module["math_table_render"], "render_table_image", lambda _tex: (b"image", 1.0))
+     records = [{
+         "id": "fixture:one",
+         "content": {"en": {
+@@ -19,8 +20,9 @@ def test_formula_audit_reports_failures_without_changing_source():
+     formulas = module["collect_formulas"](records)
+     report = module["audit"](formulas)
+     assert report["formula_occurrences"] == 3
+-    assert report["word_layout_warning_occurrences"] == 1
+-    assert report["word_layout_warnings"][0]["exercise_ids"] == ["fixture:one"]
++    assert report["word_layout_warning_occurrences"] == 0
++    assert report["word_image_occurrences"] == 1
++    assert report["word_images"][0]["exercise_ids"] == ["fixture:one"]
+     assert report["katex_failed_occurrences"] == 1
+     assert report["word_failed_occurrences"] == 1
+     assert report["katex_failures"][0]["exercise_ids"] == ["fixture:one"]
+diff --git a/backend/tests/test_query_direction_regression.py b/backend/tests/test_query_direction_regression.py
+new file mode 100644
+index 0000000..45f78af
+--- /dev/null
++++ b/backend/tests/test_query_direction_regression.py
+@@ -0,0 +1,8 @@
++import chat
++
++
++def test_retrieval_preserves_direction_commands_when_removing_delimiter_sizes():
++    assert chat._normalize_query(r"x\rightarrow 0") == r"x\rightarrow 0"
++    assert chat._normalize_query(r"x\leftarrow 0") == r"x\leftarrow 0"
++    assert chat._normalize_query(r"\left(x+1\right)") == "(x+1)"
++    assert chat._normalize_query(r"\left\{x\right\}") == r"\{x\}"
+diff --git a/backend/tests/test_rag_diversity.py b/backend/tests/test_rag_diversity.py
+index ad3afd4..1932478 100644
+--- a/backend/tests/test_rag_diversity.py
++++ b/backend/tests/test_rag_diversity.py
+@@ -36,3 +36,12 @@ def test_diversity_does_not_change_top_one():
+     hits = _index().search("alpha beta", 1)
+     assert len(hits) == 1
+     assert hits[0][0].title == "Doc A"
++
++
++def test_section_heading_contributes_to_ranking():
++    chunks = [
++        Chunk("a", "Doc", "Doc", "泰勒公式", "普通内容", [], "analysis"),
++        Chunk("b", "Doc", "Doc", "无关章节", "普通内容", [], "analysis"),
++    ]
++    hits = KnowledgeIndex(chunks, None).search("泰勒公式", 1)
++    assert hits[0][0].id == "a"
+diff --git a/backend/tools/eval_qa.py b/backend/tools/eval_qa.py
+index ae50b2d..ed6af9e 100644
+--- a/backend/tools/eval_qa.py
++++ b/backend/tools/eval_qa.py
+@@ -65,7 +65,8 @@ def _print_summary(summary: dict) -> None:
+     print(f"答案级幻觉率: {rate(ans.get('answer_hallucination'))} "
+           f"(n={ (ans.get('answer_hallucination') or {}).get('n') })")
+     print(f"断言级幻觉率: {rate(claim)} "
+-          f"({claim.get('bad_claims', 0)}/{claim.get('total_claims', 0)})")
++          f"({claim.get('bad_claims', 0)}/{claim.get('total_claims', 0)}; "
++          f"未判定 {claim.get('unknown_claims', 0)})")
+     print(f"不可答编造率: {rate(una.get('fabrication'))} "
+           f"(n={ (una.get('fabrication') or {}).get('n') })")
+     print(f"检索 hit@k: {rate(ret.get('hit_rate'))}  recall: {ret.get('recall', '—')}  "
+@@ -73,6 +74,8 @@ def _print_summary(summary: dict) -> None:
+     health = summary.get("health") or {}
+     print(f"运行错误: {health.get('run_errors', 0)}  评审失败: {health.get('judge_errors', 0)}  "
+           f"降级: {health.get('degraded', 0)}")
++    if health.get("judge_roles"):
++        print(f"实际评审角色: {health['judge_roles']};需核对与生成模型的独立性")
+ 
+ 
+ async def _main() -> int:
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index 829ffd3..5a9ef39 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "mathguide-frontend",
+-  "version": "1.24.0",
++  "version": "1.25.0",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "mathguide-frontend",
+-      "version": "1.24.0",
++      "version": "1.25.0",
+       "dependencies": {
+         "gsap": "^3.13.0",
+         "katex": "^0.16.22",
+diff --git a/frontend/package.json b/frontend/package.json
+index afdd220..b179d0c 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "mathguide-frontend",
+   "private": true,
+-  "version": "1.24.0",
++  "version": "1.25.0",
+   "type": "module",
+   "scripts": {
+     "dev": "vite",
+diff --git a/frontend/scripts/math-text-test.ts b/frontend/scripts/math-text-test.ts
+index 5a22a12..7f9edfe 100644
+--- a/frontend/scripts/math-text-test.ts
++++ b/frontend/scripts/math-text-test.ts
+@@ -11,6 +11,7 @@
+ /* eslint-disable */
+ declare const process: { exit(code: number): void }
+ 
++import { readFileSync } from 'node:fs'
+ import { createServer } from 'vite'
+ import { renderToString } from 'vue/server-renderer'
+ 
+@@ -46,6 +47,26 @@ async function main() {
+       return renderToString(vnode)
+     }
+ 
++    const notes = JSON.parse(readFileSync('../backend/knowledge_graph/data/point_notes.json', 'utf8')) as
++      Record<string, { summary: string, keyPoints: string[] }>
++    const graphIsolation = await server.ssrLoadModule('/src/utils/mathIsolation.ts') as {
++      isolateMath: (text: string) => { text: string, formulas: { pending: boolean }[] }
++    }
++    let graphMathFields = 0
++    const graphFailures: string[] = []
++    for (const [id, note] of Object.entries(notes)) {
++      for (const text of [note.summary, ...note.keyPoints]) {
++        if (!text.includes('$') && !text.includes(String.raw`\(`) && !text.includes(String.raw`\[`)) continue
++        graphMathFields++
++        const isolated = graphIsolation.isolateMath(text)
++        const rendered = await renderComp(text)
++        if (!isolated.formulas.length || isolated.text.includes('$') || isolated.formulas.some((f) => f.pending)
++            || !rendered.includes('katex') || rendered.includes('seg-math-raw')) graphFailures.push(id)
++      }
++    }
++    check('全部知识图谱笔记中的公式可渲染', graphMathFields > 0 && !graphFailures.length,
++      `公式字段 ${graphMathFields}, 失败节点 ${graphFailures.slice(0, 5).join(', ')}`)
++
+     // ① \(...\) 行内公式 → KaTeX 渲染
+     let html = await renderComp('导数定义:\\(f\'(x)=\\lim_{h\\to 0}\\frac{f(x+h)-f(x)}{h}\\)')
+     check('括号式行内公式被渲染', html.includes('katex'), `输出: ${html.slice(0, 120)}`)
+diff --git a/frontend/src/components/chat/MathText.vue b/frontend/src/components/chat/MathText.vue
+index 100d227..f88e8cc 100644
+--- a/frontend/src/components/chat/MathText.vue
++++ b/frontend/src/components/chat/MathText.vue
+@@ -7,6 +7,7 @@
+ import { defineComponent, h, type VNode } from 'vue'
+ import katex from 'katex'
+ import mathMacros from '@/utils/mathMacros.json'
++import { renderMathArray } from '@/utils/mathArrays'
+ import { isolateMath, prepareMath, splitIsolatedMath, type IsolatedFormula } from '@/utils/mathIsolation'
+ 
+ interface Seg {
+@@ -42,8 +43,15 @@ function renderKatex(latex: string, display: boolean): string {
+       macros: { ...mathMacros, '\\knowl': '\\def\\mgIgnore##1{}\\mgIgnore{#1}#2' },
+     })
+   } catch {
+-    // 渲染异常时不静默丢内容:原样展示 LaTeX 源码,保证任何符号都不会"凭空消失"
+-    html = `<code class="seg-math-raw">${escapeHtml(latex)}</code>`
++    try {
++      html = renderMathArray(prepareMath(latex), (cell) => katex.renderToString(cell, {
++        throwOnError: true,
++        macros: { ...mathMacros, '\\knowl': '\\def\\mgIgnore##1{}\\mgIgnore{#1}#2' },
++      })) || ''
++    } catch {
++      html = ''
++    }
++    if (!html) html = `<code class="seg-math-raw">${escapeHtml(latex)}</code>`
+   }
+   if (katexCache.size >= KATEX_CACHE_MAX) katexCache.clear()
+   katexCache.set(key, html)
+diff --git a/frontend/src/utils/aboutContent.ts b/frontend/src/utils/aboutContent.ts
+index 97fd018..2cfc9f9 100644
+--- a/frontend/src/utils/aboutContent.ts
++++ b/frontend/src/utils/aboutContent.ts
+@@ -6,9 +6,9 @@
+  */
+ 
+ export const APP_NAME = 'MathGuide'
+-export const APP_VERSION = 'v1.24.0'
+-export const APP_STABLE_VERSION = 'v1.24.0'
+-export const APP_STABLE_DATE = '2026-11-09'
++export const APP_VERSION = 'v1.25.0'
++export const APP_STABLE_VERSION = 'v1.25.0'
++export const APP_STABLE_DATE = '2026-11-11'
+ export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
+ export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
+ export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
+diff --git a/frontend/src/utils/mathArrays.ts b/frontend/src/utils/mathArrays.ts
+new file mode 100644
+index 0000000..ef381a6
+--- /dev/null
++++ b/frontend/src/utils/mathArrays.ts
+@@ -0,0 +1,167 @@
++/** Preserve TeX array layout when KaTeX does not support its column syntax. */
++type Boundary = { rule: number; space: number }
++type Cell = { value: string; span: number; align: string; left: number; right: number }
++type Row = { cells: Cell[] } | { rule: [number, number] }
++
++function group(source: string, start: number): { value: string; end: number } | null {
++  while (/\s/.test(source[start] || '')) start++
++  if (source[start] !== '{') return null
++  let level = 1
++  for (let i = start + 1; i < source.length; i++) {
++    if (source[i] === '\\' && /[{}\\]/.test(source[i + 1] || '')) { i++; continue }
++    if (source[i] === '{') level++
++    if (source[i] === '}' && --level === 0) return { value: source.slice(start + 1, i), end: i + 1 }
++  }
++  return null
++}
++
++function expandColumns(source: string, depth = 0): string | null {
++  if (depth > 4) return null
++  let out = ''
++  for (let i = 0; i < source.length; i++) {
++    if (source[i] !== '*') { out += source[i]; continue }
++    const count = source.slice(i + 1).match(/^\s*(\d+)/)
++    if (!count || Number(count[1]) < 1 || Number(count[1]) > 20) return null
++    const part = group(source, i + 1 + count[0].length)
++    if (!part) return null
++    const expanded = expandColumns(part.value, depth + 1)
++    if (expanded === null) return null
++    out += expanded.repeat(Number(count[1]))
++    i = part.end - 1
++  }
++  return out
++}
++
++function columns(source: string): { aligns: string[]; boundaries: Boundary[] } | null {
++  const spec = expandColumns(source)
++  if (spec === null) return null
++  const aligns: string[] = []
++  const boundaries: Boundary[] = [{ rule: 0, space: 1 }]
++  const spacing: Record<string, number> = { '': 0, '~': 0.3333, '\\,': 0.1667, '\\;': 0.2778, '\\quad': 1 }
++  for (let i = 0; i < spec.length; i++) {
++    const ch = spec[i]
++    if (/\s/.test(ch)) continue
++    if (ch === '|') { boundaries[aligns.length].rule++; continue }
++    if (ch === '@') {
++      const part = group(spec, i + 1)
++      if (!part || !(part.value.trim() in spacing)) return null
++      boundaries[aligns.length].space = spacing[part.value.trim()]
++      i = part.end - 1
++      continue
++    }
++    if (!'lcr'.includes(ch)) return null
++    aligns.push(ch)
++    if (aligns.length > 30) return null
++    boundaries.push({ rule: 0, space: 1 })
++  }
++  return aligns.length ? { aligns, boundaries } : null
++}
++
++function splitTop(source: string, delimiter: '&' | '\\\\'): string[] | null {
++  const parts: string[] = []
++  let start = 0, depth = 0
++  for (let i = 0; i < source.length; i++) {
++    const ch = source[i]
++    if (ch === '\\') {
++      if (source.startsWith(delimiter, i) && depth === 0) {
++        parts.push(source.slice(start, i)); i += delimiter.length - 1; start = i + 1; continue
++      }
++      if (/[{}\\&]/.test(source[i + 1] || '')) i++
++      continue
++    }
++    if (ch === '{') depth++
++    if (ch === '}' && --depth < 0) return null
++    if (ch === delimiter && depth === 0) { parts.push(source.slice(start, i)); start = i + 1 }
++  }
++  if (depth !== 0) return null
++  parts.push(source.slice(start))
++  return parts
++}
++
++function rows(source: string, aligns: string[], boundaries: Boundary[]): Row[] | null {
++  const rawRows = splitTop(source, '\\\\')
++  if (!rawRows) return null
++  const result: Row[] = []
++  for (const [rowIndex, rawRow] of rawRows.entries()) {
++    let row = rawRow.trim()
++    while (row.startsWith('\\hline') || row.startsWith('\\cline')) {
++      if (/^\\hline\b/.test(row)) { result.push({ rule: [1, aligns.length] }); row = row.replace(/^\\hline\b\s*/, ''); continue }
++      const match = row.match(/^\\cline\s*\{\s*(\d+)\s*-\s*(\d+)\s*\}\s*/)
++      if (!match) return null
++      const first = Number(match[1]), last = Number(match[2])
++      if (first < 1 || last < first || last > aligns.length) return null
++      result.push({ rule: [first, last] }); row = row.slice(match[0].length)
++    }
++    if (!row && rowIndex === rawRows.length - 1) continue
++    const rawCells = splitTop(row, '&')
++    if (!rawCells) return null
++    let index = 0
++    const cells: Cell[] = []
++    for (const raw of rawCells) {
++      let value = raw.trim(), span = 1, align = aligns[index], left = boundaries[index]?.rule || 0, right = 0
++      if (/^\\multicolumn\b/.test(value)) {
++        let pos = value.indexOf('\\multicolumn') + '\\multicolumn'.length
++        const n = group(value, pos); if (!n || !/^\d+$/.test(n.value.trim())) return null
++        span = Number(n.value.trim()); pos = n.end
++        const format = group(value, pos); if (!format || !/^\|*[lcr]\|*$/.test(format.value.trim())) return null
++        pos = format.end
++        const cell = group(value, pos); if (!cell || value.slice(cell.end).trim()) return null
++        const fmt = format.value.trim()
++        align = fmt.match(/[lcr]/)![0]
++        left = fmt.startsWith('|') ? (fmt.startsWith('||') ? 2 : 1) : 0
++        right = fmt.endsWith('|') ? (fmt.endsWith('||') ? 2 : 1) : 0
++        value = cell.value
++      } else {
++        right = boundaries[index + 1]?.rule || 0
++      }
++      if (span < 1 || index + span > aligns.length || !align) return null
++      cells.push({ value, span, align, left, right })
++      index += span
++    }
++    while (index < aligns.length) {
++      cells.push({ value: '', span: 1, align: aligns[index], left: boundaries[index].rule, right: boundaries[index + 1].rule })
++      index++
++    }
++    result.push({ cells })
++  }
++  return result
++}
++
++/** Render a complete array using safe, separately rendered KaTeX cells. */
++export function renderMathArray(source: string, renderCell: (tex: string) => string): string | null {
++  const tex = source.trim(), begin = '\\begin{array}', end = '\\end{array}'
++  if (!tex.startsWith(begin) || !tex.endsWith(end)) return null
++  const spec = group(tex, begin.length)
++  if (!spec || spec.end > tex.length - end.length) return null
++  const layout = columns(spec.value)
++  if (!layout) return null
++  const body = tex.slice(spec.end, -end.length)
++  if (/\\(?:begin|end)\s*\{/.test(body)) return null
++  const parsed = rows(body, layout.aligns, layout.boundaries)
++  if (!parsed) return null
++  const border = (n: number) => n > 1 ? '3px double currentColor' : n ? '1px solid currentColor' : 'none'
++  const align = (a: string) => ({ l: 'left', c: 'center', r: 'right' }[a] || 'center')
++  let html = '<span class="mg-array" style="display:inline-block;max-width:100%;overflow-x:auto;vertical-align:middle"><table style="border-collapse:collapse;border-spacing:0;display:inline-table;vertical-align:middle">'
++  for (const row of parsed) {
++    if ('rule' in row) {
++      html += '<tr aria-hidden="true">'
++      for (let i = 0; i < layout.aligns.length; i++) {
++        const line = i + 1 >= row.rule[0] && i + 1 <= row.rule[1] ? '1px solid currentColor' : 'none'
++        html += `<td style="padding:0;height:0;line-height:0;border-top:${line}"></td>`
++      }
++      html += '</tr>'
++      continue
++    }
++    let index = 0
++    html += '<tr>'
++    for (const cell of row.cells) {
++      const leftSpace = layout.boundaries[index].space / 2
++      const rightSpace = layout.boundaries[index + cell.span].space / 2
++      const rendered = cell.value ? renderCell(cell.value) : ''
++      html += `<td colspan="${cell.span}" style="padding:0 ${rightSpace}em 0 ${leftSpace}em;text-align:${align(cell.align)};border-left:${border(cell.left)};border-right:${border(cell.right)}">${rendered}</td>`
++      index += cell.span
++    }
++    html += '</tr>'
++  }
++  return html + '</table></span>'
++}
+diff --git a/frontend/src/views/GraphView.vue b/frontend/src/views/GraphView.vue
+index 7d0da41..5a1cff2 100644
+--- a/frontend/src/views/GraphView.vue
++++ b/frontend/src/views/GraphView.vue
+@@ -9,6 +9,7 @@
+ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+ import { useRoute, useRouter } from 'vue-router'
+ import Starfield from '@/components/common/Starfield.vue'
++import MathText from '@/components/chat/MathText.vue'
+ import { statusOf } from '@/api/http'
+ import {
+   exportGraphHtml,
+@@ -481,9 +482,9 @@ onBeforeUnmount(() => {
+ 
+         <section>
+           <h3>{{ t('graph.mainContent') }}</h3>
+-          <p v-if="selected.summary" class="summary">{{ selected.summary }}</p>
++          <MathText v-if="selected.summary" class="summary" :text="selected.summary" />
+           <ul v-if="selected.keyPoints?.length" class="key-points">
+-            <li v-for="item in selected.keyPoints" :key="item">{{ item }}</li>
++            <li v-for="item in selected.keyPoints" :key="item"><MathText :text="item" /></li>
+           </ul>
+           <p v-else-if="!selected.summary" class="none">{{ t('graph.noSummary') }}</p>
+           <button class="go-learn" @click="goLearn(selected)">{{ t('graph.goLearn') }}</button>
+diff --git a/scripts/audit/formula_render_audit.py b/scripts/audit/formula_render_audit.py
+index bd2d6ce..81c8d54 100644
+--- a/scripts/audit/formula_render_audit.py
++++ b/scripts/audit/formula_render_audit.py
+@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
+ sys.path.insert(0, str(ROOT / "backend"))
+ 
+ import math_render  # noqa: E402
++import math_table_render  # noqa: E402
++from exercises.source_repairs import repair_source  # noqa: E402
+ 
+ DATASET = ROOT / "backend" / "data" / "exercises" / "bilingual" / "all.jsonl"
+ KATEX = ROOT / "backend" / "static" / "katex" / "katex.min.js"
+@@ -46,6 +48,7 @@ def collect_formulas(records):
+     """Count occurrences and preserve their locations without copying user data."""
+     formulas = {}
+     for record in records:
++        record = repair_source(record)
+         for language, content in record.get("content", {}).items():
+             for field in ("question", "answer", "solution"):
+                 value = content.get(field, "")
+@@ -69,15 +72,19 @@ def audit(formulas):
+     )
+     katex_errors = {index: error for index, error in json.loads(result.stdout)}
+     word_errors = {}
++    word_images = {}
+     word_layout_warnings = {}
+     for index, (tex, _display) in enumerate(keys):
+         try:
+-            math_render.to_omml(tex)
++            if math_render.requires_table_image(tex):
++                if index in katex_errors:
++                    raise ValueError("Unsupported ruled array syntax")
++                math_table_render.render_table_image(tex)
++                word_images[index] = "Ruled array rendered as an image"
++            else:
++                math_render.to_omml(tex)
+         except ValueError as exc:
+             word_errors[index] = str(exc)
+-        else:
+-            if r"\hline" in tex:
+-                word_layout_warnings[index] = "Array horizontal rules may be omitted"
+         if (index + 1) % 10000 == 0:
+             print(f"Word: {index + 1}/{len(keys)} unique formulas checked", file=sys.stderr, flush=True)
+ 
+@@ -102,6 +109,8 @@ def audit(formulas):
+         "word_failed_occurrences": sum(len(formulas[keys[i]]) for i in word_errors),
+         "katex_failures": summarize(katex_errors),
+         "word_failures": summarize(word_errors),
++        "word_image_occurrences": sum(len(formulas[keys[i]]) for i in word_images),
++        "word_images": summarize(word_images),
+         "word_layout_warning_occurrences": sum(len(formulas[keys[i]]) for i in word_layout_warnings),
+         "word_layout_warnings": summarize(word_layout_warnings),
+     }

@@ -23,6 +23,11 @@ dev.bat
 
 - [DEMO.md](DEMO.md) — 大创展示脚本:环境准备、演示动线、翻车预案、答辩备答
 - [docs/EVAL_REPORT.md](docs/EVAL_REPORT.md) — 50 题问答评测与 50 题抗幻觉评测报告
+- [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) — 工程优化方案与落地进度(P0–P5)
+- [docs/COVERAGE_PLAN.md](docs/COVERAGE_PLAN.md) — 覆盖率方案:按类别定线、逐文件台账与执行批次
+- [docs/DEPLOY_PLAYBOOK.md](docs/DEPLOY_PLAYBOOK.md) — **部署待办与已知风险(部署时先读这份)**
+- [docs/HANDOFF.md](docs/HANDOFF.md) — **新会话交接单(换会话时先读这份)**
+- [docs/COVERAGE_REMAINING.md](docs/COVERAGE_REMAINING.md) — 覆盖率剩余工作草稿(**已关闭**:146/146 文件达标)
 
 ## 测试
 

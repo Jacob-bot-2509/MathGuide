@@ -26,10 +26,14 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import quota
+import research_corpus as rc
 from auth import require_auth
 from http_utils import read_json_object
+from log import get_logger
 from rate_limit import SlidingWindowLimiter
-import research_corpus as rc
+
+log = get_logger(__name__)
 
 MAX_IMAGES = 4
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -518,6 +522,7 @@ def extract(images: list[tuple[str, bytes]], columns: list[dict],
 async def analyze_page(request: Request) -> JSONResponse:
     """整页图片 → 区块结构(正文/公式/表格/手写/图注),可选落库。"""
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     uid = str(rec.get("uid") or "")
     if not _limiter.allow(uid):
         raise HTTPException(429, "too many requests")
@@ -564,13 +569,14 @@ async def analyze_page(request: Request) -> JSONResponse:
             saved = await asyncio.to_thread(
                 rc._save_page_blocks, uid, doc_id, page, result.get("blocks") or [])
         except Exception as exc:  # noqa: BLE001 区块保存失败不影响识别
-            print(f"[vision] 页面区块保存失败(忽略): {exc}")
+            log.warning(f"[vision] 页面区块保存失败(忽略): {exc}")
     return JSONResponse({**result, "saved": saved},
                         headers={"Cache-Control": "no-store"})
 
 
 async def extract_formulas(request: Request) -> JSONResponse:
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     uid = str(rec.get("uid") or "")
     if not _limiter.allow(uid):
         raise HTTPException(429, "too many requests")
@@ -623,13 +629,13 @@ async def extract_formulas(request: Request) -> JSONResponse:
                 rc._save_extracted_formulas, uid, doc_id, table_id,
                 result.get("formulas") or [])
         except Exception as exc:  # noqa: BLE001 公式库写入失败不影响本次识别
-            print(f"[vision] 公式候选保存失败(忽略): {exc}")
+            log.warning(f"[vision] 公式候选保存失败(忽略): {exc}")
     if doc_id:
         try:
             blocks = await asyncio.to_thread(
                 rc._save_source_blocks, uid, doc_id, page,
                 result.get("formulas") or [])
         except Exception as exc:  # noqa: BLE001 区块写入失败不影响本次识别
-            print(f"[vision] 公式来源区块保存失败(忽略): {exc}")
+            log.warning(f"[vision] 公式来源区块保存失败(忽略): {exc}")
     return JSONResponse({**result, "saved": saved, "blocks": blocks},
                         headers={"Cache-Control": "no-store"})

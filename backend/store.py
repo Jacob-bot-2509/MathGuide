@@ -408,6 +408,51 @@ def issue_token(uid: str) -> str:
         conn.close()
 
 
+def token_age(token: str) -> float | None:
+    """token 已签发多少秒;不存在或已过期返回 None。
+
+    只给滑动续期判断用:调用方拿它和 `TOKEN_TTL_HOURS` 比,决定要不要轮换。
+    不在这里做"是否过期"的裁决,避免与 `resolve_token` 两套口径。
+    """
+    if not token:
+        return None
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT issued FROM tokens WHERE key = ?", (_token_key(token),)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    issued = row["issued"]
+    if not isinstance(issued, (int, float)):
+        return None
+    return time.time() - issued
+
+
+def newest_token_age(uid: str) -> float | None:
+    """该用户最近一次签发 token 距今多少秒;没有记录返回 None。
+
+    给滑动续期做节流用:客户端如果没把新 token 写回本地,会一直带着旧 token
+    来请求,没有节流就会每次 session() 都签发一个新 token。
+    """
+    if not uid:
+        return None
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT issued FROM tokens WHERE uid = ? ORDER BY issued DESC LIMIT 1",
+            (uid,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    issued = row["issued"]
+    if not isinstance(issued, (int, float)):
+        return None
+    return time.time() - issued
+
+
 def resolve_token(token: str) -> dict | None:
     """token → 用户记录;库中只存 SHA-256 键,不存明文 token。"""
     conn = _conn()

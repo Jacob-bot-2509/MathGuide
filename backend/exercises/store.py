@@ -9,6 +9,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from .schema import EXERCISE_TYPES, Exercise, SchemaError, parse_exercise
+from .source_repairs import repair_source
 from .taxonomy import CATEGORY_KEYS, CROSS_TOPIC_IDS
 
 DEFAULT_TIERS: tuple[str, ...] = ("safe",)
@@ -39,7 +40,7 @@ def load_jsonl(path: Path) -> tuple[Exercise, ...]:
         except json.JSONDecodeError as exc:
             raise SchemaError(f"{path.name} 第 {lineno} 行: JSON 无效 ({exc.msg})") from exc
         try:
-            exercises.append(parse_exercise(value))
+            exercises.append(parse_exercise(repair_source(value)))
         except SchemaError as exc:
             raise SchemaError(f"{path.name} 第 {lineno} 行: {exc}") from exc
     return tuple(exercises)

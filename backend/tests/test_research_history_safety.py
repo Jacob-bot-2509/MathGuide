@@ -206,6 +206,7 @@ def test_reopening_during_eviction_keeps_new_file(corpus, monkeypatch):
 
 def test_daily_retention_continues_after_error(monkeypatch):
     import asyncio
+
     import research_papers as papers
 
     waits = []

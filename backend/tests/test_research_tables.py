@@ -1,7 +1,10 @@
 """实验数据表:公式引擎、模板导入、API、导出。"""
 from __future__ import annotations
 
+import asyncio
 import io
+import os
+from decimal import Decimal
 
 import pytest
 from openpyxl import Workbook
@@ -97,10 +100,11 @@ def test_exponent_guard():
 
 
 def test_regression_endpoint_returns_worker_result(monkeypatch, tables):
-    import research_tables as rt
     from starlette.applications import Starlette
     from starlette.routing import Route
     from starlette.testclient import TestClient
+
+    import research_tables as rt
 
     monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-reg"})
     monkeypatch.setattr(rt, "_get_table", lambda uid, tid: {"id": tid, "title": "T"})
@@ -602,3 +606,581 @@ def test_print_writes_xlsx_and_opens(tables, monkeypatch):
     assert body["opened"] is True and body["file"].endswith(".xlsx")
     assert opened and opened[0].exists()
     assert opened[0].read_bytes().startswith(b"PK")
+
+
+# ---------- G3 补充:公式引擎分支 / 载荷校验 / 逐端点错误映射 ----------
+
+
+def test_compute_supports_whitelisted_functions():
+    cols = [{"key": "A", "label": "a", "type": "number"},
+            {"key": "B", "label": "b", "type": "computed"}]
+    rows = [["1"], ["2"], ["3"], ["4"]]
+
+    def first(expr):
+        return rt.compute(cols, rows, {"B": expr})["computed"]["B"][0]
+
+    assert first("=AVERAGE(A2:A5)") == "2.5000"
+    assert first("=MIN(A2:A5)") == "1.0000"
+    assert first("=MAX(A2:A5)") == "4.0000"
+    assert first("=COUNT(A2:A5)") == "4.0000"
+    assert first("=ABS(-A2)") == "1.0000"
+    assert first("=SQRT(A5)") == "2.0000"
+    assert first("=LOG(A5)") == "0.6021"
+    assert first("=LN(A5)") == "1.3863"
+    assert first("=EXP(A2)") == "2.7183"
+    assert first("=POWER(A5,2)") == "16.0000"
+    assert first("=ROUND(A5/3,2)") == "1.3300"
+    assert first("=A5%3") == "1.0000"
+
+
+def test_compute_reports_function_and_reference_errors():
+    cols = [{"key": "A", "label": "a", "type": "number"},
+            {"key": "B", "label": "b", "type": "computed"}]
+    rows = [["1"]]
+
+    def err(expr):
+        result = rt.compute(cols, rows, {"B": expr})
+        assert result["computed"]["B"] == [""]
+        return result["errors"][0]["error"]
+
+    assert "开方" in err("=SQRT(-1)")
+    assert "定义域" in err("=LOG(0)")
+    assert "定义域" in err("=LN(-1)")
+    assert "指数" in err("=EXP(2000)")
+    assert "指数" in err("=POWER(2,2000)")
+    assert "保留位数" in err("=ROUND(A2,99)")
+    assert "区域为空" in err("=SUM(A9:A9)")
+    assert "不支持的函数" in err("=FOO(1)")
+    assert "区域" in err("=ABS(A2:A9)")
+    assert "参数错误" in err("=C(1)")
+    assert "区域参数错误" in err("=R(1,2)")
+    assert "引用越界" in err("=C(0,2)")
+    assert "引用列不存在" in err("=D2")
+    assert "引用越界" in err("=A99")
+    assert "不支持的语法" in err("=1>2")
+    assert "非法常量" in err("='text'")
+    assert "命名参数" in err("=ABS(A2, digits=1)")
+
+
+def test_compute_treats_short_rows_and_unknown_column_regions():
+    cols = [{"key": "A", "label": "a", "type": "number"},
+            {"key": "B", "label": "b", "type": "number"},
+            {"key": "C", "label": "c", "type": "computed"}]
+    result = rt.compute(cols, [["1"]], {"C": "=B2"})
+    assert result["computed"]["C"] == [""]
+    assert result["errors"][0]["error"]
+
+    ok = rt.compute(cols, [["1", "2"]], {"C": "=SUM(A2:B2)"})
+    assert ok["computed"]["C"] == ["3.0000"]
+    assert ok["errors"] == []
+
+
+def test_stat_text_and_percentile_edges():
+    assert rt._stat_text(None) == ""
+    assert rt._stat_text(Decimal("1.5")) == "1.5000"
+    huge = Decimal("1e100000")
+    assert rt._stat_text(huge) == str(huge)        # 无法格式化时退回原始文本
+    assert rt._percentile([], Decimal("0.5")) is None
+    assert rt._percentile([Decimal("7")], Decimal("0.5")) == Decimal("7")
+    assert rt._percentile([Decimal("1"), Decimal("3")], Decimal("0.5")) == Decimal("2")
+
+
+def test_clean_merges_and_sizes_ignore_invalid_items():
+    assert rt._clean_merges("nope", 2, 2) == []
+    assert rt._clean_merges(["junk", {"r1": "x"}, {"r1": 1, "c1": 1,
+                                                   "r2": 1, "c2": 1}], 2, 2) == []
+    with pytest.raises(ValueError):
+        rt._clean_merges([{"r1": 0, "c1": 0, "r2": 9, "c2": 9}], 2, 2)
+    assert rt._clean_sizes("nope", 2, 120, 40, 600) == [120, 120]
+    assert rt._clean_sizes([1, "x", 9999], 3, 120, 40, 600) == [40, 120, 600]
+    assert rt._clean_sizes([250], 2, 120, 40, 600) == [250, 120]
+
+
+def test_validate_table_payload_rejects_bad_shapes():
+    bad = [
+        {"columns": "x", "rows": []},
+        {"columns": [], "rows": []},
+        {"columns": [{"key": "A"}] * (rt.MAX_COLS + 1), "rows": []},
+        {"columns": [{"key": "A"}], "rows": [["1"]] * (rt.MAX_ROWS + 1)},
+        {"columns": ["x"], "rows": []},
+        {"columns": [{"key": "A"}, {"key": "A"}], "rows": []},
+        {"columns": [{"key": "A"}], "rows": ["x"]},
+        {"columns": [{"key": "A"}], "rows": [], "formulas": []},
+    ]
+    for body in bad:
+        with pytest.raises(ValueError):
+            rt._validate_table_payload(body)
+
+
+def test_validate_table_payload_normalizes_fields():
+    cols, rows, formulas, labels, merges, widths, heights, sources = (
+        rt._validate_table_payload({
+            "columns": [{"key": "bad key", "type": "weird", "role": "measured",
+                         "unit": "m"},
+                        {"label": "b", "type": "number", "role": "unknown"}],
+            "rows": [[" 1 ", None, "extra"]],
+            "formulas": {"a": "=1+1", "B": "   ", "ZZ": "=1", "9!": "=1"},
+            "rowLabels": ["x"],
+        }))
+    assert cols[0] == {"key": "A", "label": "A", "type": "text",
+                       "role": "measured", "unit": "m"}
+    assert cols[1]["key"] == "B" and cols[1]["type"] == "number"
+    assert "role" not in cols[1]
+    assert rows == [["1", ""]]
+    assert formulas == {"A": "=1+1"}
+    assert labels == ["x"]
+    assert merges == []
+    assert widths == [120, 120]
+    assert heights == [30]
+    assert sources == [{}]        # 每行一个占位来源
+
+
+def _tables_app():
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+
+    return Starlette(routes=[
+        Route("/api/research/tables/import", rt.import_table, methods=["POST"]),
+        Route("/api/research/tables", rt.list_tables),
+        Route("/api/research/tables", rt.create_table, methods=["POST"]),
+        Route("/api/research/tables/{table_id}", rt.get_table),
+        Route("/api/research/tables/{table_id}", rt.save_table, methods=["POST"]),
+        Route("/api/research/tables/{table_id}", rt.delete_table,
+              methods=["DELETE"]),
+        Route("/api/research/tables/{table_id}/compute", rt.compute_table,
+              methods=["POST"]),
+        Route("/api/research/tables/{table_id}/validate-formula",
+              rt.validate_formula, methods=["POST"]),
+        Route("/api/research/tables/{table_id}/stats", rt.stats_table,
+              methods=["POST"]),
+        Route("/api/research/tables/{table_id}/match-formulas",
+              rt.match_formulas, methods=["POST"]),
+        Route("/api/research/tables/{table_id}/suggest-topic",
+              rt.suggest_topic, methods=["POST"]),
+        Route("/api/research/tables/{table_id}/export", rt.export_table),
+        Route("/api/research/tables/{table_id}/print", rt.print_table,
+              methods=["POST"]),
+        Route("/api/research/tables/{table_id}/regression", rt.regression_table,
+              methods=["POST"]),
+        Route("/api/research/analysis/capabilities", rt.analysis_capabilities),
+    ])
+
+
+PAYLOAD = {
+    "title": "演示表",
+    "columns": [{"key": "A", "label": "时间", "type": "number"},
+                {"key": "B", "label": "位移", "type": "number"},
+                {"key": "C", "label": "速度", "type": "computed"}],
+    "rows": [["1", "2", ""], ["3", "4", ""]],
+    "formulas": {"C": "=A2/B2"},
+}
+
+
+def test_table_crud_endpoints_map_errors(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-crud"})
+    client = TestClient(_tables_app())
+
+    assert client.get("/api/research/tables/nope").status_code == 404
+    assert client.post("/api/research/tables",
+                       json={"columns": "x", "rows": []}).status_code == 400
+
+    created = client.post("/api/research/tables", json=PAYLOAD)
+    assert created.status_code == 200
+    tid = created.json()["table"]["id"]
+    assert client.get(f"/api/research/tables/{tid}").json()["table"]["title"] == "演示表"
+
+    assert client.post("/api/research/tables/nope",
+                       json=PAYLOAD).status_code == 404
+    assert client.post(f"/api/research/tables/{tid}",
+                       json={"columns": [], "rows": []}).status_code == 400
+    saved = client.post(f"/api/research/tables/{tid}",
+                        json={**PAYLOAD, "title": "改名"})
+    assert saved.status_code == 200
+    assert saved.json()["table"]["title"] == "改名"
+
+    assert client.delete("/api/research/tables/nope").status_code == 404
+    deleted = client.delete(f"/api/research/tables/{tid}?hard=1")
+    assert deleted.status_code == 200 and deleted.json()["hard"] is True
+    assert client.delete(f"/api/research/tables/{tid}").status_code == 404
+
+
+def test_import_and_list_endpoints(tables, monkeypatch):
+    from openpyxl import load_workbook
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-imp"})
+    client = TestClient(_tables_app())
+
+    assert client.get("/api/research/tables").json()["tables"] == []
+    empty = client.post("/api/research/tables/import?name=a.csv", content=b"")
+    assert empty.status_code == 400
+    bad = client.post("/api/research/tables/import?name=a.pdf",
+                      content=b"not a table")
+    assert bad.status_code == 400
+
+    csv_res = client.post("/api/research/tables/import?name=exp.csv",
+                          content=b"a,b\n1,2\n")
+    assert csv_res.status_code == 200
+    assert csv_res.json()["table"]["rows"] == [["1", "2"]]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["x", "y"])
+    ws.append([1, 2])
+    buf = io.BytesIO()
+    wb.save(buf)
+    xlsx_res = client.post("/api/research/tables/import?name=t.xlsx",
+                           content=buf.getvalue())
+    assert xlsx_res.status_code == 200
+    assert xlsx_res.json()["table"]["columns"][0]["label"] == "x"
+    assert load_workbook  # 保证导入路径真实可用
+
+    listed = client.get("/api/research/tables?projectId=p1").json()["tables"]
+    assert listed == []
+
+
+def test_import_rejects_oversized_template(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-big"})
+    client = TestClient(_tables_app())
+    res = client.post("/api/research/tables/import?name=big.csv",
+                      content=b"a,b\n" + b"x" * (6 * 1024 * 1024))
+    assert res.status_code == 413
+
+
+def test_compute_endpoint_maps_errors(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-comp"})
+    client = TestClient(_tables_app())
+    created = rt._create_table("u-comp", PAYLOAD, None)
+
+    assert client.post("/api/research/tables/nope/compute",
+                       json=PAYLOAD).status_code == 404
+    assert client.post(f"/api/research/tables/{created['id']}/compute",
+                       json={"columns": [], "rows": []}).status_code == 400
+
+    body = client.post(f"/api/research/tables/{created['id']}/compute",
+                       json=PAYLOAD).json()
+    assert body["computed"]["C"] == ["0.5000", "0.7500"]
+    assert body["table"]["title"] == "演示表"
+
+
+class _DeniedLimiter:
+    def allow(self, key):
+        return False
+
+
+def test_validate_formula_error_paths(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-vf"})
+    client = TestClient(_tables_app())
+    created = rt._create_table("u-vf", {
+        "title": "反算",
+        "columns": [{"key": "A", "label": "位移", "type": "number"},
+                    {"key": "B", "label": "时间", "type": "number"},
+                    {"key": "C", "label": "速度", "type": "number"}],
+        "rows": [["1", "2", "0.5"], ["3", "4", "0.9"], ["5", "6", ""]],
+        "formulas": {},
+    }, None)
+    url = f"/api/research/tables/{created['id']}/validate-formula"
+
+    assert client.post("/api/research/tables/nope/validate-formula",
+                       json={"columnKey": "C", "formula": "=A2/B2"}).status_code == 404
+    assert client.post(url, json={"columnKey": "", "formula": "=A2/B2"}).status_code == 400
+    assert client.post(url, json={"columnKey": "C", "formula": ""}).status_code == 400
+    assert client.post(url, json={"columnKey": "Z", "formula": "=A2/B2"}).status_code == 400
+
+    body = client.post(url, json={"columnKey": "c", "formula": "=A2/B2"}).json()
+    assert body["columnKey"] == "C"
+    assert body["compared"] == 2               # 空单元格不参与比对
+    assert body["matched"] == 1                # 0.9 与 0.75 不匹配
+    assert body["maxError"] == "0.1500"
+    assert [s["ok"] for s in body["samples"]] == [True, False]
+    assert body["errors"] == []
+
+
+def test_validate_formula_reports_out_of_range_values(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-vf2"})
+    client = TestClient(_tables_app())
+    created = rt._create_table("u-vf2", {
+        "title": "超范围",
+        "columns": [{"key": "A", "label": "x", "type": "number"},
+                    {"key": "B", "label": "y", "type": "number"}],
+        "rows": [["1", "1e400"]],
+        "formulas": {},
+    }, None)
+    body = client.post(
+        f"/api/research/tables/{created['id']}/validate-formula",
+        json={"columnKey": "B", "formula": "=A2*2"}).json()
+    assert body["compared"] == 0
+    assert body["maxError"] == ""
+    assert body["errors"] and body["errors"][0]["col"] == "B"
+
+
+def test_stats_endpoint_rejects_bad_payload_and_handles_empty_table(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-st"})
+    client = TestClient(_tables_app())
+    created = rt._create_table("u-st", {
+        "title": "空表",
+        "columns": [{"key": "A", "label": "x", "type": "number"}],
+        "rows": [],
+        "formulas": {},
+    }, None)
+    url = f"/api/research/tables/{created['id']}/stats"
+    assert client.post(url, json={"columns": "x", "rows": []}).status_code == 400
+
+    body = client.post(url, json={"columns": [{"key": "A", "label": "x",
+                                              "type": "number"}],
+                                  "rows": [], "formulas": {}}).json()
+    assert body["stats"] == []
+    assert body["correlations"] == []
+
+    single = client.post(url, json={
+        "columns": [{"key": "A", "label": "x", "type": "number"}],
+        "rows": [["1"], ["2"]], "formulas": {}}).json()
+    assert single["stats"][0]["n"] == 2
+    assert single["correlations"] == []
+
+
+def test_match_formulas_endpoint(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-mf"})
+    client = TestClient(_tables_app())
+    assert client.post("/api/research/tables/nope/match-formulas",
+                       json={}).status_code == 404
+
+    created = rt._create_table("u-mf", {
+        "title": "匹配",
+        "columns": [{"key": "A", "label": "位移", "type": "number"},
+                    {"key": "B", "label": "时间", "type": "number"},
+                    {"key": "C", "label": "速度", "type": "number"}],
+        "rows": [["1", "2", "0.5"]],
+        "formulas": {},
+    }, None)
+    saved = [{"id": "f1", "target": "速度", "expr": "位移/时间",
+              "variables": ["位移", "时间"],
+              "variableMap": {"位移": "A", "时间": "B"}}]
+    monkeypatch.setattr(rt.rc, "_list_extracted_formulas",
+                        lambda uid, table_id, doc_id: saved)
+    body = client.post(f"/api/research/tables/{created['id']}/match-formulas",
+                       json={"docId": "doc-1"}).json()
+    assert body["candidates"][0]["columnKey"] == "C"
+    assert body["candidates"][0]["formula"] == "=A2/B2"
+
+
+def test_suggest_topic_endpoint_paths(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-topic"})
+    monkeypatch.setattr(rt, "_topic_limiter", rt.SlidingWindowLimiter(100, 60))
+    client = TestClient(_tables_app())
+    created = rt._create_table("u-topic", PAYLOAD, None)
+    url = f"/api/research/tables/{created['id']}/suggest-topic"
+
+    assert client.post("/api/research/tables/nope/suggest-topic",
+                       json={}).status_code == 404
+
+    monkeypatch.setattr(rt.llm_mod, "is_configured", lambda: False)
+    assert client.post(url, json={}).status_code == 503
+
+    monkeypatch.setattr(rt.llm_mod, "is_configured", lambda: True)
+    monkeypatch.setattr(rt, "_topic_limiter", _DeniedLimiter())
+    assert client.post(url, json={}).status_code == 429
+    monkeypatch.setattr(rt, "_topic_limiter", rt.SlidingWindowLimiter(100, 60))
+
+    async def refuse(*args, **kwargs):
+        yield "抱歉"
+
+    monkeypatch.setattr(rt.llm_mod, "stream_chat", refuse)
+    assert client.post(url, json={}).status_code == 502
+
+    async def answer(*args, **kwargs):
+        yield '{"title":"'
+        yield '自由落体","confidence":0.8}'
+
+    monkeypatch.setattr(rt.llm_mod, "stream_chat", answer)
+    body = client.post(url, json={}).json()
+    assert body["title"] == "自由落体"
+    assert body["confidence"] == 0.8
+
+
+def test_analysis_capabilities_endpoint(monkeypatch):
+    from starlette.testclient import TestClient
+
+    import analysis_client
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-cap"})
+    monkeypatch.setattr(rt, "_analysis_limiter", rt.SlidingWindowLimiter(100, 60))
+    client = TestClient(_tables_app())
+
+    async def ok():
+        return {"rdkit": True}
+
+    monkeypatch.setattr(rt, "_run_capabilities", ok)
+    assert client.get("/api/research/analysis/capabilities").json()[
+        "packs"] == {"rdkit": True}
+
+    async def fail():
+        raise analysis_client.AnalysisError("worker_down")
+
+    monkeypatch.setattr(rt, "_run_capabilities", fail)
+    packs = client.get("/api/research/analysis/capabilities").json()["packs"]
+    assert packs == {"rdkit": False, "biopython": False,
+                     "astropy": False, "networkx": False}
+
+    monkeypatch.setattr(rt, "_analysis_limiter", _DeniedLimiter())
+    assert client.get("/api/research/analysis/capabilities").status_code == 429
+
+
+def test_regression_spec_validation_matrix(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-reg2"})
+    monkeypatch.setattr(rt, "_analysis_limiter", rt.SlidingWindowLimiter(100, 60))
+    client = TestClient(_tables_app())
+    created = rt._create_table("u-reg2", PAYLOAD, None)
+    url = f"/api/research/tables/{created['id']}/regression"
+    base = {"columns": PAYLOAD["columns"], "rows": PAYLOAD["rows"],
+            "formulas": {}}
+
+    bad_specs = [
+        "not-a-dict",
+        {"x": ["A"], "y": "B", "model": "ols", "extra": 1},
+        {"x": ["A"], "y": "B", "model": "logit"},
+        {"x": ["A"], "y": "B", "model": "ols", "options": {"intercept": False}},
+        {"x": [], "y": "B", "model": "ols"},
+        {"x": ["A"] * 9, "y": "B", "model": "ols"},
+        {"x": [1], "y": "B", "model": "ols"},
+        {"x": ["A", "A"], "y": "B", "model": "ols"},
+        {"x": ["Z"], "y": "B", "model": "ols"},
+        {"x": ["A"], "y": "B", "model": "poly", "degree": 5},
+        {"x": ["A", "B"], "y": "C", "model": "poly"},
+        {"x": ["A"], "y": "B", "model": "poly", "degree": "abc"},
+    ]
+    for spec in bad_specs:
+        assert client.post(url, json={**base, "regression": spec}).status_code == 400, spec
+
+    assert client.post(url, json=base).status_code == 400       # 缺 regression
+
+
+def test_regression_endpoint_maps_analysis_errors(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    import analysis_client
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-reg3"})
+    monkeypatch.setattr(rt, "_analysis_limiter", rt.SlidingWindowLimiter(100, 60))
+    client = TestClient(_tables_app())
+    created = rt._create_table("u-reg3", PAYLOAD, None)
+    url = f"/api/research/tables/{created['id']}/regression"
+    body = {"columns": PAYLOAD["columns"], "rows": PAYLOAD["rows"],
+            "formulas": {}, "regression": {"x": ["A"], "y": "B", "model": "ols"}}
+
+    assert client.post("/api/research/tables/nope/regression",
+                       json=body).status_code == 404
+
+    async def insufficient(payload, timeout=30.0):
+        raise analysis_client.AnalysisError("insufficient_n")
+
+    monkeypatch.setattr(rt, "_run_analysis", insufficient)
+    assert client.post(url, json=body).status_code == 400
+
+    async def worker_down(payload, timeout=30.0):
+        raise analysis_client.AnalysisError("worker_down")
+
+    monkeypatch.setattr(rt, "_run_analysis", worker_down)
+    assert client.post(url, json=body).status_code == 503
+
+    async def broken(payload, timeout=30.0):
+        raise ValueError("bad rows")
+
+    monkeypatch.setattr(rt, "_run_analysis", broken)
+    assert client.post(url, json=body).status_code == 400
+
+    seen = {}
+
+    async def ok(payload, timeout=30.0):
+        seen["payload"] = payload
+        return {"model": "poly", "n": 2, "coefficients": []}
+
+    monkeypatch.setattr(rt, "_run_analysis", ok)
+    res = client.post(url, json={
+        **body, "formulas": {"C": "=A2/B2"},
+        "regression": {"x": ["C"], "y": "B", "model": "poly", "degree": 2}})
+    assert res.status_code == 200
+    assert res.json()["model"] == "poly"
+    assert seen["payload"]["spec"] == {"x": ["C"], "y": "B", "model": "poly",
+                                       "degree": 2}
+    assert seen["payload"]["rows"][0][2] == "0.5000"     # 计算列已展开
+    assert seen["payload"]["formulas"] == {}
+
+    monkeypatch.setattr(rt, "_analysis_limiter", _DeniedLimiter())
+    assert client.post(url, json=body).status_code == 429
+
+
+def test_resolved_analysis_rows_pads_missing_columns():
+    columns = [{"key": "A"}, {"key": "B"}, {"key": "C"}]
+    rows = [["1", "2"]]
+    assert rt._resolved_analysis_rows(columns, rows, {}) == [["1", "2"]]
+    resolved = rt._resolved_analysis_rows(columns, rows, {"C": "=A2+B2"})
+    assert resolved == [["1", "2", "3.0000"]]
+
+
+def test_export_and_print_endpoint_errors(tables, monkeypatch):
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(rt, "require_auth", lambda request: {"uid": "u-exp"})
+    client = TestClient(_tables_app())
+    assert client.get("/api/research/tables/nope/export").status_code == 404
+
+    created = rt._create_table("u-exp", PAYLOAD, None)
+    xlsx = client.get(f"/api/research/tables/{created['id']}/export?format=xlsx")
+    assert xlsx.status_code == 200
+    assert xlsx.content.startswith(b"PK")
+    assert "spreadsheetml" in xlsx.headers["content-type"]
+    assert "attachment" in xlsx.headers["content-disposition"]
+
+    print_url = f"/api/research/tables/{created['id']}/print"
+    headers = {"host": "127.0.0.1:8000"}
+    assert client.post("/api/research/tables/nope/print", json=PAYLOAD,
+                       headers=headers).status_code == 404
+    assert client.post(print_url, json={"columns": [], "rows": []},
+                       headers=headers).status_code == 400
+
+
+def test_tables_for_export_and_csv_guard(tables):
+    assert rt.tables_for_export("u-none") == []      # 没有库文件时返回空
+    created = rt._create_table("u-export", PAYLOAD, None)
+    exported = rt.tables_for_export("u-export")
+    assert [t["id"] for t in exported] == [created["id"]]
+    assert exported[0]["formulas"] == {"C": "=A2/B2"}
+
+    assert rt._csv_safe("=SUM(A2)") == "'=SUM(A2)"
+    assert rt._csv_safe("-12.5") == "-12.5"
+    assert rt._csv_safe("+1") == "+1"
+    assert rt._csv_safe("plain") == "plain"
+    assert rt._csv_safe("") == ""
+    assert rt._csv_safe("@cmd") == "'@cmd"
+
+
+def test_prune_print_files_keeps_latest(tables):
+    folder = rt._print_dir("u-prune")
+    for index in range(23):
+        path = folder / f"t{index}.xlsx"
+        path.write_bytes(b"PK")
+        os.utime(path, (1000 + index, 1000 + index))
+    rt._prune_print_files(folder, keep=20)
+    assert len(list(folder.glob("*.xlsx"))) == 20
+    assert not (folder / "t0.xlsx").exists()
+    assert (folder / "t22.xlsx").exists()
+

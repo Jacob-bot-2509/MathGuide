@@ -178,8 +178,8 @@ def _is_symplectic(matrix: list[list[float]], dimension: int) -> bool:
     for row in range(size):
         for col in range(size):
             value = sum(
-                matrix[k][row] * j[k][l] * matrix[l][col]
-                for k in range(size) for l in range(size)
+                matrix[k][row] * j[k][p] * matrix[p][col]
+                for k in range(size) for p in range(size)
             )
             if abs(value - j[row][col]) > 1e-7:
                 return False
@@ -900,7 +900,7 @@ def _build_subspace(linear: dict) -> tuple[str, list[dict], list[dict]]:
             shapes.append(_plane(center, normal, DISPLAY * 2.0, "S"))
             shapes.append(_vector(offset, _add(offset, u, DISPLAY), "v1"))
             shapes.append(_vector(offset, _add(offset, v, DISPLAY), "v2"))
-            notes.append(_annotation(center, f"dim = 2"))
+            notes.append(_annotation(center, "dim = 2"))
         else:
             shapes.append(_vector(offset, _add(offset, units[0], DISPLAY), "v1"))
             shapes.append(_vector(offset, _add(offset, units[1], DISPLAY), "v2"))
@@ -1296,7 +1296,6 @@ def _build_unitary(linear: dict) -> tuple[str, list[dict], list[dict]]:
 
 def _build_symplectic(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
     ambient = linear["ambient"]
-    matrix = linear["matrix"]
     projection = linear.get("projection", {})
     kind = projection.get("kind", "none")
     note = projection.get("note", "")

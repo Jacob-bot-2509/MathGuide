@@ -7,6 +7,7 @@
 import { defineComponent, h, type VNode } from 'vue'
 import katex from 'katex'
 import mathMacros from '@/utils/mathMacros.json'
+import { renderMathArray } from '@/utils/mathArrays'
 import { isolateMath, prepareMath, splitIsolatedMath, type IsolatedFormula } from '@/utils/mathIsolation'
 
 interface Seg {
@@ -42,8 +43,15 @@ function renderKatex(latex: string, display: boolean): string {
       macros: { ...mathMacros, '\\knowl': '\\def\\mgIgnore##1{}\\mgIgnore{#1}#2' },
     })
   } catch {
-    // 渲染异常时不静默丢内容:原样展示 LaTeX 源码,保证任何符号都不会"凭空消失"
-    html = `<code class="seg-math-raw">${escapeHtml(latex)}</code>`
+    try {
+      html = renderMathArray(prepareMath(latex), (cell) => katex.renderToString(cell, {
+        throwOnError: true,
+        macros: { ...mathMacros, '\\knowl': '\\def\\mgIgnore##1{}\\mgIgnore{#1}#2' },
+      })) || ''
+    } catch {
+      html = ''
+    }
+    if (!html) html = `<code class="seg-math-raw">${escapeHtml(latex)}</code>`
   }
   if (katexCache.size >= KATEX_CACHE_MAX) katexCache.clear()
   katexCache.set(key, html)

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import html as html_mod
 import json
+import os
 import re
 import secrets
 import shutil
@@ -24,16 +25,54 @@ from pathlib import Path
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+import math_render
+import rag.llm as llm
 from chat import _rate_check, _record, require_auth
 from http_utils import read_json_object
-import rag.llm as llm
-import math_render
+from log import get_logger
 
-# Edge 浏览器(Windows 自带,仅调用不改系统文件)
+log = get_logger(__name__)
+
+# 浏览器:本机 Windows 自带 Edge;Linux 服务器装 chromium。
+# 查找优先级:MG_EDGE_PATH(部署时显式指定)→ 系统已知路径 → PATH 里的常见命令名。
 _EDGE_CANDIDATES = (
     Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"),
     Path("C:/Program Files/Microsoft/Edge/Application/msedge.exe"),
+    # Linux 服务器常见位置(apt / snap / rpm 各不同)
+    Path("/usr/bin/chromium"),
+    Path("/usr/bin/chromium-browser"),
+    Path("/usr/bin/google-chrome"),
+    Path("/usr/bin/microsoft-edge"),
+    Path("/snap/bin/chromium"),
 )
+_EDGE_COMMANDS = (
+    "msedge",
+    "chromium",
+    "chromium-browser",
+    "google-chrome",
+    "microsoft-edge",
+)
+
+
+def _find_edge() -> str | None:
+    """返回可用的 headless 浏览器可执行文件;找不到返回 None。
+
+    `MG_EDGE_PATH` 是部署开关:服务器上指定一次(例如容器内 `/usr/bin/chromium`)即可,
+    不必依赖命令名是否在 PATH 里。**显式配置了但文件不存在时直接返回 None**,
+    不做兜底 —— 否则配错了会悄悄用别的浏览器,产出的 PDF 和预期不一致却查不出原因。
+    """
+    configured = (os.getenv("MG_EDGE_PATH") or "").strip()
+    if configured:
+        path = Path(configured)
+        return str(path) if path.is_file() else None
+    for candidate in _EDGE_CANDIDATES:
+        if candidate.is_file():
+            return str(candidate)
+    for name in _EDGE_COMMANDS:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
 
 # KaTeX 静态资源:优先后端自带副本(便于只部署 backend),否则复用前端 node_modules。
 # 两处目录结构都是 katex.min.css / katex.min.js。
@@ -51,13 +90,6 @@ def _katex_dir() -> Path:
 
 
 CONTENT_MAX = 32000  # 与聊天输入上限一致
-
-
-def _find_edge() -> str | None:
-    for p in _EDGE_CANDIDATES:
-        if p.is_file():
-            return str(p)
-    return shutil.which("msedge")
 
 
 def _system_prompt(lang: str) -> str:
@@ -187,6 +219,7 @@ def _render_html(doc: dict, lang: str, katex_dir: Path, brand: str | None = None
     zh = lang != "en"
     css = (katex_dir / "katex.min.css").as_uri()
     js = (katex_dir / "katex.min.js").as_uri()
+    array_js = (katex_dir.parent / "math_arrays.js").as_uri()
     nonce = secrets.token_hex(16)  # 只放行本页内联脚本;注入的 <script> 没有 nonce
     render_macros = {**math_render.MACROS, r"\knowl": r"\def\mgIgnore##1{}\mgIgnore{#1}#2"}
 
@@ -270,47 +303,75 @@ def _render_html(doc: dict, lang: str, katex_dir: Path, brand: str | None = None
   {''.join(secs)}
   {refs}
   <script nonce="{nonce}" src="{js}"></script>
+  <script nonce="{nonce}" src="{array_js}"></script>
   <script nonce="{nonce}">
     const mathMacros = {json.dumps(render_macros, ensure_ascii=True)};
-    document.querySelectorAll('.mg-math').forEach(function (el) {{
+    function renderFormula(el, display) {{
       const source = el.textContent;
-      try {{ katex.render(source, el, {{ throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
-      catch (e) {{ el.textContent = source; }}
-    }});
-    document.querySelectorAll('.mg-mathd').forEach(function (el) {{
-      const source = el.textContent;
-      try {{ katex.render(source, el, {{ displayMode: true, throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
-      catch (e) {{ el.textContent = source; }}
-    }});
+      try {{ katex.render(source, el, {{ displayMode: display, throwOnError: true, macros: Object.assign({{}}, mathMacros) }}); }}
+      catch (e) {{
+        try {{
+          const table = MGMathArrays.renderMathArray(source, cell => katex.renderToString(cell,
+            {{throwOnError: true, macros: Object.assign({{}}, mathMacros)}}));
+          if (table) {{ el.innerHTML = table; return; }}
+        }} catch (ignored) {{}}
+        el.textContent = source;
+      }}
+    }}
+    document.querySelectorAll('.mg-math').forEach(el => renderFormula(el, false));
+    document.querySelectorAll('.mg-mathd').forEach(el => renderFormula(el, true));
   </script>
 </body>
 </html>"""
 
 
+PDF_TIMEOUT_DEFAULT = 120.0  # 秒;低配 VPS 上 60s 会误杀长文档,可用 MG_PDF_TIMEOUT 覆盖
+
+
+def _pdf_timeout() -> float:
+    raw = (os.getenv("MG_PDF_TIMEOUT") or "").strip()
+    if not raw:
+        return PDF_TIMEOUT_DEFAULT
+    try:
+        return max(10.0, float(raw))
+    except ValueError:
+        return PDF_TIMEOUT_DEFAULT
+
+
 def _html_to_pdf(html_path: Path, pdf_path: Path) -> bytes | None:
-    """Edge headless 打印 HTML 为 PDF;失败返回 None(由调用方决定兜底)"""
+    """浏览器 headless 打印 HTML 为 PDF;失败返回 None(由调用方决定兜底)。
+
+    `--headless` 参数按"新 → 旧"回退:新版 chromium/Edge 只认 `--headless=new`,
+    部分发行版仍是老的 `--headless`。写死其中一个,会在另一半机型上**静默不产出 PDF**
+    (命令返回 0、没有报错、就是没文件),所以这里逐个尝试。
+    """
     edge = _find_edge()
     if edge is None:
-        print("[doc] 未找到 Edge 浏览器")
+        log.info("[doc] 未找到可用的 headless 浏览器(MG_EDGE_PATH / chromium / msedge)")
         return None
-    cmd = [
-        edge, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
-        f"--print-to-pdf={pdf_path}", "--virtual-time-budget=8000",
-        html_path.as_uri(),
-    ]
-    try:
-        subprocess.run(cmd, capture_output=True, timeout=60, check=False)
-    except subprocess.TimeoutExpired:
-        print("[doc] Edge 转 PDF 超时")
-        return None
-    if not pdf_path.is_file():
-        print("[doc] Edge 未产出 PDF")
-        return None
-    data = pdf_path.read_bytes()
-    if not data.startswith(b"%PDF"):
-        print("[doc] 产物不是合法 PDF")
-        return None
-    return data
+    timeout = _pdf_timeout()
+    for flag in ("--headless=new", "--headless"):
+        pdf_path.unlink(missing_ok=True)
+        cmd = [
+            edge, flag, "--disable-gpu", "--no-pdf-header-footer",
+            f"--print-to-pdf={pdf_path}", "--virtual-time-budget=8000",
+            html_path.as_uri(),
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+        except subprocess.TimeoutExpired:
+            # 超时说明这一档参数被接受了(只是慢),换参数没有意义
+            log.warning(f"[doc] 浏览器转 PDF 超时({timeout:.0f}s,参数 {flag})")
+            return None
+        if not pdf_path.is_file():
+            continue  # 该参数不被支持 → 换下一档
+        data = pdf_path.read_bytes()
+        if not data.startswith(b"%PDF"):
+            log.info(f"[doc] 产物不是合法 PDF(参数 {flag})")
+            continue
+        return data
+    log.info("[doc] 浏览器未产出 PDF(已尝试 --headless=new 与 --headless)")
+    return None
 
 
 def render_pdf_bytes(document: dict, lang: str = "zh", brand: str | None = None) -> bytes | None:
@@ -351,17 +412,17 @@ async def export_pdf(request: Request) -> Response | JSONResponse:
         raw = "".join(full)
         parsed = _extract_json(raw)
         if parsed is None:
-            print(f"[doc] LLM 输出非 JSON({len(raw)} 字),降级排版")
+            log.warning(f"[doc] LLM 输出非 JSON({len(raw)} 字),降级排版")
             doc = _fallback_doc(content, lang)
         else:
             doc = _normalize_doc(parsed, content, lang)
     except Exception as exc:  # noqa: BLE001 模型侧错误不阻断下载
-        print(f"[doc] LLM 重组失败,降级排版: {exc}")
+        log.warning(f"[doc] LLM 重组失败,降级排版: {exc}")
         doc = _fallback_doc(content, lang)
 
     katex_dir = _katex_dir()
     if not (katex_dir / "katex.min.js").is_file():
-        print("[doc] 未找到 KaTeX 资源,PDF 中的公式将以源码展示")
+        log.info("[doc] 未找到 KaTeX 资源,PDF 中的公式将以源码展示")
 
     # HTML → PDF(Edge 转码也放线程池,不冻事件循环)
     with tempfile.TemporaryDirectory(prefix="mg-doc-") as tmp:
@@ -378,7 +439,7 @@ async def export_pdf(request: Request) -> Response | JSONResponse:
             _record, rec, cmd="导出文档", prompt_len=len(content),
             reply_len=0, role="deep", research=True)
     except Exception as exc:  # noqa: BLE001 记账失败不影响下载
-        print(f"[doc] 导出记账失败: {exc}")
+        log.warning(f"[doc] 导出记账失败: {exc}")
     filename = f"mg-survey-{lang}-{time.strftime('%Y%m%d')}.pdf"
     return Response(
         pdf,

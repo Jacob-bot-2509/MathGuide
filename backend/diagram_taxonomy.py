@@ -13,7 +13,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-
 # 每个词条 = (关键词, 权重)。权重不是“命中就画”,而是“这段内容适合该形式”的证据。
 VISUAL_CUES: dict[str, dict[str, float]] = {
     "plot2d": {

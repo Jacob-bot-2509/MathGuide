@@ -25,7 +25,6 @@ sources 是研究型提问的检索范围(平台名白名单在 rag/research)。
 import asyncio
 import hashlib
 import json
-import random
 import re
 import secrets
 import time
@@ -35,19 +34,77 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
+import analysis_client
 import config
 import diagnosis
+import diagram_metrics
 import learning_analysis
+import quota
 import rag
 import research_actions
 import research_corpus
-import diagram_metrics
 import research_diagrams
 import research_tables
-import analysis_client
 import usage
 from auth import require_auth
+
+# ---- 从 chat.py 拆出的三块(M3-1):协议 / 提示词 / 纯路由函数 ----
+# 整组导入并标注 F401 豁免:外部(main.py 与 tests)仍按 `chat._sse`、
+# `chat.WELCOME_ZH`、`chat._pick_role` 取用,改名会打断它们。
+from chat_prompts import (  # noqa: F401
+    _CLARIFY_EN,
+    _CLARIFY_ZH,
+    _INTUITION_SYSTEM_EN,
+    _INTUITION_SYSTEM_ZH,
+    ATTACH_FILE_EN,
+    ATTACH_FILE_ZH,
+    ATTACH_IMAGE_EN,
+    ATTACH_IMAGE_ZH,
+    FALLBACK_EN,
+    FALLBACK_ZH,
+    WELCOME_RESEARCH_ZH,
+    WELCOME_ZH,
+    _nav_guide_system,
+    _nav_system,
+)
+from chat_routing import (  # noqa: F401
+    _ANALYSIS_EN,
+    _ANALYSIS_TOPICS,
+    _DEEP_MARKERS,
+    _FEATURE_TOPICS,
+    _FOLLOWUP_RE,
+    _IMPORT_RE,
+    _MULTI_PART_RE,
+    _QUERY_FILLER_RE,
+    _chitchat_kind,
+    _clean_scope,
+    _compose_direct,
+    _conversational_reply,
+    _is_chinese,
+    _is_feature_question,
+    _is_formula_clarify,
+    _is_formula_followup,
+    _is_import_request,
+    _is_learning_analysis_request,
+    _normalize_query,
+    _pick_role,
+    _research_cache_key,
+    _retrieval_query,
+    _strip_meta,
+    _validated_history,
+)
+from chat_sse import (  # noqa: F401
+    _DONE,
+    CHUNK,
+    FRAME_MS,
+    _frame_text_len,
+    _frames,
+    _sse,
+    _stream_text,
+    _with_meta,
+)
 from http_utils import read_json_object
+from log import get_logger
 from rag.research.types import SearchHit
 from rate_limit import SlidingWindowLimiter
 from session_cache import (
@@ -61,291 +118,35 @@ from session_cache import (
     valid_workspace,
 )
 
-CHUNK = 6          # 直答模式每帧字符数(配合浏览器端 ~24ms 渲染节流)
-FRAME_MS = 0.02    # 帧间隔(秒),模拟真实模型逐字输出
+log = get_logger(__name__)
+
 DIAGRAM_TIMEOUT = 45.0  # 单张图规划上限(秒);3D 采样较慢,但不能无限拖住回答
-_DONE = "data: [DONE]\n\n"  # SSE 收尾标记(由 _sse 统一补,生成器不再各自 yield)
-
-WELCOME_ZH = (
-    "**欢迎回到 MATHGUIDE · 学习辅助**\n\n"
-    "我是 MG,你的高等数学学习与研究助手。直接提问即可,或用下方指令:"
-    "学习分析 / 章节知识导航 / 问题记录 / 公式查询手册 / 待办清单。\n\n"
-    "问题的**板块我会自动识别**,先给严谨的推导与结论;需要通俗解释时,"
-    "点回答下的「换个直观说法」即可;"
-    "中文、英文提问都可以。\n\n"
-    "(Welcome to MATHGUIDE · Learn. You can also ask in English, e.g. \"explain limits with intuition\".)"
-)
-
-WELCOME_RESEARCH_ZH = (
-    "**欢迎回到 MATHGUIDE · 科学研究**\n\n"
-    "我是 MG,你的科研工作区助手。本区会话、研究档案与检索范围与学习辅助完全独立,"
-    "可直接提问,或用下方指令:研究档案 / 搜索范围 / 待办清单。\n\n"
-    "提出研究型问题时,我会按选定的**搜索范围**跨文献库检索,并给出带编号引用的综合解答;"
-    "中文、英文提问都可以。\n\n"
-    "(Welcome to MATHGUIDE · Research. This workspace is isolated from Learn; ask in English if you prefer.)"
-)
-
-FALLBACK_ZH = (
-    "这个问题我按通用方法论给你搭分析框架。\n\n"
-    "**通用三步走(专业表述):** ① 明确对象与条件,把问题转化为标准型(极限式、方程、积分、模型);"
-    "② 选择对应工具求解;③ **回代验算**——MG 的「自我验证工作流」会在解答发布前进行一致性检查与符号复验,"
-    "低置信度时会主动标注「该解答需进行人工处理」。\n\n"
-    "把题目原文(或拍照上传)发给我,我会按上面的框架给出带完整过程的解答。"
-)
-
-FALLBACK_EN = (
-    "Here is a general framework I can apply to this problem.\n\n"
-    "**Approach (3 steps):** 1) Identify the objects and conditions, and rewrite the problem into a canonical form "
-    "(a limit, an equation, an integral, or a model); 2) apply the matching tool; 3) **verify by substitution**. "
-    "MG's self-verification workflow runs consistency checks and symbolic re-validation before publishing an answer, "
-    "flagging low-confidence ones as \"manual review required\".\n\n"
-    "Paste the full problem (or upload a photo) and I'll work through it step by step."
-)
-
-ATTACH_IMAGE_ZH = (
-    "已收到你上传的图片 **{name}**。\n\n"
-    "当前演示环境会保留图片于会话记录中;接入视觉模型后,MG 将直接识图作答:"
-    "拍照的手写题目 → OCR + 版面解析 → 按板块与难度路由。\n\n"
-    "**现在你可以:** ① 把题目文字打出来,我照常解答;② 先手动归入对应板块(题目类型判断已生效)。"
-)
-ATTACH_FILE_ZH = (
-    "已收到文件 **{name}**(大小 {size} KB)。\n\n"
-    "文本/PDF 教材已读取正文,可执行「章节知识导航」一键划分章节;"
-)
-ATTACH_IMAGE_EN = (
-    "Image **{name}** received and kept in this conversation.\n\n"
-    "The demo backend stores the preview only; once the vision model is wired up, "
-    "MathGuide will read handwritten problems directly from photos. "
-    "Meanwhile, type the problem text and I will solve it as usual."
-)
-ATTACH_FILE_EN = (
-    "File **{name}** received (metadata only, {size} KB).\n\n"
-    "Document parsing (PDF / lecture notes) arrives with the real file service."
-)
+# 普通问答检索条数:前 3 条在 prompt 里标「重点」,后 2 条标「备选」。
+# top5 比 top3 多召回金标(旧 48 题:0.667→0.75),但不会全部当同等依据。
+RETRIEVAL_TOP_K = 5
 
 
-def _is_chinese(text: str) -> bool:
-    return any("一" <= ch <= "鿿" for ch in text)
 
 
-# 数学题判定(知识库触发词 + 题目措辞)统一在 rag.is_math_question:
-# 正则编译一次缓存复用,评测工具与线上链路同源
-
-# 深答路由触发词:证明 / 竞赛类问题交给 deep 强模型(未配置自动回退 main)
-_DEEP_MARKERS = ("证明", "求证", "竞赛", "奥数", "难题", "prove", "proof", "olympiad")
 
 
-def _pick_role(question: str) -> str:
-    """按需路由 LLM 角色:证明/竞赛 → deep,其余 main(节省成本,好钢用在刀刃上)"""
-    q = question.lower()
-    role = rag.llm.pick("deep") if any(m in q for m in _DEEP_MARKERS) else "main"
-    print(f"[chat] 角色路由 {role} | 问题长度 {len(question)}")
-    return role
 
 
-# 教材缓存:章节导航列表生成时按「用户 + 会话」暂存教材文本,后续章节指引按
-# (uid, sessionId) 取用,点击章节只发章节名即可(服务重启缓存失效,指引自动降级为通用知识作答)。
-# 键必须带 uid:sessionId 是客户端自增的小整数,跨用户必然撞号(见 session_cache)。
 
 
-# 会话大脑:同类多条随机轮换,避免机械重复;语气自然、有温度
-CHITCHAT_SETS_ZH: dict[str, list[str]] = {
-    "greet": [
-        "你好呀!我是 MG。今天想一起攻克哪块数学?",
-        "嗨!很高兴见到你~ 我是 MG,有数学问题尽管说,想闲聊也欢迎。",
-        "你好你好!MG 在呢,随时可以开始。",
-    ],
-    "thanks": [
-        "不客气!能帮上忙我就很开心。",
-        "应该的!有新的问题随时回来。",
-        "不用谢~ 一起把数学啃下来,就是对我最好的感谢。",
-    ],
-    "bye": [
-        "再见!下次遇到数学问题,我随叫随到。",
-        "拜拜~ 学累了就休息一下,咱们下次再战。",
-        "好,下次见!祝你一切顺利。",
-    ],
-    "praise": [
-        "谢谢夸奖!我继续加油,争取每次解答都让你满意。",
-        "哈哈,被你夸得有点不好意思了。咱们继续?",
-        "过奖啦,真正厉害的是坚持提问的你。",
-    ],
-    "intro": [
-        "我是 MG,MathGuide 的高等数学学习助手。概念讲解、章节导航、问题记录、公式查询,都是我的拿手活。",
-        "我叫 MG,专攻高等数学的学习与科研辅助。你可以直接丢给我一道题,或者问我某个概念怎么理解。",
-    ],
-    "ability": [
-        "我能帮你做这些:讲概念、串章节知识、归纳错题、查公式,还能给难题搭解题框架;需要时可以把概念换成直观说法。",
-        "我的主战场是高等数学:概念讲解、问题记录、公式查询,还能陪你梳理章节脉络。",
-    ],
-    "usage": [
-        "直接在输入框提问就行,比如「什么是泰勒展开」;下面指令栏的按钮可以一键切到章节导航、公式查询等模式。",
-        "用法很简单:输入问题回车即可。想回顾收纳过的题目点「问题记录」,想查公式点「公式查询手册」。",
-    ],
-    "mood": [
-        "听起来你有点低落?数学解不出来的挫败感我懂。要不先聊两句,或者换一道简单题找回手感?",
-        "抱抱~ 学习压力大的时候,允许自己休息一下。想倾诉我听着,想做题我陪着。",
-    ],
-    "agree": [
-        "好嘞!",
-        "收到~",
-        "嗯嗯,明白。",
-    ],
-    "generic": [
-        "明白你的意思了~ 这个话题我可能不专业,但数学相关的问题我随叫随到。",
-        "哈哈,记下了。闲聊我也挺喜欢的,不过别忘了,我是你身边最能打的数学搭子。",
-        "收到!虽然我的主场是数学,但陪你聊聊天完全没问题。",
-    ],
-}
-CHITCHAT_SETS_EN: dict[str, list[str]] = {
-    "greet": [
-        "Hi there! I'm MG, your advanced-math study buddy. What shall we tackle today?",
-        "Hey! Great to see you. Got a math question, or just want to chat?",
-        "Hello hello! I'm here — ready whenever you are.",
-    ],
-    "thanks": [
-        "You're very welcome! Glad I could help.",
-        "Anytime! Come back whenever a question pops up.",
-        "No problem at all — tackling math together is the best thanks.",
-    ],
-    "bye": [
-        "See you! I'll be here whenever a math problem shows up.",
-        "Bye! Take a break when you need one — we'll pick it up next time.",
-        "Until next time! Good luck with everything.",
-    ],
-    "praise": [
-        "Thank you! I'll keep it up — aiming to make every answer satisfying.",
-        "Haha, you're making me blush. Shall we keep going?",
-        "You're too kind — the real credit goes to you for asking.",
-    ],
-    "intro": [
-        "I'm MG, MathGuide's assistant for advanced mathematics: concept explanations, worked examples, chapter navigation, mistake reviews, and formula lookup.",
-        "I'm MG — I help with learning and research in higher math. Send me a problem, or ask how to understand a concept.",
-    ],
-    "ability": [
-        "Here's what I do: explain concepts with intuition, walk through chapters, review mistakes, look up formulas, and scaffold solutions for hard problems.",
-        "My home turf is higher mathematics: concept explanations, worked examples, mistake reviews, formula lookup, and chapter navigation.",
-    ],
-    "usage": [
-        "Just type your question and hit Enter — try \"what is Taylor expansion?\". The command bar below switches modes like worked examples or formula lookup.",
-        "Easy: type a question and press Enter. For examples tap \"Worked Examples\", for formulas tap \"Formula Lookup\".",
-    ],
-    "mood": [
-        "Sounds like you're feeling a bit down? I know how frustrating math can be. Want to talk, or maybe switch to an easier problem to get your confidence back?",
-        "Hugs — it's okay to rest when studying gets heavy. I'm here to listen, or to work through problems if you prefer.",
-    ],
-    "agree": [
-        "Sure thing!",
-        "Got it.",
-        "Okay, understood.",
-    ],
-    "generic": [
-        "Got what you mean! This topic might be outside my specialty, but I'm always here for math.",
-        "Haha, noted. I enjoy chatting too — but remember, I'm your toughest math buddy.",
-        "Received! Math is my home turf, but chatting with you is always welcome.",
-    ],
-}
 
 
-def _chitchat_kind(text: str) -> str | None:
-    """识别会话类型(寒暄/感谢/告别/夸奖/自我介绍/能力/用法/情绪/应和);未识别返回 None"""
-    t = text.lower().strip()
-    if re.search(r"^(喂|你好|您好|嗨|哈喽|在吗|在不在)|(hi|hello|hey|hiya|how are you)\b", t):
-        return "greet"
-    if re.search(r"谢谢|感谢|thanks|thank you|thx", t):
-        return "thanks"
-    if re.search(r"再见|拜拜|byebye|bye", t):
-        return "bye"
-    if re.search(r"厉害|真棒|太强了|牛逼|牛啊|不错嘛|干得漂亮|great|awesome|amazing|well done", t):
-        return "praise"
-    if re.search(r"你是谁|你叫什么|介绍一下你|自我介绍|what are you|who are you|about yourself", t):
-        return "intro"
-    if re.search(r"你会什么|能做什么|有什么功能|功能|what can you do", t):
-        return "ability"
-    if re.search(r"怎么用|如何使用|使用说明|帮助|help", t):
-        return "usage"
-    if re.search(r"难过|烦|焦虑|心情|压力|学不会|太难了|不想学|崩溃|tired|stressed|anxious|sad", t):
-        return "mood"
-    if re.fullmatch(r"(好的|好|嗯|哦|行|可以|ok|okay|fine|yes|no)", t):
-        return "agree"
-    return None
 
 
-def _conversational_reply(text: str, zh: bool, kind: str | None) -> str:
-    """会话应答:同类多条随机轮换,语气自然"""
-    sets = CHITCHAT_SETS_ZH if zh else CHITCHAT_SETS_EN
-    return random.choice(sets[kind or "generic"])
 
 
-def _strip_meta(prompt: str, cmd: str | None) -> str:
-    """剥离前端可能遗留的 [cmd] 前缀,仅留原始问题"""
-    text = re.sub(r"^\[[^\]]*\]\s*", "", prompt)
-    if cmd and text.startswith(cmd):
-        text = text[len(cmd):].lstrip(": ： ")
-    return text.strip()
 
 
-def _compose_direct(prompt: str, chunks: list[tuple[rag.Chunk, float]]) -> str:
-    """知识库直答模式(未配置 LLM):把检索到的知识片段组装成回复文本"""
-    zh = _is_chinese(prompt)
-    if not chunks:
-        return FALLBACK_ZH if zh else FALLBACK_EN
-    parts = []
-    if zh:
-        parts.append("以下为知识库检索到的最相关资料:")
-    else:
-        parts.append("Here are the most relevant entries from the knowledge base "
-                     "(currently in Chinese):")
-    for i, (c, _score) in enumerate(chunks, 1):
-        # 英文提问用英文标题(正文仍为中文资料时,标题至少可读)
-        title = c.title_en if not zh else c.title
-        parts.append(f"\n\n**【资料{i}】** {title} · {c.section}\n\n{c.text}")
-    return "".join(parts)
 
 
-def _validated_history(raw: object) -> list[dict]:
-    """校验并截断前端传来的历史消息(条数/长度双保险,异常值直接丢弃)。
-    上限 16 条:超出部分由滚动摘要压缩(_update_summary),早期上下文不丢失"""
-    out: list[dict] = []
-    if not isinstance(raw, list):
-        return out
-    for item in raw[:16]:
-        if not isinstance(item, dict):
-            continue
-        role, content = item.get("role"), item.get("content")
-        if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
-            continue
-        out.append({"role": role, "content": content.strip()[:400]})
-    return out
 
 
-# 追问标记:短问句里出现这些指代/承接词时,检索需要带上上一轮的提问。
-# 只认「那/它/这个/上述…」这类真正依赖前文的词,不把普通的「为什么/怎么」也算进来。
-_FOLLOWUP_RE = re.compile(
-    r"^(那|那么|这个|那个|它|其|它们|还有|以及|如果|and|so|then|what about|how about|it|this|that)?"
-    r"|(它|这个|那个|上述|前面|刚才|上面|该).*(关系|联系|区别|为什么|怎么|如何|呢|吗)",
-    re.IGNORECASE,
-)
 
-
-def _retrieval_query(question: str, history: list[dict] | None) -> str:
-    """普通问答的检索词:追问时拼上一轮用户问题,避免「它和积分有什么关系」只检索“积分”。
-
-    只影响检索,不改发给模型的 prompt;历史仍按原样交给 LLM。
-    """
-    if not history or not _FOLLOWUP_RE.search(question):
-        return question
-    previous = next(
-        (m["content"] for m in reversed(history) if m.get("role") == "user" and m.get("content")),
-        "",
-    )
-    if not previous:
-        return question
-    return f"{previous} {question}"[:500]
-
-
-# 会话滚动摘要:每 8 次请求压缩一次旧对话(便宜模型,失败静默),长对话保持早期上下文。
-# 与教材缓存一样按 (uid, workspace, sid) 隔离,避免客户端自增的 sessionId 跨用户/跨区撞号。
 async def _update_summary(uid: str, sid: int, old_turns: list[dict], prev: str,
                           workspace: str = "learn") -> None:
     system = (
@@ -367,7 +168,7 @@ async def _update_summary(uid: str, sid: int, old_turns: list[dict], prev: str,
     text = "".join(parts).strip()
     if text:
         set_summary(uid, sid, text, workspace=workspace)
-        print(f"[chat] 会话 {sid} 摘要已更新({len(text)} 字)")
+        log.info(f"[chat] 会话 {sid} 摘要已更新({len(text)} 字)")
 
 
 def _research_reply(outcome: rag.research.SearchOutcome, zh: bool) -> str:
@@ -413,23 +214,8 @@ _RESEARCH_TTL = 600.0   # 秒
 _RESEARCH_MAX = 32
 
 
-def _clean_scope(raw: object) -> list[str] | None:
-    """请求体里的搜索范围(平台名列表)→ 干净的字符串列表;None/空/非列表 = 全平台"""
-    if not isinstance(raw, list):
-        return None
-    out = [str(s)[:30] for s in raw][:12]
-    return [s for s in out if s] or None
 
 
-def _research_cache_key(question: str, scope: list[str] | None = None,
-                        uid: str = "") -> str:
-    """范围与用户参与缓存键:同一问题换了检索平台、或换了人的论文库,
-    必须重新检索/综合。用户语料是私有的,不能复用别人的答案。"""
-    tag = "all" if not scope else ",".join(sorted(scope))
-    return f"{uid}|{tag}|{question.strip().lower()}"
-
-
-# ---------- 安全与用量(测试期防护) ----------
 
 PROMPT_MAX = 32000  # 服务端输入上限(字符):覆盖长文档教材(3万字)+ 指令前缀,超出静默截断
 PAPER_CONTEXT_CHARS = 20000  # 当前论文问答带入的正文上限:足够覆盖摘要+方法+结果,不挤爆上下文
@@ -446,22 +232,6 @@ def _rate_check(uid: str) -> None:
         raise HTTPException(429, "rate limited")
 
 
-def _frame_text_len(frame: str | bytes) -> int:
-    """只统计正文帧的字符数:跳过 [DONE]、meta 帧与非 data 帧。
-
-    旧实现按整帧长度记账,把 `data: "`、JSON 引号/转义和结尾换行都算进
-    「回复字数」,成本报表会虚高数倍。帧格式由 `_frames`/`_sse` 统一约定,
-    这里按同一契约解包。
-    """
-    raw = frame if isinstance(frame, str) else frame.decode("utf-8", "ignore")
-    if raw == _DONE or not raw.startswith("data:"):
-        return 0
-    payload = raw[5:].strip()
-    try:
-        value = json.loads(payload)
-    except (json.JSONDecodeError, TypeError):
-        return len(payload)
-    return len(value) if isinstance(value, str) else 0
 
 
 def _meter(resp: StreamingResponse, rec: dict, prompt_len: int, cmd: str,
@@ -482,7 +252,7 @@ def _meter(resp: StreamingResponse, rec: dict, prompt_len: int, cmd: str,
                 role=meta["role"], research=meta["research"],
                 workspace=meta.get("workspace", "learn"))
         except Exception as exc:  # noqa: BLE001 记账失败不能反过来打断已完成的回答
-            print(f"[chat] 用量记账失败(不影响回答): {exc}")
+            log.warning(f"[chat] 用量记账失败(不影响回答): {exc}")
 
     resp.body_iterator = counted()
     return resp
@@ -547,7 +317,7 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
             full.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
-        print(f"[chat] 研究综合失败,降级为来源列表: {exc}")
+        log.warning(f"[chat] 研究综合失败,降级为来源列表: {exc}")
         if full:
             # 已经流出一部分:不能再回放来源列表(用户会看到「半截正文 + 完整兜底」)
             note = ("\n\n⚠ 综合生成中断,以上内容可能不完整。"
@@ -576,7 +346,7 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
                 if frame:
                     yield frame
         except Exception as exc:  # noqa: BLE001 图解失败不影响综述
-            print(f"[chat] 研究综述图解失败(忽略): {exc}")
+            log.warning(f"[chat] 研究综述图解失败(忽略): {exc}")
     if ck:
         _RESEARCH_ANSWER[ck] = (time.monotonic(), "".join(full))
         _RESEARCH_ANSWER.move_to_end(ck)
@@ -584,76 +354,57 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
             _RESEARCH_ANSWER.popitem(last=False)
 
 
-def _with_meta(resp: StreamingResponse, meta: dict) -> StreamingResponse:
-    """在流最前附一帧元信息(JSON 对象帧):前端据此识别研究型回答
-    (导出入口只对研究消息显示)。包在 _meter 之外,meta 帧不计入用量长度"""
-    original = resp.body_iterator
-
-    async def prefixed():
-        yield f"data: {json.dumps({'mg_meta': meta}, ensure_ascii=False)}\n\n"
-        async for frame in original:
-            yield frame
-
-    resp.body_iterator = prefixed()
-    return resp
 
 
-async def _frames(text: str, pace: bool = True):
-    """按帧切片流式下发一段完整文本(JSON 字符串包裹);收尾标记由 _sse 统一补。
-    pace=False 用于引用区等附属内容:不做人工逐字拟态,即时下发"""
-    i = 0
-    while i < len(text):
-        yield f"data: {json.dumps(text[i:i + CHUNK], ensure_ascii=False)}\n\n"
-        i += CHUNK
-        if pace:
-            await asyncio.sleep(FRAME_MS)
 
 
-def _sse(gen) -> StreamingResponse:
-    """SSE 响应统一构造:媒体类型与反缓冲头只写一处
-    (散在五处时,漏一个头就会被中间代理缓冲,流式变一次性吐出)。
-
-    收尾的 [DONE] 也由这里统一补。先前是每个生成器各自记得 yield 一行,
-    结果四个降级分支(章节导航 / 章节指引 / 粘贴文本 / 语音转写)提前 return 时全漏了:
-    前端收不到收尾标记,就没法区分「后端正常降级」和「连接被掐断」,
-    只能把半截回答当成完整回答存进历史。契约收进这一层,新生成器想漏也漏不掉。
-    生成器里若自带 [DONE] 会在此丢弃,保证一条流恰好一个收尾。"""
-    async def terminated():
-        async for frame in gen:
-            if frame != _DONE:
-                yield frame
-        # 只有生成器正常跑完才走得到这里;客户端中途断开时本协程被取消,不会补发
-        yield _DONE
-
-    return StreamingResponse(
-        terminated(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
-def _stream_text(text: str) -> StreamingResponse:
-    return _sse(_frames(text))
 
 
-async def _verify_answer(question: str, answer: str, role: str) -> str | None:
-    """双角色验证:解答生成后用另一角色复核,返回一句复核结论(失败返回 None,不打断主回答)"""
+async def _verify_answer(question: str, answer: str, role: str) -> dict | None:
+    """双角色验证:解答生成后用另一角色复核。
+    返回 {"verdict": correct|wrong|uncertain, "issue": ..., "correction": ...};
+    复核不可用时返回 None,不打断主回答。"""
     system = (
-        "你是数学解答复核员。请核查用户问题与给出的解答:判断结论是否正确"
-        "(结论:正确 / 有误 / 需人工复核),并用一句话说明依据。"
-        "不要重算过程,不要输出除结论和一句话依据以外的任何内容。"
+        "你是数学解答复核员。请核查用户问题与给出的解答,只输出一个 JSON 对象,"
+        "不要 Markdown、不要解释。字段:\n"
+        '{"verdict":"correct|wrong|uncertain","issue":"一句话指出问题或依据",'
+        '"correction":"若 verdict=wrong,给出可替换的更正解答;否则留空"}\n'
+        "判断以题目条件和数学定义为准;过程省略但结论正确也算 correct;"
+        "不确定时用 uncertain,不要强行判错。"
     )
-    user = f"问题:{question[:300]}\n\n解答:\n{answer[:1500]}"
+    user = f"问题:{question[:500]}\n\n解答:\n{answer[:4000]}"
     parts: list[str] = []
     try:
-        async for delta in rag.llm.stream_chat(system, user, role=role, thinking=False):
+        async for delta in rag.llm.stream_chat(
+                system, user, role=role, thinking=False, max_tokens=1600,
+                temperature=0):
             parts.append(delta)
-            if sum(len(p) for p in parts) >= 300:
+            if sum(len(p) for p in parts) >= 4000:
                 break
     except Exception:  # noqa: BLE001 复核失败静默跳过,不影响主回答
         return None
     text = "".join(parts).strip()
-    return text[:200] or None
+    if not text:
+        return None
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            verdict = str(data.get("verdict", "")).strip().lower()
+            if verdict not in {"correct", "wrong", "uncertain"}:
+                verdict = "uncertain"
+            return {
+                "verdict": verdict,
+                "issue": str(data.get("issue", "")).strip()[:300],
+                "correction": str(data.get("correction", "")).strip()[:4000],
+            }
+    # 兼容模型只给一句话的情况:不把它当判错
+    return {"verdict": "uncertain", "issue": text[:300], "correction": ""}
 
 
 async def _diagram_verified(question: str, context: str, diagram: dict) -> bool:
@@ -680,7 +431,8 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                    diagram_mode: bool = False, diagram_allowed: bool = True,
                    diagram_question: str = "",
                    diagram_excerpts: list[dict] | None = None,
-                   diagram_request_id: str = ""):
+                   diagram_request_id: str = "",
+                   temperature: float | None = None):
     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
     verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过);
     summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)。
@@ -822,8 +574,11 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             return research_diagrams.diagram_event(
                 diagram, markers.request_id,
                 marker.anchor_id, marker.anchor_index)
+        stream_kwargs = {"history": history, "role": role}
+        if temperature is not None:
+            stream_kwargs["temperature"] = temperature
         if markers is None:
-            async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
+            async for delta in rag.llm.stream_chat(system, prompt, **stream_kwargs):
                 answer.append(delta)
                 yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
         else:
@@ -833,7 +588,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                     {"section": chunk.section, "text": chunk.text}
                     for chunk, _score in chunks
                 ]
-            async for delta in rag.llm.stream_chat(system, prompt, history=history, role=role):
+            async for delta in rag.llm.stream_chat(system, prompt, **stream_kwargs):
                 clean = markers.feed(delta)
                 if clean:
                     answer.append(clean)
@@ -964,8 +719,16 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
             vrole = "main" if role == "deep" else rag.llm.pick("deep")
             verdict = await _verify_answer(prompt, "".join(answer), vrole)
             if verdict:
-                print(f"[chat] 复核({vrole}): {len(verdict)} 字")
-                yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
+                label = {"correct": "正确", "wrong": "有误",
+                         "uncertain": "需人工复核"}.get(verdict["verdict"], "需人工复核")
+                log.info(f"[chat] 复核({vrole}): {label} | {len(verdict['issue'])} 字")
+                correction = verdict.get("correction", "")
+                if verdict["verdict"] == "wrong" and correction:
+                    # 更正放在复核行之前:_clean_answer 只剥末尾复核行,更正会保留给评测
+                    yield (f"data: {json.dumps(f'**更正**\n\n{correction}', ensure_ascii=False)}\n\n")
+                issue = verdict.get("issue", "")
+                suffix = f":{issue}" if issue else ""
+                yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}):{label}{suffix}', ensure_ascii=False)}\n\n"
             # 解答完询问是否收录进问题记录(归纳本):前端渲染为「是/否」按钮。
             # 科研区不设问题归纳,不追加该入口。
             if workspace == "learn":
@@ -995,7 +758,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
         for _marker, _diagram, task in pending_verify:
             if not task.done():
                 task.cancel()
-        print(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
+        log.warning(f"[chat] LLM 调用失败,降级为知识库直答: {exc}")
         if answer:
             note = ("\n\n⚠ 模型连接中断,以上回答可能不完整。"
                     if zh else "\n\n⚠ Model connection lost; the answer above may be incomplete.")
@@ -1053,7 +816,7 @@ async def _gen_paper_llm(question: str, cmd: str | None,
                 try:
                     actions = planner.result()
                 except Exception as exc:  # noqa: BLE001
-                    print(f"[chat] 论文窗口动作规划失败(忽略): {exc}")
+                    log.warning(f"[chat] 论文窗口动作规划失败(忽略): {exc}")
                     actions = []
                 if actions:
                     frame = _paper_actions_frame(actions, request_id, doc_id)
@@ -1071,7 +834,7 @@ async def _gen_paper_llm(question: str, cmd: str | None,
                     try:
                         actions = await asyncio.wait_for(planner, timeout=15)
                     except Exception as exc:  # noqa: BLE001
-                        print(f"[chat] 论文窗口动作规划超时/失败(忽略): {exc}")
+                        log.warning(f"[chat] 论文窗口动作规划超时/失败(忽略): {exc}")
                         actions = []
                     if actions:
                         frame = _paper_actions_frame(actions, request_id, doc_id)
@@ -1089,17 +852,8 @@ async def _gen_paper_llm(question: str, cmd: str | None,
             next_frame.cancel()
 
 
-_IMPORT_RE = re.compile(
-    r"入库|进库|加入.{0,6}(?:论文)?库|导入.{0,6}(?:论文)?库|"
-    r"存(?:进|到|入).{0,6}(?:论文)?库|保存.{0,6}(?:论文)?库|"
-    r"收(?:进|到).{0,6}(?:论文)?库|放(?:进|到|入).{0,6}(?:论文)?库|"
-    r"\bimport\b.{0,20}(?:this|the)?\s*paper|\bimport\b.{0,20}librar|\badd\b.{0,20}librar",
-    re.IGNORECASE,
-)
 
 
-def _is_import_request(question: str) -> bool:
-    return bool(_IMPORT_RE.search(question or ""))
 
 
 async def _gen_continue(question: str, partial: str, zh: bool):
@@ -1127,7 +881,7 @@ async def _gen_continue(question: str, partial: str, zh: bool):
         async for delta in rag.llm.stream_chat(system, user, role=role):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 续写失败只提示,不改动已有内容
-        print(f"[chat] 续写失败: {exc}")
+        log.warning(f"[chat] 续写失败: {exc}")
         note = ("⚠ 续写失败,请稍后重试。" if zh
                 else "⚠ Continuation failed. Please try again.")
         yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
@@ -1135,22 +889,8 @@ async def _gen_continue(question: str, partial: str, zh: bool):
 
 # 章节链接契约:[章节名](cmd://chapter/<名称>) —— 前端 MathText 渲染为可点击章节;
 # 「返回」按钮 [返回](cmd://back) 由后端拼装(不经过模型,防止格式漂移)
-def _nav_system():
-    return (
-        "你是教材章节导航助手。用户上传了一本教材,教材内容已随提问给出。"
-        "请只输出该教材的章节划分列表:每一章单独一行,格式严格为 "
-        "[第N章 章节名](cmd://chapter/第N章章节名),链接地址内不要含空格、括号或标点。"
-        "不要展示任何章节内容,不要解释,不要输出列表以外的任何文字。"
-        "若文本不像一本教材,按其内容结构推断章节并同样只输出章节列表。"
-    )
 
 
-def _nav_guide_system():
-    return (
-        "你是教材章节导航助手。教材内容与用户点击的章节已随提问给出。"
-        "请针对该章节输出大概知识指引:该章学什么(核心概念)、重点与难点、"
-        "与前后章节的联系、学习建议。条目式回答,与用户提问同语言,控制在 150 字以内。"
-    )
 
 
 async def _gen_nav_list(question: str):
@@ -1162,7 +902,7 @@ async def _gen_nav_list(question: str):
             emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
-        print(f"[chat] 章节导航调用失败: {exc}")
+        log.warning(f"[chat] 章节导航调用失败: {exc}")
         zh = _is_chinese(question)
         text = (("⚠ 章节导航中断,以上列表可能不完整。" if emitted
                  else "⚠ 章节导航调用失败,请稍后重试。") if zh else
@@ -1187,7 +927,7 @@ async def _gen_nav_guide(question: str, tb: str = ""):
             emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
-        print(f"[chat] 章节指引调用失败: {exc}")
+        log.warning(f"[chat] 章节指引调用失败: {exc}")
         zh = _is_chinese(question)
         text = (("⚠ 章节指引中断,以上内容可能不完整。" if emitted
                  else "⚠ 章节指引调用失败,请稍后重试。") if zh else
@@ -1212,7 +952,7 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
             emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型侧错误统一降级,不让前端假死
-        print(f"[chat] 粘贴文本 LLM 调用失败,降级为接收回执: {exc}")
+        log.warning(f"[chat] 粘贴文本 LLM 调用失败,降级为接收回执: {exc}")
         if emitted:
             note = ("⚠ 文件解读中断,以上内容可能不完整。" if zh
                     else "⚠ File reading interrupted; the text above may be incomplete.")
@@ -1224,23 +964,10 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
 
 # 公式手册第一步的澄清标记(与前端 i18n 双语模板固定子串成契约):
 # 命中即走澄清分支——不检索知识库、不触发复核与问题记录收纳
-_CLARIFY_ZH = "请先询问我想查哪个具体知识点"
-_CLARIFY_EN = "Please first ask me which specific topic"
 
 
-def _is_formula_clarify(question: str, cmd: str | None) -> bool:
-    """公式手册两步流程的第一步:指令命中且提问带澄清标记"""
-    return cmd == "公式查询手册" and (_CLARIFY_ZH in question or _CLARIFY_EN in question)
 
 
-def _is_formula_followup(history: list[dict] | None) -> bool:
-    """公式手册两步流程的第二步:上一条用户消息带澄清标记 → 本轮是
-    「说出知识点」的作答轮,双角色复核必须开启(即使检索未命中)"""
-    for h in reversed(history or []):
-        if h.get("role") != "user":
-            continue
-        return _CLARIFY_ZH in h.get("content", "") or _CLARIFY_EN in h.get("content", "")
-    return False
 
 
 async def _verify_clarify(question: str, answer: str, role: str) -> str | None:
@@ -1281,7 +1008,7 @@ async def _gen_formula_clarify(question: str):
             answer.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
-        print(f"[chat] 公式手册澄清调用失败,降级为静态提示: {exc}")
+        log.warning(f"[chat] 公式手册澄清调用失败,降级为静态提示: {exc}")
         zh = _is_chinese(question)
         if answer:
             text = ("⚠ 澄清提问中断,以上内容可能不完整。" if zh
@@ -1298,29 +1025,16 @@ async def _gen_formula_clarify(question: str):
     vrole = rag.llm.pick("deep")
     verdict = await _verify_clarify(question, "".join(answer), vrole)
     if verdict:
-        print(f"[chat] 公式手册澄清复核({vrole}): {len(verdict)} 字")
+        log.info(f"[chat] 公式手册澄清复核({vrole}): {len(verdict)} 字")
         yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
 
 
 # ---------- 直观解释:按需生成 + 服务端缓存 ----------
 
-_INTUITION_SYSTEM_ZH = (
-    "你是数学直观解释助手。用生活化类比解释给定的数学内容,要求:"
-    "1. 先用一句话点明要解释的对象;"
-    "2. 给出一个贴切的类比;"
-    "3. 明确类比与数学对象的对应关系;"
-    "4. 指出类比的局限;"
-    "5. 200 字以内,不重复原解答的推导步骤,最多保留一个关键公式。"
-)
-_INTUITION_SYSTEM_EN = (
-    "You explain math intuitively. Given a question (and an optional answer excerpt), "
-    "1) name the object being explained in one sentence; 2) give one apt everyday analogy; "
-    "3) map the analogy to the math explicitly; 4) state its limits; "
-    "5) stay under 150 words, do not repeat the original derivation, keep at most one formula."
-)
-_INTUITION_CACHE: OrderedDict[tuple[str, str], tuple[float, str]] = OrderedDict()
 _INTUITION_TTL = 1800.0
 _INTUITION_MAX = 64
+# 直观解释缓存:按 (问题, 回答哈希) 命中,LRU 淘汰。属于运行期状态,留在本模块。
+_INTUITION_CACHE: OrderedDict[tuple[str, str], tuple[float, str]] = OrderedDict()
 
 
 async def _gen_intuition(question: str, answer: str, zh: bool):
@@ -1337,7 +1051,7 @@ async def _gen_intuition(question: str, answer: str, zh: bool):
             parts.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 失败不伪造内容
-        print(f"[chat] 直观解释生成失败: {exc}")
+        log.warning(f"[chat] 直观解释生成失败: {exc}")
         note = ("⚠ 直观解释生成失败,请稍后重试。" if zh
                 else "⚠ Could not generate an intuitive explanation. Please try again.")
         yield f"data: {json.dumps(note, ensure_ascii=False)}\n\n"
@@ -1354,6 +1068,7 @@ async def _gen_intuition(question: str, answer: str, zh: bool):
 async def intuition(request: Request) -> StreamingResponse | JSONResponse:
     """按需生成直观解释;默认命中缓存,refresh=true 时重写(用户点「换个说法」)。"""
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     body = await read_json_object(request)
     question = str(body.get("question", "")).strip()[:2000]
     answer = str(body.get("answer", "")).strip()[:4000]
@@ -1371,7 +1086,7 @@ async def intuition(request: Request) -> StreamingResponse | JSONResponse:
 
 
 async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
-    """聊天入口(安全外壳):认证 → 输入上限 → 限流 → 路由 → 用量记账"""
+    """聊天入口(安全外壳):认证 → 输入上限 → 限流/额度 → 路由 → 用量记账"""
     rec = require_auth(request)  # 401: {"detail": "unauthorized"}
 
     body = await read_json_object(request)
@@ -1389,13 +1104,20 @@ async def chat_stream(request: Request) -> StreamingResponse | JSONResponse:
         prompt = prompt[:PROMPT_MAX]
 
     # 限流:每用户滑动窗口,仅对非空提问计次(新会话问候不占用额度)
+    # 每日额度同理放在这里:问候不调用模型,不该算进当天用量。
     if prompt:
-        _rate_check(str(rec.get("uid") or rec.get("phone") or ""))
+        uid = str(rec.get("uid") or rec.get("phone") or "")
+        _rate_check(uid)
+        quota.check(uid)
 
     meta = {"role": "main", "research": False, "workspace": workspace}
     resp = await _route_chat(prompt, cmd, body, rec, meta, workspace)
     if not isinstance(resp, StreamingResponse):
         return resp
+    if not prompt:
+        # 空 prompt 只是"新会话问候"(固定文案,不调用模型):不计入用量,
+        # 否则会污染成本报表,也会白占用户当天的模型额度
+        return _with_meta(resp, meta)
     resp = _meter(resp, rec, len(prompt), cmd or "", meta)
     return _with_meta(resp, meta)
 
@@ -1406,6 +1128,7 @@ async def speech_to_math(request: Request) -> StreamingResponse:
     一字未出时回放原文帧,不阻断语音输入;已输出半截则主动中断流(前端
     complete=false 回退原文,避免半截转写混进缓存);计入限流与用量统计"""
     rec = require_auth(request)
+    quota.check(str(rec.get("uid") or ""))
     body = await read_json_object(request)
     text = str(body.get("text", "")).strip()[:6000]
     if not text:
@@ -1444,47 +1167,17 @@ async def speech_to_math(request: Request) -> StreamingResponse:
                 _record, rec, cmd="语音转写", prompt_len=len(text),
                 reply_len=sum(len(p) for p in parts), role="main", research=False)
         except Exception as exc:  # noqa: BLE001 记账失败不影响转写结果
-            print(f"[chat] 语音转写记账失败: {exc}")
+            log.warning(f"[chat] 语音转写记账失败: {exc}")
 
     return _sse(gen())
 
 
-_ANALYSIS_TOPICS = (
-    "学习进度", "学习情况", "掌握情况", "学习分析", "知识图谱", "薄弱点",
-    "学得怎么样", "学得如何", "艾宾浩斯", "遗忘曲线", "记忆保持", "复习优先级",
-)
-_ANALYSIS_EN = (
-    "my learning progress",
-    "analyze my learning",
-    "my progress",
-    "my mastery",
-    "my knowledge graph",
-)
 
 
-def _is_learning_analysis_request(question: str) -> bool:
-    """自然语言触发的学习分析:第一人称 + 学习进度语义,避免劫持普通提问。"""
-    text = (question or "").strip()
-    if not text:
-        return False
-    if "我的" in text and any(topic in text for topic in _ANALYSIS_TOPICS):
-        return True
-    lower = text.lower()
-    return any(marker in lower for marker in _ANALYSIS_EN)
 
 
-_FEATURE_TOPICS = (
-    "艾宾浩斯", "遗忘曲线", "记忆保持", "复习优先级",
-    "学习分析算法", "掌握度算法", "待复核算法",
-)
 
 
-def _is_feature_question(question: str) -> bool:
-    """问系统实现而不是问自己的进度:必须按固定事实回答。"""
-    text = (question or "").strip()
-    if not text or "我的" in text:
-        return False
-    return any(topic in text for topic in _FEATURE_TOPICS)
 
 
 def _feature_answer(zh: bool) -> str:
@@ -1603,7 +1296,7 @@ async def _gen_point_lesson(uid: str, point_id: str, question: str, zh: bool):
             parts.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 模型失败降级为预置内容
-        print(f"[chat] 知识点讲解模型失败,降级: {exc}")
+        log.warning(f"[chat] 知识点讲解模型失败,降级: {exc}")
         if not parts:
             async for frame in _frames(fallback):
                 yield frame
@@ -1628,7 +1321,7 @@ async def _gen_learning_analysis(uid: str, question: str, zh: bool):
                 parts.append(delta)
                 yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
         except Exception as exc:  # noqa: BLE001 分析失败降级为确定性报告
-            print(f"[chat] 学习分析模型失败,降级: {exc}")
+            log.warning(f"[chat] 学习分析模型失败,降级: {exc}")
             text = learning_analysis.fallback_report(snapshot, zh=zh)
             if parts:
                 text = "\n\n" + text
@@ -1672,7 +1365,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                 table_context = research_tables.context_text(table)
                 table_stamp = f"{candidate}:{int(table.get('updatedAt') or 0)}"
         except Exception as exc:  # noqa: BLE001 表格校验失败不影响普通对话
-            print(f"[chat] 数据表上下文读取失败(忽略): {exc}")
+            log.warning(f"[chat] 数据表上下文读取失败(忽略): {exc}")
 
     raw_regression = body.get("tableRegression")
     if (workspace == "research" and prompt and table_row is not None
@@ -1709,7 +1402,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             table_context = research_tables.context_text(
                 table_row, _regression_summary(result, stale))
         except Exception as exc:  # noqa: BLE001 回归失败不阻断聊天
-            print(f"[chat] 聊天回归重算失败(忽略): {exc}")
+            log.warning(f"[chat] 聊天回归重算失败(忽略): {exc}")
             table_context = research_tables.context_text(
                 table_row, "回归结果不可用(计算服务未安装或失败),不要自行估算。")
 
@@ -1830,7 +1523,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                         "status": status,
                     }
             except Exception as exc:  # noqa: BLE001 入库失败要如实告知
-                print(f"[chat] 论文入库失败: {exc}")
+                log.warning(f"[chat] 论文入库失败: {exc}")
                 imported = {
                     "docId": paper_id, "title": paper_title,
                     "status": "failed", "reason": str(exc)[:200],
@@ -1860,7 +1553,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             actions = await research_actions.plan_actions(
                 uid, paper_id, question, excerpts, history)
         except Exception as exc:  # noqa: BLE001
-            print(f"[chat] 论文窗口动作规划失败(忽略): {exc}")
+            log.warning(f"[chat] 论文窗口动作规划失败(忽略): {exc}")
             actions = []
         if actions:
             meta["paperActions"] = actions
@@ -1872,6 +1565,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # 必须先判意图、后检索:深度搜索内部自会检索知识库,
     # 这里若先检一遍,研究型提问就要白付一份 embedding 开销(结果还被丢掉)
     # 只允许科学研究工作区进入该链路:学习辅助区不跨区查文献
+    # 数据表上下文(带 tableId)也一并由此进入研究链路;未配模型时走下面的来源列表。
+    # 不要再为"直答也带表"另开分支:那条分支在本函数里不可达,已于 2026-11-14 删除。
     if workspace == "research" and (
             table_context or rag.route.is_research_intent(question)):
         meta["research"] = True
@@ -1884,7 +1579,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         cached = _RESEARCH_ANSWER.get(ck)
         if cached and time.monotonic() - cached[0] < _RESEARCH_TTL:
             _RESEARCH_ANSWER.move_to_end(ck)  # 命中即刷新 LRU 顺序
-            print(f"[chat] 研究综合缓存命中(问题 {len(question)} 字)")
+            log.info(f"[chat] 研究综合缓存命中(问题 {len(question)} 字)")
             meta["role"] = "deep"
             return _stream_text(cached[1])
         outcome = await rag.research.deep_search(question, top_k=3, scope=scope)
@@ -1894,7 +1589,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             local = await asyncio.to_thread(
                 research_corpus.chat_hits, uid, question, 4, paper_id or None)
         except Exception as exc:  # noqa: BLE001 语料检索失败不阻断外部检索
-            print(f"[chat] 科研语料检索失败(继续外部来源): {exc}")
+            log.warning(f"[chat] 科研语料检索失败(继续外部来源): {exc}")
             local = []
         if local:
             outcome.hits = [
@@ -1919,7 +1614,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     retrieval_query = _retrieval_query(question, history)
     # 检索含 embedding 请求(同步、冷启动可达数十秒)→ 线程池执行,
     # 不阻塞事件循环(否则这段等待会冻住所有并发会话)
-    chunks = await asyncio.to_thread(rag.search, retrieval_query, 3)
+    chunks = await asyncio.to_thread(rag.search, retrieval_query, RETRIEVAL_TOP_K)
 
     # 图谱知识点会话:追问仍带上摘要与要点,排在普通检索资料之前
     if workspace == "learn":
@@ -1938,7 +1633,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             local = await asyncio.to_thread(
                 research_corpus.chat_hits, uid, question, 4, paper_id or None)
         except Exception as exc:  # noqa: BLE001 语料检索失败不影响主链路
-            print(f"[chat] 科研语料检索失败(继续公共知识库): {exc}")
+            log.warning(f"[chat] 科研语料检索失败(继续公共知识库): {exc}")
             local = []
         if local:
             chunks = [
@@ -1948,17 +1643,18 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                 for h in local
             ] + chunks
 
-    if workspace == "research" and table_context:
-        chunks = [
-            (rag.Chunk("research-table", "研究数据表", "",
-                       "用户当前数据表(数值以此为准)", table_context), 7.0),
-        ] + chunks
-
     if rag.llm.is_configured():
         # 双角色验证仅对数学题(命中知识库或题目措辞)开启;闲聊不浪费复核调用。
         # 公式手册第二步(上一条用户消息带澄清标记)强制开启:公式定理作答必须有独立复核
         role = _pick_role(question)
         meta["role"] = role
+        # 评测可显式传 temperature=0 固定随机性;普通请求不传,沿用平台默认
+        raw_temperature = body.get("temperature")
+        temperature = (
+            min(2.0, max(0.0, float(raw_temperature)))
+            if isinstance(raw_temperature, (int, float)) and not isinstance(raw_temperature, bool)
+            else None
+        )
         sid = valid_session_id(body.get("sessionId"))
         verify = bool(chunks) or rag.is_math_question(question) or _is_formula_followup(history)
         summary = get_summary(uid, sid, workspace=workspace) if sid is not None else ""
@@ -1973,7 +1669,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                 {"section": chunk.section, "text": chunk.text}
                 for chunk, _score in chunks
             ],
-            diagram_request_id=secrets.token_hex(8)))
+            diagram_request_id=secrets.token_hex(8),
+            temperature=temperature))
     # 直答模式:
     # ① 检索到相关知识 → 知识直答(专业问询专业回答);
     # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架;

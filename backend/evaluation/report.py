@@ -5,6 +5,8 @@ import json
 import time
 from pathlib import Path
 
+from .metrics import _answer_correct
+
 
 def _fmt_rate(block: dict | None) -> str:
     if not block or block.get("rate") is None:
@@ -53,8 +55,10 @@ def write_outputs(out_dir: str | Path, records: list[dict], summary: dict,
     lines += [
         "## 断言级幻觉",
         "",
-        f"- 无依据断言:{claim.get('bad_claims', 0)} / {claim.get('total_claims', 0)}",
+        f"- 明确错误或编造的断言:{claim.get('bad_claims', 0)} / {claim.get('total_claims', 0)}",
+        f"- 未能判定的断言:{claim.get('unknown_claims', 0)};无法判定答案级指标的回答:{claim.get('unknown_answers', 0)}",
         f"- 比例:{claim.get('rate') if claim.get('rate') is not None else '—'}",
+        "- 旧版评审中的无依据断言按无法判定处理;结果需经人工复核。",
         "",
     ]
     health = summary.get("health") or {}
@@ -63,6 +67,7 @@ def write_outputs(out_dir: str | Path, records: list[dict], summary: dict,
         "",
         f"- 运行错误:{health.get('run_errors', 0)}",
         f"- 评审失败:{health.get('judge_errors', 0)}",
+        f"- 实际评审角色:{health.get('judge_roles', {})};回退可能与生成模型同源,需核对独立性。",
         f"- 降级回答:{health.get('degraded', 0)} / {summary.get('n_items', 0)}",
         "",
     ]
@@ -76,16 +81,16 @@ def write_outputs(out_dir: str | Path, records: list[dict], summary: dict,
                 f"{_fmt_rate(row.get('answer_hallucination'))} |")
         lines.append("")
 
-    failures = [r for r in records if r.get("objective_correct") is False
-                or (r.get("judge") or {}).get("correct") is False
-                or r.get("error")]
+    failures = [r for r in records if r.get("error") or _answer_correct(r) is False]
     lines += ["## 失败样本(前 20)", ""]
     if not failures:
         lines.append("无。")
     else:
         for r in failures[:20]:
-            reason = r.get("error") or r.get("objective_detail") or \
-                (r.get("judge") or {}).get("rationale") or "判错"
+            reason = r.get("error") or (
+                r.get("objective_detail_strict") if r.get("objective_correct_strict") is False
+                else (r.get("judge") or {}).get("rationale")
+            ) or r.get("objective_detail") or "判错"
             lines.append(f"- `{r['id']}` {r['question']} — {str(reason)[:200]}")
     lines.append("")
 

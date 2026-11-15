@@ -1,0 +1,95 @@
+# 新会话交接单（HANDOFF）
+
+> 用法：新开一个会话，把这份文件路径发给 Cline，并说"按 docs/HANDOFF.md 继续"。
+> 工作区：`C:\Users\Jacap\.cline\worktrees\c1637\code`（分支 `cline/c1637`，tag `v1.26.0`）
+> 最后更新：2026-11-14 ｜ 最新提交：`test(coverage): G2/G3/G5/G6/G7 全量收口`（见 `git log -1`）
+
+## 0. 一句话任务
+
+覆盖率已**全部收口**（146/146 达标，后端 1504 passed / 90%，前端 1021 条 / 97.7%）。
+下一阶段的工作重心转为：**真机验证 → 部署上线**（见 `docs/DEPLOY_PLAYBOOK.md`），
+覆盖率只需守住"不倒退"门槛（CI `--cov-fail-under=85`）。
+
+## 1. ⚠️ 第一件事（不要跳过）
+
+本轮结束时全量已经跑过并全绿，**基线是可信的**：
+
+```powershell
+cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
+& 'D:\Works\code\.venv\Scripts\python.exe' -m pytest -q      # 期望：1504 passed，0 failed（约 87s）
+```
+
+- 改代码后再跑；若红先修红，别继续叠加改动。
+- 全量超过单条命令 30 秒上限，用后台方式跑：
+  `Start-Process` 重定向到 `tmp.log`，再 `Start-Sleep` + 读日志。
+
+## 2. 当前状态（覆盖率收口后，工作树 clean）
+
+| 项 | 数值 |
+| --- | --- |
+| 后端测试 | **1504 passed, 0 failed**（约 87s） |
+| 后端覆盖率 | **90%**（16175 语句） |
+| 前端测试 | 脚本套件全过 + vitest **51 文件 / 1021 条** |
+| 前端覆盖率 | **97.70%**（utils/stores/services） |
+| 已达标文件 | **146 / 146**（后端 91 + 前端 55） |
+| ruff / eslint / vue-tsc | 0 违规 / 0 违规 / 0 错误 |
+
+已达标（不要再改）：全量都达标了。逐文件的「之前→之后 / 测试文件 / 改坏验证」见
+`COVERAGE_PLAN.md` §12（本轮 G2–G7）与 §11（历史批次）。
+
+## 3. 下一步（严格按顺序）
+
+1. **真机验证**（覆盖率覆盖不到的部分）：
+   - `backend/tools/check_pdf.py` 在 Linux + chromium 上跑一次（Windows 已 `RESULT: OK`）；
+   - `research_lit.py` 的真实外网下载链路（测试只做了 fake client）；
+   - 语音输入、会话轮换等需要真设备/真时间的链路。
+2. **部署**：按 `docs/DEPLOY_PLAYBOOK.md` 走前置三件事 → PDF 方案 A → 备份 → 安全开关 → 验收 → 回滚。
+3. ~~**结构债**：`chat.py:1645` 疑似死代码~~ —— **已删除**（2026-11-14，见 `COVERAGE_PLAN.md` §12.10）。
+
+## 4. 硬规则（每做完一个文件都要过）
+
+1. 单文件覆盖率 ≥ 它所属类别的线（定线表见 `COVERAGE_PLAN.md` §2）；
+2. 该文件**主要公开函数至少被调用一次**；
+3. **改坏验证**：挑一条断言，把被测分支改坏 → 测试必须变红（写进提交信息）；
+4. `ruff check .` 全绿 + 全量 `pytest -q` 无回归；
+5. 在 `COVERAGE_PLAN.md` §11 追加一行记录（之前→之后 / 测试文件 / 改坏验证）。
+
+**禁止**：只调用不断言的测试、为凑数给工具脚本写测试、滥用 `pragma: no cover`、
+为了覆盖率改产品代码（难测是设计耦合，记成结构债）。
+
+## 5. 环境与已踩过的坑（省你半天）
+
+| 坑 | 现状 |
+| --- | --- |
+| Python 解释器 | **`D:\Works\code\.venv\Scripts\python.exe`**（3.13）。仓库里没有 `.venv` |
+| numpy 曾崩 | 原为 cp314 轮子，已重装（numpy 2.2.6 / statsmodels 0.14.4 / scipy 1.14.1 / pandas 2.2.3） |
+| `analysis_regression` 曾 0% | 是 `pytest.importorskip("statsmodels")` 静默跳过；CI 已补装 `requirements-analysis.txt` |
+| `import main` 会写 `backend/data` | 模块级 `store.init()`；测试要先 patch 数据路径再 import（见 `tests/test_main_app.py`） |
+| 控制台中文乱码 | PowerShell 默认 GBK；`tools/check_pdf.py` 已 `reconfigure(utf-8)` 并输出 ASCII `RESULT:` 行 |
+| 命令行引号 | `npx`/`npm` 用 `& cmd /c "..."`；PowerShell 里 `;` 串命令 |
+| 全量 pytest | 45s，超 30s 上限 → 后台跑 + 轮询 |
+
+## 6. 部署侧（本轮已做完，勿重复）
+
+- `docs/DEPLOY_PLAYBOOK.md`：部署唯一真源（前置三件事 / PDF 方案 A / 备份 / 安全开关 / 验收 / 回滚）
+- `backend/tools/check_pdf.py`：上线前自检五项（浏览器 → 中文字体 → 真打印 → CJK 字体嵌入 → 文本层中文），
+  本机 Windows + Edge 157 实测 `RESULT: OK`；**Linux chromium 尚未实测**
+- 待用户执行：服务器上 `apt install -y chromium fonts-noto-cjk` → `python tools/check_pdf.py` → 眼验一份含数组公式+中文的 PDF
+
+## 7. 常用命令
+
+```powershell
+# 全量（后台）
+cd backend; Start-Process -FilePath 'D:\Works\code\.venv\Scripts\python.exe' `
+  -ArgumentList '-m','pytest','-q' -WorkingDirectory (Get-Location) `
+  -RedirectStandardOutput ..\tmp.log -RedirectStandardError ..\tmp.err.log -WindowStyle Hidden
+# 单模块覆盖率
+cd backend; & 'D:\Works\code\.venv\Scripts\python.exe' -m pytest tests/test_<x>.py -q --cov=<module> --cov-report=term-missing
+# lint
+cd backend; & 'D:\Works\code\.venv\Scripts\ruff.exe' check .
+cd frontend; & cmd /c "npx eslint src"
+# 前端测试
+cd frontend; & cmd /c "npx vitest run"
+# PDF 自检
+cd backend; & 'D:\Works\code\.venv\Scripts\python.exe' tools/check_pdf.py
+```

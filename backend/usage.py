@@ -104,6 +104,35 @@ def _trim(conn) -> None:
         conn.execute("DELETE FROM usage WHERE id < ?", (row["id"],))
 
 
+def day_start(now: float | None = None) -> float:
+    """本地时区当天 0 点的时间戳。
+
+    额度按**自然日**重置,与用户直觉一致(而不是"滚动 24 小时")。
+    """
+    stamp = time.time() if now is None else now
+    year, month, day = time.localtime(stamp)[:3]
+    return time.mktime((year, month, day, 0, 0, 0, 0, 0, -1))
+
+
+def count_since(uid: str, since: float) -> int:
+    """该账号在 `since` 之后的调用条数(每日额度判定用)。
+
+    直接查 usage 表,不额外维护计数器:多 worker、进程重启、手工改库都不会算错,
+    与 /api/stats、账号导出用的是同一份数据。走 `idx_usage_uid` 索引。
+    """
+    if not uid:
+        return 0
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM usage WHERE uid = ? AND ts >= ?",
+            (uid, float(since)),
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(row["n"]) if row is not None else 0
+
+
 def record(*, uid: str, cmd: str, prompt_len: int, reply_len: int,
            role: str, research: bool, ts: float, workspace: str = "learn") -> None:
     """写入一条调用记录;只存 uid,不存手机号/昵称。"""

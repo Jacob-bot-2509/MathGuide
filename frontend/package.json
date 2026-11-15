@@ -1,13 +1,18 @@
 {
   "name": "mathguide-frontend",
   "private": true,
-  "version": "1.24.0",
+  "version": "1.26.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node scripts/run-tests.mjs"
+    "lint": "eslint src",
+    "format": "prettier --write src",
+    "test": "node scripts/run-tests.mjs && vitest run --coverage",
+    "test:unit": "vitest run",
+    "test:scripts": "node scripts/run-tests.mjs",
+    "coverage": "vitest run --coverage"
   },
   "dependencies": {
     "gsap": "^3.13.0",
@@ -19,12 +24,24 @@
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/katex": "^0.16.7",
     "@types/node": "^26.4.1",
     "@types/three": "^0.187.0",
     "@vitejs/plugin-vue": "^6.0.2",
+    "@vitest/coverage-v8": "^5.1.0",
+    "@vue/test-utils": "^2.5.1",
+    "esbuild": "0.28.2",
+    "eslint": "^10.14.0",
+    "eslint-plugin-vue": "^10.12.1",
+    "globals": "^17.14.0",
+    "happy-dom": "^21.0.4",
+    "prettier": "^3.10.1",
     "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.2",
     "vite": "^7.2.4",
+    "vitest": "^5.1.0",
+    "vue-eslint-parser": "^10.4.2",
     "vue-tsc": "^3.2.4"
   }
 }

@@ -63,3 +63,24 @@ def test_production_mode_allows_public_bind(monkeypatch):
     _clear_env(monkeypatch)
     monkeypatch.setenv("MG_DEMO_MODE", "0")
     config.assert_safe_demo_mode(["--host", "0.0.0.0"])
+
+
+def test_detect_workers_defaults_to_one(monkeypatch):
+    """限流与会话缓存是进程内存:默认必须按单进程理解。"""
+    monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
+    assert config.detect_workers([]) == 1
+
+
+def test_detect_workers_reads_argv(monkeypatch):
+    monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
+    assert config.detect_workers(["--port", "8000", "--workers", "4"]) == 4
+    assert config.detect_workers(["--workers=8"]) == 8
+    # 非法值不炸,按单进程处理
+    assert config.detect_workers(["--workers", "many"]) == 1
+
+
+def test_detect_workers_reads_env(monkeypatch):
+    monkeypatch.setenv("WEB_CONCURRENCY", "3")
+    assert config.detect_workers([]) == 3
+    monkeypatch.setenv("WEB_CONCURRENCY", "")
+    assert config.detect_workers([]) == 1

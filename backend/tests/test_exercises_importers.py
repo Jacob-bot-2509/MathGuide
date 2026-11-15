@@ -7,7 +7,6 @@ from exercises.importers import math_dataset, numinamath, olympiadbench
 from exercises.importers.common import ImportSkip
 
 
-
 def test_import_cleanup_preserves_math_comparisons_while_removing_html():
     from exercises.importers.common import clean_text
 

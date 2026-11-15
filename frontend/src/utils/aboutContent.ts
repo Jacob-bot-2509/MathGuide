@@ -6,9 +6,9 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.24.0'
-export const APP_STABLE_VERSION = 'v1.24.0'
-export const APP_STABLE_DATE = '2026-11-09'
+export const APP_VERSION = 'v1.26.0'
+export const APP_STABLE_VERSION = 'v1.26.0'
+export const APP_STABLE_DATE = '2026-11-14'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
 export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
@@ -51,6 +51,37 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '登录不再每天掉线:会话改为滑动续期 —— Cookie 记 30 天,token 24 小时硬上限,剩余不足 20% 时静默换新(同一账号 5 分钟内不重复换),登出时同时吊销 Cookie 与 Bearer。',
+        en: 'No more daily sign-outs: sessions now slide — the cookie lasts 30 days, the token keeps a hard 24h ceiling, and it rotates silently once less than 20% remains (at most once per account per 5 minutes); logging out revokes both the cookie and the bearer token.',
+      },
+      {
+        zh: '成本护栏:新增每日模型调用额度(环境变量 MG_DAILY_LLM_CALLS),超限返回 429 并给出明确提示;顺带修掉“欢迎语也记一次用量”的记账错误,罐头文案不再占用额度。',
+        en: 'Cost guardrail: a daily model-call quota (MG_DAILY_LLM_CALLS) now returns 429 with a clear message when exceeded; the accounting bug that charged the canned welcome message as a model call is fixed, so canned replies no longer consume quota.',
+      },
+      {
+        zh: '安全加固:写操作按 Origin/Referer 校验来源(跨站 POST 返回 403,脚本客户端不受影响);表格打印仅限部署本机,MG_PRINT_OPEN 不再能绕过该限制;多 worker 启动时明确告警(限流与会话缓存按进程内存实现)。',
+        en: 'Hardening: write requests are origin-checked (cross-site POST returns 403 while script clients still work); table printing is limited to the deploying host and MG_PRINT_OPEN can no longer bypass it; starting with multiple workers now warns explicitly, since rate limiting and the session cache are per-process.',
+      },
+      {
+        zh: '导出 PDF 支持 Linux 服务器:自动查找 chromium / Chrome / Edge,可用 MG_EDGE_PATH 显式指定,MG_PDF_TIMEOUT 可调超时,新旧版浏览器 headless 参数自动回退;另附部署自检脚本,一条命令验证服务器能渲染出含中文与公式的 PDF。',
+        en: 'PDF export now works on Linux servers: chromium / Chrome / Edge are auto-detected, MG_EDGE_PATH pins the binary, MG_PDF_TIMEOUT tunes the timeout, and the headless flag falls back automatically on older browsers; a deployment self-check script verifies in one command that the server can render a Chinese, formula-bearing PDF.',
+      },
+      {
+        zh: '工程质量:服务端 print 全部换成结构化日志(带 request_id),接入 ruff 与 eslint 基线并加 CI 矩阵;后端覆盖率 90%、前端 97.7%,CI 分别以 85% 与 90% 设防倒退门槛;新增契约测试守住“路由 ↔ 文档”“中英词条一致”“KaTeX 前后端版本一致”。',
+        en: 'Engineering quality: all server-side prints became structured logs with request ids; ruff and eslint baselines with a CI matrix; backend coverage is now 90% and frontend 97.7%, with CI floors of 85% and 90% to stop regressions; contract tests guard routes-vs-docs, zh/en key parity and KaTeX version consistency.',
+      },
+      {
+        zh: '结构治理:chat.py、research_corpus、i18n 与聊天工作区按职责拆分为独立模块,最大单文件从 3944 行降到 3056 行;同时补上组件级测试能力(vitest + happy-dom),流式收尾、附件入库、语音输入与图解放大手势首次有了自动化断言。',
+        en: 'Structure: chat.py, research_corpus, the i18n catalog and the chat workspace were split by responsibility, bringing the largest file from 3,944 to 3,056 lines; component-level testing (vitest + happy-dom) was added, so stream finalisation, attachment intake, speech input and diagram gestures now have automated assertions.',
+      },
+    ],
+  },
+  {
+    version: 'v1.25.0',
+    date: '2026-11-11',
+    status: 'released',
     items: [
       {
         zh: '文档生成预览:文档和习题集生成后先进入预览,可反复让模型按修改要求重写,满意后再点“生成”导出 PDF、Markdown 或 Word。',

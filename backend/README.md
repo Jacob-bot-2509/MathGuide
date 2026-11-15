@@ -2,7 +2,7 @@
 
 大模型高等数学学习辅助与科学研究应用 —— 后端(RAG 检索增强生成骨架)。
 
-认证(注册 / 登录 / 登出)走本地 JSON 存储;聊天采用 RAG 链路:
+认证(注册 / 登录 / 登出)与用量、诊断记录走 SQLite(`data/mathguide.db`);聊天采用 RAG 链路:
 **知识库(markdown + LaTeX)→ 切片索引 → 检索 → LLM 流式生成**。
 未配置 LLM 时自动降级为「知识库直答」模式(直接返回检索到的知识片段),
 全链路(前端 ↔ SSE ↔ 认证)始终可演示。
@@ -25,6 +25,19 @@ Windows 下也可用仓库根目录 `dev.bat` 一键启动前后端(脚本按自
 ../.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
 ../.venv/Scripts/python.exe -m pytest
 ```
+
+`requirements-dev.txt` 里另有 `watchfiles`(仅 `dev.bat` 的热重载守护用)与 `ruff`。
+代码检查:
+
+```bash
+../.venv/Scripts/ruff.exe check .        # 规则集见 pyproject.toml(E4/E7/E9/F/I)
+../.venv/Scripts/ruff.exe check . --fix  # 自动修导入顺序等
+```
+
+日志走 `backend/log.py`(`from log import get_logger`),不要再用裸 `print`:
+统一格式带时间、级别、`request_id` 与模块名;`request_id` 由 ASGI 中间件按请求生成,
+同一次回答的多条日志可以直接串起来。级别用 `MG_LOG_LEVEL` 调(默认 INFO)。
+**不记录**问题正文、回答正文与手机号,只记 uid、长度、耗时与模型角色。
 
 ## 回归计算 worker(可选)
 
@@ -254,14 +267,22 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/account/export` | 导出账号、用量元数据与诊断记录 → `200 {exportedAt, account, usage, diagnoses}` |
 | POST | `/api/account/delete` | 注销账号(密码或 `confirm` 二次确认),级联删 token/用量/诊断 → `200 {ok:true}` |
 | POST | `/api/chat/stream` | 聊天流式回复(SSE) |
+| POST | `/api/chat/intuition` | 按需生成直观解释;默认命中缓存,`refresh=true` 时重写(用户点「换个说法」) |
 | POST | `/api/research/docs?name=文件名&projectId=&temp=1` | 上传论文(PDF/文本原始字节),按内容哈希去重、按用户隔离 → `{docId, duplicate, pages, chunks}`;`temp=1` 进临时语料,供拖入后确认是否入库 |
 | GET | `/api/research/docs` | 当前用户的论文列表(元数据,含 `projectId`) |
+| GET | `/api/research/storage` | 科研存储占用:正式论文 / 临时历史 / 回收站与配额(不返回正文) |
+| POST | `/api/research/cache/purge` | 清理当前账号可重建的缓存与索引,释放占用(不删论文与批注) |
 | GET | `/api/research/docs/{doc_id}` | 单篇论文来源元数据(场所、ISSN、许可、OA、撤稿),供阅读器顶部显示 |
 | GET | `/api/research/docs/{doc_id}/insights` | 论文结构缓存(研究问题/方法/结论/局限/章节);无缓存返回 `cached=false` |
 | POST | `/api/research/docs/{doc_id}/insights` | 生成或刷新论文结构 `{refresh?}`;按 docId + 内容哈希缓存 |
 | POST | `/api/research/docs/{doc_id}/progress` | 保存阅读页码 `{page}`;聊天记录不落库 |
 | DELETE | `/api/research/docs` | 清空正式论文库及其批注、切片、章节树、结构缓存和原文件；保留临时浏览历史 |
 | DELETE | `/api/research/docs/{doc_id}` | 删除论文、批注、切片、章节树、结构缓存与原文件 |
+| GET | `/api/research/docs/{doc_id}/text` | 非 PDF 文档的分页正文(带页码与总页数),供文本阅读器 |
+| GET | `/api/research/docs/{doc_id}/file` | 本人论文原始文件(支持 PDF Range),供阅读器同源加载 |
+| GET | `/api/research/docs/{doc_id}/annotations` | 该论文的批注列表 `{annotations}` |
+| POST | `/api/research/docs/{doc_id}/annotations` | 新增或更新一条批注 → `{annotation}`;引用无效返回 400 |
+| DELETE | `/api/research/docs/{doc_id}/annotations/{annotation_id}` | 删除一条批注 |
 | POST | `/api/research/search` | 全文检索 `{query, topK?, docId?, projectId?, tree?}` → `{hits, mode, elapsed}`;BM25 + embedding 混合,未配置向量时纯 BM25 |
 | GET | `/api/research/tree?docId=` | 论文章节树(节点扁平列表,`parentId` 组树) |
 | GET | `/api/research/projects` | 研究项目列表(目标/思路/状态) |
@@ -271,6 +292,8 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | GET | `/api/research/literature?q=&field=&peerReviewed=&includePreprints=&oaOnly=` | 跨库检索:Crossref/arXiv/Europe PMC/DOAJ/OpenAlex/S2,物理加 INSPIRE/NASA ADS,生物加 PubMed,数学加 zbMATH;DOI 为 bioRxiv/medRxiv 时补预印本元数据;返回 venueTier/oaStatus/landingUrl 等字段 |
 | GET | `/api/research/literature/related?doi=\|title=` | 相关论文:Crossref 参考文献 + arXiv/Europe PMC/OpenAlex |
 | GET | `/api/research/literature/oa?doi=` | 合法开放获取解析(Unpaywall 优先,OpenAlex 兜底) |
+| GET | `/api/research/fulltext?id=` | 按 DOI/arXiv/PMID 等标识符解析合法全文;只返回候选,不下载、不代理 |
+| POST | `/api/research/literature/open-pdf` | 下载开放获取 PDF 并用本机默认程序打开(仅本机;远端 403) |
 | GET | `/api/research/venues?issn=\|name=&field=` | 场所权威查询:返回学科层级 T0–T3、出版社与 registry 版本 |
 | GET | `/api/research/sources` | 来源清单:学科范围、层级、全文策略与 key 配置状态(不探测外网) |
 | POST | `/api/research/tables/import?name=&projectId=` | 导入 XLSX/DOCX/CSV 模板 → 结构化列与行 |
@@ -280,14 +303,32 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/research/tables/{id}` | 保存草稿(不带 `source` 时保留原来源) |
 | POST | `/api/research/tables/{id}/compute` | 「完成」:保存并计算,返回逐格结果与错误 |
 | POST | `/api/research/tables/{id}/stats` | 统计与绘图数据:描述性统计、Pearson 相关、序列(不落库) |
+| POST | `/api/research/tables/{id}/validate-formula` | 反算校验:用候选公式重算目标列并与已有数值比对(不落库) |
+| POST | `/api/research/tables/{id}/suggest-topic` | 根据表头、样例数据与来源论文建议表格主题(不落库) |
+| POST | `/api/research/tables/{id}/match-formulas` | 从已保存公式库推荐 Top-3 候选(不落库) |
+| POST | `/api/research/tables/{id}/regression` | 对当前草稿跑确定性 OLS / 多元线性 / 多项式回归(不落库) |
+| POST | `/api/research/tables/{id}/print` | 保存草稿并生成 xlsx,用本机 WPS/Excel 打开(仅本机) |
+| GET | `/api/research/analysis/capabilities` | 学科包能力:只报告计算 worker 里实际可导入的包,缺失不报错 |
 | GET | `/api/research/tables/{id}/export?format=csv\|xlsx` | 导出 |
 | DELETE | `/api/research/tables/{id}` | 删除数据表 |
 | POST | `/api/research/papers/{doc_id}/extract-table` | 论文表格截图转录 `{image:{mime,data}, page}` → `{table, docId, docName, page}`;只返回预览,不自动入库 |
 | POST | `/api/research/papers/{doc_id}/locate` | 论文内定位与问题相关的段落(供阅读器高亮) |
 | POST | `/api/research/papers/{doc_id}/explain-region` | 截图解释图表/公式区域(只依据图片) |
+| POST | `/api/research/papers/temp` | 按开放获取 URL 抓取 PDF 生成临时论文(可带 `metadata`) |
+| POST | `/api/research/papers/temp-page` | 把开放获取落地页抓成临时文本论文,交给站内阅读器 |
+| POST | `/api/research/papers/import` | 临时论文转为正式入库;批注按 docId 保留,无需迁移 |
+| GET | `/api/research/history` | 临时浏览历史列表(读取前先清理过期项) |
+| GET | `/api/research/history/trash` | 回收站列表(到期自动清理,不计入活动容量) |
+| DELETE | `/api/research/history/{doc_id}?hard=` | 删除历史;`hard=1` 彻底删除并 VACUUM,否则进回收站 |
+| POST | `/api/research/history/{doc_id}/restore` | 从回收站恢复到浏览历史 |
+| POST | `/api/research/legacy-import` | 导入旧版导出的 JSON 归档(≤6MB);docId 由内容哈希派生,可重复导入 |
 | POST | `/api/research/literature/compare` | 多文献对比 `{docIds:[2~6]}` → 研究问题/方法/数据/结果/局限,每行带 `rowSources` 来源 |
 | POST | `/api/research/report` | 项目研究报告 DOCX `{projectId, tableIds?}`:项目档案 + 数据表 + 统计 + 来源(不调用 LLM) |
 | POST | `/api/research/formulas/extract` | 图片公式识别 `{images:[{mime,data(base64)}], columns}` → `{formulas, groups, master, warnings}`;图片不落盘 |
+| GET | `/api/research/formulas?docId=&tableId=` | 已保存的公式候选(供再次识别时复用) |
+| POST | `/api/research/pages/analyze` | 整页图片 → 区块结构(正文/公式/表格/手写/图注),可选落库 |
+| POST | `/api/research/diagrams/plan` | 手动「图解此段」:只依据当前回答/当前论文,不触发外部检索 |
+| GET | `/api/research/diagrams/metrics` | 图解运行指标:仅聚合计数/耗时,不含问题、回答或用户身份 |
 | POST | `/api/diagnosis` | 掌握度诊断:`{pointId, answer}` 走模型评分,或 `{pointId, selfRating}` 自评 |
 | GET | `/api/diagnosis/report` | 薄弱点报告(低于 3 分,按分数升序/核心度降序) |
 | GET | `/api/recommendation` | 学习路径推荐:`?strategy=difficulty|coreness&limit=5` |
@@ -302,6 +343,9 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/doc/outline` | 独立要求 → 知识库证据 → 可编辑大纲 |
 | POST | `/api/doc/generate` | 大纲 → 逐节生成(无依据跳过) → `{document,gaps}` |
 | POST | `/api/doc/render` | 结构化文档 → PDF/Markdown/Word |
+| POST | `/api/doc/revise` | 按用户修改要求重写已生成文档;证据与引用不改 |
+| POST | `/api/doc/exercise/plan` | 按筛选条件给出组卷计划:可用题量、选中题目与缺口主题 |
+| POST | `/api/doc/exercise` | 按筛选条件组卷并导出 PDF/Word(可带答案与解析) |
 | GET | `/api/stats` | 用量统计(**仅管理员**):总调用数 / 回复字数 / 按 uid / 按模型角色 |
 
 登录请求体:
@@ -381,7 +425,9 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 - **续写契约**:`resume: true` + `partial: 已生成正文`,配合 `prompt` 原问题使用;
   走后端专用续写分支,不重新检索/复核,只输出断点后的内容(最多取正文末尾 24000 字);
 - **安全底座**:prompt 服务端截断 3.2 万字;每用户 60 秒内最多 6 问(超出 429);
-  token 24 小时过期;每次调用自动记账(用量统计见下);
+  token 24 小时过期(滑动续期:Cookie 记 30 天,剩余寿命不足 20% 时
+  `/api/auth/session` 换发新 token,所以 30 天内来过就不会掉登录);
+  每次调用自动记账(用量统计见下);
 - 响应为 OpenAI 兼容 SSE,**每帧 payload 是 JSON 字符串**(正文含换行、LaTeX 反斜杠时仍为单行,不会拆碎 data 行):
 
 ```

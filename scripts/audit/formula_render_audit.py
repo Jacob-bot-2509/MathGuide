@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
 import math_render  # noqa: E402
+import math_table_render  # noqa: E402
+from exercises.source_repairs import repair_source  # noqa: E402
 
 DATASET = ROOT / "backend" / "data" / "exercises" / "bilingual" / "all.jsonl"
 KATEX = ROOT / "backend" / "static" / "katex" / "katex.min.js"
@@ -46,6 +48,7 @@ def collect_formulas(records):
     """Count occurrences and preserve their locations without copying user data."""
     formulas = {}
     for record in records:
+        record = repair_source(record)
         for language, content in record.get("content", {}).items():
             for field in ("question", "answer", "solution"):
                 value = content.get(field, "")
@@ -69,15 +72,19 @@ def audit(formulas):
     )
     katex_errors = {index: error for index, error in json.loads(result.stdout)}
     word_errors = {}
+    word_images = {}
     word_layout_warnings = {}
     for index, (tex, _display) in enumerate(keys):
         try:
-            math_render.to_omml(tex)
+            if math_render.requires_table_image(tex):
+                if index in katex_errors:
+                    raise ValueError("Unsupported ruled array syntax")
+                math_table_render.render_table_image(tex)
+                word_images[index] = "Ruled array rendered as an image"
+            else:
+                math_render.to_omml(tex)
         except ValueError as exc:
             word_errors[index] = str(exc)
-        else:
-            if r"\hline" in tex:
-                word_layout_warnings[index] = "Array horizontal rules may be omitted"
         if (index + 1) % 10000 == 0:
             print(f"Word: {index + 1}/{len(keys)} unique formulas checked", file=sys.stderr, flush=True)
 
@@ -102,6 +109,8 @@ def audit(formulas):
         "word_failed_occurrences": sum(len(formulas[keys[i]]) for i in word_errors),
         "katex_failures": summarize(katex_errors),
         "word_failures": summarize(word_errors),
+        "word_image_occurrences": sum(len(formulas[keys[i]]) for i in word_images),
+        "word_images": summarize(word_images),
         "word_layout_warning_occurrences": sum(len(formulas[keys[i]]) for i in word_layout_warnings),
         "word_layout_warnings": summarize(word_layout_warnings),
     }

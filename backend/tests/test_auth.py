@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 
 import pytest
 from starlette.applications import Starlette
@@ -85,6 +86,9 @@ def test_register_sets_shared_cookie_and_session_restores(client):
     assert auth.COOKIE_NAME in cookie
     assert "httponly" in cookie.lower()
     assert "samesite=lax" in cookie.lower()
+    # 方案 B:Cookie 记 30 天(真正有效期由 token 的滑动续期决定)
+    assert f"max-age={auth.COOKIE_MAX_AGE}" in cookie.lower()
+    assert auth.COOKIE_MAX_AGE == 30 * 24 * 3600
 
     restored = client.get("/api/auth/session")
     assert restored.status_code == 200
@@ -93,6 +97,110 @@ def test_register_sets_shared_cookie_and_session_restores(client):
     # 登出只靠 Cookie 也必须生效:共享凭据在服务端被吊销
     assert client.post("/api/auth/logout").status_code == 200
     assert client.get("/api/auth/session").status_code == 401
+
+
+def test_expired_token_closes_session(client, monkeypatch):
+    """token 过期且没有更新的 Cookie 时必须 401(不能靠旧凭据继续登录)。"""
+    now = [1_000_000.0]
+    monkeypatch.setattr(store.time, "time", lambda: now[0])
+    assert client.post(
+        "/api/auth/register", json={"phone": PHONE, "password": PASSWORD}
+    ).status_code == 200
+    assert client.get("/api/auth/session").status_code == 200
+
+    now[0] += store.TOKEN_TTL_HOURS * 3600 + 1
+    assert client.get("/api/auth/session").status_code == 401
+
+
+def test_session_does_not_rotate_fresh_token(client):
+    """新签发的 token 不轮换:否则每次启动都写库,且旧标签页会莫名换凭据。"""
+    body = client.post(
+        "/api/auth/register", json={"phone": PHONE, "password": PASSWORD}
+    ).json()
+    token = body["token"]
+
+    res = client.get("/api/auth/session", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    assert "token" not in res.json()
+    # Cookie 里仍是同一个 token,且被刷新了有效期
+    assert f"{auth.COOKIE_NAME}={token}" in res.headers.get("set-cookie", "")
+
+
+def test_session_rotates_token_near_expiry(client, monkeypatch):
+    """剩余寿命不足 20% 时轮换:新 token 可用,旧 token 不吊销(多标签页不踢人)。"""
+    body = client.post(
+        "/api/auth/register", json={"phone": PHONE, "password": PASSWORD}
+    ).json()
+    old = body["token"]
+
+    now = [time.time()]
+    monkeypatch.setattr(store.time, "time", lambda: now[0])
+    # 24h 的 80% = 19.2h;推到 19.5h 即触发轮换
+    now[0] += store.TOKEN_TTL_HOURS * 3600 * auth.RENEW_AFTER_RATIO + 0.5 * 3600
+
+    res = client.get("/api/auth/session", headers={"Authorization": f"Bearer {old}"})
+    assert res.status_code == 200
+    new = res.json()["token"]
+    assert new and new != old
+    assert f"{auth.COOKIE_NAME}={new}" in res.headers.get("set-cookie", "")
+
+    assert store.resolve_token(new) is not None
+    # 不吊销:另一个标签页/长连接可能还拿着旧 token,它靠自己 24h 到期退出
+    assert store.resolve_token(old) is not None
+
+
+def test_renewal_is_throttled(client, monkeypatch, temp_store):
+    """客户端不写回新 token 时,不能在每次 session() 都签发一个(否则 token 表被刷大)。"""
+    body = client.post(
+        "/api/auth/register", json={"phone": PHONE, "password": PASSWORD}
+    ).json()
+    old = body["token"]
+    uid = temp_store.find_user_by_phone(PHONE)[0]
+
+    now = [time.time()]
+    monkeypatch.setattr(store.time, "time", lambda: now[0])
+    now[0] += store.TOKEN_TTL_HOURS * 3600 * auth.RENEW_AFTER_RATIO + 0.5 * 3600
+
+    headers = {"Authorization": f"Bearer {old}"}
+    first = client.get("/api/auth/session", headers=headers)
+    second = client.get("/api/auth/session", headers=headers)
+    assert "token" in first.json()
+    assert "token" not in second.json(), "5 分钟内不应重复轮换"
+
+    owned = [k for k, v in temp_store.tokens_snapshot().items() if v["uid"] == uid]
+    assert len(owned) == 2, f"注册 1 条 + 轮换 1 条,实际 {len(owned)}"
+
+
+def test_stale_bearer_falls_back_to_cookie(client, temp_store):
+    """旧 Bearer 失效但 Cookie 是新的(别的标签页已轮换)时,仍应判定为已登录。"""
+    body = client.post(
+        "/api/auth/register", json={"phone": PHONE, "password": PASSWORD}
+    ).json()
+    stale = body["token"]
+    uid = temp_store.find_user_by_phone(PHONE)[0]
+    fresh = temp_store.issue_token(uid)
+    temp_store.revoke_token(stale)  # 模拟旧 token 已退役
+    client.cookies.set(auth.COOKIE_NAME, fresh)
+
+    res = client.get("/api/auth/session", headers={"Authorization": f"Bearer {stale}"})
+    assert res.status_code == 200
+    assert res.json()["user"]["phone"] == PHONE
+
+
+def test_logout_revokes_bearer_and_cookie_tokens(client, temp_store):
+    """登出要把 Bearer 与 Cookie 两个凭据都清掉,否则"已登出"的 Cookie 还能用。"""
+    body = client.post(
+        "/api/auth/register", json={"phone": PHONE, "password": PASSWORD}
+    ).json()
+    header_token = body["token"]
+    uid = temp_store.find_user_by_phone(PHONE)[0]
+    cookie_token = temp_store.issue_token(uid)
+    client.cookies.set(auth.COOKIE_NAME, cookie_token)
+
+    res = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {header_token}"})
+    assert res.status_code == 200
+    assert temp_store.resolve_token(header_token) is None
+    assert temp_store.resolve_token(cookie_token) is None
 
 
 def test_login_errors(client):

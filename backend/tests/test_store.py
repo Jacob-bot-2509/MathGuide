@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import pytest
-from contextlib import closing
 import sqlite3
 import threading
+from contextlib import closing
+
+import pytest
 
 import db
 import store

@@ -60,3 +60,15 @@ def test_hallucination_set_has_50_unanswerable_items():
         assert item.reference_answer == ""
         assert item.gold_chunk_ids == []
         assert 1 <= item.difficulty <= 5
+
+
+def test_reference_solution_round_trip(tmp_path):
+    path = tmp_path / "solution.jsonl"
+    path.write_text(
+        '{"id":"p","question":"证明","answer_type":"proof",'
+        '"reference_answer":"Proof","reference_solution":"完整推导"}\n',
+        encoding="utf-8",
+    )
+    item = load_items(path)[0]
+    assert item.reference_solution == "完整推导"
+    assert item.reference_answer == "Proof"

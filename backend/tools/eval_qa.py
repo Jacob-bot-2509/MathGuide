@@ -65,7 +65,8 @@ def _print_summary(summary: dict) -> None:
     print(f"答案级幻觉率: {rate(ans.get('answer_hallucination'))} "
           f"(n={ (ans.get('answer_hallucination') or {}).get('n') })")
     print(f"断言级幻觉率: {rate(claim)} "
-          f"({claim.get('bad_claims', 0)}/{claim.get('total_claims', 0)})")
+          f"({claim.get('bad_claims', 0)}/{claim.get('total_claims', 0)}; "
+          f"未判定 {claim.get('unknown_claims', 0)})")
     print(f"不可答编造率: {rate(una.get('fabrication'))} "
           f"(n={ (una.get('fabrication') or {}).get('n') })")
     print(f"检索 hit@k: {rate(ret.get('hit_rate'))}  recall: {ret.get('recall', '—')}  "
@@ -73,6 +74,8 @@ def _print_summary(summary: dict) -> None:
     health = summary.get("health") or {}
     print(f"运行错误: {health.get('run_errors', 0)}  评审失败: {health.get('judge_errors', 0)}  "
           f"降级: {health.get('degraded', 0)}")
+    if health.get("judge_roles"):
+        print(f"实际评审角色: {health['judge_roles']};需核对与生成模型的独立性")
 
 
 async def _main() -> int:

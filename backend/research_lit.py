@@ -22,7 +22,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import time
 from copy import deepcopy
 from pathlib import Path

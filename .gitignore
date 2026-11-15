@@ -29,9 +29,38 @@ backend/tools/.last_sync
 .sse-stream-test.cjs
 .trash-store-test.cjs
 .todo-test.cjs
+.i18n-test.cjs
+.session-bootstrap-test.cjs
+
+# 版本发布附件(源码 tar.gz / patch)不再入库:v1.25.0 及以后改挂 GitHub Release assets。
+# 历史目录仍在版本库中(已跟踪),新增的 releases/v* 不会再被提交,避免仓库每版 +2MB。
+releases/
+
+# 覆盖率产物(pytest-cov / vitest)
+# 注意用 .coverage* 而不是 .coverage.*:后者漏掉 .coverage_del 这类下划线后缀
+.coverage*
+htmlcov/
+coverage/
+coverage-*/
+
+# 本地临时日志与临时提交信息(排查/批处理脚本输出,勿入库)
+tmp_*.log
+tmp_commit_msg.txt
 
 # 编辑器/编码代理本地配置(Serena,勿入库)
 .serena/
 
 # 独立分析 worker 的本地虚拟环境
 backend/.venv-analysis/
+
+# 教材扫描与内部提取数据：仅内部使用，不入库/不发布
+_analysis_book.pdf
+review_packets/_book_pages/
+review_packets/_vision_*.json
+review_packets/book_extract/pilot*/
+review_packets/book_extract/full*/
+
+review_packets/_incoming_zip/
+review_packets/book_extract/_*.txt
+_zip_p006.jpg
+_our_p006.jpg

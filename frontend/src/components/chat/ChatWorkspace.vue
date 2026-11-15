@@ -19,13 +19,12 @@
  * 问题分类由前端关键词预判,后端路由做最终裁决。
  */
 import { computed, defineAsyncComponent, markRaw, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch } from 'vue'
-import type { CSSProperties } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import MathText from '@/components/chat/MathText.vue'
 import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
 import DiagramBoundary from '@/components/diagram/DiagramBoundary.vue'
-import { appendDiagram, parseDiagramEvent, splitMessageBlocks, type DiagramBlock } from '@/utils/diagramSpec'
-import { needsDiagram, planDiagram } from '@/services/diagramService'
+import { appendDiagram, splitMessageBlocks, type DiagramBlock } from '@/utils/diagramSpec'
+import { planDiagram } from '@/services/diagramService'
 import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
 import ResearchArchivePanel from '@/components/chat/ResearchArchivePanel.vue'
@@ -43,9 +42,7 @@ import { COMMANDS, RESEARCH_COMMANDS } from '@/utils/commands'
 import { catName, cmdDefault, cmdHint, cmdName, t } from '@/utils/i18n'
 import {
   requestIntuition,
-  speechToMath,
   type ChatMeta,
-  type ChatStreamHandle,
 } from '@/services/chatService'
 import { getResearchTable } from '@/services/researchTableService'
 import { getResearchDocMeta, uploadTempPaper, type PaperAction, type ResearchDoc } from '@/services/researchService'
@@ -54,12 +51,11 @@ import { downloadBlob, exportSurveyPdf } from '@/services/docService'
 import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, categoryByKey, classifyQuestion, isChitchat } from '@/utils/classifier'
 import { detectAmbiguous, topicById, type AmbiguousOption } from '@/utils/ambiguous'
 import { usePaperChat } from '@/composables/usePaperChat'
-import { settingsState, updateSettings } from '@/stores/settings'
+import { settingsState } from '@/stores/settings'
 import { isAllSelected, scopeForRequest, selectedSources } from '@/stores/researchScope'
 import {
   MAX_SESSIONS,
   sessionStore,
-  type ChatAttachment,
   type ChatMsg,
   type ChatSession,
   type Workspace,
@@ -67,22 +63,15 @@ import {
 import { addToTrash } from '@/stores/trash'
 import { notebookStore } from '@/stores/notebook'
 import { setTodoWorkspace } from '@/stores/todo'
-import { compressImage } from '@/utils/avatar'
-import { extractPdfText } from '@/utils/fileText'
-import { beautifyMath, cachedConvert, normalizeSpeechCase, saveConvert, speechMathConvert } from '@/utils/speechMath'
 import { showToast } from '@/utils/toast'
 import { chapterNameFromCmd } from '@/utils/cmdLink'
 import { splitStableBlocks } from '@/utils/mathBlocks'
-import {
-  clampDiagramSplit as clampDiagramSplitValue,
-  DIAGRAM_SPLIT_DEFAULT,
-  isDoubleTap,
-  tapMoved,
-  moveFocusPanel,
-  resizeFocusPanel,
-  type FocusPanel,
-  type TapPoint,
-} from '@/utils/diagramFocus'
+import { useChatAttachments } from '@/composables/useChatAttachments'
+import { useSpeechInput } from '@/composables/useSpeechInput'
+import { useChatStream } from '@/composables/useChatStream'
+import { useResearchSplit } from '@/composables/useResearchSplit'
+import { useDiagramFocus } from '@/composables/useDiagramFocus'
+import { SPLIT_MIN_WIDTH } from '@/utils/splitPane'
 
 const props = withDefaults(defineProps<{ workspace?: Workspace }>(), { workspace: 'learn' })
 
@@ -94,16 +83,21 @@ const ResearchSearchView = defineAsyncComponent(
   () => import('@/views/ResearchSearchView.vue'),
 )
 
-const SPLIT_KEY = 'mg-research-split'
-const SPLIT_DEFAULT = 0.4
-const SEARCH_MIN_PX = 320
-const CHAT_MIN_PX = 380
-const SPLIT_MIN_WIDTH = 1100
-
-const searchOpen = ref(false)
-const splitResizing = ref(false)
 const workspaceBodyRef = ref<HTMLElement | null>(null)
-const splitRatio = ref(loadSplitRatio())
+const listEl = ref<HTMLDivElement | null>(null)
+const focusCloseEl = ref<HTMLButtonElement | null>(null)
+
+/* 科研检索右侧分栏:开关、比例、拖拽与本地记忆都交给 composable */
+const {
+  searchOpen,
+  splitResizing,
+  splitRatio,
+  clampSplit,
+  startSplitDrag,
+  nudgeSplit,
+  resetSplit,
+  closeSplitIfNarrow,
+} = useResearchSplit({ bodyRef: workspaceBodyRef })
 const searchPaneRef = ref<{
   locateForQuestion: (q: string) => Promise<void>
   reloadDocs: () => Promise<void>
@@ -202,39 +196,12 @@ async function loadTableContext(): Promise<void> {
   }
 }
 
-function loadSplitRatio(): number {
-  try {
-    const value = Number(localStorage.getItem(SPLIT_KEY))
-    return Number.isFinite(value) && value > 0 ? clampSplit(value) : SPLIT_DEFAULT
-  } catch {
-    return SPLIT_DEFAULT
-  }
-}
-
-function clampSplit(value: number, width = workspaceBodyRef.value?.clientWidth ?? 0): number {
-  if (width >= SEARCH_MIN_PX + CHAT_MIN_PX) {
-    const min = SEARCH_MIN_PX / width
-    const max = 1 - CHAT_MIN_PX / width
-    return Math.min(max, Math.max(min, value))
-  }
-  return Math.min(0.6, Math.max(0.4, value))
-}
-
-function saveSplitRatio(): void {
-  try {
-    localStorage.setItem(SPLIT_KEY, String(splitRatio.value))
-  } catch {
-    /* 忽略 */
-  }
-}
-
 /** 检索按钮:按设置与本机宽度选择分栏或独立页 */
 function openResearchSearch(): void {
   if (!isResearch.value) return
   // 图解放大占用右侧;打开检索前先退出放大,避免两个分栏抢同一侧。
   if (focusDiagram.value) {
-    searchWasOpen.value = false
-    closeDiagramFocus()
+    closeDiagramFocus({ restoreSearch: false })
   }
   if (settingsState.researchSearchMode === 'page' || window.innerWidth < SPLIT_MIN_WIDTH) {
     router.push('/research/search')
@@ -249,353 +216,38 @@ function openResearchSearch(): void {
   }
 }
 
-function startSplitDrag(e: PointerEvent): void {
-  const body = workspaceBodyRef.value
-  if (!body) return
-  e.preventDefault()
-  splitResizing.value = true
-  const rect = body.getBoundingClientRect()
-  const move = (ev: PointerEvent) => {
-    const ratio = (rect.right - ev.clientX) / rect.width
-    splitRatio.value = clampSplit(ratio, rect.width)
-  }
-  const up = () => {
-    splitResizing.value = false
-    window.removeEventListener('pointermove', move)
-    window.removeEventListener('pointerup', up)
-    saveSplitRatio()
-  }
-  window.addEventListener('pointermove', move)
-  window.addEventListener('pointerup', up)
-}
-
-function nudgeSplit(delta: number): void {
-  splitRatio.value = clampSplit(splitRatio.value + delta)
-  saveSplitRatio()
-}
-
-function resetSplit(): void {
-  splitRatio.value = clampSplit(SPLIT_DEFAULT)
-  saveSplitRatio()
-}
-
 function onSplitAsk(prompt: string): void {
   if (prompt) send(prompt)
 }
 
 /* ---------- 图解放大 ---------- */
-const DIAGRAM_SPLIT_KEY = 'mg-diagram-split'
-const focusDiagram = ref<DiagramBlock | null>(null)
-const focusOrigin = ref<{ msgId: number; diagramId: string; scrollTop: number } | null>(null)
-const focusCloseEl = ref<HTMLButtonElement | null>(null)
-const diagramSplitRatio = ref(loadDiagramSplit())
-const diagramSplitResizing = ref(false)
-const searchWasOpen = ref(false)
-const narrowQuery = typeof window.matchMedia === 'function'
-  ? window.matchMedia('(max-width: 899px)') : null
-const isNarrow = ref(narrowQuery?.matches ?? false)
-const focusPanel = ref<FocusPanel>({ x: 0, w: 90, h: 82, fullscreen: false })
-const lastTap = ref<(TapPoint & { diagramId: string; msgId: number }) | null>(null)
-const touchPointers = new Map<number, { x: number; y: number; moved: boolean }>()
-let touchWasMulti = false
-let focusGesture: {
-  pointers: Map<number, { x: number; y: number }>
-  startX: number
-  startY: number
-  startW: number
-  startH: number
-  startPanelX: number
-  startDistance: number
-  fullscreen: boolean
-  sawMulti: boolean
-} | null = null
-const viewport = (): { width: number; height: number } => ({
-  width: window.innerWidth,
-  height: window.innerHeight,
-})
-const focusPaneStyle = computed<CSSProperties>(() => {
-  if (!isNarrow.value) return { width: `${diagramSplitRatio.value * 100}%` }
-  if (focusPanel.value.fullscreen) {
-    return {
-      left: '0',
-      top: '0',
-      width: '100vw',
-      height: '100vh',
-      transform: 'none',
-      borderRadius: '0',
-    }
-  }
-  return {
-    left: `calc(50% + ${focusPanel.value.x}px)`,
-    top: '50%',
-    width: `${focusPanel.value.w}vw`,
-    height: `${focusPanel.value.h}vh`,
-    transform: 'translate(-50%, -50%)',
-  }
-})
-
-function loadDiagramSplit(): number {
-  try {
-    const value = Number(localStorage.getItem(DIAGRAM_SPLIT_KEY))
-    return Number.isFinite(value) && value > 0
-      ? clampDiagramSplitForBody(value)
-      : DIAGRAM_SPLIT_DEFAULT
-  } catch {
-    return DIAGRAM_SPLIT_DEFAULT
-  }
-}
-
-function clampDiagramSplitForBody(value: number): number {
-  return clampDiagramSplitValue(value, workspaceBodyRef.value?.clientWidth ?? 0)
-}
-
-function saveDiagramSplit(): void {
-  try {
-    localStorage.setItem(DIAGRAM_SPLIT_KEY, String(diagramSplitRatio.value))
-  } catch {
-    /* 忽略 */
-  }
-}
-
-function startDiagramSplitDrag(e: PointerEvent): void {
-  const body = workspaceBodyRef.value
-  if (!body) return
-  e.preventDefault()
-  diagramSplitResizing.value = true
-  const rect = body.getBoundingClientRect()
-  const move = (ev: PointerEvent) => {
-    diagramSplitRatio.value = clampDiagramSplitForBody(
-      (rect.right - ev.clientX) / rect.width,
-    )
-  }
-  const up = () => {
-    diagramSplitResizing.value = false
-    window.removeEventListener('pointermove', move)
-    window.removeEventListener('pointerup', up)
-    saveDiagramSplit()
-  }
-  window.addEventListener('pointermove', move)
-  window.addEventListener('pointerup', up)
-}
-
-function nudgeDiagramSplit(delta: number): void {
-  diagramSplitRatio.value = clampDiagramSplitForBody(diagramSplitRatio.value + delta)
-  saveDiagramSplit()
-}
-
-function resetDiagramSplit(): void {
-  diagramSplitRatio.value = clampDiagramSplitForBody(DIAGRAM_SPLIT_DEFAULT)
-  saveDiagramSplit()
-}
-
-function isFocused(block: DiagramBlock): boolean {
-  return focusDiagram.value?.id === block.id
-}
-
-function openDiagramFocus(block: DiagramBlock, msgId: number): void {
-  if (focusDiagram.value?.id === block.id) return
-  focusOrigin.value = {
-    msgId,
-    diagramId: block.id,
-    scrollTop: listEl.value?.scrollTop ?? 0,
-  }
-  searchWasOpen.value = searchOpen.value
-  if (searchOpen.value) searchOpen.value = false
-  if (!isNarrow.value) diagramSplitRatio.value = clampDiagramSplitForBody(diagramSplitRatio.value)
-  if (isNarrow.value) focusPanel.value = { x: 0, w: 90, h: 82, fullscreen: false }
-  lastTap.value = null
-  focusDiagram.value = block
-  nextTick(() => focusCloseEl.value?.focus())
-}
-
-function closeDiagramFocus(): void {
-  if (!focusDiagram.value) return
-  const restoreFocus = !!document.activeElement?.closest('.diagram-focus-pane')
-  focusDiagram.value = null
-  lastTap.value = null
-  touchPointers.clear()
-  touchWasMulti = false
-  focusGesture = null
-  if (searchWasOpen.value && !isNarrow.value) searchOpen.value = true
-  searchWasOpen.value = false
-  const origin = focusOrigin.value
-  focusOrigin.value = null
-  nextTick(() => {
-    if (origin && listEl.value) {
-      listEl.value.scrollTop = origin.scrollTop
-      if (restoreFocus) {
-        const message = listEl.value.querySelector(`[data-msg-id="${origin.msgId}"]`)
-        const diagram = [...(message?.querySelectorAll<HTMLElement>('.diagram-embed') ?? [])]
-          .find((el) => el.dataset.diagramId === origin.diagramId)
-        diagram?.focus({ preventScroll: true })
-      }
-    }
-  })
-}
-
-function onChatPaneClick(): void {
-  if (focusDiagram.value) closeDiagramFocus()
-}
-
-function onRootClick(event: MouseEvent): void {
-  if (!focusDiagram.value) return
-  const target = event.target as HTMLElement | null
-  if (target?.closest('.diagram-focus-pane')) return
-  closeDiagramFocus()
-}
-
-function onFocusKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && focusDiagram.value) {
-    event.preventDefault()
-    closeDiagramFocus()
-  }
-}
-
-function onNarrowChange(event: MediaQueryListEvent): void {
-  isNarrow.value = event.matches
-  if (event.matches) {
-    focusPanel.value = { x: 0, w: 90, h: 82, fullscreen: false }
-  }
-}
-
-function onDiagramPointerDown(event: PointerEvent): void {
-  if (event.pointerType !== 'touch') return
-  touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY, moved: false })
-  if (touchPointers.size > 1) {
-    touchWasMulti = true
-    lastTap.value = null
-  }
-}
-
-function onDiagramPointerMove(event: PointerEvent): void {
-  const start = touchPointers.get(event.pointerId)
-  if (start && tapMoved(start, { x: event.clientX, y: event.clientY })) start.moved = true
-}
-
-function onDiagramPointerCancel(event: PointerEvent): void {
-  touchPointers.delete(event.pointerId)
-  if (!touchPointers.size) touchWasMulti = false
-  lastTap.value = null
-}
-
-function onDiagramPointerUp(
-  event: PointerEvent,
-  block: DiagramBlock,
-  msgId: number,
-): void {
-  if (event.pointerType !== 'touch') return
-  const start = touchPointers.get(event.pointerId)
-  touchPointers.delete(event.pointerId)
-  const invalid = !start || start.moved || tapMoved(start, { x: event.clientX, y: event.clientY })
-    || touchWasMulti || !!focusDiagram.value || !isNarrow.value
-  if (!touchPointers.size) touchWasMulti = false
-  if (invalid) {
-    lastTap.value = null
-    return
-  }
-  const tap = { time: performance.now(), x: event.clientX, y: event.clientY, diagramId: block.id, msgId }
-  if (lastTap.value?.diagramId === block.id && lastTap.value.msgId === msgId
-    && isDoubleTap(lastTap.value, tap)) {
-    lastTap.value = null
-    openDiagramFocus(block, msgId)
-  } else {
-    lastTap.value = tap
-  }
-}
-
-function focusDistance(points: Map<number, { x: number; y: number }>): number {
-  const values = [...points.values()]
-  if (values.length < 2) return 0
-  return Math.hypot(values[0].x - values[1].x, values[0].y - values[1].y)
-}
-
-function onFocusPointerDown(event: PointerEvent): void {
-  if (!isNarrow.value) return
-  event.preventDefault()
-  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
-  if (!focusGesture) {
-    focusGesture = {
-      pointers: new Map(),
-      startX: event.clientX,
-      startY: event.clientY,
-      startW: focusPanel.value.w,
-      startH: focusPanel.value.h,
-      startPanelX: focusPanel.value.x,
-      startDistance: 0,
-      fullscreen: focusPanel.value.fullscreen,
-      sawMulti: false,
-    }
-  }
-  focusGesture.pointers.set(event.pointerId, {
-    x: event.clientX,
-    y: event.clientY,
-  })
-  if (focusGesture.pointers.size === 1) {
-    focusGesture.startX = event.clientX
-    focusGesture.startY = event.clientY
-    focusGesture.startPanelX = focusPanel.value.x
-  } else if (focusGesture.pointers.size === 2) {
-    focusGesture.sawMulti = true
-    focusGesture.startDistance = focusDistance(focusGesture.pointers)
-    focusGesture.startW = focusPanel.value.w
-    focusGesture.startH = focusPanel.value.h
-  }
-}
-
-function onFocusPointerMove(event: PointerEvent): void {
-  if (!focusGesture || !focusGesture.pointers.has(event.pointerId)) return
-  focusGesture.pointers.set(event.pointerId, {
-    x: event.clientX,
-    y: event.clientY,
-  })
-  if (focusGesture.pointers.size >= 2) {
-    if (focusPanel.value.fullscreen || focusGesture.startDistance <= 0) return
-    const scale = focusDistance(focusGesture.pointers) / focusGesture.startDistance
-    focusPanel.value = resizeFocusPanel({
-      x: focusGesture.startPanelX,
-      w: focusGesture.startW,
-      h: focusGesture.startH,
-      fullscreen: false,
-    }, scale, viewport())
-    return
-  }
-  if (focusPanel.value.fullscreen) return
-  const dx = event.clientX - focusGesture.startX
-  focusPanel.value = moveFocusPanel({
-    ...focusPanel.value,
-    x: focusGesture.startPanelX,
-  }, dx, viewport())
-}
-
-function onFocusPointerUp(event: PointerEvent): void {
-  if (!focusGesture) return
-  const gesture = focusGesture
-  const point = gesture.pointers.get(event.pointerId)
-  gesture.pointers.delete(event.pointerId)
-  if (gesture.pointers.size === 1) {
-    const remaining = [...gesture.pointers.values()][0]
-    gesture.startX = remaining.x
-    gesture.startY = remaining.y
-    gesture.startPanelX = focusPanel.value.x
-    gesture.startW = focusPanel.value.w
-    gesture.startH = focusPanel.value.h
-    gesture.sawMulti = true
-  }
-  if (gesture.pointers.size === 0) {
-    focusGesture = null
-    if (gesture.fullscreen && !gesture.sawMulti && point
-      && event.clientY - gesture.startY > 60) {
-      closeDiagramFocus()
-    }
-  }
-}
-
-function onFocusPointerCancel(event: PointerEvent): void {
-  if (!focusGesture) return
-  focusGesture.pointers.delete(event.pointerId)
-  if (focusGesture.pointers.size === 0) focusGesture = null
-}
-
+/* 浮层几何、手势、宽屏分栏与关闭后的焦点还原都在 composable 里;
+   消息列表与检索开关作为依赖注入,组件只做接线。 */
+const {
+  focusDiagram,
+  diagramSplitResizing,
+  searchWasOpen,
+  isNarrow,
+  focusPanel,
+  focusPaneStyle,
+  isFocused,
+  openDiagramFocus,
+  closeDiagramFocus,
+  onChatPaneClick,
+  onRootClick,
+  startDiagramSplitDrag,
+  nudgeDiagramSplit,
+  resetDiagramSplit,
+  reclampSplitIfWide,
+  onDiagramPointerDown,
+  onDiagramPointerMove,
+  onDiagramPointerUp,
+  onDiagramPointerCancel,
+  onFocusPointerDown,
+  onFocusPointerMove,
+  onFocusPointerUp,
+  onFocusPointerCancel,
+} = useDiagramFocus({ bodyRef: workspaceBodyRef, listEl, closeEl: focusCloseEl, searchOpen })
 /** 模型动作到达:确保右侧阅读器存在,再跳页/高亮/批注。
  *  独立页面模式不强行跳转,避免打断当前对话。 */
 async function applyPaperActionsFromModel(
@@ -624,26 +276,17 @@ async function applyPaperActionsFromModel(
 
 /** 窗口变窄时收起分栏,避免聊天区被压到不可用 */
 function onWorkspaceResize(): void {
-  if (searchOpen.value && window.innerWidth < SPLIT_MIN_WIDTH) searchOpen.value = false
-  if (focusDiagram.value && window.innerWidth >= 900) {
-    diagramSplitRatio.value = clampDiagramSplitForBody(diagramSplitRatio.value)
-  }
+  closeSplitIfNarrow()
+  reclampSplitIfWide()
 }
 
 /** 科研区:独占研究检索链路与搜索范围面板;学习区不跨区查文献 */
 const isResearch = computed(() => props.workspace === 'research')
 
-/* 文件导入上限(拖拽一次最多 3 个;粘贴文本截断上限,保护本地存储与请求体积) */
-const MAX_DROP_FILES = 3
-const PASTE_TEXT_MAX = 3000
 
 /** 触屏设备判定:手机/平板用「粘贴导入」替代拖拽(拖拽仅限电脑端) */
 const isTouchDevice = window.matchMedia?.('(pointer: coarse)').matches ?? false
 
-/* 文本/PDF 教材:上传时提取正文随附件保存,章节导航等指令可基于内容工作。
-   上限 3 万字,发挥 QwenLong 长上下文能力(移动端粘贴导入仍 3 千字) */
-const FILE_TEXT_EXT = /\.(txt|md|markdown)$/i
-const FILE_TEXT_MAX = 30000
 
 /* 会话上下文栈:按工作区取独立仓库,两区同号 sessionId 也不会串档 */
 const store = sessionStore(props.workspace)
@@ -711,11 +354,32 @@ function anchorTo(selector: string) {
 const tipsOpen = ref(false)
 const flashMsgId = ref(0)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
-const listEl = ref<HTMLDivElement | null>(null)
 
 /* 后台流:不同会话的输出并行生成,切换界面不中断;按消息 id 索引便于精确取消 */
-let streams = new Map<number, ChatStreamHandle>()
-const timers = new Map<number, ReturnType<typeof setTimeout>>()
+/* 一条回复的流式生命周期(排队/节流上屏/收尾/中断)在 composable 里;
+   这里只提供依赖:会话、滚动、落盘、图解追问与真正的发请求函数。 */
+const {
+  streamInto,
+  scheduleStream,
+  cancelReply,
+  stopGenerating,
+  resumeReply,
+  stopAllStreams,
+} = useChatStream({
+  workspace: () => props.workspace,
+  activeSession: () => activeSession.value ?? null,
+  sessions: () => sessions.value,
+  pinnedToBottom: () => pinnedToBottom,
+  pinToBottom: () => { pinnedToBottom = true },
+  scrollBottom,
+  persist: persistSessions,
+  flush: () => flushSessions(true),
+  toast: showToast,
+  history: buildHistory,
+  markPaperImported,
+  requestDiagram,
+  stream: paperChat.stream,
+})
 let flashTimer: ReturnType<typeof setTimeout> | null = null
 
 const activeSession = computed(() => sessions.value.find((s) => s.id === activeId.value))
@@ -762,21 +426,6 @@ function createSession(cat?: ChatSession['cat']): ChatSession {
   activeId.value = s.id
   persistSessions()
   return s
-}
-
-/** 页面卸载时:停止全部后台流与定时器,保留已生成内容 */
-function stopAllStreams() {
-  for (const s of streams.values()) s.cancel()
-  streams.clear()
-  for (const t of timers.values()) clearTimeout(t)
-  timers.clear()
-  for (const s of sessions.value) {
-    for (const m of s.messages) {
-      m.streaming = false
-      m.thinking = false
-    }
-  }
-  flushSessions()  // 离开学习页前立即落盘,不等 debounce
 }
 
 /* ---------- 对话 ---------- */
@@ -1005,180 +654,6 @@ function requestIntuitionFor(msg: ChatMsg): void {
   })
 }
 
-/** 让某会话的一条助手消息开始流式接收回复(输出在所属会话内进行,切换界面不中断) */
-function streamInto(session: ChatSession, reply: ChatMsg, prompt: string, meta?: ChatMeta) {
-  // 增量节流:高频 chunk 先攒进 pending,约每 24ms 合并提交一次;
-  // MathText 对已闭合公式有渲染缓存,单次提交开销极小,不会随正文增长变慢
-  let pending = ''
-  let commit: ReturnType<typeof setTimeout> | null = null
-  // 本次流是否已由 onError 收过尾:失败路径 chatService 会补一次 onDone,
-  // 那是幂等清理,不该再叠一层「已中断」标记
-  let failed = false
-  const flush = () => {
-    commit = null
-    if (!pending) return
-    reply.content += pending
-    pending = ''
-    // 贴底才跟随滚动:用户上拉阅读时不打扰
-    if (session === activeSession.value && pinnedToBottom) scrollBottom(false)
-  }
-  const stream = paperChat.stream(prompt, {
-    onMeta: (meta) => {
-      // 后端路由才知道的标记:研究型回答打上 research,导出入口只对它显示
-      const inner = (meta as {
-        mg_meta?: {
-          research?: boolean
-          tableChanged?: boolean
-          paperImported?: {
-            docId: string; title?: string; status?: string; reason?: string
-          }
-        }
-      }).mg_meta
-      if (inner?.research) reply.research = true
-      if (inner?.tableChanged) showToast(t('chat.tableChanged'))
-      if (inner?.paperImported) markPaperImported(inner.paperImported)
-      const diagram = parseDiagramEvent(meta)
-      if (diagram) {
-        reply.diagrams = markRaw(appendDiagram(reply.diagrams, diagram))
-        persistSessions()
-      }
-    },
-    onDelta: (t) => {
-      reply.thinking = false
-      pending += t
-      if (!reply.content) {
-        // 首个增量立即上屏(欢迎语/回复的第一句话即刻出现),后续增量再走节流
-        flush()
-      } else if (!commit) {
-        commit = setTimeout(flush, 24)
-      }
-    },
-    onDone: (_full, complete) => {
-      if (commit) {
-        clearTimeout(commit)
-        commit = null
-      }
-      flush() // 提交最后的残量,避免丢尾
-      reply.streaming = false
-      reply.thinking = false
-      if (!reply.content) {
-        // 一字未出:主动停止给停止提示(此时流已被 cancelReply 移出 streams);
-        // 被中断则给连接失败提示,否则气泡空着,用户以为卡住了
-        if (!streams.has(reply.id)) reply.content = t('learn.stoppedNote')
-        else if (!complete && !failed) reply.content = t('learn.errStream')
-      } else if (!complete && !failed) {
-        // 连接断在后端 [DONE] 之前(后端重启 / 网络中断):手里的字只是半截。
-        // 不标记的话,这半截回答和完整回答在界面上长得一模一样,用户无从察觉
-        reply.interrupted = true
-      }
-      streams.delete(reply.id)
-      persistSessions()
-      if (!failed && complete && reply.content
-        && needsDiagram(prompt, buildHistory(session, reply.id))
-        && !reply.diagrams?.length) {
-        void requestDiagram(reply, prompt, true)
-      }
-    },
-    // 请求失败(典型:后端未启动 / 限流 429)时,若一字未出则显示对应提示,
-    // 避免气泡永远停留在"思考中"且无任何反馈。
-    // 失败路径 onDone 不再触发(settled 拦截),清理须在此完整收尾,
-    // 否则 streaming 永真 → 发送按钮永远"生成中"。
-    onError: (err?: unknown) => {
-      failed = true
-      if (commit) {
-        clearTimeout(commit)
-        commit = null
-      }
-      flush() // 先提交已收到的残量,不丢内容
-      reply.thinking = false
-      if (!reply.content) {
-        reply.content = (err as { status?: number })?.status === 429
-          ? t('learn.toastRateLimit')
-          : t('learn.errStream')
-      } else {
-        // 已经有内容还报错 = 流断在半途(实测后端被杀时是连接重置,不走干净关闭那条路)。
-        // 这半截同样得标记,否则它和完整回答在界面上没有区别
-        reply.interrupted = true
-      }
-      reply.streaming = false
-      streams.delete(reply.id)
-      persistSessions()
-    },
-  }, { workspace: props.workspace, ...meta })
-  streams.set(reply.id, stream)
-}
-
-/** 延迟后开始流式输出(模拟"思考"阶段);定时器按消息 id 记录,便于精确取消 */
-function scheduleStream(session: ChatSession, reply: ChatMsg, prompt: string, delay: number, meta?: ChatMeta) {
-  const timer = setTimeout(() => {
-    timers.delete(reply.id)
-    if (reply.streaming) streamInto(session, reply, prompt, meta)
-  }, delay)
-  timers.set(reply.id, timer)
-}
-
-/** 精确取消一条回复:等待中的定时器与进行中的流一并清理(含尚未启动的孤儿流) */
-function cancelReply(id: number) {
-  const timer = timers.get(id)
-  if (timer) {
-    clearTimeout(timer)
-    timers.delete(id)
-  }
-  const stream = streams.get(id)
-  if (stream) {
-    stream.cancel()
-    streams.delete(id)
-  }
-}
-
-/** 停止当前会话的生成:进行中的流中止后走正常收尾(保留已生成内容),
-    尚未启动的(思考阶段)同步收尾,避免"生成中"卡死 */
-function stopGenerating() {
-  const session = activeSession.value
-  if (!session) return
-  for (const m of session.messages) {
-    if (!m.streaming) continue
-    const hadContent = !!m.content
-    cancelReply(m.id)
-    m.thinking = false
-    if (!streams.has(m.id)) {
-      m.streaming = false
-      if (!m.content) m.content = t('learn.stoppedNote')
-    }
-    // 有已生成内容才允许续写;空回答只显示停止提示
-    m.stopped = hadContent && !!m.content
-  }
-  persistSessions()
-}
-
-/** 续写被「停止生成」截断的回答:原问题 + 已生成正文发给后端,增量追加到同一条消息 */
-function resumeReply(msg: ChatMsg) {
-  const session = activeSession.value
-  if (!session || msg.streaming || !msg.content) return
-  if (session.messages.some((m) => m.streaming)) {
-    showToast(t('learn.toastBusy'))
-    return
-  }
-  const idx = session.messages.findIndex((m) => m.id === msg.id)
-  if (idx < 0) return
-  const question = [...session.messages.slice(0, idx)].reverse().find((m) => m.role === 'user')
-  if (!question) return
-
-  const partial = msg.content
-  msg.stopped = false
-  msg.interrupted = false
-  msg.thinking = true
-  msg.streaming = true
-  streamInto(session, msg, question.content, {
-    sessionId: session.id,
-    categoryKey: session.cat?.key,
-    resume: true,
-    partial,
-  })
-  pinnedToBottom = true
-  scrollBottom()
-  persistSessions()
-}
 
 function send(text?: string, cmd?: string, extra?: { pointId?: string }) {
   let content = (text ?? input.value).trim()
@@ -1588,73 +1063,34 @@ function pickFile() {
   fileInputEl.value?.click()
 }
 
-async function onImage(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (file) await importImageFile(file)
-}
-
-function onFile(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  if (isResearch.value && isPaperFile(file)) void stagePaperFile(file)
-  else attachFileItem(file)
-}
-
-/** 文件入库:PDF(pdfjs 提取文本层)/ 文本类(.txt/.md)读取正文随附件保存,其余仅元信息 */
-async function attachFileItem(file: File) {
-  if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
-    try {
-      const text = await extractPdfText(file)
-      if (!text) {
-        // 扫描版 PDF(无文本层):按普通文件接收并提示
-        attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name)
-        showToast(t('learn.toastPdfNoText'))
-        return
-      }
-      attachMessage({ kind: 'file', name: file.name, size: file.size, text }, file.name)
-      return
-    } catch {
-      /* 解析失败按普通文件处理 */
-    }
-  }
-  if (FILE_TEXT_EXT.test(file.name)) {
-    try {
-      const raw = await file.text()
-      const capped = raw.trim().slice(0, FILE_TEXT_MAX)
-      attachMessage({ kind: 'file', name: file.name, size: file.size, text: capped }, file.name)
-      return
-    } catch {
-      /* 读取失败按普通文件处理 */
-    }
-  }
-  attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name)
-}
-
-/** PDF 文本提取(pdfjs 懒加载:仅首次传 PDF 时拉取,主包体积不受影响) */
-
-/** 图片统一入库:压缩为缩略 dataURL 后作为图片附件发送(相册/拍照/拖入/粘贴共用) */
-async function importImageFile(file: File) {
-  try {
-    const url = await compressImage(file, 800)
-    attachMessage({ kind: 'image', name: file.name, url, size: file.size }, file.name)
-  } catch {
-    showToast(t('acc.toastAvatarFail'))
-  }
-}
-
-/** 拖入/选择的论文先进入临时语料,解析成功后再询问是否入库。 */
-const PAPER_EXT = /\.(pdf|docx|epub|html?|xml|rtf|tex)$/i
-
-function isPaperFile(file: File): boolean {
-  return file.type === 'application/pdf'
-    || file.type.includes('wordprocessingml')
-    || file.type === 'application/epub+zip'
-    || PAPER_EXT.test(file.name)
-}
+/* 附件接收(文件/拖拽/粘贴/剪贴板)在 composable 里;
+   这里只接管模板要绑的事件与展示,菜单开合仍由组件自己管。 */
+const {
+  dragging,
+  onImage,
+  onFile,
+  onDragOver,
+  onDragLeave,
+  onDropFiles,
+  onPaste,
+  pasteImport,
+  fmtSize,
+} = useChatAttachments({
+  isResearch: () => isResearch.value,
+  isTouchDevice,
+  closeAttachMenu: () => { attachOpen.value = false },
+  activeSession: () => activeSession.value ?? null,
+  createSession,
+  nextMsgId,
+  cancelReply,
+  scheduleStream,
+  history: buildHistory,
+  scrollBottom,
+  pinToBottom: () => { pinnedToBottom = true },
+  flush: () => flushSessions(true),
+  toast: showToast,
+  stagePaper: stagePaperFile,
+})
 
 function findMessage(id: number): ChatMsg | null {
   for (const session of sessions.value) {
@@ -1797,334 +1233,16 @@ function cancelPaperPrompt(): void {
 
 
 
-const dragging = ref(false)
-let dragHideTimer: ReturnType<typeof setTimeout> | null = null
-
-function onDragOver(e: DragEvent) {
-  if (isTouchDevice || !e.dataTransfer?.types.includes('Files')) return
-  e.preventDefault()
-  dragging.value = true
-  if (dragHideTimer) {
-    clearTimeout(dragHideTimer)
-    dragHideTimer = null
-  }
-}
-
-/** dragleave 在子元素间穿梭时会频繁触发:延迟收尾,避免遮罩闪烁 */
-function onDragLeave() {
-  if (dragHideTimer) clearTimeout(dragHideTimer)
-  dragHideTimer = setTimeout(() => (dragging.value = false), 120)
-}
-
-async function onDropFiles(e: DragEvent) {
-  if (isTouchDevice) return
-  if (dragHideTimer) clearTimeout(dragHideTimer)
-  dragging.value = false
-  const files = Array.from(e.dataTransfer?.files ?? [])
-  if (!files.length) return
-  e.preventDefault()
-  if (files.length > MAX_DROP_FILES) {
-    showToast(t('learn.toastDropTooMany'))
-    return
-  }
-  for (const f of files) {
-    if (f.type.startsWith('image/')) await importImageFile(f)
-    else if (isResearch.value && isPaperFile(f)) await stagePaperFile(f)
-    else await attachFileItem(f)
-  }
-}
-
-/* ---------- 粘贴导入(移动端为主:剪贴板图片/文本 → 附件) ---------- */
-
-/** 输入框粘贴到剪贴板文件(截图/复制图片)时:不进输入框,直接作为附件导入 */
-function onPaste(e: ClipboardEvent) {
-  const items = e.clipboardData?.items
-  if (!items) return
-  for (const item of items) {
-    if (item.kind !== 'file') continue
-    const f = item.getAsFile()
-    if (!f) continue
-    e.preventDefault()
-    if (f.type.startsWith('image/')) importImageFile(f)
-    else if (isResearch.value && isPaperFile(f)) void stagePaperFile(f)
-    else attachFileItem(f)
-    return
-  }
-}
-
-/** 移动端「粘贴导入」按钮:优先读剪贴板图片,退而读文本
-    (作为 .txt 附件导入,正文随提示词交给模型阅读理解) */
-async function pasteImport() {
-  attachOpen.value = false
-  // 剪贴板图片(截图/复制的图片)
-  try {
-    if (navigator.clipboard?.read) {
-      const items = await navigator.clipboard.read()
-      for (const item of items) {
-        const imgType = item.types.find((ty) => ty.startsWith('image/'))
-        if (!imgType) continue
-        const blob = await item.getType(imgType)
-        const ext = imgType.split('/')[1] || 'png'
-        await importImageFile(new File([blob], `粘贴图片.${ext}`, { type: imgType }))
-        return
-      }
-    }
-  } catch {
-    /* 无图片或未授权,继续尝试文本 */
-  }
-  // 剪贴板文本(复制的文档/题目/论文片段)
-  try {
-    const text = (await navigator.clipboard.readText()).trim()
-    if (!text) {
-      showToast(t('learn.toastPasteEmpty'))
-      return
-    }
-    const capped = text.slice(0, PASTE_TEXT_MAX)
-    attachMessage(
-      { kind: 'file', name: '粘贴文本.txt', size: new Blob([capped]).size, text: capped },
-      '粘贴文本.txt',
-    )
-  } catch {
-    showToast(t('learn.toastPasteEmpty'))
-  }
-}
-
-/** 附件消息:留在当前会话(未分类会话归入未归类),MG 给出附件接收回复 */
-function attachMessage(attachment: ChatAttachment, content: string) {
-  let session = activeSession.value
-  if (!session) session = createSession(FALLBACK_CATEGORY)
-  if (!session.cat) session.cat = FALLBACK_CATEGORY
-  if (session.messages.some((m) => m.streaming)) {
-    if (!session.messages[0]?.streaming) return
-    cancelReply(session.messages[0].id)
-    session.messages.shift()
-  }
-
-  const userMsg: ChatMsg = { id: nextMsgId(), role: 'user', content, attachment }
-  session.messages.push(userMsg)
-  pinnedToBottom = true
-  scrollBottom()
-  // 图片以 dataURL 随会话持久化:存储超限时明确提示,避免静默丢失记录。
-  // 附件可能很大,必须立即写并拿到真实配额结果,不能等 debounce。
-  if (!flushSessions(true)) showToast(t('learn.toastStorage'))
-
-  const reply: ChatMsg = { id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true }
-  session.messages.push(reply)
-  // 同上:流式期间通过响应式代理更新,界面才能实时刷新
-  const live = session.messages[session.messages.length - 1]
-  // 契约 [attach:image|file]文件名;粘贴导入的文本带正文(空行分隔),后端交 LLM 阅读理解
-  const attachPrompt = `[attach:${attachment.kind}]${attachment.name}${attachment.text ? `\n\n${attachment.text}` : ''}`
-  scheduleStream(session, live, attachPrompt, 450, {
-    sessionId: session.id,
-    categoryKey: session.cat?.key,
-    history: buildHistory(session),
-  })
-}
-
-function fmtSize(bytes?: number): string {
-  if (bytes === undefined) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
 
 /* ---------- 语音输入(浏览器本地识别,Chrome / Edge 可用) ---------- */
-
-/* Web Speech API:results 里的每一项(SpeechRecognitionResult)只有 isFinal,
-   识别文本在首个候选上(r[0].transcript)——项本身没有 transcript 属性,
-   直接读会得到 undefined 拼进输入框 */
-interface SRResult {
-  isFinal: boolean
-  length: number
-  [i: number]: { transcript: string } | undefined
-}
-
-interface ISpeechRecognition {
-  lang: string
-  interimResults: boolean
-  /** 持续听写:一句话说完不自动停止,由用户点麦克风结束(长段口述更稳) */
-  continuous: boolean
-  onresult: ((e: { results: ArrayLike<SRResult> }) => void) | null
-  onend: (() => void) | null
-  onerror: ((e: { error: string }) => void) | null
-  start(): void
-  stop(): void
-}
-
-type SRConstructor = new () => ISpeechRecognition
-
-function getSR(): SRConstructor | null {
-  const w = window as unknown as { SpeechRecognition?: SRConstructor; webkitSpeechRecognition?: SRConstructor }
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
-}
-
-const listening = ref(false)
-let sr: ISpeechRecognition | null = null
-let srBaseText = ''
-let srStopToConvert = false // 用户主动点停 → 结束后自动转写数学符号
-
-/* 转写提速编排:说话中后台预热(停顿 800ms 起转,结果攒着不打扰输入框)+
-   点停 0ms 本地速转先出符号 + LLM 精修流式覆盖;seq 保证新旧转换互不干扰 */
-let convSeq = 0
-let convCancel: (() => void) | null = null
-let convAcc = '' // 当前流累计结果
-let convRaw = '' // 当前流对应的原文
-let convLive = false // 是否把流式结果显示到输入框
-let convWarmDone = false
-let convDebounce: ReturnType<typeof setTimeout> | null = null
-
-function cancelConvert() {
-  convSeq++
-  convCancel?.()
-  convCancel = null
-  convLive = false
-}
-
-function startConvert(raw: string, live: boolean) {
-  if (!raw.trim()) return
-  cancelConvert()
-  convRaw = raw
-  convLive = live
-  convAcc = ''
-  const seq = convSeq
-  // 本次转换开始前的输入框内容(live 模式下通常是本地速转结果):
-  // 流式覆盖后若模型半途失败,要能撤回到它,而不是把半截转写留在输入框里
-  const fallbackText = input.value
-  // 先本地归一大小写(ASR 大小写是噪声,不刻意念"大"一律小写),
-  // 再交 LLM 按数学惯例自动判别(矩阵 A/随机变量 X 等该大写则大写)
-  convCancel = speechToMath(normalizeSpeechCase(raw), {
-    onDelta: (full) => {
-      if (seq !== convSeq) return
-      convAcc = full
-      if (convLive) {
-        // 输入框是纯文本:把模型可能输出的 ^/_、LaTeX 记号美化为 Unicode 直读形式
-        const pretty = beautifyMath(full)
-        if (pretty !== input.value) {
-          input.value = pretty
-          autoGrow()
-        }
-      }
-    },
-    onDone: (full) => {
-      if (seq !== convSeq) return
-      saveConvert(raw, beautifyMath(full), 'llm') // 精修结果(美化后)入缓存:同句再念零请求
-    },
-    onFail: () => {
-      if (seq !== convSeq) return
-      // 撤回本次流式覆盖;用户中途手改过输入框则不动,避免吞掉编辑
-      if (convLive && input.value === beautifyMath(convAcc)) {
-        input.value = fallbackText
-        autoGrow()
-      }
-      if (!listening.value) showToast(t('learn.toastConvertFail'))
-    },
-  }).cancel
-}
-
-function toggleMic() {
-  if (listening.value) {
-    srStopToConvert = true
-    sr?.stop()
-    return
-  }
-  if (!settingsState.voiceAccess) {
-    showToast(t('learn.toastVoiceDenied'))
-    return
-  }
-  const Ctor = getSR()
-  if (!Ctor) {
-    showToast(t('learn.toastNoSR'))
-    return
-  }
-  sr = new Ctor()
-  sr.lang = settingsState.language === 'en' ? 'en-US' : 'zh-CN'
-  sr.interimResults = true
-  sr.continuous = true
-  srBaseText = input.value
-  convWarmDone = false
-  cancelConvert() // 清理上一次语音遗留的转写流
-  sr.onresult = (e) => {
-    let final = ''
-    let interim = ''
-    for (let i = 0; i < e.results.length; i++) {
-      const r = e.results[i]
-      // 识别文本在首个候选 r[0].transcript 上
-      const text = r[0]?.transcript ?? ''
-      if (!text) continue
-      if (r.isFinal) final += text
-      else interim += text
-    }
-    input.value = srBaseText + final + interim
-    autoGrow()
-    // 后台预热:停顿 800ms 后把当前文本拿去转写(结果先攒着,点停即展示)
-    if (convDebounce) clearTimeout(convDebounce)
-    convDebounce = setTimeout(() => {
-      convDebounce = null
-      if (listening.value && !convWarmDone) {
-        convWarmDone = true
-        startConvert(input.value, false)
-      }
-    }, 800)
-  }
-  sr.onend = () => {
-    listening.value = false
-    if (convDebounce) {
-      clearTimeout(convDebounce)
-      convDebounce = null
-    }
-    // 用户主动点停且有新识别内容 → 转写四档:
-    // ① 缓存里有精修结果 → 直接上屏,零网络;
-    // ② 说话期间预热已完成 → 直接上屏 LLM 结果;
-    // ③ 否则本地编译器 0ms 出符号上屏;
-    // ④ LLM 后台精修无感覆盖(结果回写缓存)。
-    if (srStopToConvert) {
-      srStopToConvert = false
-      const raw = input.value
-      if (raw.trim() && raw !== srBaseText) {
-        const cached = cachedConvert(raw)
-        if (cached && cached.source === 'llm') {
-          input.value = cached.text
-          autoGrow()
-        } else if (convRaw === raw && convAcc) {
-          convLive = true
-          // 与①③④同一口径:预热流是 LLM 原始输出(可能含 ^_{}、LaTeX 记号),
-          // 漏掉美化会让同一句话因走哪条路径而长得不一样
-          input.value = beautifyMath(convAcc)
-          autoGrow()
-        } else {
-          const local = cached?.text ?? speechMathConvert(raw)
-          if (!cached) saveConvert(raw, local, 'local')
-          input.value = local
-          autoGrow()
-          startConvert(raw, true)
-        }
-      }
-    }
-  }
-  sr.onerror = (e) => {
-    listening.value = false
-    if (e.error === 'aborted') return
-    // 麦克风权限被拒(not-allowed / service-not-allowed)单独提示
-    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-      showToast(t('learn.toastMicDenied'), 3600)
-      return
-    }
-    // 安卓设备的识别走 Google 语音服务,国内网络不通时上报 network
-    showToast(e.error === 'network' ? t('learn.toastVoiceNetwork') : t('learn.toastNoVoice'))
-  }
-  listening.value = true
-  try {
-    sr.start()
-  } catch {
-    listening.value = false
-  }
-}
-
-/** 模型语音回复开关(功能待开发,开启后仍以文本回复) */
-function setModelVoice(on: boolean) {
-  updateSettings({ modelVoice: on })
-  if (on) showToast(t('learn.toastVoiceDev'))
-}
+/* 识别会话、预热定时器、转写四档编排都在 composable 里;
+   这里只把输入框与自动增高传进去。 */
+const {
+  listening,
+  toggleMic,
+  setModelVoice,
+  dispose: disposeSpeech,
+} = useSpeechInput({ input, autoGrow, toast: showToast })
 
 /* ---------- 初始化 ---------- */
 
@@ -2190,8 +1308,6 @@ onMounted(() => {
   }
   window.addEventListener('resize', onWorkspaceResize)
   window.addEventListener('beforeunload', warnPendingPapers)
-  window.addEventListener('keydown', onFocusKeydown)
-  narrowQuery?.addEventListener?.('change', onNarrowChange)
 })
 
 onBeforeRouteLeave(async () => {
@@ -2209,12 +1325,8 @@ function warnPendingPapers(event: BeforeUnloadEvent): void {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onWorkspaceResize)
   window.removeEventListener('beforeunload', warnPendingPapers)
-  window.removeEventListener('keydown', onFocusKeydown)
-  narrowQuery?.removeEventListener?.('change', onNarrowChange)
   stopAllStreams()
-  sr?.stop()
-  cancelConvert()
-  if (convDebounce) clearTimeout(convDebounce)
+  disposeSpeech()
   if (flashTimer) clearTimeout(flashTimer)
 })
 </script>
@@ -2622,7 +1734,7 @@ onBeforeUnmount(() => {
       <div
         v-if="focusDiagram && isNarrow"
         class="diagram-focus-backdrop"
-        @click="closeDiagramFocus"
+        @click="closeDiagramFocus()"
       ></div>
       <aside
         ref="focusPaneEl"
@@ -2651,7 +1763,7 @@ onBeforeUnmount(() => {
             type="button"
             :aria-label="t('common.close')"
             @pointerdown.stop
-            @click="closeDiagramFocus"
+            @click="closeDiagramFocus()"
           >×</button>
         </header>
         <div

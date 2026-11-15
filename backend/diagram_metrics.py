@@ -4,6 +4,10 @@ from __future__ import annotations
 import threading
 from collections import Counter
 
+from log import get_logger
+
+log = get_logger(__name__)
+
 _lock = threading.Lock()
 _counts: Counter[str] = Counter()
 _plan_count = 0
@@ -24,7 +28,7 @@ def record(kind: str, ok: bool = True, reason: str = "",
                 _plan_failures += 1
             _total_ms += max(0, duration_ms)
             _total_points += max(0, points)
-    print(f"[diagram] {key} ms={max(0, duration_ms)} points={max(0, points)}")
+    log.info(f"[diagram] {key} ms={max(0, duration_ms)} points={max(0, points)}")
 
 
 def snapshot() -> dict:

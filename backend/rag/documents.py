@@ -24,6 +24,10 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from log import get_logger
+
+log = get_logger(__name__)
+
 MAX_SECTION_CHARS = 900
 
 class _IdGen:
@@ -172,5 +176,5 @@ def load_knowledge(base: Path) -> list[Chunk]:
             try:
                 loader(path, chunks)
             except Exception as exc:  # noqa: BLE001 坏文件跳过,但必须留痕
-                print(f"[rag] 跳过无法解析的知识文件 {path.name}: {exc}")
+                log.warning(f"[rag] 跳过无法解析的知识文件 {path.name}: {exc}")
     return chunks

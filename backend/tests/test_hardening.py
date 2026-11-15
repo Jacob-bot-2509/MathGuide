@@ -18,7 +18,6 @@ import session_cache
 import store
 from rate_limit import SlidingWindowLimiter
 
-
 # ---------- 会话缓存:空 uid 不能退化成共享桶 ----------
 
 def test_empty_uid_never_shares_a_cache_bucket():
@@ -168,3 +167,42 @@ def test_backend_ships_its_own_katex():
     assert (katex_dir / "fonts").is_dir(), "缺少字体目录,CSS 里的 fonts/ 引用会 404"
     assert katex_dir.parent.name == "backend" or "backend" in str(katex_dir), (
         "优先命中的不是后端自带目录: %s" % katex_dir)
+
+
+# ---------- MG_PRINT_OPEN:不能在公网部署里放开本地程序 ----------
+
+def _req_with_host(host: str):
+    from starlette.requests import Request
+
+    return Request({"type": "http", "method": "POST",
+                    "headers": [(b"host", host.encode())], "query_string": b""})
+
+
+def test_print_open_flag_cannot_bypass_loopback_in_production(monkeypatch):
+    """MG_PRINT_OPEN=1 曾能绕过 host 校验:公网部署里等于让人在服务器上打开文件。"""
+    import research_tables
+
+    monkeypatch.setenv("MG_PRINT_OPEN", "1")
+    monkeypatch.setenv("MG_DEMO_MODE", "0")
+    assert research_tables._print_allowed(_req_with_host("mg.example.com")) is False
+    assert research_tables._print_allowed(_req_with_host("evil.test:8080")) is False
+
+
+def test_print_open_flag_still_works_for_lan_demo(monkeypatch):
+    """本机演示(局域网手机/平板)仍可用显式开关,不受本次收紧影响。"""
+    import research_tables
+
+    monkeypatch.setenv("MG_PRINT_OPEN", "1")
+    monkeypatch.setenv("MG_DEMO_MODE", "1")
+    assert research_tables._print_allowed(_req_with_host("192.168.1.5:5173")) is True
+
+
+def test_print_only_local_by_default(monkeypatch):
+    import research_tables
+
+    monkeypatch.delenv("MG_PRINT_OPEN", raising=False)
+    monkeypatch.setenv("MG_DEMO_MODE", "1")
+    assert research_tables._print_allowed(_req_with_host("127.0.0.1:8000")) is True
+    assert research_tables._print_allowed(_req_with_host("localhost")) is True
+    assert research_tables._print_allowed(_req_with_host("[::1]:8000")) is True
+    assert research_tables._print_allowed(_req_with_host("mg.example.com")) is False

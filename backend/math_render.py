@@ -253,13 +253,20 @@ def markdown(text: str) -> str:
     return "".join(result)
 
 
+def requires_table_image(tex: str) -> bool:
+    """Word's MathML converter discards array rules, so they need visual rendering."""
+    return bool(re.search(r"\\(?:hline|cline)\b|\\begin\{array\}\s*\{[^{}]*\|", tex))
+
+
 def to_omml(tex: str):
-    from latex2mathml.converter import convert
     import mathml2omml
-    from lxml import etree
     from docx.oxml import parse_xml
+    from latex2mathml.converter import convert
+    from lxml import etree
 
     tex = prepare(tex).replace(r"\begin{aligned}", r"\begin{align*}").replace(r"\end{aligned}", r"\end{align*}")
+    if requires_table_image(tex):
+        raise ValueError("Word array rules require visual rendering")
     # The Word converter supports align but not alignat's spacing argument.
     tex = re.sub(r"\\begin\{(?:alignat\*?|alignedat)\}\s*\{\d+\}", lambda _: r"\begin{align*}", tex)
     tex = re.sub(r"\\end\{(?:alignat\*?|alignedat)\}", lambda _: r"\end{align*}", tex)
