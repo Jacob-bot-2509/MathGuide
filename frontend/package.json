@@ -12,6 +12,7 @@
     "test": "node scripts/run-tests.mjs && vitest run --coverage",
     "test:unit": "vitest run",
     "test:scripts": "node scripts/run-tests.mjs",
+    "check:build": "node scripts/check-build.mjs",
     "coverage": "vitest run --coverage"
   },
   "dependencies": {

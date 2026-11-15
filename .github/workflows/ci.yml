@@ -44,6 +44,13 @@ jobs:
           - os: windows-latest
             python: "3.13"
             cov_floor: 85
+          # macOS:大小写不敏感文件系统、无 /usr/bin/chromium、信号量与 fork 语义都不同,
+          # 这三类差异只会在这条线上暴露(用户里有不少 Mac 本地起服务)。
+          # 覆盖率口径与 Linux 一致,门槛同样 85;预算 20 分钟对 macOS 偏紧,
+          # 超时就先看是不是"挂起"而不是"慢",别直接放宽。
+          - os: macos-latest
+            python: "3.13"
+            cov_floor: 85
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -60,6 +67,22 @@ jobs:
       - name: Lint (ruff)
         working-directory: backend
         run: ruff check .
+      - name: rlimit 静态守卫(进程内不许改 rlimit)
+        # 只在子进程启动脚本里设 rlimit(analysis_client.py)。主进程里调 setrlimit
+        # 会让 uvicorn 整体挂起且无日志,这条检查把该类写法挡在合并之前。
+        working-directory: backend
+        run: python tools/lint_rlimits.py
+      - name: 探测 analysis 依赖是否已支持本解释器
+        # 3.14 前瞻线跳过了 scipy/pandas/statsmodels(没有 cp314 wheel)。
+        # 这一步不阻塞:等上游出了 wheel,日志里会出现一条 warning 提醒去掉 skip_analysis。
+        if: ${{ matrix.skip_analysis }}
+        continue-on-error: true
+        run: |
+          if python -m pip install --dry-run --only-binary=:all: -r backend/requirements-analysis.txt > /dev/null 2>&1; then
+            echo "::warning::analysis 依赖已支持本解释器,可以把 skip_analysis 去掉(见 docs/COVERAGE_PLAN.md §2)"
+          else
+            echo "::notice::analysis 依赖仍无本解释器 wheel,维持豁免"
+          fi
       - name: Compile
         run: python -m compileall -q backend
       - name: Test
@@ -107,3 +130,8 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+      - name: 构建产物检查(KaTeX 随包 / 体积预算 / public 资源)
+        # 前端构建最容易"静默降级":KaTeX CSS 或字体没进 dist,页面公式变源码,
+        # 但构建照样成功。这里断言产物里真的有 .katex 规则与字体、robots.txt 随包、
+        # 单块与总量 gzip 不超预算;顺带确认后端离线导出用的 backend/static/katex 仍在。
+        run: npm run check:build

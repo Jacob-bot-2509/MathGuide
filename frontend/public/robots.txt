@@ -1,0 +1,11 @@
+# MathGuide:私有学习/科研工具,不需要被检索收录。
+# /api/ 一律不抓(接口必须带登录态,抓了只有 401)。
+# 部署到公开域名时保持这段默认值;确实要做 SEO 再按需放开。
+User-agent: *
+Disallow: /api/
+Disallow: /login
+Allow: /
+
+# 明确拒绝在搜索结果里出现用户私有内容页面(路径前缀由前端路由决定)
+Disallow: /workspace
+Disallow: /research
