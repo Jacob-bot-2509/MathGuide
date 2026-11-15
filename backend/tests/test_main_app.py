@@ -144,6 +144,10 @@ def test_startup_survives_data_migrations_failing(main_module, monkeypatch):
             records.append(("WARNING", message))
 
     monkeypatch.setattr(log_module, "get_logger", lambda _name: _Recorder())
+    # 多 worker 的告警现在由 config 发出(启动期硬校验在 config.assert_single_worker 里),
+    # 而 config 的 logger 在 import 时就绑定了,所以这里连它一起换成记录器。
+    import config as config_module
+    monkeypatch.setattr(config_module, "log", _Recorder())
     monkeypatch.setenv("WEB_CONCURRENCY", "4")  # 触发多 worker 告警分支
     monkeypatch.setattr(usage, "migrate_identity", _boom)
     monkeypatch.setattr(retention, "run", lambda: {"accounts": 2, "usage": 3})

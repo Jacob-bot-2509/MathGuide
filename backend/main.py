@@ -78,13 +78,9 @@ log = get_logger(__name__)
 config.assert_safe_demo_mode()
 # .env.local 装载后再读限流配置(模块导入时 env 还没加载)
 auth.configure_rate_limit()
-# 限流器与会话缓存是进程内存:多 worker 会让额度翻 N 倍、缓存各存一份
-_workers = config.detect_workers()
-if _workers > 1:
-    log.warning(
-        f"[config] 检测到 {_workers} 个 worker:限流与会话缓存按进程内存实现,"
-        "多 worker 会让额度变成 N 倍且缓存分裂;请保持单 worker(见 deploy/README.md)"
-    )
+# 限流器与会话缓存是进程内存:多 worker 会让额度翻 N 倍、缓存各存一份。
+# 演示模式只提示,公网模式直接拒绝启动(见 config.assert_single_worker)
+config.assert_single_worker()
 
 
 def _cors_origins() -> list[str]:

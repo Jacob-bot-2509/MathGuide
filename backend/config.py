@@ -111,7 +111,7 @@ def detect_workers(argv: list[str] | None = None) -> int:
 
     为什么专门做这个判断:限流器(`rate_limit`)、会话缓存(`session_cache`)、
     聊天检索缓存都是**进程内存**。多 worker 会让"每账号 6 次/分"变成 6×N 次、
-    缓存各存一份互不可见。这里只负责报数,由 `main.py` 在启动日志里提示。
+    缓存各存一份互不可见。这里只负责报数,由 `assert_single_worker` 决定放不放行。
     """
     args = sys.argv[1:] if argv is None else argv
     for index, arg in enumerate(args):
@@ -130,6 +130,29 @@ def detect_workers(argv: list[str] | None = None) -> int:
         return max(1, int(raw))
     except ValueError:
         return 1
+
+
+def assert_single_worker(argv: list[str] | None = None) -> None:
+    """多 worker 直接拒绝启动(演示模式只提示,方便本机反复起停)。
+
+    为什么是硬拒绝而不是一句 WARNING:限流额度、会话缓存、检索缓存都是进程内存实现,
+    N 个 worker 下"每账号 6 次/分"实际是 6×N 次,登出/吊销只在其中一个进程生效 ——
+    这不是"慢一点",而是**额度与失效语义失真**,评测或公网环境下会直接变事故。
+    日志里出现过警告不代表有人看见,所以默认改成启动即失败,把问题挡在部署窗口内。
+    """
+    workers = detect_workers(argv)
+    if workers <= 1:
+        return
+    message = (
+        f"检测到 {workers} 个 worker,但本服务不支持多进程:限流额度、会话缓存、"
+        "检索缓存都是进程内存实现,多 worker 会让额度变成 N 倍且缓存各存一份。"
+        "请去掉 --workers / WEB_CONCURRENCY,保持单进程"
+        "(要提并发,优先加机器或前置队列,不要加 worker;见 deploy/README.md)。"
+    )
+    if demo_mode():
+        log.warning(f"[config] {message}(演示模式仅提示,公网部署会直接拒绝启动)")
+        return
+    raise RuntimeError(message)
 
 
 def assert_safe_demo_mode(argv: list[str] | None = None) -> None:
