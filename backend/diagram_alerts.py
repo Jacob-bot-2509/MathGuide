@@ -17,7 +17,11 @@ from log import get_logger
 log = get_logger(__name__)
 
 _lock = threading.Lock()
-_last_sent = 0.0
+# 首个告警必须发得出去,所以"从未发送"用 -inf 而不是 0.0:
+# time.monotonic() 在 Windows 上是开机以来的秒数,新开机的机器/刚起来的容器里它可能远小于
+# 冷却窗口(默认 300s),拿 0.0 当哨兵会把"开机后头几分钟内的第一条告警"静默吞掉。
+_NEVER_SENT = float("-inf")
+_last_sent = _NEVER_SENT
 
 
 def _cooldown() -> float:
@@ -41,7 +45,7 @@ def build_payload(reason: str) -> dict:
 def reset_for_tests() -> None:
     global _last_sent
     with _lock:
-        _last_sent = 0.0
+        _last_sent = _NEVER_SENT
 
 
 async def notify(reason: str) -> bool:

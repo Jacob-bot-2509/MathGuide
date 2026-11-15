@@ -94,6 +94,45 @@ def test_notify_sends_once_then_respects_cooldown(monkeypatch):
     assert len(calls) == 1
 
 
+def test_first_alert_sent_right_after_boot(monkeypatch):
+    """回归:新开机时第一条告警会被冷却窗口吞掉(旧实现拿 0.0 当"从未发送"哨兵)。
+
+    time.monotonic() 在 Windows 上是开机秒数:CI runner 与"刚起来的容器"都只有几十秒,
+    小于冷却窗口(默认 300s),`now - 0.0 < cooldown` 直接成立 —— 表现是告警永远发不出去,
+    而不是报错。这条用例把时钟钉在开机 10 秒来复现旧行为。
+    """
+    sent = []
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def post(self, url, json=None):
+            sent.append(url)
+
+            class _Response:
+                status_code = 204
+            return _Response()
+
+    import httpx
+    monkeypatch.setenv("MG_DIAGRAM_ALERT_WEBHOOK", "https://hook.example/x")
+    monkeypatch.setenv("MG_DIAGRAM_ALERT_COOLDOWN", "300")
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(da.time, "monotonic", lambda: 10.0)   # 开机 10 秒
+
+    assert asyncio.run(da.notify("first")) is True
+    assert len(sent) == 1
+    # 同一条时钟下,冷却依然生效
+    assert asyncio.run(da.notify("second")) is False
+    assert len(sent) == 1
+
+
 def test_notify_non_2xx_counts_as_failure(monkeypatch):
     class FakeClient:
         def __init__(self, **_kwargs):
