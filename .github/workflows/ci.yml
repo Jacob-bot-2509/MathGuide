@@ -12,6 +12,11 @@ jobs:
   backend:
     name: backend (py${{ matrix.python }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # 兜底:Linux 线曾出现过持仓 6 小时(默认上限)的情况,超过 20 分钟直接判失败,
+    # 别再让一条挂死的 job 卡住整条流水线与 PR 状态。
+    timeout-minutes: 20
+    # 前瞻线只提供信号,不阻塞合并(见 matrix 里 3.14 项的说明)。
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -25,10 +30,13 @@ jobs:
           # pip 会退化成源码编译,再因缺 OpenBLAS 报 "Dependency OpenBLAS not found" 直接失败,
           # 整条线连测试都跑不起来。所以这里只装主依赖与测试依赖:analysis_regression 被
           # importorskip 跳过,它的覆盖由两条 3.13 基线守着;覆盖率不可比,故不设门槛。
+          # 实测该线还有 8 条环境性失败(缺 numpy / 无浏览器 / 线程受限),因此标为 experimental
+          # ——信号照收,但不阻塞合并。
           - os: ubuntu-latest
             python: "3.14"
             skip_analysis: true
             cov_floor: 0
+            experimental: true
           # 项目是 Windows 优先(dev.bat / GBK 控制台 / 路径处理),必须有一条 Windows 线
           - os: windows-latest
             python: "3.13"
@@ -56,7 +64,13 @@ jobs:
         # 覆盖率门槛只用来**防倒退**(实测 90%,门槛设 85%)。
         # 单文件是否达标看 docs/COVERAGE_PLAN.md §2 的类别线,不看这个总数。
         # 门槛按矩阵项取值:3.14 前瞻线缺 analysis 依赖,覆盖率不可比,取 0(即不设门槛)。
-        run: python -m pytest -q --cov --cov-report=term-missing --cov-fail-under=${{ matrix.cov_floor }}
+        # PYTHONUNBUFFERED:管道里的 pytest 进度默认被 8KB 缓冲吃掉,挂起时日志一片空白;
+        # 关掉缓冲后,取消 job 拿到的部分日志能直接指出卡在哪个用例。
+        env:
+          PYTHONUNBUFFERED: "1"
+        # 用 -v 而不是 -q:Linux 线出现过"Test 步骤无声挂起",-v + 无缓冲后即便中途取消 job,
+        # 部分日志也能直接指出最后一条未完成的用例。
+        run: python -m pytest -v --cov --cov-report=term-missing --cov-fail-under=${{ matrix.cov_floor }}
 
   frontend:
     name: frontend (node 22)
