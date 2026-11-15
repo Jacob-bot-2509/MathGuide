@@ -553,6 +553,10 @@ math 只有 10%，而数学是主打学科；math 的 oa（可获取全文比例
 2. `ExecStart` 显式写 `--proxy-headers --forwarded-allow-ips=127.0.0.1`（别依赖 uvicorn 默认值；现在 nginx 已传 `X-Forwarded-For`，`_client_key()` 依赖它做按 IP 限流）；
 3. 启动时若检测到 `--workers > 1`（读 `sys.argv`）或 `WEB_CONCURRENCY > 1`，打 `WARNING` 并说明限流会失效。
 
+> **2026-11-15 更新**：第 3 条已从"告警"升级为**硬校验** —— `MG_DEMO_MODE=0`（公网模式）下检测到多 worker
+> 直接 `RuntimeError` 拒绝启动（`config.assert_single_worker`），演示模式仍只告警。原因很简单：
+> 日志里的 WARNING 在部署窗口里几乎没人会看，而额度翻倍/缓存分裂是**静默**发生的语义错误。
+
 ### M6-3 写操作来源校验
 
 Cookie 用 `samesite=lax`，跨站 POST 已被浏览器挡住；但双域部署下 Cookie 作用域是父域（`MG_COOKIE_DOMAIN=.example.com`），**任一子域被 XSS 就等于全站沦陷**。建议：

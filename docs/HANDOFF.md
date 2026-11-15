@@ -6,9 +6,11 @@
 
 ## 0. 一句话任务
 
-覆盖率已**全部收口**（146/146 达标，后端 1506 passed / 89.89%，前端 1021 条 / 97.7%）。
+覆盖率已**全部收口**（146/146 达标，后端 1537 passed / 90.06%，前端 1021 条 / 97.7%）。
 下一阶段的工作重心转为：**真机验证 → 部署上线**（见 `docs/DEPLOY_PLAYBOOK.md`）。
-「部署前能做完」与「上服务器才能做」的完整拆分见 [`docs/DEPLOY_SPLIT_PLAN.md`](DEPLOY_SPLIT_PLAN.md)。
+「部署前能做完」与「上服务器才能做」的完整拆分见 [`docs/DEPLOY_SPLIT_PLAN.md`](DEPLOY_SPLIT_PLAN.md)；
+其中 **§1 的 13 项已全部做完**（并发闸门 / rlimit 守卫 / 单 worker 硬校验 / 25 项验收脚本 /
+备份恢复脚本 / macOS CI / 前端产物检查 / 投放幂等性 / robots），只剩 §2 的上机项。
 覆盖率只需守住"不倒退"门槛（CI `--cov-fail-under=85`）。
 
 ## 1. ⚠️ 第一件事（不要跳过）
@@ -17,7 +19,7 @@
 
 ```powershell
 cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
-& 'D:\Works\code\.venv\Scripts\python.exe' -m pytest -q      # 期望：1506 passed，0 failed（约 92s）
+& 'D:\Works\code\.venv\Scripts\python.exe' -m pytest -q      # 期望：1537 passed，0 failed（约 86s）
 ```
 
 - 改代码后再跑；若红先修红，别继续叠加改动。
@@ -28,8 +30,8 @@ cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
 
 | 项 | 数值 |
 | --- | --- |
-| 后端测试 | **1506 passed, 0 failed**（约 92s） |
-| 后端覆盖率 | **89.89%**（16204 语句，未覆盖 1639） |
+| 后端测试 | **1537 passed, 0 failed**（约 86s） |
+| 后端覆盖率 | **90.06%**（16291 语句，未覆盖 1620） |
 | 前端测试 | 脚本套件全过 + vitest **51 文件 / 1021 条** |
 | 前端覆盖率 | **97.70%**（utils/stores/services） |
 | 已达标文件 | **146 / 146**（后端 91 + 前端 55） |

@@ -66,13 +66,23 @@ npm run build
 # 后端测试与静态检查
 cd backend && ../.venv/Scripts/python.exe -m pytest
 cd backend && ../.venv/Scripts/ruff.exe check .
+# 进程内 rlimit 守卫(秒级;主进程里 setrlimit 会让 uvicorn 整体挂起且无日志)
+cd backend && python tools/lint_rlimits.py
 
-# 前端测试、静态检查与构建
-cd frontend && npm run lint && npm test && npm run build
+# 前端测试、静态检查、构建与产物检查
+cd frontend && npm run lint && npm test && npm run build && npm run check:build
 
 # 公网绑定必须被拒绝(MG_DEMO_MODE=1 时)
 cd backend && ../.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --port 8010
 # 预期:RuntimeError,不会启动
+```
+
+**服务起来之后**跑一次 25 项验收(部署当天只改 `--base-url`,不靠手敲 curl):
+
+```bash
+cd backend
+python tools/smoke_deploy.py --base-url http://127.0.0.1:8000 --invite <码>
+# 期望结尾:PASS 25 · FAIL 0
 ```
 
 浏览器检查:
@@ -91,7 +101,8 @@ cd backend && ../.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --p
 - **必须单 worker**:限流器(`rate_limit`)、会话缓存(`session_cache`)、聊天检索缓存
   都放在进程内存里。加 `--workers 4` 会让"每账号 6 次/分"变成 24 次/分、
   缓存互相看不见(同一用户切到别的 worker 就像换了台机器)。
-  启动时若检测到多 worker,后端会打一条 WARNING 提醒。
+  **现在是硬校验**:`MG_DEMO_MODE=0` 时检测到 `--workers N` / `WEB_CONCURRENCY>1`
+  直接拒绝启动;演示模式仍只打 WARNING(方便本机反复起停)。
 - **必须传 `--proxy-headers --forwarded-allow-ips=127.0.0.1`**:反向代理已带
   `X-Forwarded-For`,不显式声明时能否取到真实客户端 IP 取决于 uvicorn 版本默认值,
   而按 IP 限流与日志都依赖它。
@@ -102,7 +113,10 @@ cd backend && ../.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --p
 
 ## 6. 备份与模型厂商
 
-- 备份 `backend/data/` 到加密仓库(restic/borg),并定期做恢复演练;
+- 用 `python tools/db_backup.py` 做**数据库**一致性备份(`.backup` 语义,自动含 WAL;
+  产物过 `integrity_check`;默认留最近 7 份),用 `python tools/db_restore.py --from <快照>`
+  先演练、再加 `--yes` 真恢复(恢复前自动留 `mg-prerestore-*.db` 安全副本)。
+- 再把 `backend/data/`(含 `research/` 上传件)整体同步到加密仓库(restic/borg),定期做恢复演练;
   备份访问权限与生产数据同级。
 - 在阿里云百炼 / 智谱控制台确认账号的数据留存与训练开关;
   实验数据不应被厂商用于训练,必要时签署 DPA/数据处理协议。
@@ -112,8 +126,9 @@ cd backend && ../.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --p
 
 - `backend/data/` 只允许后端进程用户读写;备份加密并限制访问。
 - `usage.jsonl` / `usage.json` 已不含手机号/昵称;账号注销会级联删除。
-- 定期备份 `backend/data/mathguide.db`(连同 `-wal` / `-shm`):停服务后
-  `sqlite3 mathguide.db ".backup '/backup/mathguide.db'"` 或整目录复制;
+- 定期备份 `backend/data/mathguide.db`(连同 `-wal` / `-shm`):优先用
+  `python tools/db_backup.py`(一致性快照,`cp` 会丢 WAL 里的最后一段写入);
+  裸命令是 `sqlite3 mathguide.db ".backup '/backup/mathguide.db'"`;
   `tokens` 表只存 token 的 SHA-256,库文件泄露不等于凭据泄露。
 - `users.json` / `tokens.json` 只在首次建库时作为迁移源被导入一次,之后不再写入;
   可留作历史备份,但**不要再按它们做日常备份**。

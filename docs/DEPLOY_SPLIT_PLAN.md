@@ -2,7 +2,7 @@
 
 > **怎么调出**：下次说"按 `docs/DEPLOY_SPLIT_PLAN.md` 继续"。
 > 配套：`docs/DEPLOY_PLAYBOOK.md`（部署唯一真源）、`deploy/README.md`（操作手册）。
-> 最后更新：2026-11-15 ｜ 对应版本：`v1.26.1`（代码快照 `1176a11`）
+> 最后更新：2026-11-15（§1 全部 13 项收口）｜ 对应版本：`v1.26.1` 之后的收口提交
 
 ## 0. 一条判据
 
@@ -20,17 +20,21 @@
 | --- | --- | --- | --- | --- |
 | 1.1 | 运维文档与配置收口（`MG_EDGE_NO_SANDBOX` 进 `.env.local.example` / playbook / deploy README；数字与回滚指针校正） | **已做**（2026-11-15） | 纯文档 | 三处文档口径一致，`docs/DEPLOY_PLAYBOOK.md` §二有判据表 |
 | 1.2 | `check_pdf.py` 双档沙箱探测 | **已做**（2026-11-15） | 打桩/真实 Edge 都能跑 | 自检输出直接给出"要不要开沙箱"，且提示自检与生产必须一致 |
-| 1.3 | **PDF 导出并发闸门** | 未做（P1） | 用打桩替换 `subprocess.run` 即可测并发与拒绝路径 | 同时导出数超过 N 时返回 429/503 带 `Retry-After`，而不是起 N 个 chromium 把内存吃光 |
-| 1.4 | **"进程内不得改 rlimit" 静态守卫** | 未做（P1，防本次挂起复发） | 纯 AST/文本扫描，秒级 | `backend/tools/` 下的检查脚本进 CI；`analysis_client.py` 走白名单，其它文件出现 `setrlimit` 立即红 |
-| 1.5 | 单 worker 强校验 | 半做（现在只 WARNING） | 启动逻辑可单测 | 检测到 `--workers N` / `WEB_CONCURRENCY>1` 且非演示模式时拒绝启动（与 `MG_DEMO_MODE` 守卫同风格） |
-| 1.6 | **25 项验收脚本化** `backend/tools/smoke_deploy.py` | 未做（P1） | 本机 `127.0.0.1:8000` 全跑一遍 | 输出 PASS/FAIL 表；部署当天只换 `--base-url`，不靠人手敲 curl |
-| 1.7 | 备份/恢复脚本 `tools/backup_db.py` / `restore_db.py` | 未做（P1） | 本机真实 db 演练一次即可 | 用 `.backup` 而非 `cp`，自动带上 `-wal`/`-shm`；恢复后行数一致 |
-| 1.8 | macOS CI 线 | 未做（P2） | 写 yml 即可，跑在 GitHub 上 | 一条 `macos-latest` job 绿；路径/字体/信号量差异被守住 |
-| 1.9 | 3.14 线装 analysis 依赖（或写清豁免理由） | 未做（P2） | CI 层决定 | 要么 `analysis_regression` 在 3.14 也跑，要么在 `COVERAGE_PLAN.md` 记成显式豁免 |
-| 1.10 | 前端构建产物检查（KaTeX 是否随包、首屏体积） | 未做（P2） | 本机 `npm run build` + 体积断言 | 构建把 `backend/static/katex` 打进去（离线导出 PDF 依赖它）；体积超阈值时 CI 提示 |
-| 1.11 | 数据投放脚本幂等性 | 未做（P2） | 临时 db 跑两遍比对 | 重复执行教材入库/习题导入不产生重复行 |
-| 1.12 | systemd / logrotate / nginx 模板 | 未做（P2） | 模板现在写，部署当天只改域名 | `deploy/` 下有可直接套用的模板 + 变量说明 |
-| 1.13 | 安全头 / robots 默认值核查 | 部分已有 | 代码 + 单测 | `security_headers.py` 覆盖 HSTS/CSP 等；无默认值缺口 |
+| 1.3 | **PDF 导出并发闸门** | **已做**（2026-11-15） | 用打桩替换浏览器调用即可测并发与拒绝路径 | `doc.py` 的 `_html_to_pdf` 单点加闸：同时 2 个（`MG_PDF_CONCURRENCY`）、排队 8（`MG_PDF_QUEUE`）、最多等 15s（`MG_PDF_QUEUE_WAIT`），超出直接 **429 + `Retry-After: 20`**；`docgen` 同步翻 429；8 条用例含"被拒时根本没起浏览器" |
+| 1.4 | **"进程内不得改 rlimit" 静态守卫** | **已做**（2026-11-15） | 纯 AST 扫描，秒级 | `backend/tools/lint_rlimits.py`：`analysis_client.py` 白名单，其余 `setrlimit`/`prlimit`（含 `from resource import ... as`）立即非零退出；进 CI；6 条用例含"守卫自己会报错" |
+| 1.5 | 单 worker 强校验 | **已做**（2026-11-15） | 启动逻辑可单测 | `config.assert_single_worker()`：公网模式（`MG_DEMO_MODE=0`）下 `--workers N`/`WEB_CONCURRENCY>1` **拒绝启动**（RuntimeError）；演示模式仍只告警，本机反复起停不受影响。已用真实 `import main` 验证三种组合 |
+| 1.6 | **25 项验收脚本化** `backend/tools/smoke_deploy.py` | **已做**（2026-11-15） | 本机 `127.0.0.1` 全跑一遍 | 25 项 PASS/FAIL 表 + 每项修复提示；`--base-url` 换服务器、`--invite` 走非演示、`--skip-pdf` / `--skip-mutating` / `--keep-account`；本机实测 **PASS 25 · FAIL 0**；临时账号自动注销 |
+| 1.7 | 备份/恢复脚本 `tools/db_backup.py` / `db_restore.py` | **已做**（2026-11-15） | 本机真实 db 演练一次即可 | 走 `sqlite3.backup()`（等价 `.backup`，自动含 WAL），产物 `integrity_check` + 行数核对，`--keep` 轮转；恢复前自动留 `mg-prerestore-*.db` 安全副本并打印回退命令。本机真库已跑过备份→恢复；7 条用例含"数据还在 WAL 里也能备份" |
+| 1.8 | macOS CI 线 | **已做**（2026-11-15） | 写 yml 即可，跑在 GitHub 上 | `ci.yml` 新增 `macos-latest` / py3.13 一行（门槛同 85），路径大小写、字体、`fork` 语义差异由这条线守 |
+| 1.9 | 3.14 线 analysis 依赖 | **已做（豁免 + 监控）**（2026-11-15） | CI 层决定 | 维持 `skip_analysis`（scipy/pandas/statsmodels 无 cp314 wheel），但加了一步**非阻塞探测**：一旦上游出了 wheel，CI 日志会打 `::warning::` 提醒摘掉豁免；豁免理由写进 `COVERAGE_PLAN.md` §2 |
+| 1.10 | 前端构建产物检查（KaTeX 随包、体积） | **已做**（2026-11-15） | 本机 `npm run build` + 断言 | `frontend/scripts/check-build.mjs`（`npm run check:build`，已进 CI）：断言 `.katex` 规则 + ≥8 个 KaTeX 字体真的在 dist、`robots.txt`/`theme-init.js` 随包、`backend/static/katex` 仍在、单块 gzip ≤800KB / 合计 ≤1.6MB / dist ≤10MB。实测 8/8 通过（最大块 619KB、合计 1297KB、6.31MB） |
+| 1.11 | 数据投放脚本幂等性 | **已做**（2026-11-15） | 临时 JSONL 跑两遍比对 | `merge_bank.merge()` 抽成可测函数：重复执行 `added=0`、不产生重复行、`input` 文件缺失时自动新建；`fetch_knowledge.write_md` 已存在则跳过且不覆盖。5 条用例 |
+| 1.12 | systemd / logrotate / nginx 模板 | **已做（此前已有，本轮补 `robots.txt`）** | 模板现在写，部署当天只改域名 | `deploy/` 下四份模板齐备且被 `deploy/README.md` 逐条引用；新增 `frontend/public/robots.txt`（并让 1.10 的构建检查确保它进 dist） |
+| 1.13 | 安全头 / robots 默认值核查 | **已做**（2026-11-15） | 代码 + 单测 | 后端 `security_headers.py` 覆盖 nosniff / frame / referrer / permissions，HSTS 仅在 HTTPS 或 `MG_ENABLE_HSTS=1` 时发（4 条用例）；反向代理模板里 CSP + HSTS + `Permissions-Policy` 齐全；`robots.txt` 默认 `Disallow: /api/` 并挡掉 `/workspace`、`/research` |
+
+**结论：§1 全部 13 项已收口**（1.1 / 1.2 见上文，1.3–1.13 见各行"现状"列）。
+每项都留下了可重复跑的验证入口：`pytest` 用例、`tools/lint_rlimits.py`、`tools/smoke_deploy.py`、
+`tools/db_backup.py`、`npm run check:build`。部署当天**不需要**在没有验证手段的情况下临场判断。
 
 **优先级说明**：P1 = 部署前必须做完（否则上线当天会产生"说不清原因"的故障或无法复现）；
 P2 = 可以带着未做完上线，但要写进已知限制。
@@ -64,9 +68,9 @@ P2 = 可以带着未做完上线，但要写进已知限制。
 | 0–10m | `apt install -y chromium fonts-noto-cjk`；`chromium --version` | ≥ 120 | 2.1 |
 | 10–20m | 填 `backend/.env.local`（demo=0、CORS 真域名、邀请码、额度） | 与 playbook §一/§四 逐项对齐 | 2.7 |
 | 20–30m | `python tools/check_pdf.py`；按结论决定 `MG_EDGE_NO_SANDBOX` | `RESULT: OK` + 沙箱结论落地到 env | 2.1 / 2.2 |
-| 30–40m | `python tools/smoke_deploy.py --base-url http://127.0.0.1:8000`（1.6 完成后） | 全 PASS | 2.11 |
+| 30–40m | `python tools/smoke_deploy.py --base-url http://127.0.0.1:8000 --invite <码>` | **25 项全 PASS**（SKIP 要能解释） | 2.11 |
 | 40–50m | 真实链路：一次问答、一次导出、一次文献检索 | 三件事都成 | 2.5 / 2.6 / 2.3 |
-| 50–60m | 备份一次 + 恢复演练 + 记下回滚命令 | 备份文件可恢复；`git checkout v1.26.1` 可执行 | 2.10 |
+| 50–60m | `python tools/db_backup.py` → `python tools/db_restore.py --from <备份>` → `--yes` 演练；记下回滚命令 | 备份过 `integrity_check`；恢复后行数一致；安全副本存在 | 2.10 |
 
 > 窗口里**不写代码、不改仓库**。任何"顺手修一下"都会让线上与 tag 对不上，回滚时无从下手。
 
@@ -81,14 +85,14 @@ P2 = 可以带着未做完上线，但要写进已知限制。
 
 发现代码问题 → 回本地改 → 走 CI → 发 patch 版本（v1.26.2），**不在服务器上热改**。
 
-## 5. 需要拍板的四件事
+## 5. 需要拍板的四件事（本轮已按括号内方案默认执行）
 
-| 决策 | 选项 | 影响 |
+| 决策 | 选项 | 现状 |
 | --- | --- | --- |
-| PDF 沙箱 | A. 若自检要求就开 `MG_EDGE_NO_SANDBOX=1`；B. 给 PDF 单跑一个低权限用户/带 seccomp 的容器 | A 省事但降低隔离；B 要写部署单元文件 |
-| PDF 并发闸门 | N=2、排队 8（建议）；或 N=1 直接串行 | 阈值要等 2.4 的实测，别拍脑袋抄 |
-| macOS 门禁 | 加 / 不加 | 加：CI 分钟数↑、跨平台回归更早暴露；不加：mac 上的路径问题只能靠用户报 |
-| 3.14 的 analysis 依赖 | 装（覆盖率盲区消失、CI 变慢）/ 记豁免 | 现状是整模块 skip，属于"看得见的空白" |
+| PDF 沙箱 | A. 若自检要求就开 `MG_EDGE_NO_SANDBOX=1`；B. 给 PDF 单跑一个低权限用户/带 seccomp 的容器 | 代码侧已就绪：自检直接给结论、生产必须与自检一致；**开不开由 2.1/2.2 的实机结论定** |
+| PDF 并发闸门 | N=2、排队 8（建议）；或 N=1 直接串行 | **已实现且可调**：`MG_PDF_CONCURRENCY` / `MG_PDF_QUEUE` / `MG_PDF_QUEUE_WAIT`；阈值仍按 2.4 的实测确认（1GB 机器建议 1） |
+| macOS 门禁 | 加 / 不加 | **已加**（`macos-latest` py3.13，门槛同 85）。若长期飘红再评估是否转 `experimental` |
+| 3.14 的 analysis 依赖 | 装（覆盖率盲区消失、CI 变慢）/ 记豁免 | **记豁免 + 监控**：`COVERAGE_PLAN.md` §2 写明原因，CI 里加了非阻塞探测，出 wheel 会自动提示摘豁免 |
 
 ## 6. 与其它文档的分工
 
