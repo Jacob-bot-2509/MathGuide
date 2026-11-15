@@ -76,7 +76,7 @@ P2 = 可以带着未做完上线，但要写进已知限制。
 | --- | --- |
 | `backend/.env.local`（开关与密钥） | 直接改 `*.py` / `*.vue` / `*.yml` |
 | 系统包（chromium、fonts、sqlite3） | `git pull` 到未发布的提交 |
-| systemd / nginx / logrotate 配置 | 手工 ``sqlite3`` 改表结构 |
+| systemd / nginx / logrotate 配置 | 手工 `sqlite3` 改表结构 |
 | 日志级别、超时、额度这类环境变量 | 用 `--workers N` 绕过单 worker 约束 |
 
 发现代码问题 → 回本地改 → 走 CI → 发 patch 版本（v1.26.2），**不在服务器上热改**。
