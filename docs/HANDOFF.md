@@ -35,6 +35,7 @@ cd C:\Users\Jacap\.cline\worktrees\c1637\code\backend
 | 前端测试 | 脚本套件全过 + vitest **51 文件 / 1021 条** |
 | 前端覆盖率 | **97.70%**（utils/stores/services） |
 | 已达标文件 | **146 / 146**（后端 91 + 前端 55） |
+| CI 矩阵 | backend 4 条（Linux 3.13 / Windows 3.13 / **macOS 3.13** / 3.14 预览）+ frontend，全绿 |
 | ruff / eslint / vue-tsc | 0 违规 / 0 违规 / 0 错误 |
 
 已达标（不要再改）：全量都达标了。逐文件的「之前→之后 / 测试文件 / 改坏验证」见
