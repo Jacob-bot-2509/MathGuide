@@ -9,6 +9,14 @@ from pathlib import Path
 
 
 def _posix_limits() -> None:
+    """在 fork 出来的 worker 子进程里收紧地址空间与 CPU 时间。
+
+    ⚠️ 只作为 `asyncio.create_subprocess_exec(..., preexec_fn=...)` 的钩子使用。
+    父进程(pytest)里调它会给自己套上 512MB 的硬上限:后续 numpy/scipy/statsmodels
+    一导入就顶爆,再往后任何 `threading.Thread.start()` 都会以"挂起"收场
+    (子线程在 `_bootstrap_inner` 里就死了,`_started` 永远不 set)。
+    回归测试见 tests/test_analysis_client.py 的 rlimit 用例。
+    """
     if os.name != "posix":
         return
     import resource
