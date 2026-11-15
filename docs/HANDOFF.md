@@ -1,8 +1,8 @@
 # 新会话交接单（HANDOFF）
 
 > 用法：新开一个会话，把这份文件路径发给 Cline，并说"按 docs/HANDOFF.md 继续"。
-> 工作区：`C:\Users\Jacap\.cline\worktrees\c1637\code`（分支 `cline/c1637`，tag `v1.26.0`）
-> 最后更新：2026-11-14 ｜ 最新提交：`test(coverage): G2/G3/G5/G6/G7 全量收口`（见 `git log -1`）
+> 工作区：`C:\Users\Jacap\.cline\worktrees\c1637\code`（分支 `cline/c1637`，tag `v1.26.1`）
+> 最后更新：2026-11-15 ｜ 最新提交：`release: v1.26.1 发布说明与 MANIFEST`（见 `git log -1`）
 
 ## 0. 一句话任务
 
