@@ -15,6 +15,8 @@
    限流、每日额度、会话缓存都按进程内存实现；加 N 会让额度变 N 倍、缓存分裂。
    启动时会打 WARNING 提醒，但不会拦你。
 3. **跑一次自检**：`cd backend && python tools/check_pdf.py`，必须 `RESULT: OK`（见第二节）。
+   若自检提示「沙箱起不来」并让你设 `MG_EDGE_NO_SANDBOX=1`，那这一行**必须同时进生产环境**，
+   否则自检通过、线上照样 500。
 
 ## 二、PDF 导出链路（方案 A：服务器装浏览器）
 
@@ -35,10 +37,20 @@ cd backend && python tools/check_pdf.py --out /tmp/selfcheck.pdf   # 必须 RESU
 ```
 MG_EDGE_PATH=/usr/bin/chromium     # 优先级最高;配了但文件不存在会直接返回 None(不兜底)
 MG_PDF_TIMEOUT=300                 # 可选,默认 120s,下限 10s;低配 VPS 建议上调
+# MG_EDGE_NO_SANDBOX=1             # 只在自检说「沙箱起不来」时才加;公网部署保持关闭(默认)
 ```
 
-**自检五项**（`tools/check_pdf.py`）：浏览器可发现+版本 → 系统中文字体 → 真打印出 PDF（含 `--headless` 回退）
+**自检五项**（`tools/check_pdf.py`）：浏览器可发现+版本 → 系统中文字体 → 真打印出 PDF（含 `--headless` 回退，
+并在 `MG_EDGE_NO_SANDBOX` 的两种取值下各印一次，回答「这台机器要不要放开沙箱」）
 → PDF 内嵌入 CJK 字体（`/Type0` 计数）→ PDF 文本层能读到「极限」。任一失败打印修复命令并 `RESULT: FAIL`。
+
+**沙箱开关的判据**（别猜，看自检结论）：
+
+| 自检结论 | 生产配置 |
+| --- | --- |
+| 「保留沙箱也能打印」/ 未提沙箱 | **不要**设 `MG_EDGE_NO_SANDBOX`（默认即关闭） |
+| 「这台机器只有放开沙箱才能打印」 | 生产必须同样设 `MG_EDGE_NO_SANDBOX=1`，否则线上 500 |
+| 两种设置都打不出来 | 不是沙箱问题：查浏览器版本 / `fonts-noto-cjk` / `MG_PDF_TIMEOUT` |
 
 **三个坑（已在代码/文档处理）**
 
@@ -72,6 +84,7 @@ pypdf 可提取「极限」。**Linux chromium 尚未实测**，靠自检兜住�
 | `MG_INVITE_CODES` | 注册邀请码 | 建议设置 |
 | `MG_DAILY_LLM_CALLS` | 每日模型调用额度（超限 429） | 设置,防成本失控 |
 | `MG_EDGE_PATH` | headless 浏览器路径 | PDF 需要时设置 |
+| `MG_EDGE_NO_SANDBOX` | 沙箱受限时追加 `--no-sandbox` 兜底档 | **默认关闭**；仅当自检判定「沙箱起不来」才开，且必须与生产一致 |
 | `MG_PRINT_OPEN` | 允许局域网演示机触发本机打印 | **公网不要开**（需同时 `MG_DEMO_MODE=1` 才生效） |
 
 写操作有来源校验（跨站 POST → 403），登录/注册豁免，无 `Origin` 的脚本客户端放行。
@@ -92,14 +105,15 @@ cd backend && python tools/check_pdf.py           # RESULT: OK
 | 项 | 现状 |
 | --- | --- |
 | Linux + chromium 实机验证 | 未做（只有 Windows Edge 157 实测） |
+| 自检结论 vs 生产配置 | 自检里临时开 `MG_EDGE_NO_SANDBOX=1` 才通过、生产忘了开 → 线上仍 500。判据见第二节表 |
 | 老版本浏览器缺 `--no-pdf-header-footer` | PDF 可能带页眉（难看，不影响内容）；未做兼容 |
 | 数组公式→Word 图片 | 走 `math_table_render`（同一条浏览器链路），Linux 上会降级为纯文本 |
-| 覆盖率 | 后端 **90%**（1504 passed）、前端 **97.7%**（51 文件 1021 条）；逐文件达标 146/146，口径见 `COVERAGE_PLAN.md` §2 |
+| 覆盖率 | 后端 **89.89%**（1506 passed）、前端 **97.7%**（51 文件 1021 条）；逐文件达标 146/146，口径见 `COVERAGE_PLAN.md` §2 |
 | 单文件最大 | `ChatWorkspace.vue` 3056 行（已从 3944 降） |
 
 ## 七、回滚
 
-- 代码：`git checkout v1.26.0`（发布提交）或上一 tag；**无接口路径变更、无数据表结构变更**，
+- 代码：`git checkout v1.26.1`（当前发布，代码快照 `1176a11`）或上一 tag `v1.26.0`；**无接口路径变更、无数据表结构变更**，
   回滚不需要动数据库。
 - 数据：恢复 `mathguide.db` 快照（停服务 → 覆盖三个文件 → 启动）。
 - 环境：`MG_EDGE_PATH` / `MG_PDF_TIMEOUT` / `MG_DAILY_LLM_CALLS` 都是可选，删掉即回默认行为。
