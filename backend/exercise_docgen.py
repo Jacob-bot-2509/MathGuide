@@ -441,7 +441,10 @@ async def history_list(request: Request) -> JSONResponse:
     except ValueError:
         limit = 20
     uid = str(rec.get("uid") or "")
-    return JSONResponse({"items": exercise_history.list_documents(uid, limit)})
+    return JSONResponse(
+        {"items": exercise_history.list_documents(uid, limit)},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def history_get(request: Request) -> JSONResponse:
@@ -449,21 +452,24 @@ async def history_get(request: Request) -> JSONResponse:
     uid = str(rec.get("uid") or "")
     detail = exercise_history.get_document(uid, request.path_params["doc_id"])
     if detail is None:
-        return JSONResponse({"error": "not_found"}, status_code=404)
-    return JSONResponse(detail)
+        return JSONResponse({"error": "not_found"}, status_code=404,
+                            headers={"Cache-Control": "no-store"})
+    return JSONResponse(detail, headers={"Cache-Control": "no-store"})
 
 
 async def history_delete(request: Request) -> JSONResponse:
     rec = require_auth(request)
     uid = str(rec.get("uid") or "")
     if not exercise_history.delete_document(uid, request.path_params["doc_id"]):
-        return JSONResponse({"error": "not_found"}, status_code=404)
-    return JSONResponse({"ok": True})
+        return JSONResponse({"error": "not_found"}, status_code=404,
+                            headers={"Cache-Control": "no-store"})
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
 async def history_confirm(request: Request) -> JSONResponse:
     rec = require_auth(request)
     uid = str(rec.get("uid") or "")
     if not exercise_history.confirm(uid, request.path_params["doc_id"]):
-        return JSONResponse({"error": "not_found"}, status_code=404)
-    return JSONResponse({"ok": True})
+        return JSONResponse({"error": "not_found"}, status_code=404,
+                            headers={"Cache-Control": "no-store"})
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})

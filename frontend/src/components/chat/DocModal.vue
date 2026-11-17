@@ -5,7 +5,7 @@
  * 前两条直接把原问答排版成 PDF/Markdown/Word,不改写解答;
  * 独立要求先检索知识库生成可编辑大纲,再逐节生成;没有依据的章节跳过。
  */
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { statusOf } from '@/api/http'
 import MathText from '@/components/chat/MathText.vue'
 import { downloadBlob } from '@/services/docService'
@@ -33,7 +33,7 @@ import { settingsState } from '@/stores/settings'
 import type { ChatMsg } from '@/stores/sessions'
 import type { NotebookEntry } from '@/stores/notebook'
 import { t } from '@/utils/i18n'
-import { mergeExcludeIds, nextShuffleSeed } from '@/utils/exerciseBatch'
+import { mergeExcludeIds, nextShuffleSeed, shouldConfirmExercise } from '@/utils/exerciseBatch'
 import { showToast } from '@/utils/toast'
 
 const props = defineProps<{ messages: ChatMsg[]; entries: NotebookEntry[] }>()
@@ -103,15 +103,22 @@ function exerciseTopicLabel(item: { zh: string; en: string }): string {
   return en.value ? item.en : item.zh
 }
 
-function toggleExerciseTopic(key: string): void {
-  exerciseTopics.value = exerciseTopics.value.includes(key)
-    ? exerciseTopics.value.filter((item) => item !== key)
-    : [...exerciseTopics.value, key]
+function resetExerciseBatch(): void {
   exercisePlan.value = null
   exerciseSeed.value = 20261106
   exerciseExcludeIds.value = []
   exerciseBatchIds.value = []
+  exerciseDraftId.value = ''
 }
+
+function toggleExerciseTopic(key: string): void {
+  exerciseTopics.value = exerciseTopics.value.includes(key)
+    ? exerciseTopics.value.filter((item) => item !== key)
+    : [...exerciseTopics.value, key]
+  resetExerciseBatch()
+}
+
+watch([exerciseLang, exerciseCount, custom, docKind], resetExerciseBatch)
 
 const chatSelectedCount = computed(() => selectedChat.value.length)
 const noteSelectedCount = computed(() => selectedNotes.value.length)
@@ -156,6 +163,7 @@ function errorText(err: unknown, fallback: string): string {
 
 function startChat(): void {
   clearError()
+  exerciseDraftId.value = ''
   chatRecent.value = props.messages.slice(-80)
   step.value = 'reading'
   focusPanel()
@@ -174,6 +182,7 @@ function startChat(): void {
 
 function startNotebook(): void {
   clearError()
+  exerciseDraftId.value = ''
   selectedNotes.value = []
   step.value = 'notebook'
   focusPanel()
@@ -455,6 +464,7 @@ function confirmOutline(): void {
       const result = await generateDocument(customRequest.value, plan, lang.value)
       generated.value = result.document
       gaps.value = result.gaps
+      exerciseDraftId.value = ''
       previewKind.value = 'document'
       revision.value = ''
       step.value = 'preview'
@@ -500,7 +510,7 @@ function exportPreview(): void {
     try {
       const file = await renderDocument(generated.value!, lang.value, format.value)
       downloadBlob(file.blob, file.filename)
-      if (exerciseDraftId.value) {
+      if (shouldConfirmExercise(previewKind.value, exerciseDraftId.value)) {
         try {
           await confirmExerciseExport(exerciseDraftId.value)
           exerciseDraftId.value = ''

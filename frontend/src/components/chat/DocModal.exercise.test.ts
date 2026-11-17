@@ -11,23 +11,29 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 
 const planMock = vi.fn()
 const generateMock = vi.fn()
+const confirmMock = vi.fn()
+const generateDocumentMock = vi.fn()
+const renderDocumentMock = vi.fn()
+const downloadBlobMock = vi.fn()
 
 vi.mock('@/services/docgenService', () => ({
   planExercises: (...args: unknown[]) => planMock(...args),
   generateExercises: (...args: unknown[]) => generateMock(...args),
-  confirmExerciseExport: vi.fn(),
+  confirmExerciseExport: (...args: unknown[]) => confirmMock(...args),
   deleteExerciseHistory: vi.fn(),
   exportQaDocument: vi.fn(),
   fetchDocQuestions: vi.fn(),
   fetchExerciseHistory: vi.fn(async () => []),
   fetchExerciseHistoryDocument: vi.fn(),
-  generateDocument: vi.fn(),
-  renderDocument: vi.fn(),
+  generateDocument: (...args: unknown[]) => generateDocumentMock(...args),
+  renderDocument: (...args: unknown[]) => renderDocumentMock(...args),
   requestOutline: vi.fn(),
   reviseDocument: vi.fn(),
 }))
 
-vi.mock('@/services/docService', () => ({ downloadBlob: vi.fn() }))
+vi.mock('@/services/docService', () => ({
+  downloadBlob: (...args: unknown[]) => downloadBlobMock(...args),
+}))
 vi.mock('@/utils/toast', () => ({ showToast: vi.fn() }))
 
 import DocModal from '@/components/chat/DocModal.vue'
@@ -118,6 +124,19 @@ describe('习题集预览与换批', () => {
     const body = generateMock.mock.calls[0][0] as { excludeIds: string[]; seed: number }
     expect(body.excludeIds).toEqual(BATCH)
     expect(body.seed).toBe(second.seed)
+    wrapper.unmount()
+  })
+
+  it('切换语言会清空旧预览与换批状态', async () => {
+    planMock.mockResolvedValue(plan(BATCH, 20261106))
+    const wrapper = await openExercisePanel()
+    await buttonByText(wrapper, t('doc.exercisePreview')).trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.exercise-preview').exists()).toBe(true)
+
+    await buttonByText(wrapper, t('doc.langEn')).trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.exercise-preview').exists()).toBe(false)
     wrapper.unmount()
   })
 })

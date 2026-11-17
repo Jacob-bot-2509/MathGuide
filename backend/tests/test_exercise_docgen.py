@@ -236,11 +236,14 @@ def test_generate_returns_draft_and_confirm_promotes(client):
     assert client.get("/api/doc/exercise/history").json()["items"] == []
     confirmed = client.post(f"/api/doc/exercise/history/{draft_id}/confirm")
     assert confirmed.status_code == 200
-    items = client.get("/api/doc/exercise/history").json()["items"]
+    list_res = client.get("/api/doc/exercise/history")
+    assert list_res.headers["cache-control"] == "no-store"
+    items = list_res.json()["items"]
     assert [item["id"] for item in items] == [draft_id]
 
-    detail = client.get(f"/api/doc/exercise/history/{draft_id}").json()
-    assert detail["document"]["title"] == "习题集"
+    detail_res = client.get(f"/api/doc/exercise/history/{draft_id}")
+    assert detail_res.headers["cache-control"] == "no-store"
+    assert detail_res.json()["document"]["title"] == "习题集"
 
 
 def test_history_delete_removes_entry(client):
