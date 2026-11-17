@@ -48,8 +48,9 @@ def make(exercise_id: str, *, topic="analysis", languages=("zh",), type_="comput
 
 @pytest.fixture()
 def client(monkeypatch, tmp_path):
-    import db
     from starlette.routing import Route as StarletteRoute
+
+    import db
 
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "mathguide.db")
     db.init()

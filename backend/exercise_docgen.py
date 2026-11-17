@@ -14,9 +14,9 @@ from pathlib import Path
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import exercise_history
 import math_render
 import quota
-import exercise_history
 from chat import _rate_check, require_auth
 from exercises.schema import SchemaError
 from exercises.store import ExerciseStore, tiers_from_env

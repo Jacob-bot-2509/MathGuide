@@ -11,12 +11,12 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 import auth
+import exercise_history
 import http_utils
 import research_corpus
 import session_cache
 import store
 import usage
-import exercise_history
 from rate_limit import SlidingWindowLimiter
 
 PHONE = "13800138000"
