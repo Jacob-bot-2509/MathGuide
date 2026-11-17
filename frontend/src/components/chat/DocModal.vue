@@ -90,6 +90,10 @@ const exerciseLang = ref<'zh' | 'en' | 'both'>(en.value ? 'en' : 'zh')
 const exercisePlan = ref<ExercisePlan | null>(null)
 const exerciseSeed = ref(20261106)
 const exerciseExcludeIds = ref<string[]>([])
+// 本批(预览算出来的)ID:只在「换一批」时并入 excludeIds。
+// 预览本身绝不能写 excludeIds —— 否则点「生成」时会把刚预览的那批排除掉,
+// 生成的文档和预览永远不是同一批。
+const exerciseBatchIds = ref<string[]>([])
 const exerciseDraftId = ref('')
 const history = ref<ExerciseHistoryItem[]>([])
 const historyOpen = ref(false)
@@ -106,6 +110,7 @@ function toggleExerciseTopic(key: string): void {
   exercisePlan.value = null
   exerciseSeed.value = 20261106
   exerciseExcludeIds.value = []
+  exerciseBatchIds.value = []
 }
 
 const chatSelectedCount = computed(() => selectedChat.value.length)
@@ -206,8 +211,8 @@ function previewExercises(): void {
       const plan = await planExercises(exerciseRequest())
       exercisePlan.value = plan
       exerciseSeed.value = plan.seed
-      exerciseExcludeIds.value = mergeExcludeIds(
-        exerciseExcludeIds.value, plan.batchIds)
+      // 只记住这一批;不动 excludeIds,保证随后「生成」用同一份请求得到同一批题
+      exerciseBatchIds.value = [...plan.batchIds]
     } catch (err) {
       error.value = errorText(err, t('doc.failed'))
     } finally {
@@ -219,6 +224,10 @@ function previewExercises(): void {
 
 function shuffleExercises(): void {
   if (busy.value) return
+  // 换批:把「当前这一批」并入排除列表,再推进 seed 重新预览
+  exerciseExcludeIds.value = mergeExcludeIds(
+    exerciseExcludeIds.value, exerciseBatchIds.value)
+  exerciseBatchIds.value = []
   exerciseSeed.value = nextShuffleSeed(exerciseSeed.value)
   previewExercises()
 }
@@ -542,6 +551,7 @@ function reset(): void {
   exercisePlan.value = null
   exerciseSeed.value = 20261106
   exerciseExcludeIds.value = []
+  exerciseBatchIds.value = []
   exerciseDraftId.value = ''
   previewKind.value = 'document'
   revision.value = ''
