@@ -66,6 +66,37 @@ def client(monkeypatch):
         yield test_client
 
 
+def test_plan_excludes_previous_batch_and_reports_reuse():
+    store = ExerciseStore([make(f"e{i}") for i in range(6)], tiers=("research",))
+    filters = exercise_docgen._filters({"topics": ["analysis"], "count": 3})
+    first, _ = exercise_docgen._select(store, filters, "zh", False, 1)
+    ids = [item.id for item in first]
+    second, reused = exercise_docgen._select(store, filters, "zh", False, 2, ids)
+    assert len(second) == 3
+    assert reused == 0
+    assert not ({item.id for item in second} & set(ids))
+
+
+def test_plan_reuses_when_pool_too_small():
+    store = ExerciseStore([make(f"e{i}") for i in range(3)], tiers=("research",))
+    filters = exercise_docgen._filters({"topics": ["analysis"], "count": 3})
+    first, _ = exercise_docgen._select(store, filters, "zh", False, 1)
+    ids = [item.id for item in first]
+    second, reused = exercise_docgen._select(store, filters, "zh", False, 2, ids)
+    assert len(second) == 3
+    assert reused == 3
+
+
+def test_plan_response_contains_seed_preview_batch(client):
+    response = client.post("/api/doc/exercise/plan", json={"count": 3, "lang": "zh"})
+    body = response.json()
+
+    assert isinstance(body["seed"], int)
+    assert isinstance(body["batchIds"], list)
+    assert len(body["preview"]) <= 3
+    assert body["reusedCount"] == 0
+
+
 def test_plan_reports_available_counts_by_language(client):
     response = client.post("/api/doc/exercise/plan", json={
         "topics": ["analysis"], "count": 10, "lang": "zh",

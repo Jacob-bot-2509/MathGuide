@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import random
+from collections.abc import Iterable
 from pathlib import Path
 
 from starlette.requests import Request
@@ -168,24 +170,56 @@ def _available(store: ExerciseStore, filters: dict) -> dict[str, int]:
     }
 
 
-def _select(store: ExerciseStore, filters: dict, lang: str, allow_partial: bool, seed: int):
+def _sample(items: list, count: int, seed: int) -> list:
+    ordered = sorted(items, key=lambda item: item.id)
+    if count <= 0:
+        return []
+    if count >= len(ordered):
+        return ordered
+    return random.Random(seed).sample(ordered, count)
+
+
+def _select(
+    store: ExerciseStore,
+    filters: dict,
+    lang: str,
+    allow_partial: bool,
+    seed: int,
+    exclude_ids: Iterable[str] = (),
+) -> tuple[list, int]:
+    """按条件抽样;排除上一批,池子不足时补回少量重复并报告数量。"""
     params = {
         "topics": filters["topics"],
         "cross_topics": filters["cross_topics"],
         "types": filters["types"],
         "difficulty": filters["difficulty"],
     }
+    exclude = {str(item) for item in exclude_ids}
     language = "both" if lang == "both" else lang
-    selected = list(store.sample(filters["count"], seed=seed, lang=language, **params))
+    pool = list(store.filter(lang=language, **params))
+    fresh = [item for item in pool if item.id not in exclude]
+    seen = [item for item in pool if item.id in exclude]
+    selected = _sample(fresh, filters["count"], seed)
+    reused = 0
+    if len(selected) < filters["count"] and seen:
+        extra = _sample(seen, filters["count"] - len(selected), seed + 1)
+        selected.extend(extra)
+        reused += len(extra)
     if allow_partial and len(selected) < filters["count"]:
-        seen = {item.id for item in selected}
-        for item in store.sample(filters["count"], seed=seed, lang="any", **params):
-            if item.id not in seen:
-                selected.append(item)
-                seen.add(item.id)
-            if len(selected) >= filters["count"]:
-                break
-    return selected[: filters["count"]]
+        chosen = {item.id for item in selected}
+        fallback = [
+            item for item in store.filter(lang="any", **params)
+            if item.id not in chosen
+        ]
+        fresh_any = [item for item in fallback if item.id not in exclude]
+        seen_any = [item for item in fallback if item.id in exclude]
+        extra = _sample(fresh_any, filters["count"] - len(selected), seed + 2)
+        selected.extend(extra)
+        if len(selected) < filters["count"] and seen_any:
+            more = _sample(seen_any, filters["count"] - len(selected), seed + 3)
+            selected.extend(more)
+            reused += len(more)
+    return selected[: filters["count"]], reused
 
 
 def _missing_reason(item, lang: str) -> str:
@@ -317,14 +351,32 @@ async def plan(request: Request) -> JSONResponse:
     allow_partial = bool(body.get("allowPartial"))
     store = _store()
     available = _available(store, filters)
-    selected = _select(store, filters, lang, allow_partial, int(body.get("seed", 20261106)))
+    seed = int(body.get("seed", 20261106))
+    raw_exclude = body.get("excludeIds", [])
+    exclude_ids = [str(item) for item in raw_exclude if isinstance(item, str)][:200] \
+        if isinstance(raw_exclude, list) else []
+    selected, reused = _select(
+        store, filters, lang, allow_partial, seed, exclude_ids)
     gaps = [topic for topic in filters["topics"] if topic not in {item.primary_topic for item in selected}]
+    preview = [
+        {
+            "id": item.id,
+            "topic": item.primary_topic,
+            "type": item.type,
+            "question": item.content[item.original_language].question[:80],
+        }
+        for item in selected[:3]
+    ]
     return JSONResponse({
         "available": available,
         "selected": len(selected),
         "missing": max(0, filters["count"] - len(selected)),
         "gaps": gaps,
         "coverage": store.coverage(),
+        "seed": seed,
+        "preview": preview,
+        "batchIds": [item.id for item in selected],
+        "reusedCount": reused,
     })
 
 
@@ -338,7 +390,7 @@ async def generate(request: Request) -> JSONResponse:
     mode = body.get("mode") if body.get("mode") in MODES else "questions"
     allow_partial = bool(body.get("allowPartial"))
     store = _store()
-    selected = _select(store, filters, lang, allow_partial, int(body.get("seed", 20261106)))
+    selected, _ = _select(store, filters, lang, allow_partial, int(body.get("seed", 20261106)))
     if not selected:
         return JSONResponse({
             "error": "no_evidence",
