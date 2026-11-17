@@ -347,6 +347,10 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | POST | `/api/doc/revise` | 按用户修改要求重写已生成文档;证据与引用不改 |
 | POST | `/api/doc/exercise/plan` | 按筛选条件给出组卷计划:可用题量、选中题目与缺口主题 |
 | POST | `/api/doc/exercise` | 按筛选条件组卷并导出 PDF/Word(可带答案与解析) |
+| GET | `/api/doc/exercise/history` | 已导出的习题集历史列表(不含全文) |
+| GET | `/api/doc/exercise/history/{doc_id}` | 取某条历史的完整文档快照 |
+| DELETE | `/api/doc/exercise/history/{doc_id}` | 删除某条历史 |
+| POST | `/api/doc/exercise/history/{doc_id}/confirm` | 下载成功后把草稿标记为已导出 |
 | GET | `/api/stats` | 用量统计(**仅管理员**):总调用数 / 回复字数 / 按 uid / 按模型角色 |
 
 登录请求体:

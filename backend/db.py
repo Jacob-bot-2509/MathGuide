@@ -66,6 +66,24 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS exercise_documents (
+    id          TEXT PRIMARY KEY,
+    uid         TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    exported_at TEXT,
+    title       TEXT NOT NULL,
+    lang        TEXT NOT NULL,
+    mode        TEXT NOT NULL,
+    item_count  INTEGER NOT NULL,
+    seed        INTEGER NOT NULL,
+    exclude_ids TEXT NOT NULL,
+    filters     TEXT NOT NULL,
+    document    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_docs_user
+    ON exercise_documents(uid, status, created_at DESC);
 """
 
 

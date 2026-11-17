@@ -16,6 +16,7 @@ import research_corpus
 import session_cache
 import store
 import usage
+import exercise_history
 from rate_limit import SlidingWindowLimiter
 
 PHONE = "13800138000"
@@ -428,6 +429,10 @@ def test_export_account_omits_secrets_and_scopes_usage(client, temp_usage):
                       role="main", research=False, ts=1.0)
     temp_usage.record(uid="someone-else", cmd="提问", prompt_len=10, reply_len=9,
                       role="main", research=False, ts=2.0)
+    doc_id = exercise_history.create_draft(
+        uid, {"title": "t", "sections": [], "exercise_meta": {"count": 1}},
+        {}, 1, [], "zh", "questions", "t")
+    exercise_history.confirm(uid, doc_id)
 
     res = client.post("/api/account/export", json={},
                       headers={"Authorization": f"Bearer {body['token']}"})
@@ -439,6 +444,8 @@ def test_export_account_omits_secrets_and_scopes_usage(client, temp_usage):
     assert account["accountKey"] == body["user"]["accountKey"]
     assert "uid" not in account and "password_hash" not in account and "token" not in account
     assert len(data["usage"]) == 1
+    assert [item["id"] for item in data["exerciseDocuments"]] == [doc_id]
+    assert "sections" in data["exerciseDocuments"][0]["document"]
     entry = data["usage"][0]
     assert entry["reply_len"] == 5
     assert "phone" not in entry and "user" not in entry and "uid" not in entry
@@ -458,8 +465,13 @@ def test_delete_account_requires_password_and_cascades(client, temp_store, temp_
                        headers=headers).status_code == 401
     assert store.find_user_by_phone(PHONE) is not None
 
+    doc_id = exercise_history.create_draft(
+        uid, {"title": "t", "sections": []}, {}, 1, [], "zh", "questions", "t")
+    exercise_history.confirm(uid, doc_id)
+
     res = client.post("/api/account/delete", json={"password": PASSWORD}, headers=headers)
     assert res.status_code == 200
+    assert exercise_history.list_documents(uid) == []
     assert res.headers.get("cache-control") == "no-store"
     assert store.find_user_by_phone(PHONE) is None
     assert store.resolve_token(token) is None

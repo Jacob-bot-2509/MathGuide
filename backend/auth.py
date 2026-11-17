@@ -461,11 +461,13 @@ async def login(request: Request) -> JSONResponse:
             raise HTTPException(429, "guest limit reached")
         def clean_guest(rec):
             import diagnosis
+            import exercise_history
             import research_corpus
 
             uid = str(rec.get("uid") or "")
             usage.delete_user(uid, str(rec.get("phone") or ""))
             diagnosis.delete_user(uid)
+            exercise_history.delete_user(uid)
             research_corpus.delete_user(uid)
             session_cache.clear_user(uid)
 
@@ -566,6 +568,7 @@ async def export_account(request: Request) -> JSONResponse:
         account["createdAt"] = rec["createdAt"]
     # 诊断记录与用量同口径:随账号导出,注销时级联删除(局部导入避免循环依赖)
     import diagnosis
+    import exercise_history
     import research_corpus
     import research_tables
 
@@ -574,6 +577,7 @@ async def export_account(request: Request) -> JSONResponse:
         "account": account,
         "usage": usage.for_user(uid, phone),
         "diagnoses": diagnosis.for_user(uid),
+        "exerciseDocuments": exercise_history.documents_for_export(uid),
         "researchDocs": research_corpus.docs_for_export(uid),
         "researchProjects": research_corpus.projects_for_export(uid),
         "researchTables": research_tables.tables_for_export(uid),
@@ -611,6 +615,9 @@ async def delete_account(request: Request) -> JSONResponse:
     import diagnosis
 
     diagnosis.delete_user(uid)
+    import exercise_history
+
+    exercise_history.delete_user(uid)
     # 科研文档/项目/表格随账号一并删除,避免留下孤儿数据
     import research_corpus
 

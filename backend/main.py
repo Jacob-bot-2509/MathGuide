@@ -202,6 +202,10 @@ routes = [
     Route("/api/doc/render", docgen.render, methods=["POST"]),
     Route("/api/doc/exercise/plan", exercise_docgen.plan, methods=["POST"]),
     Route("/api/doc/exercise", exercise_docgen.generate, methods=["POST"]),
+    Route("/api/doc/exercise/history", exercise_docgen.history_list),
+    Route("/api/doc/exercise/history/{doc_id}", exercise_docgen.history_get),
+    Route("/api/doc/exercise/history/{doc_id}", exercise_docgen.history_delete, methods=["DELETE"]),
+    Route("/api/doc/exercise/history/{doc_id}/confirm", exercise_docgen.history_confirm, methods=["POST"]),
     Route("/api/stats", stats),
 ]
 

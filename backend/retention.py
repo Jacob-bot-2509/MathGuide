@@ -12,6 +12,7 @@ from datetime import datetime
 
 import auth
 import diagnosis
+import exercise_history
 import research_corpus
 import session_cache
 import store
@@ -43,6 +44,7 @@ def run(now: datetime | None = None) -> dict[str, int]:
             if uid:
                 removed_usage += usage.delete_user(uid, phone)
                 diagnosis.delete_user(uid)
+                exercise_history.delete_user(uid)
                 research_corpus.delete_user(uid)
                 session_cache.clear_user(uid)
 

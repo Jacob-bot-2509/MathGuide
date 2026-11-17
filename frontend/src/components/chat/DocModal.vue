@@ -5,13 +5,17 @@
  * 前两条直接把原问答排版成 PDF/Markdown/Word,不改写解答;
  * 独立要求先检索知识库生成可编辑大纲,再逐节生成;没有依据的章节跳过。
  */
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { statusOf } from '@/api/http'
 import MathText from '@/components/chat/MathText.vue'
 import { downloadBlob } from '@/services/docService'
 import {
+  confirmExerciseExport,
+  deleteExerciseHistory,
   exportQaDocument,
   fetchDocQuestions,
+  fetchExerciseHistory,
+  fetchExerciseHistoryDocument,
   generateDocument,
   generateExercises,
   planExercises,
@@ -21,6 +25,7 @@ import {
   type DocFormat,
   type DocOutline,
   type DocQuestion,
+  type ExerciseHistoryItem,
   type ExercisePlan,
   type StructuredDocument,
 } from '@/services/docgenService'
@@ -28,6 +33,7 @@ import { settingsState } from '@/stores/settings'
 import type { ChatMsg } from '@/stores/sessions'
 import type { NotebookEntry } from '@/stores/notebook'
 import { t } from '@/utils/i18n'
+import { mergeExcludeIds, nextShuffleSeed, shouldConfirmExercise } from '@/utils/exerciseBatch'
 import { showToast } from '@/utils/toast'
 
 const props = defineProps<{ messages: ChatMsg[]; entries: NotebookEntry[] }>()
@@ -82,17 +88,37 @@ const exerciseCount = ref(10)
 const exerciseMode = ref<'questions' | 'answers' | 'solutions' | 'combined'>('solutions')
 const exerciseLang = ref<'zh' | 'en' | 'both'>(en.value ? 'en' : 'zh')
 const exercisePlan = ref<ExercisePlan | null>(null)
+const exerciseSeed = ref(20261106)
+const exerciseExcludeIds = ref<string[]>([])
+// 本批(预览算出来的)ID:只在「换一批」时并入 excludeIds。
+// 预览本身绝不能写 excludeIds —— 否则点「生成」时会把刚预览的那批排除掉,
+// 生成的文档和预览永远不是同一批。
+const exerciseBatchIds = ref<string[]>([])
+const exerciseDraftId = ref('')
+const history = ref<ExerciseHistoryItem[]>([])
+const historyOpen = ref(false)
+const historyBusy = ref('')
 
 function exerciseTopicLabel(item: { zh: string; en: string }): string {
   return en.value ? item.en : item.zh
+}
+
+function resetExerciseBatch(): void {
+  exercisePlan.value = null
+  exerciseSeed.value = 20261106
+  exerciseExcludeIds.value = []
+  exerciseBatchIds.value = []
+  exerciseDraftId.value = ''
 }
 
 function toggleExerciseTopic(key: string): void {
   exerciseTopics.value = exerciseTopics.value.includes(key)
     ? exerciseTopics.value.filter((item) => item !== key)
     : [...exerciseTopics.value, key]
-  exercisePlan.value = null
+  resetExerciseBatch()
 }
+
+watch([exerciseLang, exerciseCount, custom, docKind], resetExerciseBatch)
 
 const chatSelectedCount = computed(() => selectedChat.value.length)
 const noteSelectedCount = computed(() => selectedNotes.value.length)
@@ -137,6 +163,7 @@ function errorText(err: unknown, fallback: string): string {
 
 function startChat(): void {
   clearError()
+  exerciseDraftId.value = ''
   chatRecent.value = props.messages.slice(-80)
   step.value = 'reading'
   focusPanel()
@@ -155,6 +182,7 @@ function startChat(): void {
 
 function startNotebook(): void {
   clearError()
+  exerciseDraftId.value = ''
   selectedNotes.value = []
   step.value = 'notebook'
   focusPanel()
@@ -163,6 +191,7 @@ function startNotebook(): void {
 function startCustom(): void {
   clearError()
   step.value = 'custom'
+  void loadHistory()
   focusPanel()
 }
 
@@ -173,6 +202,8 @@ function exerciseRequest() {
     lang: exerciseLang.value,
     requirement: custom.value.trim(),
     allowPartial: false,
+    seed: exerciseSeed.value,
+    excludeIds: [...exerciseExcludeIds.value],
   }
 }
 
@@ -186,7 +217,11 @@ function previewExercises(): void {
   focusPanel()
   void (async () => {
     try {
-      exercisePlan.value = await planExercises(exerciseRequest())
+      const plan = await planExercises(exerciseRequest())
+      exercisePlan.value = plan
+      exerciseSeed.value = plan.seed
+      // 只记住这一批;不动 excludeIds,保证随后「生成」用同一份请求得到同一批题
+      exerciseBatchIds.value = [...plan.batchIds]
     } catch (err) {
       error.value = errorText(err, t('doc.failed'))
     } finally {
@@ -194,6 +229,52 @@ function previewExercises(): void {
       focusPanel()
     }
   })()
+}
+
+function shufflePreview(): void {
+  if (busy.value) return
+  exerciseExcludeIds.value = mergeExcludeIds(
+    exerciseExcludeIds.value, exerciseBatchIds.value)
+  exerciseBatchIds.value = []
+  exerciseSeed.value = nextShuffleSeed(exerciseSeed.value)
+  generateExercise()
+}
+
+async function loadHistory(): Promise<void> {
+  try {
+    history.value = await fetchExerciseHistory(20)
+  } catch {
+    history.value = []
+  }
+}
+
+async function downloadHistory(item: ExerciseHistoryItem): Promise<void> {
+  if (historyBusy.value) return
+  historyBusy.value = item.id
+  try {
+    const detail = await fetchExerciseHistoryDocument(item.id)
+    const file = await renderDocument(detail.document, detail.lang === 'en' ? 'en' : 'zh', format.value)
+    downloadBlob(file.blob, file.filename)
+    showToast(t('doc.done'))
+  } catch (err) {
+    error.value = errorText(err, t('doc.failed'))
+  } finally {
+    historyBusy.value = ''
+  }
+}
+
+async function removeHistory(item: ExerciseHistoryItem): Promise<void> {
+  if (historyBusy.value) return
+  if (typeof window !== 'undefined' && !window.confirm(t('doc.historyDeleteConfirm'))) return
+  historyBusy.value = item.id
+  try {
+    await deleteExerciseHistory(item.id)
+    await loadHistory()
+  } catch (err) {
+    error.value = errorText(err, t('doc.failed'))
+  } finally {
+    historyBusy.value = ''
+  }
 }
 
 function generateExercise(): void {
@@ -215,9 +296,13 @@ function generateExercise(): void {
       }
       generated.value = result.document
       gaps.value = result.gaps
+      exerciseDraftId.value = result.draftId ?? ''
+      exerciseSeed.value = result.seed
+      exerciseBatchIds.value = [...result.batchIds]
       previewKind.value = 'exercise'
       revision.value = ''
       step.value = 'preview'
+      await loadHistory()
     } catch (err) {
       error.value = errorText(err, t('doc.failed'))
       step.value = 'custom'
@@ -380,6 +465,7 @@ function confirmOutline(): void {
       const result = await generateDocument(customRequest.value, plan, lang.value)
       generated.value = result.document
       gaps.value = result.gaps
+      exerciseDraftId.value = ''
       previewKind.value = 'document'
       revision.value = ''
       step.value = 'preview'
@@ -425,6 +511,15 @@ function exportPreview(): void {
     try {
       const file = await renderDocument(generated.value!, lang.value, format.value)
       downloadBlob(file.blob, file.filename)
+      if (shouldConfirmExercise(previewKind.value, exerciseDraftId.value)) {
+        try {
+          await confirmExerciseExport(exerciseDraftId.value)
+          exerciseDraftId.value = ''
+          await loadHistory()
+        } catch {
+          /* 文件已下载;历史标记失败不反向报错 */
+        }
+      }
       step.value = 'done'
       showToast(t('doc.done'))
     } catch (err) {
@@ -465,6 +560,10 @@ function reset(): void {
   generated.value = null
   gaps.value = []
   exercisePlan.value = null
+  exerciseSeed.value = 20261106
+  exerciseExcludeIds.value = []
+  exerciseBatchIds.value = []
+  exerciseDraftId.value = ''
   previewKind.value = 'document'
   revision.value = ''
   focusPanel()
@@ -694,6 +793,25 @@ focusPanel()
                 }) }}
                 · {{ t('doc.exerciseMissing', { n: exercisePlan.missing }) }}
               </p>
+              <div class="exercise-history">
+                <button class="btn" @click="historyOpen = !historyOpen">
+                  {{ t('doc.history') }} ({{ history.length }})
+                </button>
+                <ul v-if="historyOpen">
+                  <li v-for="item in history" :key="item.id">
+                    <span>{{ item.title }} · {{ item.count }}</span>
+                    <button class="btn" :disabled="historyBusy === item.id"
+                            @click="downloadHistory(item)">
+                      {{ t('doc.historyDownload') }}
+                    </button>
+                    <button class="btn" :disabled="historyBusy === item.id"
+                            @click="removeHistory(item)">
+                      {{ t('doc.historyDelete') }}
+                    </button>
+                  </li>
+                  <li v-if="!history.length" class="note">{{ t('doc.historyEmpty') }}</li>
+                </ul>
+              </div>
             </template>
             <p v-else class="note">{{ t('doc.noteEvidence') }}</p>
 
@@ -800,6 +918,10 @@ focusPanel()
             <p v-if="error" class="error">{{ error }}</p>
             <footer class="doc-foot">
               <button class="btn" :disabled="busy" @click="step = 'custom'">{{ t('doc.back') }}</button>
+              <button v-if="previewKind === 'exercise'" class="btn" :disabled="busy"
+                      @click="shufflePreview">
+                {{ t('doc.exerciseShuffle') }}
+              </button>
               <span class="format">
                 <span class="format-label">{{ t('doc.format') }}</span>
                 <button class="fmt" :class="{ on: format === 'pdf' }" @click="format = 'pdf'">PDF</button>
@@ -821,6 +943,18 @@ focusPanel()
             <div class="done-mark">✓</div>
             <h2 class="prompt">{{ t('doc.done') }}</h2>
             <p class="note">{{ t('doc.doneHint') }}</p>
+            <div v-if="previewKind === 'exercise' && history.length" class="exercise-history">
+              <p class="note">{{ t('doc.history') }}</p>
+              <ul>
+                <li v-for="item in history" :key="item.id">
+                  <span>{{ item.title }} · {{ item.count }}</span>
+                  <button class="btn" :disabled="historyBusy === item.id"
+                          @click="downloadHistory(item)">
+                    {{ t('doc.historyDownload') }}
+                  </button>
+                </li>
+              </ul>
+            </div>
             <p v-if="gaps.length" class="gaps">{{ t('doc.gaps') }} {{ gaps.join('、') }}</p>
             <p v-if="error" class="error">{{ error }}</p>
             <footer class="doc-foot">
@@ -1349,6 +1483,39 @@ focusPanel()
 
 .done-mark ~ .note {
   text-align: center;
+}
+
+.exercise-preview ol {
+  margin: 6px 0 10px 18px;
+  padding: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.exercise-history ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.exercise-history li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.exercise-history li span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 560px) {

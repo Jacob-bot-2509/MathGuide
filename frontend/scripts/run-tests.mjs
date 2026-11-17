@@ -137,6 +137,12 @@ const CASES = [
     run: 'node .account-export-test.cjs',
     artifact: '.account-export-test.cjs',
   },
+  {
+    name: '习题集换批',
+    bundle: 'npx esbuild scripts/exercise-batch-test.ts --bundle --format=cjs --platform=node --define:import.meta.env={} --outfile=.exercise-batch-test.cjs',
+    run: 'node .exercise-batch-test.cjs',
+    artifact: '.exercise-batch-test.cjs',
+  },
 ]
 
 let failed = 0

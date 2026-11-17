@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import random
+from collections.abc import Iterable
 from pathlib import Path
 
 from starlette.requests import Request
@@ -14,6 +16,7 @@ from starlette.responses import JSONResponse
 
 import math_render
 import quota
+import exercise_history
 from chat import _rate_check, require_auth
 from exercises.schema import SchemaError
 from exercises.store import ExerciseStore, tiers_from_env
@@ -154,6 +157,24 @@ def _filters(body: dict) -> dict:
     }
 
 
+def _exclude_ids(body: dict) -> list[str]:
+    raw = body.get("excludeIds")
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, str)][:200]
+
+
+def _history_title(filters: dict, lang: str, count: int) -> str:
+    labels = [
+        TOPIC_LABELS.get(topic, (topic, topic))[1 if lang == "en" else 0]
+        for topic in filters["topics"]
+    ]
+    scope = "、".join(labels) if labels else ("全部" if lang != "en" else "All")
+    if lang == "en":
+        return f"Exercise Set · {scope} · {count}"
+    return f"习题集 · {scope} · {count} 题"
+
+
 def _available(store: ExerciseStore, filters: dict) -> dict[str, int]:
     base = store.filter(
         topics=filters["topics"],
@@ -168,24 +189,56 @@ def _available(store: ExerciseStore, filters: dict) -> dict[str, int]:
     }
 
 
-def _select(store: ExerciseStore, filters: dict, lang: str, allow_partial: bool, seed: int):
+def _sample(items: list, count: int, seed: int) -> list:
+    ordered = sorted(items, key=lambda item: item.id)
+    if count <= 0:
+        return []
+    if count >= len(ordered):
+        return ordered
+    return random.Random(seed).sample(ordered, count)
+
+
+def _select(
+    store: ExerciseStore,
+    filters: dict,
+    lang: str,
+    allow_partial: bool,
+    seed: int,
+    exclude_ids: Iterable[str] = (),
+) -> tuple[list, int]:
+    """按条件抽样;排除上一批,池子不足时补回少量重复并报告数量。"""
     params = {
         "topics": filters["topics"],
         "cross_topics": filters["cross_topics"],
         "types": filters["types"],
         "difficulty": filters["difficulty"],
     }
+    exclude = {str(item) for item in exclude_ids}
     language = "both" if lang == "both" else lang
-    selected = list(store.sample(filters["count"], seed=seed, lang=language, **params))
+    pool = list(store.filter(lang=language, **params))
+    fresh = [item for item in pool if item.id not in exclude]
+    seen = [item for item in pool if item.id in exclude]
+    selected = _sample(fresh, filters["count"], seed)
+    reused = 0
+    if len(selected) < filters["count"] and seen:
+        extra = _sample(seen, filters["count"] - len(selected), seed + 1)
+        selected.extend(extra)
+        reused += len(extra)
     if allow_partial and len(selected) < filters["count"]:
-        seen = {item.id for item in selected}
-        for item in store.sample(filters["count"], seed=seed, lang="any", **params):
-            if item.id not in seen:
-                selected.append(item)
-                seen.add(item.id)
-            if len(selected) >= filters["count"]:
-                break
-    return selected[: filters["count"]]
+        chosen = {item.id for item in selected}
+        fallback = [
+            item for item in store.filter(lang="any", **params)
+            if item.id not in chosen
+        ]
+        fresh_any = [item for item in fallback if item.id not in exclude]
+        seen_any = [item for item in fallback if item.id in exclude]
+        extra = _sample(fresh_any, filters["count"] - len(selected), seed + 2)
+        selected.extend(extra)
+        if len(selected) < filters["count"] and seen_any:
+            more = _sample(seen_any, filters["count"] - len(selected), seed + 3)
+            selected.extend(more)
+            reused += len(more)
+    return selected[: filters["count"]], reused
 
 
 def _missing_reason(item, lang: str) -> str:
@@ -317,14 +370,30 @@ async def plan(request: Request) -> JSONResponse:
     allow_partial = bool(body.get("allowPartial"))
     store = _store()
     available = _available(store, filters)
-    selected = _select(store, filters, lang, allow_partial, int(body.get("seed", 20261106)))
+    seed = int(body.get("seed", 20261106))
+    exclude_ids = _exclude_ids(body)
+    selected, reused = _select(
+        store, filters, lang, allow_partial, seed, exclude_ids)
     gaps = [topic for topic in filters["topics"] if topic not in {item.primary_topic for item in selected}]
+    preview = [
+        {
+            "id": item.id,
+            "topic": item.primary_topic,
+            "type": item.type,
+            "question": item.content[item.original_language].question[:80],
+        }
+        for item in selected[:3]
+    ]
     return JSONResponse({
         "available": available,
         "selected": len(selected),
         "missing": max(0, filters["count"] - len(selected)),
         "gaps": gaps,
         "coverage": store.coverage(),
+        "seed": seed,
+        "preview": preview,
+        "batchIds": [item.id for item in selected],
+        "reusedCount": reused,
     })
 
 
@@ -338,16 +407,71 @@ async def generate(request: Request) -> JSONResponse:
     mode = body.get("mode") if body.get("mode") in MODES else "questions"
     allow_partial = bool(body.get("allowPartial"))
     store = _store()
-    selected = _select(store, filters, lang, allow_partial, int(body.get("seed", 20261106)))
+    seed = int(body.get("seed", 20261106))
+    exclude_ids = _exclude_ids(body)
+    selected, _ = _select(store, filters, lang, allow_partial, seed, exclude_ids)
     if not selected:
         return JSONResponse({
             "error": "no_evidence",
             "available": _available(store, filters),
         }, status_code=422)
     document = _document(selected, lang, mode, allow_partial, filters)
+    uid = str(rec.get("uid") or "")
+    draft_id = ""
+    try:
+        draft_id = exercise_history.create_draft(
+            uid, document, filters, seed, exclude_ids, lang, mode,
+            _history_title(filters, lang, len(selected)),
+        )
+    except Exception as exc:  # noqa: BLE001 历史失败不能阻断下载
+        print(f"[exercise] 历史草稿写入失败: {exc}")
     return JSONResponse({
         "document": document,
         "selected": len(selected),
         "missing": max(0, filters["count"] - len(selected)),
         "gaps": [],
+        "draftId": draft_id,
+        "seed": seed,
+        "batchIds": [item.id for item in selected],
     })
+
+
+async def history_list(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    try:
+        limit = int(request.query_params.get("limit", "20"))
+    except ValueError:
+        limit = 20
+    uid = str(rec.get("uid") or "")
+    return JSONResponse(
+        {"items": exercise_history.list_documents(uid, limit)},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def history_get(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    detail = exercise_history.get_document(uid, request.path_params["doc_id"])
+    if detail is None:
+        return JSONResponse({"error": "not_found"}, status_code=404,
+                            headers={"Cache-Control": "no-store"})
+    return JSONResponse(detail, headers={"Cache-Control": "no-store"})
+
+
+async def history_delete(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    if not exercise_history.delete_document(uid, request.path_params["doc_id"]):
+        return JSONResponse({"error": "not_found"}, status_code=404,
+                            headers={"Cache-Control": "no-store"})
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+async def history_confirm(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    if not exercise_history.confirm(uid, request.path_params["doc_id"]):
+        return JSONResponse({"error": "not_found"}, status_code=404,
+                            headers={"Cache-Control": "no-store"})
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})

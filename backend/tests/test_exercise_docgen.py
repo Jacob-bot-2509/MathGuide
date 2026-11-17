@@ -47,7 +47,12 @@ def make(exercise_id: str, *, topic="analysis", languages=("zh",), type_="comput
 
 
 @pytest.fixture()
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
+    import db
+    from starlette.routing import Route as StarletteRoute
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "mathguide.db")
+    db.init()
     store = ExerciseStore([
         make("doc:zh", languages=("zh",)),
         make("doc:both", languages=("zh", "en")),
@@ -61,9 +66,47 @@ def client(monkeypatch):
     app = Starlette(routes=[
         Route("/api/doc/exercise/plan", exercise_docgen.plan, methods=["POST"]),
         Route("/api/doc/exercise", exercise_docgen.generate, methods=["POST"]),
+        StarletteRoute("/api/doc/exercise/history", exercise_docgen.history_list),
+        StarletteRoute("/api/doc/exercise/history/{doc_id}", exercise_docgen.history_get),
+        StarletteRoute("/api/doc/exercise/history/{doc_id}", exercise_docgen.history_delete,
+                       methods=["DELETE"]),
+        StarletteRoute("/api/doc/exercise/history/{doc_id}/confirm",
+                       exercise_docgen.history_confirm, methods=["POST"]),
     ])
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
+    db.reset_for_tests()
+
+
+def test_plan_excludes_previous_batch_and_reports_reuse():
+    store = ExerciseStore([make(f"e{i}") for i in range(6)], tiers=("research",))
+    filters = exercise_docgen._filters({"topics": ["analysis"], "count": 3})
+    first, _ = exercise_docgen._select(store, filters, "zh", False, 1)
+    ids = [item.id for item in first]
+    second, reused = exercise_docgen._select(store, filters, "zh", False, 2, ids)
+    assert len(second) == 3
+    assert reused == 0
+    assert not ({item.id for item in second} & set(ids))
+
+
+def test_plan_reuses_when_pool_too_small():
+    store = ExerciseStore([make(f"e{i}") for i in range(3)], tiers=("research",))
+    filters = exercise_docgen._filters({"topics": ["analysis"], "count": 3})
+    first, _ = exercise_docgen._select(store, filters, "zh", False, 1)
+    ids = [item.id for item in first]
+    second, reused = exercise_docgen._select(store, filters, "zh", False, 2, ids)
+    assert len(second) == 3
+    assert reused == 3
+
+
+def test_plan_response_contains_seed_preview_batch(client):
+    response = client.post("/api/doc/exercise/plan", json={"count": 3, "lang": "zh"})
+    body = response.json()
+
+    assert isinstance(body["seed"], int)
+    assert isinstance(body["batchIds"], list)
+    assert len(body["preview"]) <= 3
+    assert body["reusedCount"] == 0
 
 
 def test_plan_reports_available_counts_by_language(client):
@@ -182,3 +225,39 @@ def test_requirement_infers_cross_topic(client):
     assert response.status_code == 200
     filters = response.json()["document"]["exercise_meta"]["filters"]
     assert filters["cross_topics"] == ["taylor"]
+
+
+def test_generate_returns_draft_and_confirm_promotes(client):
+    generated = client.post("/api/doc/exercise", json={
+        "topics": ["analysis"], "count": 1, "lang": "zh", "mode": "questions",
+    })
+    draft_id = generated.json()["draftId"]
+
+    assert client.get("/api/doc/exercise/history").json()["items"] == []
+    confirmed = client.post(f"/api/doc/exercise/history/{draft_id}/confirm")
+    assert confirmed.status_code == 200
+    list_res = client.get("/api/doc/exercise/history")
+    assert list_res.headers["cache-control"] == "no-store"
+    items = list_res.json()["items"]
+    assert [item["id"] for item in items] == [draft_id]
+
+    detail_res = client.get(f"/api/doc/exercise/history/{draft_id}")
+    assert detail_res.headers["cache-control"] == "no-store"
+    assert detail_res.json()["document"]["title"] == "习题集"
+
+
+def test_history_delete_removes_entry(client):
+    generated = client.post("/api/doc/exercise", json={
+        "topics": ["analysis"], "count": 1, "lang": "zh", "mode": "questions",
+    })
+    draft_id = generated.json()["draftId"]
+    client.post(f"/api/doc/exercise/history/{draft_id}/confirm")
+
+    deleted = client.delete(f"/api/doc/exercise/history/{draft_id}")
+    assert deleted.status_code == 200
+    assert client.get("/api/doc/exercise/history").json()["items"] == []
+    assert client.get(f"/api/doc/exercise/history/{draft_id}").status_code == 404
+
+
+def test_history_confirm_unknown_id_is_404(client):
+    assert client.post("/api/doc/exercise/history/nope/confirm").status_code == 404
