@@ -132,6 +132,8 @@ export interface ExerciseDocument {
   missing: number
   gaps: string[]
   draftId?: string
+  seed: number
+  batchIds: string[]
 }
 
 export interface ExerciseHistoryItem {

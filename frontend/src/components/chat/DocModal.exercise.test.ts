@@ -82,6 +82,8 @@ beforeEach(() => {
     missing: 0,
     gaps: [],
     draftId: 'draft-1',
+    seed: 20261106,
+    batchIds: BATCH,
   })
 })
 
@@ -93,7 +95,6 @@ describe('习题集预览与换批', () => {
     await buttonByText(wrapper, t('doc.exercisePreview')).trigger('click')
     await flushPromises()
     expect(planMock.mock.calls[0][0]).toMatchObject({ excludeIds: [], seed: 20261106 })
-    expect(wrapper.find('.exercise-preview').exists()).toBe(true)
 
     await buttonByText(wrapper, t('doc.generate')).trigger('click')
     await flushPromises()
@@ -104,26 +105,19 @@ describe('习题集预览与换批', () => {
     wrapper.unmount()
   })
 
-  it('换一批把上一批并入排除列表并推进 seed', async () => {
-    planMock.mockResolvedValueOnce(plan(BATCH, 20261106))
+  it('生成后的预览页可以换一批,排除本批并推进 seed', async () => {
     const wrapper = await openExercisePanel()
-    await buttonByText(wrapper, t('doc.exercisePreview')).trigger('click')
+    await buttonByText(wrapper, t('doc.generate')).trigger('click')
     await flushPromises()
+    expect(generateMock).toHaveBeenCalledTimes(1)
 
-    planMock.mockResolvedValueOnce(plan(['ex-9'], nextShuffleSeed(20261106)))
     await buttonByText(wrapper, t('doc.exerciseShuffle')).trigger('click')
     await flushPromises()
 
-    const second = planMock.mock.calls[1][0] as { excludeIds: string[]; seed: number }
+    expect(generateMock).toHaveBeenCalledTimes(2)
+    const second = generateMock.mock.calls[1][0] as { excludeIds: string[]; seed: number }
     expect(second.excludeIds).toEqual(BATCH)
     expect(second.seed).toBe(nextShuffleSeed(20261106))
-
-    // 生成用的是换批后的请求:同一个 seed + 同一份排除列表
-    await buttonByText(wrapper, t('doc.generate')).trigger('click')
-    await flushPromises()
-    const body = generateMock.mock.calls[0][0] as { excludeIds: string[]; seed: number }
-    expect(body.excludeIds).toEqual(BATCH)
-    expect(body.seed).toBe(second.seed)
     wrapper.unmount()
   })
 
@@ -132,11 +126,15 @@ describe('习题集预览与换批', () => {
     const wrapper = await openExercisePanel()
     await buttonByText(wrapper, t('doc.exercisePreview')).trigger('click')
     await flushPromises()
-    expect(wrapper.find('.exercise-preview').exists()).toBe(true)
 
     await buttonByText(wrapper, t('doc.langEn')).trigger('click')
     await flushPromises()
-    expect(wrapper.find('.exercise-preview').exists()).toBe(false)
+    await buttonByText(wrapper, t('doc.exercisePreview')).trigger('click')
+    await flushPromises()
+
+    const second = planMock.mock.calls[1][0] as { seed: number; excludeIds: string[] }
+    expect(second.seed).toBe(20261106)
+    expect(second.excludeIds).toEqual([])
     wrapper.unmount()
   })
 })

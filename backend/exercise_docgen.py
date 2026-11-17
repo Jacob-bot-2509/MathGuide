@@ -431,6 +431,8 @@ async def generate(request: Request) -> JSONResponse:
         "missing": max(0, filters["count"] - len(selected)),
         "gaps": [],
         "draftId": draft_id,
+        "seed": seed,
+        "batchIds": [item.id for item in selected],
     })
 
 

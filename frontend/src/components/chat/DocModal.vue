@@ -231,14 +231,13 @@ function previewExercises(): void {
   })()
 }
 
-function shuffleExercises(): void {
+function shufflePreview(): void {
   if (busy.value) return
-  // 换批:把「当前这一批」并入排除列表,再推进 seed 重新预览
   exerciseExcludeIds.value = mergeExcludeIds(
     exerciseExcludeIds.value, exerciseBatchIds.value)
   exerciseBatchIds.value = []
   exerciseSeed.value = nextShuffleSeed(exerciseSeed.value)
-  previewExercises()
+  generateExercise()
 }
 
 async function loadHistory(): Promise<void> {
@@ -298,6 +297,8 @@ function generateExercise(): void {
       generated.value = result.document
       gaps.value = result.gaps
       exerciseDraftId.value = result.draftId ?? ''
+      exerciseSeed.value = result.seed
+      exerciseBatchIds.value = [...result.batchIds]
       previewKind.value = 'exercise'
       revision.value = ''
       step.value = 'preview'
@@ -792,20 +793,6 @@ focusPanel()
                 }) }}
                 · {{ t('doc.exerciseMissing', { n: exercisePlan.missing }) }}
               </p>
-              <div v-if="exercisePlan?.preview.length" class="exercise-preview">
-                <p class="note">{{ t('doc.exercisePreviewTitle') }}</p>
-                <ol>
-                  <li v-for="item in exercisePlan.preview" :key="item.id">
-                    {{ item.question }}
-                  </li>
-                </ol>
-                <p v-if="exercisePlan.reusedCount" class="note">
-                  {{ t('doc.exerciseReused', { n: exercisePlan.reusedCount }) }}
-                </p>
-              </div>
-              <button class="btn" :disabled="busy" @click="shuffleExercises">
-                {{ t('doc.exerciseShuffle') }}
-              </button>
               <div class="exercise-history">
                 <button class="btn" @click="historyOpen = !historyOpen">
                   {{ t('doc.history') }} ({{ history.length }})
@@ -931,6 +918,10 @@ focusPanel()
             <p v-if="error" class="error">{{ error }}</p>
             <footer class="doc-foot">
               <button class="btn" :disabled="busy" @click="step = 'custom'">{{ t('doc.back') }}</button>
+              <button v-if="previewKind === 'exercise'" class="btn" :disabled="busy"
+                      @click="shufflePreview">
+                {{ t('doc.exerciseShuffle') }}
+              </button>
               <span class="format">
                 <span class="format-label">{{ t('doc.format') }}</span>
                 <button class="fmt" :class="{ on: format === 'pdf' }" @click="format = 'pdf'">PDF</button>
