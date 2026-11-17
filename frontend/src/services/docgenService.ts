@@ -2,7 +2,7 @@
  * 文档生成服务:问答导出 + 独立要求的大纲/分节生成。
  * 二进制导出统一走 docService.postBinary,401 处理与聊天/PDF 导出一致。
  */
-import { post } from '@/api/http'
+import { del, get, post } from '@/api/http'
 import { getToken } from '@/stores/user'
 import { postBinary, type ExportResult } from '@/services/docService'
 import type { ChatMsg } from '@/stores/sessions'
@@ -105,6 +105,14 @@ export interface ExercisePlanRequest {
   requirement?: string
   allowPartial?: boolean
   seed?: number
+  excludeIds?: string[]
+}
+
+export interface ExercisePreviewItem {
+  id: string
+  topic: string
+  type: string
+  question: string
 }
 
 export interface ExercisePlan {
@@ -112,6 +120,10 @@ export interface ExercisePlan {
   selected: number
   missing: number
   gaps: string[]
+  seed: number
+  preview: ExercisePreviewItem[]
+  batchIds: string[]
+  reusedCount: number
 }
 
 export interface ExerciseDocument {
@@ -119,6 +131,23 @@ export interface ExerciseDocument {
   selected: number
   missing: number
   gaps: string[]
+  draftId?: string
+}
+
+export interface ExerciseHistoryItem {
+  id: string
+  title: string
+  createdAt: string
+  exportedAt: string
+  count: number
+  lang: 'zh' | 'en' | 'both'
+  mode: string
+  filters: Record<string, unknown>
+}
+
+export interface ExerciseHistoryDetail extends ExerciseHistoryItem {
+  seed: number
+  document: StructuredDocument
 }
 
 export function planExercises(body: ExercisePlanRequest): Promise<ExercisePlan> {
@@ -129,6 +158,24 @@ export function generateExercises(
   body: ExercisePlanRequest & { mode: 'questions' | 'answers' | 'solutions' | 'combined' },
 ): Promise<ExerciseDocument> {
   return post<ExerciseDocument>('/api/doc/exercise', body, authHeaders())
+}
+
+export function confirmExerciseExport(id: string): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>(`/api/doc/exercise/history/${id}/confirm`, {}, authHeaders())
+}
+
+export async function fetchExerciseHistory(limit = 20): Promise<ExerciseHistoryItem[]> {
+  const res = await get<{ items: ExerciseHistoryItem[] }>(
+    `/api/doc/exercise/history?limit=${limit}`, authHeaders())
+  return res.items
+}
+
+export function fetchExerciseHistoryDocument(id: string): Promise<ExerciseHistoryDetail> {
+  return get<ExerciseHistoryDetail>(`/api/doc/exercise/history/${id}`, authHeaders())
+}
+
+export function deleteExerciseHistory(id: string): Promise<{ ok: boolean }> {
+  return del<{ ok: boolean }>(`/api/doc/exercise/history/${id}`, authHeaders())
 }
 
 export function renderDocument(
