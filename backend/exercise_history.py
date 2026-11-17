@@ -150,6 +150,35 @@ def delete_document(uid: str, doc_id: str) -> bool:
         return bool(result.rowcount)
 
 
+def documents_for_export(uid: str) -> list[dict]:
+    """账号导出:附带用户导出的完整文档快照。"""
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, created_at, exported_at, item_count, lang, mode, "
+            "seed, filters, document FROM exercise_documents "
+            "WHERE uid = ? AND status = 'exported' ORDER BY created_at, id",
+            (uid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "createdAt": row["created_at"],
+            "exportedAt": row["exported_at"],
+            "count": row["item_count"],
+            "lang": row["lang"],
+            "mode": row["mode"],
+            "seed": row["seed"],
+            "filters": json.loads(row["filters"]),
+            "document": json.loads(row["document"]),
+        }
+        for row in rows
+    ]
+
+
 def delete_user(uid: str) -> None:
     with db.transaction() as conn:
         conn.execute("DELETE FROM exercise_documents WHERE uid = ?", (uid,))

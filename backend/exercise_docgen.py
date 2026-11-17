@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse
 
 import math_render
 import quota
+import exercise_history
 from chat import _rate_check, require_auth
 from exercises.schema import SchemaError
 from exercises.store import ExerciseStore, tiers_from_env
@@ -154,6 +155,24 @@ def _filters(body: dict) -> dict:
         "count": count,
         "requirement": requirement,
     }
+
+
+def _exclude_ids(body: dict) -> list[str]:
+    raw = body.get("excludeIds")
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, str)][:200]
+
+
+def _history_title(filters: dict, lang: str, count: int) -> str:
+    labels = [
+        TOPIC_LABELS.get(topic, (topic, topic))[1 if lang == "en" else 0]
+        for topic in filters["topics"]
+    ]
+    scope = "、".join(labels) if labels else ("全部" if lang != "en" else "All")
+    if lang == "en":
+        return f"Exercise Set · {scope} · {count}"
+    return f"习题集 · {scope} · {count} 题"
 
 
 def _available(store: ExerciseStore, filters: dict) -> dict[str, int]:
@@ -352,9 +371,7 @@ async def plan(request: Request) -> JSONResponse:
     store = _store()
     available = _available(store, filters)
     seed = int(body.get("seed", 20261106))
-    raw_exclude = body.get("excludeIds", [])
-    exclude_ids = [str(item) for item in raw_exclude if isinstance(item, str)][:200] \
-        if isinstance(raw_exclude, list) else []
+    exclude_ids = _exclude_ids(body)
     selected, reused = _select(
         store, filters, lang, allow_partial, seed, exclude_ids)
     gaps = [topic for topic in filters["topics"] if topic not in {item.primary_topic for item in selected}]
@@ -390,16 +407,63 @@ async def generate(request: Request) -> JSONResponse:
     mode = body.get("mode") if body.get("mode") in MODES else "questions"
     allow_partial = bool(body.get("allowPartial"))
     store = _store()
-    selected, _ = _select(store, filters, lang, allow_partial, int(body.get("seed", 20261106)))
+    seed = int(body.get("seed", 20261106))
+    exclude_ids = _exclude_ids(body)
+    selected, _ = _select(store, filters, lang, allow_partial, seed, exclude_ids)
     if not selected:
         return JSONResponse({
             "error": "no_evidence",
             "available": _available(store, filters),
         }, status_code=422)
     document = _document(selected, lang, mode, allow_partial, filters)
+    uid = str(rec.get("uid") or "")
+    draft_id = ""
+    try:
+        draft_id = exercise_history.create_draft(
+            uid, document, filters, seed, exclude_ids, lang, mode,
+            _history_title(filters, lang, len(selected)),
+        )
+    except Exception as exc:  # noqa: BLE001 历史失败不能阻断下载
+        print(f"[exercise] 历史草稿写入失败: {exc}")
     return JSONResponse({
         "document": document,
         "selected": len(selected),
         "missing": max(0, filters["count"] - len(selected)),
         "gaps": [],
+        "draftId": draft_id,
     })
+
+
+async def history_list(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    try:
+        limit = int(request.query_params.get("limit", "20"))
+    except ValueError:
+        limit = 20
+    uid = str(rec.get("uid") or "")
+    return JSONResponse({"items": exercise_history.list_documents(uid, limit)})
+
+
+async def history_get(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    detail = exercise_history.get_document(uid, request.path_params["doc_id"])
+    if detail is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse(detail)
+
+
+async def history_delete(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    if not exercise_history.delete_document(uid, request.path_params["doc_id"]):
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+async def history_confirm(request: Request) -> JSONResponse:
+    rec = require_auth(request)
+    uid = str(rec.get("uid") or "")
+    if not exercise_history.confirm(uid, request.path_params["doc_id"]):
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse({"ok": True})
