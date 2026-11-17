@@ -6,9 +6,9 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.27.1'
-export const APP_STABLE_VERSION = 'v1.27.1'
-export const APP_STABLE_DATE = '2026-11-15'
+export const APP_VERSION = 'v1.28.0'
+export const APP_STABLE_VERSION = 'v1.28.0'
+export const APP_STABLE_DATE = '2026-11-17'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
 export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
