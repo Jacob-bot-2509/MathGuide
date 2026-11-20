@@ -6,9 +6,9 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.28.0'
-export const APP_STABLE_VERSION = 'v1.28.0'
-export const APP_STABLE_DATE = '2026-11-17'
+export const APP_VERSION = 'v1.29.0'
+export const APP_STABLE_VERSION = 'v1.29.0'
+export const APP_STABLE_DATE = '2026-11-20'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
 export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
@@ -51,6 +51,29 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '登录与切页不再反复做同一件功课:后端每个请求原本都要重跑一次建表、再多查一次迁移标记,现在每个库只做一次。这一层数据库动作省下来之后,登录、图谱、画像这些入口的响应都缩短了一截,而它们返回的内容与之前一字不差。',
+        en: 'Signing in and switching pages no longer redo the same homework: the backend used to rerun the schema script on every request and then ask the database once more whether migration had finished; now that happens once per database. With that database traffic gone, sign-in, the graph and the profile come back noticeably sooner — and they return exactly the same content as before.',
+      },
+      {
+        zh: '图谱页拖动缩放跟手了:节点与连线的坐标、标签截断、章节淡出判定都改成提前算好,拖动与缩放只更新视图框。以前每移动一下指针,整张图的几何都要重算一遍,点一多就掉帧、像在推一块很重的板子。',
+        en: 'The graph now keeps up with your pointer: node and edge coordinates, label truncation and chapter dimming are precomputed, so panning and zooming only move the view box. Previously every pointer move recomputed the geometry of the whole graph, which dropped frames and made a large graph feel heavy to drag.',
+      },
+      {
+        zh: '长回答滚动不再卡:聊天里那份解析结果会缓存,滚动、开合面板这类与正文无关的重渲染不再把整段回答重新切分一遍。几百字的知识点讲解往下翻时,帧率稳住了,已渲染的公式也不会闪。',
+        en: 'Scrolling a long answer no longer stutters: the parsed form of the reply is cached, so re-renders caused by scrolling or opening a panel no longer re-split the whole answer. Paging through a several-hundred-word explanation keeps a steady frame rate, and formulas already on screen stop flickering.',
+      },
+      {
+        zh: '手机端更省电:星空背景的透视网格改为先画一次再复用,地址栏收缩这类连续 resize 合并到一帧,页面切到后台自动停画、回到前台再续。同样停留时间,发热与耗电都比之前低。',
+        en: 'Less battery drain on phones: the perspective grid in the background is drawn once and reused, back-to-back resizes such as the address bar collapsing are coalesced into one frame, and drawing stops while the page is in the background and resumes on return. The same session now runs cooler and draws less power.',
+      },
+    ],
+  },
+  {
+    version: 'v1.28.0',
+    date: '2026-11-17',
+    status: 'released',
     items: [
       {
         zh: '一个出口 IP 不再等于一个用户:新增双闸开关(默认关)。打开后「每 IP 10 次/分」拆成两层 —— 每个 IP 每分钟能过多少人(整间机房的天花板)与每个账号的额度分开计。40 人同时点登录时,默认单桶只有 10 个人进得去,双闸下 40 人全部通过,而单个账号的爆破防护仍是 10 次/分、一点没放宽;把上限直接调大则等于把每个人的保护一起削弱。',
