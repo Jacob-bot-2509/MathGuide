@@ -50,6 +50,8 @@ class KnowledgeGraph:
         self._descendant_counts = {
             pid: self._count_descendants(pid) for pid in points
         }
+        # 拓扑序按需计算一次(见 topological_order)
+        self._topological: list[str] | None = None
 
     def direct_dependents(self, point_id: str) -> tuple[str, ...]:
         """直接依赖该知识点的后续知识点(核心度的一阶口径)。"""
@@ -60,7 +62,14 @@ class KnowledgeGraph:
         return self._descendant_counts[point_id]
 
     def topological_order(self) -> list[str]:
-        """拓扑序;存在环时抛 KnowledgeGraphError。同层按 CSV 顺序稳定输出。"""
+        """拓扑序;存在环时抛 KnowledgeGraphError。同层按 CSV 顺序稳定输出。
+
+        结果按实例缓存:图是只读的,而推荐、学习分析每次请求都要用到拓扑序
+        (recommend 建排序表、build_snapshot 建 order 表),重复跑 Kahn 属于纯浪费。
+        返回副本,调用方仍可自由修改自己拿到的那份列表。
+        """
+        if self._topological is not None:
+            return list(self._topological)
         indegree = {
             pid: len(point.prerequisites) for pid, point in self.points.items()
         }
@@ -78,7 +87,8 @@ class KnowledgeGraph:
             raise KnowledgeGraphError(
                 f"知识点依赖存在循环: {'、'.join(cycle)}"
             )
-        return order
+        self._topological = order
+        return list(order)
 
     def _count_descendants(self, point_id: str) -> int:
         seen: set[str] = set()

@@ -103,7 +103,9 @@ def init() -> None:
     global _ready_key
     db.init()
     key = str(db.DB_PATH)
-    if _ready_key == key and db.get_meta(MIGRATION_KEY) == "1":
+    # 命中即返回:诊断读取(latest/weak_report/画像/图谱/推荐)每次都会走到这里,
+    # 原先每次都要多开一次连接查 meta,并为写迁移再取一次写锁。
+    if _ready_key == key:
         return
     with db.transaction() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -175,18 +177,28 @@ def for_user(uid: str) -> list[dict]:
     return [entry for entry in entries if entry.get("pointId") and entry.get("score")]
 
 
-def latest(uid: str) -> dict[str, dict]:
-    """每个知识点只保留最后一次诊断。"""
+def latest_from(entries: list[dict]) -> dict[str, dict]:
+    """从已读出的诊断记录里取每个知识点的最后一次诊断(调用方复用同一次查询)。"""
     result: dict[str, dict] = {}
-    for entry in for_user(uid):
+    for entry in entries:
         result[str(entry["pointId"])] = entry
     return result
 
 
-def weak_report(uid: str, graph: KnowledgeGraph | None = None) -> dict:
-    """薄弱点报告:掌握度低于阈值,按分数升序、核心度降序排列。"""
+def latest(uid: str) -> dict[str, dict]:
+    """每个知识点只保留最后一次诊断。"""
+    return latest_from(for_user(uid))
+
+
+def weak_report(uid: str, graph: KnowledgeGraph | None = None,
+                latest_map: dict[str, dict] | None = None) -> dict:
+    """薄弱点报告:掌握度低于阈值,按分数升序、核心度降序排列。
+
+    latest_map 由调用方传入已有快照时,不再重复全表扫描(画像接口一次请求
+    原先要扫三遍 diagnoses 表)。
+    """
     graph = graph or get_graph()
-    latest_map = latest(uid)
+    latest_map = latest(uid) if latest_map is None else latest_map
     weak: list[dict] = []
     for point_id, entry in latest_map.items():
         score = entry.get("score")
@@ -247,9 +259,12 @@ async def _llm_score(point: KnowledgePoint, answer: str) -> tuple[int, str]:
         f"学生回答:\n{answer[:MAX_ANSWER_CHARS]}"
     )
     parts: list[str] = []
+    received = 0
     async for delta in rag.llm.stream_chat(system, user, role="main", thinking=False):
         parts.append(delta)
-        if sum(len(part) for part in parts) >= 600:
+        # 累加计数:原先每帧都 sum(len(...) for ...) 重算整段长度,是 O(n²)
+        received += len(delta)
+        if received >= 600:
             break
     try:
         return parse_result("".join(parts))

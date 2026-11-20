@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 import networkx as nx
 
 from knowledge_graph import KnowledgeGraph
@@ -77,7 +79,18 @@ def _barycenter(neighbors, position: dict[str, int], only_level: int) -> float:
 
 
 def layout_points(graph: KnowledgeGraph) -> dict[str, dict]:
-    """返回 {知识点 id: {x, y, level}};坐标单位为像素。"""
+    """返回 {知识点 id: {x, y, level}};坐标单位为像素。
+
+    布局只取决于图结构(确定性算法),按图实例缓存:同一张图在 /api/graph、
+    /api/graph/export 与多处调用里重复构图 + 4 轮重心法排序完全是浪费。
+    返回外层字典的浅拷贝,避免调用方改动缓存里的键集合。
+    """
+    return dict(_layout_cached(graph))
+
+
+@lru_cache(maxsize=8)
+def _layout_cached(graph: KnowledgeGraph) -> dict[str, dict]:
+    """真正算一次布局并缓存(KnowledgeGraph 只读,按对象身份作为键)。"""
     g = _build(graph)
     level = _levels(graph, g)
     buckets = _order_levels(graph, g, level)

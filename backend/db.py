@@ -23,6 +23,8 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DATA_DIR / "mathguide.db"
 
 _lock = threading.Lock()
+# 已建表的库路径;init() 命中即直接返回(见 init 的说明)
+_init_key: str | None = None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -123,14 +125,26 @@ def transaction() -> Iterator[sqlite3.Connection]:
 
 
 def init() -> None:
-    """建表(幂等)。旧数据导入由各模块用 meta 标记控制。"""
+    """建表(幂等)。旧数据导入由各模块用 meta 标记控制。
+
+    建表结果按库路径缓存:鉴权、诊断、用量等热路径每次取连接都会调用 init(),
+    重复执行整份 SCHEMA(7 条 CREATE)等于每个请求多开一次连接并提交一次事务。
+    库路径变化(测试切库)或 reset_for_tests() 时缓存自动失效。
+    """
+    global _init_key
+    key = str(DB_PATH)
+    if _init_key == key:
+        return
     with _lock:
+        if _init_key == key:  # 双检:并发首启时只建一次表
+            return
         conn = connect()
         try:
             conn.executescript(SCHEMA)
             conn.commit()
         finally:
             conn.close()
+        _init_key = key
 
 
 def get_meta(key: str) -> str | None:
@@ -165,6 +179,8 @@ def table_empty(table: str) -> bool:
 
 def reset_for_tests() -> None:
     """删除测试库文件(WAL/SHM 一并清理),供 fixture 在临时目录重建。"""
+    global _init_key
+    _init_key = None  # 文件已删,建表缓存必须失效
     for suffix in ("", "-wal", "-shm"):
         path = Path(str(DB_PATH) + suffix)
         try:

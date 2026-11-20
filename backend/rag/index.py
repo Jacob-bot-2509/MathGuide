@@ -105,29 +105,33 @@ class KnowledgeIndex:
         """已装载的全部片段(供上层收集触发词等,免去二次解析知识库)"""
         return [entry[0] for entry in self._entries]
 
-    def _keyword_score(self, chunk: Chunk, q: str) -> float:
+    def _keyword_score(self, chunk: Chunk, q: str,
+                       tokens: list[str] | None = None) -> float:
+        """关键词命中分。
+
+        tokens 由调用方一次算好传进来:原先每评估一个 chunk 都要对查询串
+        重新跑一遍 _TOKEN_RE.findall,片段上百条时纯属重复劳动。
+        """
         score = 0.0
         for kw in chunk.keywords:
             if kw and kw not in STOPWORDS and kw in q:
                 score += W_KEYWORD
-        for tok in _TOKEN_RE.findall(q):
+        for tok in (_TOKEN_RE.findall(q) if tokens is None else tokens):
             if len(tok) >= 3 and tok not in STOPWORDS and tok in chunk.keywords:
                 score += W_KEYWORD * 0.5
         return score
 
     def _diversify(self, scored: list[tuple[Chunk, float]], top_k: int,
-                   query: str) -> list[tuple[Chunk, float]]:
+                   keyword_docs: set[str]) -> list[tuple[Chunk, float]]:
         """跨主题问题:同一文档最多占一半名额,避免一个主题的多个片段把 top-k 占满。
 
         只在检索结果里出现两个以上「关键词命中」文档时启用;单主题问题保持原排序,
         不会为了多样性硬塞一份无关资料。候选不足时仍用被压下的同文档片段补齐。
+
+        keyword_docs 由检索主循环顺带收集:这里不再重新计算一遍关键词分。
         """
         if top_k <= 1 or len(scored) <= top_k:
             return scored[:top_k]
-        keyword_docs = {
-            chunk.title for chunk, _ in scored
-            if self._keyword_score(chunk, query) > 0
-        }
         if len(keyword_docs) < 2:
             return scored[:top_k]
         per_doc = max(1, (top_k + 1) // 2)
@@ -161,8 +165,10 @@ class KnowledgeIndex:
                 q_vec = None
 
         scored: list[tuple[Chunk, float]] = []
+        tokens = _TOKEN_RE.findall(q)
+        keyword_docs: set[str] = set()
         for i, (c, title_grams, section_grams, body_grams) in enumerate(self._entries):
-            kw = self._keyword_score(c, q)
+            kw = self._keyword_score(c, q, tokens)
             score = kw
             score += W_TITLE * _overlap(q_grams, title_grams, self._idf)
             score += W_SECTION * _overlap(q_grams, section_grams, self._idf)
@@ -180,5 +186,8 @@ class KnowledgeIndex:
 
             if score >= MIN_SCORE:
                 scored.append((c, score))
+                # 只有真正进入候选集的片段才参与多样性判定(与原实现口径一致)
+                if kw > 0:
+                    keyword_docs.add(c.title)
         scored.sort(key=lambda x: -x[1])
-        return self._diversify(scored, top_k, q)
+        return self._diversify(scored, top_k, keyword_docs)

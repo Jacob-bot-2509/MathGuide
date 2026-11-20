@@ -35,8 +35,11 @@ async def graph_data(request: Request) -> JSONResponse:
     nodes: list[dict] = []
     edges: list[dict] = []
     chapters: list[str] = []
+    seen_chapters: set[str] = set()
     for point in graph.points.values():
-        if point.chapter not in chapters:
+        # 用集合判重:原先 `chapter not in chapters` 是列表扫描,章节一多就是 O(n²)
+        if point.chapter not in seen_chapters:
+            seen_chapters.add(point.chapter)
             chapters.append(point.chapter)
         entry = latest.get(point.id, {})
         score = entry.get("score")

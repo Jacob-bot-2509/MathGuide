@@ -18,8 +18,10 @@ WEAK_LIMIT = 5
 
 def summarize(uid: str, graph=None) -> dict:
     graph = graph or diagnosis.get_graph()
+    # 一次全表扫描同时得到「全部记录」与「每点最后一次」;weak_report 复用这份 latest,
+    # 不再各自再查一遍(原实现一次画像请求要读 3 次 diagnoses)。
     entries = diagnosis.for_user(uid)
-    latest = diagnosis.latest(uid)
+    latest = diagnosis.latest_from(entries)
 
     scores = [
         entry["score"] for entry in latest.values()
@@ -64,7 +66,8 @@ def summarize(uid: str, graph=None) -> dict:
         "weak": weak,
         "averageScore": average,
         "chapters": chapters,
-        "weakPoints": diagnosis.weak_report(uid, graph)["weak"][:WEAK_LIMIT],
+        "weakPoints": diagnosis.weak_report(
+            uid, graph, latest_map=latest)["weak"][:WEAK_LIMIT],
         "recent": recent,
     }
 

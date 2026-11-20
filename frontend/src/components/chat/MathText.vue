@@ -369,9 +369,44 @@ function inlineNodes(
   })
 }
 
-function buildNodes(text: string): VNode[] {
+/**
+ * 正文解析结果缓存:isolateMath + 逐行解析是整个渲染里最贵的部分,
+ * 而父组件因为滚动/面板开合等无关状态重渲染时 props.text 往往没变。
+ * 命中缓存只重建 VNode,不重复切分与正则扫描(流式期间每帧仍是新文本,
+ * 解析次数与原来一致,不会更慢)。key 用原文,LRU 淘汰。
+ */
+interface ParsedDoc {
+  formulas: IsolatedFormula[]
+  segs: Seg[]
+}
+
+const PARSED_CACHE_MAX = 16
+const parsedCache = new Map<string, ParsedDoc>()
+
+function parseDocument(text: string): ParsedDoc {
+  const hit = parsedCache.get(text)
+  if (hit) {
+    // 触碰即算最近使用:先删后插,保证 Map 迭代顺序即 LRU 顺序
+    parsedCache.delete(text)
+    parsedCache.set(text, hit)
+    return hit
+  }
   const isolated = isolateMath(text)
-  return parse(isolated.text, isolated.formulas).map((s, i) => {
+  const doc: ParsedDoc = {
+    formulas: isolated.formulas,
+    segs: parse(isolated.text, isolated.formulas),
+  }
+  if (parsedCache.size >= PARSED_CACHE_MAX) {
+    const oldest = parsedCache.keys().next().value
+    if (oldest !== undefined) parsedCache.delete(oldest)
+  }
+  parsedCache.set(text, doc)
+  return doc
+}
+
+function buildNodes(text: string): VNode[] {
+  const { formulas, segs } = parseDocument(text)
+  return segs.map((s, i) => {
     switch (s.type) {
       case 'text':
         return h('span', { key: i }, s.value)
@@ -388,7 +423,7 @@ function buildNodes(text: string): VNode[] {
       case 'hr':
         return h('hr', { key: i, class: 'seg-hr' })
       case 'quote':
-        return h('div', { key: i, class: 'seg-quote' }, inlineNodes(s.value, `quote-${i}`, isolated.formulas))
+        return h('div', { key: i, class: 'seg-quote' }, inlineNodes(s.value, `quote-${i}`, formulas))
       case 'table': {
         const header = s.header || []
         const rows = s.rows || []
@@ -400,14 +435,14 @@ function buildNodes(text: string): VNode[] {
             h('thead', null, [
               h('tr', null, header.map((cell, j) => h(
                 'th', { key: j, style: { textAlign: align(j) } },
-                inlineNodes(cell, `${i}-h-${j}`, isolated.formulas, true),
+                inlineNodes(cell, `${i}-h-${j}`, formulas, true),
               ))),
             ]),
             h('tbody', null, rows.map((row, r) => h(
               'tr', { key: r },
               header.map((_cell, j) => h(
                 'td', { key: j, style: { textAlign: align(j) } },
-                inlineNodes(row[j] || '', `${i}-${r}-${j}`, isolated.formulas, true),
+                inlineNodes(row[j] || '', `${i}-${r}-${j}`, formulas, true),
               )),
             ))),
           ]),

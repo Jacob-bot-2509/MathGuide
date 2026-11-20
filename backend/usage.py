@@ -56,7 +56,8 @@ def init() -> None:
     global _ready_key
     db.init()
     key = f"{db.DB_PATH}"
-    if _ready_key == key and db.get_meta(MIGRATION_KEY) == "1":
+    # 与 store/diagnosis 一致:命中标记后不再多查一次 meta(每次记录用量都会走到这里)
+    if _ready_key == key:
         return
     with db.transaction() as conn:
         conn.execute("BEGIN IMMEDIATE")

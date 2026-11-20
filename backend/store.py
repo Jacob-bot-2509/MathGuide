@@ -110,7 +110,9 @@ def init() -> None:
     global _ready_key
     db.init()
     key = str(db.DB_PATH)
-    if _ready_key == key and db.get_meta(MIGRATION_KEY) == "1":
+    # _ready_key 只在「迁移完成 + meta 已标记」之后设置,命中时无需再查 meta:
+    # 去掉每个鉴权请求多出来的一次 SELECT meta 连接。
+    if _ready_key == key:
         return
     with db.transaction() as conn:
         conn.execute("BEGIN IMMEDIATE")

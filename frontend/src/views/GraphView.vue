@@ -17,13 +17,12 @@ import {
   fetchRecommendation,
   submitSelfRating,
   type GraphData,
-  type GraphEdge,
   type GraphNode,
   type Recommendation,
   type RecommendationItem,
   type RecommendStrategy,
 } from '@/services/graphService'
-import { resolveLayout, type GraphPosition } from '@/utils/graphLayout'
+import { resolveLayout } from '@/utils/graphLayout'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import { downloadBlob } from '@/services/docService'
@@ -83,28 +82,45 @@ const matches = computed(() => {
   ).slice(0, 8)
 })
 
+/**
+ * 画布几何预计算:拖拽/缩放只改 viewBox(view 的 x/y/w/h),
+ * 若模板里逐元素调用 pos()/isDim()/label(),每次 pointermove 都要把
+ * 全部节点与边重算一遍。放进 computed 后平移缩放只更新一个属性,
+ * 几何只在布局或章节筛选变化时重算。
+ */
+const edgeGeoms = computed(() =>
+  edges.value.map((edge, index) => {
+    const from = layout.value.positions[edge.source] ?? { x: 0, y: 0, level: 0 }
+    const to = layout.value.positions[edge.target] ?? { x: 0, y: 0, level: 0 }
+    const source = nodeById.value.get(edge.source)
+    const target = nodeById.value.get(edge.target)
+    return {
+      key: `${edge.source}-${edge.target}-${index}`,
+      x1: from.x + NODE_HALF_W,
+      y1: from.y,
+      x2: to.x - NODE_HALF_W - 2,
+      y2: to.y,
+      dim: Boolean(activeChapter.value)
+        && (source?.chapter !== activeChapter.value || target?.chapter !== activeChapter.value),
+    }
+  }),
+)
+
+const nodeGeoms = computed(() =>
+  nodes.value.map((node) => {
+    const point = layout.value.positions[node.id] ?? { x: 0, y: 0, level: 0 }
+    return {
+      node,
+      x: point.x,
+      y: point.y,
+      label: node.name.length > 12 ? `${node.name.slice(0, 11)}…` : node.name,
+      dim: Boolean(activeChapter.value) && node.chapter !== activeChapter.value,
+    }
+  }),
+)
+
 function resolve(ids: string[]): GraphNode[] {
   return ids.map((id) => nodeById.value.get(id)).filter((node): node is GraphNode => Boolean(node))
-}
-
-function pos(id: string): GraphPosition {
-  return layout.value.positions[id] ?? { x: 0, y: 0, level: 0 }
-}
-
-function label(name: string): string {
-  return name.length > 12 ? `${name.slice(0, 11)}…` : name
-}
-
-function isDim(node: GraphNode): boolean {
-  return Boolean(activeChapter.value) && node.chapter !== activeChapter.value
-}
-
-function isEdgeDim(edge: GraphEdge): boolean {
-  if (!activeChapter.value) return false
-  const source = nodeById.value.get(edge.source)
-  const target = nodeById.value.get(edge.target)
-  return source?.chapter !== activeChapter.value
-    || target?.chapter !== activeChapter.value
 }
 
 function aspectRatio(): number {
@@ -246,8 +262,12 @@ async function rate(score: number) {
   try {
     await submitSelfRating(selected.value.id, score)
     showToast(t('graph.rated'))
-    data.value = await fetchGraph()
-    await loadRecommendation()
+    // 图谱与推荐互不依赖:并发取回,少等一个往返;推荐在提交诊断后发起,
+    // 拿到的仍是本次评分后的结果
+    const graphTask = fetchGraph()
+    const recommendationTask = loadRecommendation()
+    data.value = await graphTask
+    await recommendationTask
   } catch (err) {
     if (statusOf(err) === 401) {
       router.replace('/login')
@@ -304,10 +324,12 @@ function recLabel(item: RecommendationItem): string {
 }
 
 onMounted(async () => {
+  // 图谱与推荐互不依赖,同时发出:首屏少等一个往返
+  const recommendationTask = loadRecommendation()
   try {
     data.value = await fetchGraph()
     resetView()
-    await loadRecommendation()
+    await recommendationTask
     // 从学习分析/分析面板跳转过来时聚焦指定知识点
     const focus = route.query.focus
     if (typeof focus === 'string' && focus) selectById(focus)
@@ -410,29 +432,29 @@ onBeforeUnmount(() => {
 
         <g class="edges">
           <line
-            v-for="(edge, index) in edges"
-            :key="`${edge.source}-${edge.target}-${index}`"
-            :x1="pos(edge.source).x + NODE_HALF_W"
-            :y1="pos(edge.source).y"
-            :x2="pos(edge.target).x - NODE_HALF_W - 2"
-            :y2="pos(edge.target).y"
-            :class="{ dim: isEdgeDim(edge) }"
+            v-for="edge in edgeGeoms"
+            :key="edge.key"
+            :x1="edge.x1"
+            :y1="edge.y1"
+            :x2="edge.x2"
+            :y2="edge.y2"
+            :class="{ dim: edge.dim }"
             marker-end="url(#mg-arrow)"
           />
         </g>
 
         <g class="nodes">
           <g
-            v-for="node in nodes"
-            :key="node.id"
+            v-for="geom in nodeGeoms"
+            :key="geom.node.id"
             class="node"
-            :class="[`is-${node.status}`, { dim: isDim(node), selected: node.id === selectedId }]"
-            :transform="`translate(${pos(node.id).x} ${pos(node.id).y})`"
-            @click.stop="select(node)"
+            :class="[`is-${geom.node.status}`, { dim: geom.dim, selected: geom.node.id === selectedId }]"
+            :transform="`translate(${geom.x} ${geom.y})`"
+            @click.stop="select(geom.node)"
           >
             <rect x="-82" y="-18" width="164" height="36" rx="8" />
             <circle cx="-67" cy="0" r="4" class="dot" />
-            <text text-anchor="middle" dy="4.5">{{ label(node.name) }}</text>
+            <text text-anchor="middle" dy="4.5">{{ geom.label }}</text>
           </g>
         </g>
       </svg>
