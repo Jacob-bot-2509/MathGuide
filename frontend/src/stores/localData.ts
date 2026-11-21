@@ -8,6 +8,7 @@
  * 退出登录**不删**:同一账号重登必须原样看到自己的历史(曾因登出即清而被当成"数据丢失")。
  */
 import { clearConvertCache } from '@/utils/speechMath'
+import { clearBooks } from '@/utils/bookStore'
 import { clearNotebook } from './notebook'
 import { clearAllSessions } from './sessions'
 import { clearTrash } from './trash'
@@ -31,6 +32,8 @@ export function clearLearningData(): void {
   clearTrash()
   clearNotebook()
   clearConvertCache()
+  // 教材原文/目录/章节指引缓存同样属于本机数据,换账号或清除数据时一并删除
+  void clearBooks()
   try {
     localStorage.removeItem(OWNER_KEY)
   } catch {

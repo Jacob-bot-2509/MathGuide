@@ -8,11 +8,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   compressImage: vi.fn(async () => 'data:image/png;base64,AAA'),
-  extractPdfText: vi.fn(async () => ''),
+  readPdfBook: vi.fn(async () => ({
+    hash: 'hash-1',
+    pages: ['PDF 正文'],
+    outline: [],
+    pageCount: 1,
+    truncated: false,
+  })),
+  saveBook: vi.fn(async () => true),
+  loadBook: vi.fn(async (): Promise<unknown> => null),
 }))
 
 vi.mock('@/utils/avatar', () => ({ compressImage: mocks.compressImage }))
-vi.mock('@/utils/fileText', () => ({ extractPdfText: mocks.extractPdfText }))
+vi.mock('@/utils/pdfBook', () => ({
+  readPdfBook: mocks.readPdfBook,
+  MAX_BOOK_PAGES: 500,
+}))
+vi.mock('@/utils/bookStore', () => ({
+  saveBook: mocks.saveBook,
+  loadBook: mocks.loadBook,
+}))
 
 import { useChatAttachments, type ChatAttachmentDeps } from '@/composables/useChatAttachments'
 import { FALLBACK_CATEGORY } from '@/utils/classifier'
@@ -60,8 +75,18 @@ function fileOf(name: string, type: string, content = 'body'): File {
 
 beforeEach(() => {
   mocks.compressImage.mockClear()
-  mocks.extractPdfText.mockReset()
-  mocks.extractPdfText.mockResolvedValue('')
+  mocks.readPdfBook.mockReset()
+  mocks.readPdfBook.mockResolvedValue({
+    hash: 'hash-1',
+    pages: ['PDF 正文'],
+    outline: [],
+    pageCount: 1,
+    truncated: false,
+  })
+  mocks.saveBook.mockReset()
+  mocks.saveBook.mockResolvedValue(true)
+  mocks.loadBook.mockReset()
+  mocks.loadBook.mockResolvedValue(null)
 })
 
 describe('useChatAttachments 附件消息', () => {
@@ -120,33 +145,95 @@ describe('useChatAttachments 三条输入通道', () => {
     expect(attach?.url).toBe('data:image/png;base64,AAA')
   })
 
-  it('文本文件:正文截断到 3 万字随附件保存', async () => {
+  it('图片压缩期间切换会话时提示重选', async () => {
+    const original: ChatSession = { id: 1, messages: [] }
+    const other: ChatSession = { id: 2, messages: [] }
+    let active = original
+    let finish!: (value: string) => void
+    mocks.compressImage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const { state, api } = makeHarness({ activeSession: () => active })
+    const pending = api.importImageFile(fileOf('shot.png', 'image/png'))
+    active = other
+    finish('data:image/png;base64,AAA')
+    await pending
+    expect(original.messages).toHaveLength(0)
+    expect(other.messages).toHaveLength(0)
+    expect(state.toasts).toContain(t('learn.toastAttachSessionChanged'))
+  })
+
+  it('文本文件:正文截断到 20 万字随附件保存', async () => {
     const { state, api } = makeHarness()
-    const long = 'x'.repeat(31000)
+    const long = 'x'.repeat(210000)
 
     await api.attachFileItem(fileOf('note.md', 'text/markdown', long))
 
     const attach = state.session.messages[0].attachment
-    expect(attach?.text?.length).toBe(30000)
+    expect(attach?.text?.length).toBe(200000)
   })
 
   it('扫描版 PDF(无文本层):按普通文件接收并提示', async () => {
     const { state, api } = makeHarness()
-    mocks.extractPdfText.mockResolvedValue('')
+    mocks.readPdfBook.mockResolvedValue({
+      hash: 'scan', pages: ['', ''], outline: [], pageCount: 2, truncated: false,
+    })
 
     await api.attachFileItem(fileOf('scan.pdf', 'application/pdf'))
 
     expect(state.session.messages[0].attachment?.text).toBeUndefined()
+    expect(state.session.messages[0].attachment?.bookId).toBeUndefined()
     expect(state.toasts).toContain(t('learn.toastPdfNoText'))
   })
 
-  it('有文本层的 PDF:正文进附件', async () => {
+  it('有文本层的 PDF:存书库,附件只带 bookId 与页数', async () => {
     const { state, api } = makeHarness()
-    mocks.extractPdfText.mockResolvedValue('PDF 正文')
 
-    await api.attachFileItem(fileOf('paper.pdf', 'application/pdf'))
+    await api.attachFileItem(fileOf('book.pdf', 'application/pdf'))
 
-    expect(state.session.messages[0].attachment?.text).toBe('PDF 正文')
+    const attach = state.session.messages[0].attachment
+    expect(attach?.bookId).toBe('hash-1')
+    expect(attach?.bookPages).toBe(1)
+    expect(attach?.text).toBeUndefined()
+    expect(mocks.saveBook).toHaveBeenCalledTimes(1)
+    expect(state.toasts).toContain(t('learn.toastBookReady', { n: 1 }))
+  })
+
+  it('解析期间切换会话时不会将 PDF 加入新会话', async () => {
+    const original: ChatSession = { id: 1, messages: [] }
+    const other: ChatSession = { id: 2, messages: [] }
+    let active = original
+    let finish!: (value: { hash: string; pages: string[]; outline: never[]; pageCount: number; truncated: boolean }) => void
+    mocks.readPdfBook.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const { state, api } = makeHarness({ activeSession: () => active })
+    const pending = api.attachFileItem(fileOf('book.pdf', 'application/pdf'))
+    active = other
+    finish({ hash: 'hash-race', pages: ['正文'], outline: [], pageCount: 1, truncated: false })
+    await pending
+    expect(original.messages).toHaveLength(0)
+    expect(other.messages).toHaveLength(0)
+    expect(state.toasts).toContain(t('learn.toastAttachSessionChanged'))
+    expect(state.toasts).not.toContain(t('learn.toastBookReady', { n: 1 }))
+  })
+
+  it('同一本教材已缓存:不重复解析写库', async () => {
+    const { state, api } = makeHarness()
+    mocks.loadBook.mockResolvedValue({ hash: 'hash-1', pages: ['PDF 正文'] })
+
+    await api.attachFileItem(fileOf('book.pdf', 'application/pdf'))
+
+    expect(mocks.saveBook).not.toHaveBeenCalled()
+    expect(state.session.messages[0].attachment?.bookId).toBe('hash-1')
+  })
+
+  it('超过 500 页:拒绝并提示,不生成附件消息', async () => {
+    const { state, api } = makeHarness()
+    mocks.readPdfBook.mockResolvedValue({
+      hash: 'big', pages: ['x'], outline: [], pageCount: 501, truncated: true,
+    })
+
+    await api.attachFileItem(fileOf('big.pdf', 'application/pdf'))
+
+    expect(state.session.messages).toHaveLength(0)
+    expect(state.toasts).toContain(t('learn.toastBookTooLarge'))
   })
 
   it('科研区的论文文件走临时语料,不进对话附件', async () => {
@@ -161,14 +248,21 @@ describe('useChatAttachments 三条输入通道', () => {
 
   it('学习区的同一个 PDF 走普通附件', async () => {
     const { state, api } = makeHarness()
-    mocks.extractPdfText.mockResolvedValue('正文')
 
     api.onFile({ target: { files: [fileOf('p.pdf', 'application/pdf')], value: '' } } as unknown as Event)
-    await Promise.resolve()
-    await Promise.resolve()
+    await vi.waitFor(() => {
+      expect(state.session.messages.length).toBeGreaterThan(0)
+    })
 
     expect(state.staged).toEqual([])
-    expect(state.session.messages.length).toBeGreaterThan(0)
+  })
+
+  it('连续拖入时遇到生成中会提示,不静默丢弃后续文件', async () => {
+    const { state, api } = makeHarness()
+    const files = ['a.txt', 'b.txt'].map((name) => fileOf(name, 'text/plain'))
+    await api.onDropFiles({ dataTransfer: { files }, preventDefault: () => {} } as unknown as DragEvent)
+    expect(state.session.messages[0].attachment?.name).toBe('a.txt')
+    expect(state.toasts).toContain(t('learn.toastAttachBusy'))
   })
 
   it('拖入超过 3 个文件:提示且一个都不入库', async () => {

@@ -164,18 +164,19 @@ def test_verify_answer_degrades_to_uncertain(monkeypatch):
 # ---------- 复核三态接线:_gen_llm(verify=True) ----------
 
 def _verify_reply(monkeypatch, verdict: dict | None, *, role: str = "main",
-                  workspace: str = "learn") -> tuple[str, dict]:
+                  workspace: str = "learn", question: str = "1+1=?") -> tuple[str, dict]:
     monkeypatch.setattr(chat.rag.llm, "stream_chat", _fake_llm(["正文回答"]))
     monkeypatch.setattr(chat.rag.llm, "pick", lambda name: name)
     captured: dict = {}
 
-    async def fake_verify(question, answer, vrole):
+    async def fake_verify(question, answer, vrole, zh=True):
         captured["vrole"] = vrole
+        captured["zh"] = zh
         return verdict
 
     monkeypatch.setattr(chat, "_verify_answer", fake_verify)
     frames = _collect(chat._gen_llm(
-        "1+1=?", None, [], role=role, verify=True, workspace=workspace))
+        question, None, [], role=role, verify=True, workspace=workspace))
     return _joined(frames), captured
 
 
@@ -219,6 +220,35 @@ def test_verify_skipped_when_unavailable_and_role_deep_verified_by_main(monkeypa
         role="deep", workspace="research")
     assert captured["vrole"] == "main"
     assert "cmd://nb/yes" not in text
+
+
+def test_answer_language_uses_question_then_history():
+    assert chat._answer_is_zh("求导 x^2") is True
+    assert chat._answer_is_zh("What is the derivative of x^2?") is False
+    # 纯数字/符号无法判断语言:默认中文
+    assert chat._answer_is_zh("1+1=?") is True
+    # 纯符号问句沿用最近一条带语言的历史
+    assert chat._answer_is_zh(
+        "1+1=?", [{"role": "assistant", "content": "Let f(x)=x^2."}]) is False
+    assert chat._answer_is_zh(
+        "1+1=?", [{"role": "user", "content": "求导"}]) is True
+
+
+def test_english_question_gets_english_review_line(monkeypatch):
+    text, captured = _verify_reply(
+        monkeypatch,
+        {"verdict": "correct", "issue": "The limit is correct", "correction": ""},
+        question="What is the derivative of x^2?")
+    assert captured["zh"] is False
+    assert "Review (deep):correct" in text
+    assert "复核" not in text
+
+
+def test_build_system_english_has_no_chinese_style_instructions():
+    system = chat.rag.build_system([], None, zh=False)
+    assert "Answer entirely in English" in system
+    assert "**Key idea**" in system
+    assert "参考思路" not in system
 
 
 
@@ -575,6 +605,38 @@ def test_route_nav_guide_reads_cached_textbook(monkeypatch):
     assert captured["tb"] == textbook
 
 
+def test_gen_nav_guide_keeps_inline_chapter_text_and_skips_stale_cache(monkeypatch):
+    """目录优先链路:章节正文由前端内联发送,不能被 2000 字截断,也不能再拼旧缓存。"""
+    captured: dict = {}
+
+    async def fake_stream(system, user, **kwargs):
+        captured["user"] = user
+        yield "指引"
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    chapter = "第三章 积分 " + "正" * 5000
+    text = _joined(_collect(chat._gen_nav_guide(
+        f"请给出「第三章 积分」这一章的大概知识指引\n\n<教材文本>:\n{chapter}",
+        tb="旧目录缓存")))
+
+    assert "指引" in text
+    assert "正" * 5000 in captured["user"]
+    assert "旧目录缓存" not in captured["user"]
+
+
+def test_gen_nav_guide_appends_cached_textbook_for_legacy_path(monkeypatch):
+    captured: dict = {}
+
+    async def fake_stream(system, user, **kwargs):
+        captured["user"] = user
+        yield "指引"
+
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
+    _joined(_collect(chat._gen_nav_guide("第二章", tb="缓存正文")))
+
+    assert "缓存正文" in captured["user"]
+
+
 def test_gen_nav_list_and_guide_degrade_by_stream_position(monkeypatch):
     monkeypatch.setattr(chat.rag.llm, "stream_chat", _fake_llm(raises=RuntimeError("boom")))
     assert "章节导航调用失败" in _joined(_collect(chat._gen_nav_list("教材")))
@@ -590,6 +652,14 @@ def test_gen_nav_guide_appends_back_button_only_on_success(monkeypatch):
     monkeypatch.setattr(chat.rag.llm, "stream_chat", _fake_llm(["指引正文"]))
     text = _joined(_collect(chat._gen_nav_guide("第二章", tb="教材")))
     assert "指引正文" in text and "cmd://back" in text
+
+
+def test_gen_nav_guide_preserves_full_inline_chapter(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(chat.rag.llm, "stream_chat", _fake_llm(["指引正文"], capture=captured))
+    question = "请讲解第二章\n\n<教材文本>:\n" + "字" * (chat.TEXTBOOK_CAP - 1) + "尾"
+    _collect(chat._gen_nav_guide(question))
+    assert captured["user"] == question
 
 
 # ---------- 公式手册:澄清第一步(不检索、独立复核、失败降级) ----------
@@ -614,7 +684,7 @@ def test_gen_formula_clarify_streams_then_appends_review(monkeypatch):
     monkeypatch.setattr(chat.rag.llm, "stream_chat", _fake_llm(["你想查哪个知识点?"]))
     monkeypatch.setattr(chat.rag.llm, "pick", lambda role: "deep")
 
-    async def fake_verify(question, answer, role):
+    async def fake_verify(question, answer, role, zh=True):
         return "符合要求:只问了知识点"
 
     monkeypatch.setattr(chat, "_verify_clarify", fake_verify)

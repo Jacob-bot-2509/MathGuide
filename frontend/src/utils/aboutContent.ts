@@ -6,9 +6,9 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.29.0'
-export const APP_STABLE_VERSION = 'v1.29.0'
-export const APP_STABLE_DATE = '2026-11-20'
+export const APP_VERSION = 'v1.30.0'
+export const APP_STABLE_VERSION = 'v1.30.0'
+export const APP_STABLE_DATE = '2026-11-21'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
 export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
@@ -51,6 +51,33 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '整本教材不再一次塞给模型:PDF 最多 500 页,有书签直接本地出目录;没有书签只读前 20 页目录区。点某一章才送该章正文(≤20 万字),原文、目录和章节指引都缓存在本机 IndexedDB,重复访问不再调用模型。',
+        en: 'Textbooks are no longer sent to the model whole: PDFs up to 500 pages read their outline locally when bookmarks exist, otherwise only the first 20 pages of front matter. Opening a chapter sends only that chapter (up to 200k characters), and the text, outline and chapter guides are cached in IndexedDB so repeat visits make no model call.',
+      },
+      {
+        zh: '曲面图的法向量按方程计算:z=f(x,y) 用 (-f_x,-f_y,1),平面/球面/圆柱用各自的几何法向,不再出现某点法向一律竖直的错误;投影区域会自动补画成洋红色并加半透明圆盘,截口与投影一眼能分开;标注过的对象不再因排不下被隐藏。',
+        en: 'Surface normals are now computed from the equation — (-fx,-fy,1) for z=f(x,y), and the true geometric normal for planes, spheres and cylinders — so a point normal is no longer forced vertical. Projection regions are drawn automatically in magenta with a translucent disk, clearly separated from the cut boundary, and labelled objects are no longer hidden just because labels are crowded.',
+      },
+      {
+        zh: '英文提问时整套系统提示、图解标题和复核行都改用英文,不再在推导末尾滑回中文;纯闲聊的回答不再显示“图解此段/换个直观说法”按钮。',
+        en: 'English questions now get an entirely English system prompt, diagram labels and review line, instead of drifting back into Chinese near the end; small-talk replies no longer offer the “diagram” and “explain intuitively” buttons.',
+      },
+      {
+        zh: 'iPad 与手机适配收口:局域网 HTTPS 调试、动态视口高度、指令弹窗贴边自动内收、深浅色切换同步根背景、图谱双指缩放;设置页退出登录区域不再先黑后白。',
+        en: 'iPad and phone polish: local HTTPS debugging, dynamic viewport height, command popovers clamped inside the screen, theme switches that update the root background immediately, and pinch-to-zoom on the graph. The sign-out area in Settings no longer flashes black before turning white.',
+      },
+      {
+        zh: '习题“换一批/预览”改用自己的 30 次/分限流桶,不再和聊天共用 6 次/分的额度,连续换几批不会突然提示生成失败。',
+        en: 'Exercise shuffle/preview now has its own 30-per-minute bucket instead of sharing the chat limit of six, so shuffling several batches no longer turns into a sudden “generation failed”.',
+      },
+    ],
+  },
+  {
+    version: 'v1.29.0',
+    date: '2026-11-20',
+    status: 'released',
     items: [
       {
         zh: '登录与切页不再反复做同一件功课:后端每个请求原本都要重跑一次建表、再多查一次迁移标记,现在每个库只做一次。这一层数据库动作省下来之后,登录、图谱、画像这些入口的响应都缩短了一截,而它们返回的内容与之前一字不差。',

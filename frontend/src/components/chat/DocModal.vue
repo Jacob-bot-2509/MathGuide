@@ -32,11 +32,17 @@ import {
 import { settingsState } from '@/stores/settings'
 import type { ChatMsg } from '@/stores/sessions'
 import type { NotebookEntry } from '@/stores/notebook'
+import type { DocHistoryQa } from '@/utils/docHistory'
 import { t } from '@/utils/i18n'
 import { mergeExcludeIds, nextShuffleSeed, shouldConfirmExercise } from '@/utils/exerciseBatch'
 import { showToast } from '@/utils/toast'
 
-const props = defineProps<{ messages: ChatMsg[]; entries: NotebookEntry[] }>()
+const props = defineProps<{
+  messages: ChatMsg[]
+  entries: NotebookEntry[]
+  /** 问题归纳面板里的历史问答(会话中的问题+回答) */
+  historyQa?: DocHistoryQa[]
+}>()
 const emit = defineEmits<{ close: [] }>()
 
 type Step = 'choose' | 'reading' | 'chat' | 'notebook' | 'custom' | 'outlining' | 'outline' | 'generating' | 'preview' | 'done'
@@ -59,7 +65,27 @@ const panelEl = ref<HTMLElement | null>(null)
 const questions = ref<DocQuestion[]>([])
 const chatRecent = ref<ChatMsg[]>([])
 const selectedChat = ref<number[]>([])
-const selectedNotes = ref<number[]>([])
+// 归纳本词条与历史问答统一用字符串键(n:词条id / h:会话id:消息id),
+// 两套数字 id 可能撞车,不能直接混在一个数组里。
+const selectedNotes = ref<string[]>([])
+
+/** 「在问题归纳中选择」的可选列表:显式收录的词条 + 面板里的历史问答 */
+const notebookOptions = computed(() => {
+  const out: Array<{ key: string; question: string; answer: string }> = []
+  const seen = new Set<string>()
+  for (const entry of props.entries) {
+    const key = `n:${entry.id}`
+    out.push({ key, question: entry.question, answer: entry.answer })
+    seen.add(`${entry.question}\u0000${entry.answer}`)
+  }
+  for (const item of props.historyQa ?? []) {
+    const sig = `${item.question}\u0000${item.answer}`
+    if (seen.has(sig)) continue
+    seen.add(sig)
+    out.push({ key: item.key, question: item.question, answer: item.answer })
+  }
+  return out
+})
 
 const custom = ref('')
 const docKind = ref<'document' | 'exercise'>('document')
@@ -157,6 +183,7 @@ function errorText(err: unknown, fallback: string): string {
     return en.value ? err.message : `公式无法转换为 Word 公式：${err.message.split(':').slice(1).join(':').trim()}`
   }
   if (statusOf(err) === 422) return t('doc.noEvidence')
+  if (statusOf(err) === 429) return t('doc.rateLimited')
   if (statusOf(err) === 503) return t('doc.retrievalFailed')
   return fallback
 }
@@ -313,16 +340,16 @@ function generateExercise(): void {
   })()
 }
 
-function toggle(list: number[], id: number): number[] {
-  return list.includes(id) ? list.filter((item) => item !== id) : [...list, id]
+function toggle<T>(list: T[], value: T): T[] {
+  return list.includes(value) ? list.filter((item) => item !== value) : [...list, value]
 }
 
 function toggleChat(id: number): void {
   selectedChat.value = toggle(selectedChat.value, id)
 }
 
-function toggleNote(id: number): void {
-  selectedNotes.value = toggle(selectedNotes.value, id)
+function toggleNote(key: string): void {
+  selectedNotes.value = toggle(selectedNotes.value, key)
 }
 
 function selectAllChat(): void {
@@ -334,7 +361,7 @@ function clearChat(): void {
 }
 
 function selectAllNotes(): void {
-  selectedNotes.value = props.entries.map((entry) => entry.id)
+  selectedNotes.value = notebookOptions.value.map((item) => item.key)
 }
 
 function clearNotes(): void {
@@ -362,9 +389,9 @@ function chatItems() {
 }
 
 function noteItems() {
-  return props.entries
-    .filter((entry) => selectedNotes.value.includes(entry.id))
-    .map((entry) => ({ question: entry.question, answer: entry.answer }))
+  return notebookOptions.value
+    .filter((item) => selectedNotes.value.includes(item.key))
+    .map((item) => ({ question: item.question, answer: item.answer }))
 }
 
 async function downloadQa(items: Array<{ question: string; answer: string }>, source: string): Promise<void> {
@@ -671,9 +698,9 @@ focusPanel()
           <template v-else-if="step === 'notebook'">
             <div class="step-head">
               <h2 class="prompt">{{ t('doc.notebook') }}</h2>
-              <span class="count">{{ t('doc.itemCount', { n: entries.length }) }}</span>
+              <span class="count">{{ t('doc.itemCount', { n: notebookOptions.length }) }}</span>
             </div>
-            <p v-if="!entries.length" class="empty">{{ t('doc.noNotebook') }}</p>
+            <p v-if="!notebookOptions.length" class="empty">{{ t('doc.noNotebook') }}</p>
             <template v-else>
               <div class="bulk">
                 <button class="mini" @click="selectAllNotes">{{ t('doc.selectAll') }}</button>
@@ -681,14 +708,14 @@ focusPanel()
                 <span class="count">{{ noteSelectedCount }}</span>
               </div>
               <ul class="pick-list">
-                <li v-for="entry in entries" :key="entry.id" class="pick-item">
+                <li v-for="item in notebookOptions" :key="item.key" class="pick-item">
                   <label>
                     <input
                       type="checkbox"
-                      :checked="selectedNotes.includes(entry.id)"
-                      @change="toggleNote(entry.id)"
+                      :checked="selectedNotes.includes(item.key)"
+                      @change="toggleNote(item.key)"
                     />
-                    <span class="pick-text">{{ entry.question }}</span>
+                    <span class="pick-text">{{ item.question }}</span>
                   </label>
                 </li>
               </ul>

@@ -7,7 +7,7 @@
  * 子域判定错会把用户带到错误的学习/科研区。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chapterNameFromCmd } from '@/utils/cmdLink'
+import { chapterNameFromCmd, chapterPageFromCmd } from '@/utils/cmdLink'
 import { fitSegments, residualSegments, type RegressionResultLike } from '@/utils/regressionChart'
 import { showToast, toast } from '@/utils/toast'
 import {
@@ -25,6 +25,14 @@ describe('cmdLink', () => {
 
   it('解出百分号编码的章节名', () => {
     expect(chapterNameFromCmd('cmd://chapter/%E6%9E%81%E9%99%90')).toBe('极限')
+  })
+
+  it('同名书签的页码与标题分离并拒绝非法值', () => {
+    const link = 'cmd://chapter/' + encodeURIComponent('习题') + '?page=12'
+    expect(chapterNameFromCmd(link)).toBe('习题')
+    expect(chapterPageFromCmd(link)).toBe(12)
+    expect(chapterPageFromCmd('cmd://chapter/习题?page=-1')).toBeNull()
+    expect(chapterPageFromCmd('cmd://chapter/习题?page=999999999999999999999')).toBeNull()
   })
 
   it('畸形编码退回原始文本,而不是抛 URIError', () => {

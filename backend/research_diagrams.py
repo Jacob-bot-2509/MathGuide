@@ -664,6 +664,10 @@ def select_segments(
 
 
 
+def _has_cjk(text: str) -> bool:
+    return any("一" <= ch <= "鿿" for ch in text or "")
+
+
 def _text(value: object, limit: int) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
@@ -980,6 +984,146 @@ def _refine_gradient(shapes: list[dict]) -> None:
         round(x0 + dx, 6), round(y0 + dy, 6),
         round(z0 + gx * dx + gy * dy, 6),
     ]
+
+
+def _refine_normal_from_solid(shapes: list[dict], normal_re: re.Pattern) -> None:
+    """没有 z=f(x,y) 曲面时,用平面法向量/球面径向修正“法向量”箭头。"""
+    plane = next((
+        shape for shape in shapes
+        if shape.get("kind") == "plane"
+        and isinstance(shape.get("normal"), list) and len(shape["normal"]) >= 3
+    ), None)
+    sphere = next((
+        shape for shape in shapes
+        if shape.get("kind") == "sphere"
+        and all(isinstance(shape.get(key), (int, float))
+                for key in ("x", "y", "z"))
+    ), None)
+    cylinder = next((
+        shape for shape in shapes
+        if shape.get("kind") == "cylinder"
+        and all(isinstance(shape.get(key), (int, float))
+                for key in ("x", "y", "z"))
+    ), None)
+    if plane is None and sphere is None and cylinder is None:
+        return
+    for shape in shapes:
+        if shape.get("kind") != "vector":
+            continue
+        label = str(shape.get("label") or "")
+        if not normal_re.search(label) and "∇F" not in label:
+            continue
+        start = shape.get("from")
+        end = shape.get("to")
+        if not (isinstance(start, list) and len(start) >= 3
+                and isinstance(end, list) and len(end) >= 3):
+            continue
+        try:
+            x0, y0, z0 = float(start[0]), float(start[1]), float(start[2])
+            if plane is not None:
+                nx, ny, nz = (float(plane["normal"][0]), float(plane["normal"][1]),
+                              float(plane["normal"][2]))
+            elif sphere is not None:
+                nx, ny, nz = (x0 - float(sphere["x"]), y0 - float(sphere["y"]),
+                              z0 - float(sphere["z"]))
+            else:
+                # 竖直圆柱:法向在 xy 平面内、从轴线指向该点
+                nx, ny, nz = (x0 - float(cylinder["x"]),
+                              y0 - float(cylinder["y"]), 0.0)
+            dx, dy, dz = (float(end[0]) - x0, float(end[1]) - y0,
+                          float(end[2]) - z0)
+        except (TypeError, ValueError, IndexError):
+            continue
+        norm = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if not math.isfinite(norm) or norm < 1e-9:
+            continue
+        nx, ny, nz = nx / norm, ny / norm, nz / norm
+        dot = dx * nx + dy * ny + dz * nz
+        if dot < -1e-6 or (abs(dot) <= 1e-6 and nz < 0):
+            nx, ny, nz = -nx, -ny, -nz
+        length = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if length < 1e-6:
+            length = 1.0
+        shape["to"] = [
+            round(x0 + nx * length, 6),
+            round(y0 + ny * length, 6),
+            round(z0 + nz * length, 6),
+        ]
+
+
+def _refine_surface_normal(shapes: list[dict]) -> None:
+    """曲面 z=f(x,y) 上的法向量由表达式求偏导,不采用模型手估的竖直箭头。
+
+    典型错误:第二类曲面积分图中把某点法向量画成 (0,0,1),与 z 轴平行。
+    对 z=f(x,y),正确法向是 (-f_x, -f_y, 1)(上侧);这里只修正明确标成
+    法向量的箭头,并保留模型原本的朝向(上/下侧),不碰梯度或普通向量。
+    """
+    surface = next((
+        shape for shape in shapes
+        if shape.get("kind") == "surface" and shape.get("expr")
+        and not isinstance(shape.get("points"), list)
+    ), None)
+    if surface is None:
+        surface = next((
+            shape for shape in shapes
+            if shape.get("kind") == "surface" and shape.get("expr")
+        ), None)
+    normal_re = re.compile(
+        r"法向|法向量|外法向|内法向|单位法向|上侧|下侧|外侧|内侧|"
+        r"upward|downward|outward|inward|\bnormal\b|^n(?:\s|=|$)",
+        re.IGNORECASE)
+    if surface is None:
+        _refine_normal_from_solid(shapes, normal_re)
+        return
+    expr = str(surface.get("expr") or "").strip()
+    expr = re.sub(r"^\s*z\s*=\s*", "", expr, flags=re.IGNORECASE)
+    run = _compile_expr(expr, allow_y=True)
+    if run is None:
+        _refine_normal_from_solid(shapes, normal_re)
+        return
+    for shape in shapes:
+        if shape.get("kind") != "vector":
+            continue
+        label = str(shape.get("label") or "")
+        if not normal_re.search(label) and "∇F" not in label:
+            continue
+        start = shape.get("from")
+        end = shape.get("to")
+        if not (isinstance(start, list) and len(start) >= 3
+                and isinstance(end, list) and len(end) >= 3):
+            continue
+        try:
+            x0, y0, z0 = float(start[0]), float(start[1]), float(start[2])
+            h = 1e-4 * max(1.0, abs(x0), abs(y0))
+            fx = (run(x0 + h, y0) - run(x0 - h, y0)) / (2 * h)
+            fy = (run(x0, y0 + h) - run(x0, y0 - h)) / (2 * h)
+            surface_z = run(x0, y0)
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            continue
+        if not all(math.isfinite(value) for value in (fx, fy, surface_z)):
+            continue
+        # 起点必须落在这张曲面上,否则不是“曲面在一点的法向量”
+        if abs(z0 - surface_z) > 0.25 * max(1.0, abs(surface_z)):
+            continue
+        normal = math.sqrt(fx * fx + fy * fy + 1.0)
+        nx, ny, nz = -fx / normal, -fy / normal, 1.0 / normal
+        try:
+            dx, dy, dz = float(end[0]) - x0, float(end[1]) - y0, float(end[2]) - z0
+        except (TypeError, ValueError):
+            continue
+        # 保留模型选择的朝向:下方/内侧时整体取反;接近垂直时默认取上侧
+        dot = dx * nx + dy * ny + dz * nz
+        if dot < -1e-6 or (abs(dot) <= 1e-6 and nz < 0):
+            nx, ny, nz = -nx, -ny, -nz
+        length = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if length < 1e-6:
+            length = 1.0
+        shape["from"] = [round(x0, 6), round(y0, 6), round(surface_z, 6)]
+        shape["to"] = [
+            round(x0 + nx * length, 6),
+            round(y0 + ny * length, 6),
+            round(surface_z + nz * length, 6),
+        ]
 
 
 def _is_straight_curve(shape: dict) -> bool:
@@ -1314,21 +1458,21 @@ def _surface_question_terms(question: str) -> tuple[str | None, float | None]:
     expr: str | None = None
     plane_values: set[float] = set()
     for clause in _SURFACE_CLAUSE_RE.split(question or ""):
-        match = _SURFACE_EXPR_RE.search(clause)
-        if not match:
-            continue
-        value = match.group(1).strip()
-        if not value:
-            continue
-        if re.search(r"[xy]", value, re.IGNORECASE):
-            if expr is None:
-                expr = value
-            continue
-        number = re.match(r"[-+]?\d+(?:\.\d+)?", value)
-        if number:
-            parsed = _num(number.group(0))
-            if parsed is not None:
-                plane_values.add(round(parsed, 9))
+        # 一个分句里可能同时出现曲面方程和截平面(如“z=x^2+y^2 被 z=1 截下”),
+        # 只 search 第一个会漏掉截平面高度,投影圆半径就只能用渲染器默认值。
+        for match in _SURFACE_EXPR_RE.finditer(clause):
+            value = match.group(1).strip()
+            if not value:
+                continue
+            if re.search(r"[xy]", value, re.IGNORECASE):
+                if expr is None:
+                    expr = value
+                continue
+            number = re.match(r"[-+]?\d+(?:\.\d+)?", value)
+            if number:
+                parsed = _num(number.group(0))
+                if parsed is not None:
+                    plane_values.add(round(parsed, 9))
     # 多个不同高度的平面无法判断哪个缺坐标;不猜,保留模型值。
     plane_z = next(iter(plane_values)) if len(plane_values) == 1 else None
     return expr, plane_z
@@ -1343,11 +1487,12 @@ def repair_surface_shapes(raw: dict, question: str) -> dict:
     if raw.get("type") not in ("surface3d", "geometry3d"):
         return raw
     expr, plane_z = _surface_question_terms(question)
-    if not expr and plane_z is None:
-        return raw
     shapes = raw.get("shapes")
     if not isinstance(shapes, list):
         shapes = []
+    if not expr and plane_z is None:
+        _add_projection_shape(shapes, question)
+        return {**raw, "shapes": shapes}
     if expr and not any(
             isinstance(shape, dict) and shape.get("kind") == "surface"
             for shape in shapes):
@@ -1379,9 +1524,13 @@ def repair_surface_shapes(raw: dict, question: str) -> dict:
                 shape.setdefault("width", 4.0)
                 shape.setdefault("height", 4.0)
             elif kind == "circle":
+                # 投影圆盘落在 z=0;截口圆落在 z=plane_z。仅补缺失坐标,不改模型显式值。
+                label = str(shape.get("label") or "")
+                at_projection = bool(re.search(
+                    r"投影|projection|xoy|xy\s*面", label, re.IGNORECASE))
                 shape.setdefault("x", 0.0)
                 shape.setdefault("y", 0.0)
-                shape.setdefault("z", plane_z)
+                shape.setdefault("z", 0.0 if at_projection else plane_z)
                 if not any(isinstance(shape.get(key), (int, float))
                            for key in ("r", "radius")) and expr:
                     simple = re.fullmatch(
@@ -1389,7 +1538,92 @@ def repair_surface_shapes(raw: dict, question: str) -> dict:
                         expr, re.IGNORECASE)
                     if simple and plane_z > 0:
                         shape["r"] = math.sqrt(plane_z)
+    _add_projection_shape(shapes, question)
     return {**raw, "shapes": shapes}
+
+
+def _add_projection_shape(shapes: list[dict], question: str) -> None:
+    """题面/图注明确要投影,但模型只画了截口或没画投影时,补一个可渲染的投影。
+
+    只做确定性的垂直投影:把水平截口圆/边界曲线降到 z=0;都没有时用曲面
+    采样点的 xy 范围补一个矩形区域。投影只作为辅助注记,不改变原曲面。
+    """
+    if not re.search(r"投影|projection", question or "", re.IGNORECASE):
+        return
+    if any(re.search(r"投影|projection", str(shape.get("label") or ""),
+                     re.IGNORECASE)
+           for shape in shapes):
+        return
+
+    def projected_label(text: str) -> str:
+        if _has_cjk(question):
+            return f"投影 D: {text}" if text else "投影区域 D"
+        return f"Projection D: {text}" if text else "Projection region D"
+
+    # 1) 水平截口圆 → 同半径、同圆心的 z=0 圆
+    for shape in shapes:
+        if shape.get("kind") != "circle":
+            continue
+        radius = shape.get("r") if isinstance(shape.get("r"), (int, float)) else shape.get("radius")
+        z = shape.get("z")
+        if not isinstance(radius, (int, float)) or radius <= 0:
+            continue
+        if not isinstance(z, (int, float)) or abs(z) < 1e-9:
+            continue
+        shapes.append({
+            "kind": "circle",
+            "x": shape.get("x", 0.0),
+            "y": shape.get("y", 0.0),
+            "z": 0.0,
+            "r": float(radius),
+            "label": projected_label(str(shape.get("label") or "")),
+            "color": "#ff4dd2",
+        })
+        return
+
+    # 2) 边界折线/曲线 → 投影到 z=0
+    for shape in shapes:
+        if shape.get("kind") not in ("polygon", "curve"):
+            continue
+        pts = shape.get("points")
+        if not isinstance(pts, list) or len(pts) < 2:
+            continue
+        projected = []
+        for item in pts:
+            point = _point(item)
+            if point and len(point) >= 2:
+                projected.append([point[0], point[1], 0.0])
+        if len(projected) >= 2:
+            shapes.append({
+                "kind": "polygon" if shape.get("kind") == "polygon" else "curve",
+                "points": projected,
+                "label": projected_label(str(shape.get("label") or "")),
+                "color": "#ff4dd2",
+            })
+            return
+
+    # 3) 只有曲面采样点 → 用 xy 范围补矩形投影
+    surface = next((shape for shape in shapes
+                    if shape.get("kind") == "surface"
+                    and isinstance(shape.get("points"), list)
+                    and len(shape["points"]) >= 2), None)
+    if surface is None:
+        return
+    xs, ys = [], []
+    for item in surface["points"]:
+        point = _point(item)
+        if point and len(point) >= 2:
+            xs.append(point[0])
+            ys.append(point[1])
+    if not xs or not ys:
+        return
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    shapes.append({
+        "kind": "polygon",
+        "points": [[x0, y0, 0.0], [x1, y0, 0.0], [x1, y1, 0.0], [x0, y1, 0.0]],
+        "label": "投影区域 D" if _has_cjk(question) else "Projection region D",
+        "color": "#ff4dd2",
+    })
 
 
 def prepare_diagram(raw: object) -> dict | None:
@@ -1411,6 +1645,7 @@ def prepare_diagram(raw: object) -> dict | None:
             if clean is not None:
                 dict_shapes.append(clean)
         _refine_gradient(dict_shapes)
+        _refine_surface_normal(dict_shapes)
         for shape in dict_shapes:
             if (shape.get("kind") == "surface" and shape.get("expr")
                     and not shape.get("label")):
@@ -1597,6 +1832,18 @@ def _renderable_shape(shape: dict, diagram_type: str = "") -> bool:
         return False
     if kind in ("curve", "polygon", "surface"):
         return bool(shape.get("points"))
+    if kind in ("segment", "line", "vector"):
+        start, end = shape.get("from"), shape.get("to")
+        if not (isinstance(start, list) and isinstance(end, list)
+                and len(start) >= 2 and len(end) >= 2):
+            return False
+        try:
+            distance = math.sqrt(sum((float(b) - float(a)) ** 2
+                                     for a, b in zip(start, end)))
+        except (TypeError, ValueError):
+            return False
+        # 零长度箭头/线段在渲染器里不可见;留在图里只会让标签指向空气。
+        return math.isfinite(distance) and distance > 1e-6
     if kind in ("point", "circle"):
         if spatial and kind == "circle":
             # 三维圆的中心缺 z 会被渲染器当成 0;宁可丢弃,也不画错位置。
@@ -1907,6 +2154,9 @@ _PLAN_SYSTEM = (
     "9. 坐标轴只画线条并标 x/y/z 名称,不要画刻度数字;"
     "图面只标关键对象符号(如 P、∇f、θ),不要把公式和数值堆进图里。\n"
     "10. surface3d 的关键点、梯度向量要落在曲面上并从该点出发;"
+    "法向量必须按曲面方程计算:z=f(x,y) 在一点的单位法向为 "
+    "(-f_x,-f_y,1)/|(-f_x,-f_y,1)|,不得把点法向量一律画成 (0,0,1);"
+    "平面用法向量,球面用该点减球心;法向起点必须落在对应曲面上。"
     "同一位置只放一条 annotation,避免标签重叠;说明文字分散在图形外围的"
     "上/下/左/右不同方位,同一侧不要堆叠,更不要压在曲线或曲面上。\n"
     "11. 几何图必须按真实比例和坐标画:长度、角度、位置要计算,不要随手估;"
@@ -2016,12 +2266,21 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
         body = _text(item.get("text") or item.get("snippet"), 900)
         if body:
             context.append(f"- {section}:{body}")
-    try:
+    system = _PLAN_SYSTEM_RESEARCH if mode == "research" else _PLAN_SYSTEM
+    if not _has_cjk(question):
+        # 英文提问:图的标题/标签/注释也必须全英文,否则答案框里会混入中文
+        system += (
+            "\nLanguage: the user writes in English. Write every title, label and "
+            "annotation text in English; keep mathematical notation unchanged. "
+            "Do not output Chinese text."
+        )
+    context_text = "\n".join(context)
+
+    async def _attempt(repair_note: str = "") -> dict | None:
         async with _planner_gate():
             parts: list[str] = []
-            system = _PLAN_SYSTEM_RESEARCH if mode == "research" else _PLAN_SYSTEM
             async for delta in llm.stream_chat(
-                    system, "\n".join(context), role=role,
+                    system + repair_note, context_text, role=role,
                     fallback=True, max_tokens=1800, thinking=False):
                 parts.append(delta)
                 if sum(len(part) for part in parts) >= 12000:
@@ -2033,7 +2292,19 @@ async def plan_diagram(question: str, before: str, excerpts: list[dict],
             if isinstance(raw, dict):
                 raw = repair_surface_shapes(raw, question)
             # 表达式采样是 CPU 活,放线程里,避免卡住 SSE 事件循环。
-            diagram = await asyncio.to_thread(prepare_diagram, raw)
+            return await asyncio.to_thread(prepare_diagram, raw)
+
+    try:
+        diagram = await _attempt()
+        # 一次校验失败很常见(模型漏字段/类型写错);重试一次再判失败,
+        # 避免用户只点一次「图解此段」就收到失败提示。
+        if diagram is None or (strict and kind and diagram.get("type") != kind):
+            diagram = await _attempt(
+                "\n\n上一次输出未通过图解协议校验。请重新只输出一个合法 JSON 对象:"
+                "字段齐全、类型与要求一致、坐标与表达式可被直接计算,不要 Markdown 代码块。"
+            )
+            diagram_metrics.record(
+                "plan_retry", diagram is not None, "ok" if diagram else "invalid")
     except asyncio.CancelledError:
         diagram_metrics.record(
             "plan", False, "cancelled",
@@ -2192,9 +2463,12 @@ async def plan_geogebra(question: str, before: str, role: str = "main") -> dict 
 用户问题:{_text(question, 800)}
 当前讲解:{_text(latest, 1200)}"""
     parts: list[str] = []
+    system = _GEO_PLAN_SYSTEM
+    if not _has_cjk(question):
+        system += ("\nLanguage: write the title in English; do not output Chinese text.")
     try:
         async for delta in llm.stream_chat(
-                _GEO_PLAN_SYSTEM, context, role=role, fallback=True,
+                system, context, role=role, fallback=True,
                 max_tokens=700, thinking=False):
             parts.append(delta)
             if sum(len(part) for part in parts) >= 4000:

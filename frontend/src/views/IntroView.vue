@@ -312,6 +312,8 @@ onBeforeUnmount(() => {
 .intro {
   position: fixed;
   inset: 0;
+  /* iOS Safari 下 fixed 高度可能按含工具栏的布局视口计算,dvh 锁定可见视口 */
+  height: 100dvh;
   overflow: hidden;
   background: var(--bg-void);
 }

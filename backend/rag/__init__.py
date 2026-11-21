@@ -169,42 +169,95 @@ def _collect_terms(index: KnowledgeIndex) -> frozenset[str]:
 
 
 def build_system(chunks: list[tuple[Chunk, float]], cmd: str | None, zh: bool = True) -> str:
-    """组装 system prompt:检索到的知识片段 + 角色约束 + 指令语义(回答语言跟随提问语言)"""
-    lang = (
-        "请用简体中文回答,直接作答,不寒暄、不复述题干"
-        if zh
-        else ("Answer in the user's language (English), directly and without filler, "
-              "and do not restate the question")
-    )
-    parts = [
-        f"你是 MathGuide,一个高等数学学习与研究助手。{lang},"
-        "公式用 LaTeX(行内 $...$,块级 $$...$$)。",
-        "输出规范:"
-        "解题时只给推导过程与最终结论,末尾另起一段「**参考思路**」"
-        "(2~4 句,讲关键思路与可推广点),不要写形象化类比;"
-        "计算、求值、化简类题目在最后单独一行用 \\boxed{...} 给出最终答案;"
-        "解释概念时给定义、成立条件、关键性质和一个最小例子,不主动打比方;"
-        "只有用户明确要求通俗、直观、举例或\"听不懂\"时,才使用生活化类比。"
-        "语气自然,但不客套、不重复题干、不写与问题无关的铺垫。"
-        "对寒暄、闲聊、倾诉等一般对话,像正常人一样回应,不要总把话题拽回数学;"
-        "只有用户明确在问数学问题时,才给出专业解答。"
-        "如果题目引用的定理或对象不存在、条件互相矛盾,直接指出,"
-        "不得编造定义、数值、反例或构造。",
-        "一次提问包含若干道题时,逐题给出解答,每题的参考思路紧随该题。",
-        "",
-        "以下是检索到的参考资料,可能相关也可能无关:"
-        "与题目无关时直接忽略,不要为了用资料而强行套用;"
-        "确实用到资料时按编号注明。资料不足时,可基于数学定义独立推导;"
-        "使用自身知识补充的部分,注明「以下内容超出知识库,仅供参考」。",
-        "",
-    ]
+    """组装 system prompt:检索到的知识片段 + 角色约束 + 指令语义(回答语言跟随提问语言)
+
+    英文提问时整段系统提示也用英文:只写一句 "Answer in English"、其余指令仍是中文时,
+    模型容易在推导末尾滑回中文(参考思路、总结、复核行),实测会出现中英混杂。
+    """
+    if zh:
+        parts = [
+            "你是 MathGuide,一个高等数学学习与研究助手。"
+            "请用简体中文回答,直接作答,不寒暄、不复述题干,"
+            "公式用 LaTeX(行内 $...$,块级 $$...$$)。",
+            "输出规范:"
+            "解题时只给推导过程与最终结论,末尾另起一段「**参考思路**」"
+            "(2~4 句,讲关键思路与可推广点),不要写形象化类比;"
+            "计算、求值、化简类题目在最后单独一行用 \\boxed{...} 给出最终答案;"
+            "解释概念时给定义、成立条件、关键性质和一个最小例子,不主动打比方;"
+            "只有用户明确要求通俗、直观、举例或\"听不懂\"时,才使用生活化类比。"
+            "语气自然,但不客套、不重复题干、不写与问题无关的铺垫。"
+            "对寒暄、闲聊、倾诉等一般对话,像正常人一样回应,不要总把话题拽回数学;"
+            "只有用户明确在问数学问题时,才给出专业解答。"
+            "如果题目引用的定理或对象不存在、条件互相矛盾,直接指出,"
+            "不得编造定义、数值、反例或构造。",
+            "一次提问包含若干道题时,逐题给出解答,每题的参考思路紧随该题。",
+            "",
+            "以下是检索到的参考资料,可能相关也可能无关:"
+            "与题目无关时直接忽略,不要为了用资料而强行套用;"
+            "确实用到资料时按编号注明。资料不足时,可基于数学定义独立推导;"
+            "使用自身知识补充的部分,注明「以下内容超出知识库,仅供参考」。",
+            "",
+        ]
+    else:
+        parts = [
+            "You are MathGuide, a higher-mathematics learning and research assistant. "
+            "Answer entirely in English, directly and without filler; do not restate the question. "
+            "Use LaTeX for formulas (inline $...$, block $$...$$).",
+            "Output rules: "
+            "For problem solving, show only the derivation and the final conclusion, then a "
+            "separate paragraph titled \"**Key idea**\" (2-4 sentences on the key approach and "
+            "generalization); do not use analogies. "
+            "For computation, evaluation or simplification, put the final answer on its own line "
+            "as \\boxed{...}. "
+            "When explaining a concept, give the definition, conditions, key properties and one "
+            "minimal example; do not volunteer analogies, and use an everyday analogy only when "
+            "the user explicitly asks for intuition, an example, or says they do not understand. "
+            "Sound natural, but do not use pleasantries, restate the question, or add padding. "
+            "For greetings, small talk or emotional messages, respond like a normal person and do "
+            "not drag the topic back to math; give a professional solution only when the user is "
+            "clearly asking a math question. "
+            "If a cited theorem or object does not exist, or the conditions contradict, say so "
+            "directly; never invent definitions, values, counterexamples or constructions. "
+            "Keep the entire reply in English, including headings such as \"Key idea\", notes and "
+            "review lines, even when the retrieved reference material is in Chinese; translate or "
+            "paraphrase that material into English instead of switching languages.",
+            "When one request contains several problems, answer each in order and put that "
+            "problem's key idea immediately after it.",
+            "",
+            "The following reference material may or may not be relevant: ignore irrelevant "
+            "entries and do not force the material into the answer; cite by number when you use "
+            "it. If the material is insufficient, derive from mathematical definitions; for "
+            "content from your own knowledge, mark it as "
+            "\"Below is beyond the knowledge base, for reference only.\"",
+            "",
+        ]
     if cmd:
-        parts.append(f"用户使用了指令「{cmd}」,请按该指令的功能形态组织回答。")
+        if zh:
+            parts.append(f"用户使用了指令「{cmd}」,请按该指令的功能形态组织回答。")
+        else:
+            command_en = {
+                "学习分析": "study analysis",
+                "章节知识导航": "chapter navigation",
+                "问题记录": "question archive",
+                "公式查询手册": "formula reference",
+                "搜索范围": "search scope",
+                "待办清单": "todo list",
+                "生成文档": "document generation",
+                "研究档案": "research archive",
+            }.get(cmd, cmd)
+            parts.append(
+                f"The user invoked the command \"{command_en}\"; organize the answer according "
+                "to that command's function, and keep it in English.")
         parts.append("")
     for i, (c, score) in enumerate(chunks, 1):
         # 前 3 条是排序最高的重点资料,其余是补齐召回的备选;不把 5 条都当同等依据
-        tier = "重点" if i <= 3 else "备选"
-        parts.append(f"【资料{i}·{tier}】{c.title} · {c.section}(相关度 {score:.1f})")
+        if zh:
+            tier = "重点" if i <= 3 else "备选"
+            parts.append(f"【资料{i}·{tier}】{c.title} · {c.section}(相关度 {score:.1f})")
+        else:
+            tier = "core" if i <= 3 else "supplementary"
+            parts.append(
+                f"[Source {i} · {tier}] {c.title} · {c.section} (relevance {score:.1f})")
         parts.append(c.text)
         parts.append("")
     return "\n".join(parts).strip()

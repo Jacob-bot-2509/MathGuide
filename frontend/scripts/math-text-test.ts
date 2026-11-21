@@ -139,6 +139,11 @@ async function main() {
     html = await renderComp('$\\href{javascript:alert(1)}{x}$')
     check('KaTeX href 不生成 javascript 链接', !html.includes('href="javascript:'), `输出: ${html.slice(0, 160)}`)
 
+    html = await renderComp(String.raw`[习题 \[上\]](cmd://chapter/%E4%B9%A0%E9%A2%98?page=3)`)
+    check('带方括号的章节标题保留可点击链接与页码',
+      html.includes('data-mg-cmd="cmd://chapter/%E4%B9%A0%E9%A2%98?page=3"') && html.includes('习题 [上]'),
+      `输出: ${html.slice(0, 300)}`)
+
     // ⑬ cmd://chapter 的畸形百分号编码安全回退(不能抛 URIError)
     const cmdMod = await server.ssrLoadModule('/src/utils/cmdLink.ts')
     const { chapterNameFromCmd } = cmdMod as { chapterNameFromCmd: (url: string) => string | null }

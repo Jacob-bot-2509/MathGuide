@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 
-TEXTBOOK_CAP = 30000  # 与前端 FILE_TEXT_MAX / chat.PROMPT_MAX 同一量级
+TEXTBOOK_CAP = 200_000  # 与前端 CHAPTER_TEXT_CAP / chat.PROMPT_MAX 同一量级
 TEXTBOOK_MAX = 16
 SUMMARY_MAX = 64
 TICK_MAX = 4096

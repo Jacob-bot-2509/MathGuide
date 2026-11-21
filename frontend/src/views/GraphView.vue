@@ -23,6 +23,7 @@ import {
   type RecommendStrategy,
 } from '@/services/graphService'
 import { resolveLayout } from '@/utils/graphLayout'
+import { panBy, pinchMetrics, zoomAround } from '@/utils/graphGesture'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
 import { downloadBlob } from '@/services/docService'
@@ -181,61 +182,109 @@ function pick(node: GraphNode) {
   centerOn(node.id)
 }
 
-function svgPoint(event: MouseEvent): DOMPoint {
+function svgPoint(screen: { x: number; y: number }): DOMPoint {
   const svg = svgEl.value
-  if (!svg) return new DOMPoint(event.clientX, event.clientY)
+  if (!svg) return new DOMPoint(screen.x, screen.y)
   const point = svg.createSVGPoint()
-  point.x = event.clientX
-  point.y = event.clientY
+  point.x = screen.x
+  point.y = screen.y
   const matrix = svg.getScreenCTM()
   return matrix ? point.matrixTransform(matrix.inverse()) : point
 }
 
+function viewMaxWidth(): number {
+  return Math.max(1200, layout.value.width * 1.6)
+}
+
 function onWheel(event: WheelEvent) {
   if (!svgEl.value) return
-  const point = svgPoint(event)
+  const point = svgPoint({ x: event.clientX, y: event.clientY })
   const factor = event.deltaY > 0 ? 1.15 : 1 / 1.15
-  const nextWidth = Math.min(
-    Math.max(500, view.w * factor),
-    Math.max(1200, layout.value.width * 1.6),
-  )
-  const scale = nextWidth / view.w
-  view.x = point.x - (point.x - view.x) * scale
-  view.y = point.y - (point.y - view.y) * scale
-  view.w = nextWidth
-  view.h *= scale
+  zoomAround(view, point, factor, 500, viewMaxWidth())
 }
+
+/* 触屏手势:一根手指平移,两根手指围绕中点缩放(同时跟手平移)。
+   画布已设 touch-action: none,双指不再放大整个网页。 */
+const pointers = new Map<number, DOMPoint>()
+let pinch: { distance: number; mid: DOMPoint } | null = null
 
 let drag: { pointerId: number; last: DOMPoint; moved: boolean } | null = null
 let suppressClick = false
 
+function readPinch(): { distance: number; mid: DOMPoint } | null {
+  const pts = [...pointers.values()]
+  if (pts.length < 2) return null
+  const { distance, mid } = pinchMetrics(pts[0], pts[1])
+  return { distance, mid: new DOMPoint(mid.x, mid.y) }
+}
+
 function onDown(event: PointerEvent) {
-  if (event.button !== 0) return
-  drag = { pointerId: event.pointerId, last: svgPoint(event), moved: false }
+  if (event.pointerType === 'mouse' && event.button !== 0) return
+  const point = new DOMPoint(event.clientX, event.clientY)
+  pointers.set(event.pointerId, point)
+  if (pointers.size >= 2) {
+    pinch = readPinch()
+    drag = null
+    suppressClick = true
+  } else {
+    drag = { pointerId: event.pointerId, last: point, moved: false }
+  }
   window.addEventListener('pointermove', onMove)
   window.addEventListener('pointerup', onUp)
   window.addEventListener('pointercancel', onUp)
 }
 
 function onMove(event: PointerEvent) {
+  if (!pointers.has(event.pointerId)) return
+  const point = new DOMPoint(event.clientX, event.clientY)
+  pointers.set(event.pointerId, point)
+
+  if (pinch && pointers.size >= 2) {
+    const next = readPinch()
+    if (!next) return
+    const previousMid = svgPoint(pinch.mid)
+    const nextMid = svgPoint(next.mid)
+    panBy(view, nextMid.x - previousMid.x, nextMid.y - previousMid.y)
+    zoomAround(view, previousMid, pinch.distance / (next.distance || 1), 500, viewMaxWidth())
+    pinch = next
+    suppressClick = true
+    return
+  }
+
   if (!drag || drag.pointerId !== event.pointerId) return
-  const point = svgPoint(event)
-  const dx = point.x - drag.last.x
-  const dy = point.y - drag.last.y
+  const previousPoint = svgPoint(drag.last)
+  const nextPoint = svgPoint(point)
+  const dx = nextPoint.x - previousPoint.x
+  const dy = nextPoint.y - previousPoint.y
   if (Math.abs(dx) + Math.abs(dy) > 1) drag.moved = true
-  view.x -= dx
-  view.y -= dy
+  panBy(view, dx, dy)
   drag.last = point
 }
 
 function onUp(event: PointerEvent) {
-  if (!drag || drag.pointerId !== event.pointerId) return
-  suppressClick = drag.moved
+  pointers.delete(event.pointerId)
+
+  if (pointers.size >= 2) {
+    pinch = readPinch()
+    drag = null
+    return
+  }
+
+  pinch = null
+  if (pointers.size === 1) {
+    // 松开一指后继续用剩下那根平移;moved=true 防止抬手误触发节点点选
+    const [id, last] = [...pointers.entries()][0]
+    drag = { pointerId: id, last, moved: true }
+    return
+  }
+
+  const moved = suppressClick || Boolean(drag?.moved)
   drag = null
+  suppressClick = moved
   window.removeEventListener('pointermove', onMove)
   window.removeEventListener('pointerup', onUp)
   window.removeEventListener('pointercancel', onUp)
-  // 拖拽后若没有触发 click(例如指针在画布外松开),下一帧自动解除抑制,
+  // 拖拽/缩放后若没有触发 click(例如指针在画布外松开),下一帧自动解除抑制,
   // 避免下一次正常点选被吞掉
   if (suppressClick) setTimeout(() => { suppressClick = false }, 0)
 }
@@ -567,6 +616,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .graph-page {
   min-height: 100vh;
+  /* iPad/手机 Safari 的 100vh 含工具栏区域,dvh 跟随可见视口,横竖屏都适用 */
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   position: relative;

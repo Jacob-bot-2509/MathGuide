@@ -95,6 +95,15 @@ export function isolateMath(source: string): IsolatedMath {
   }
 
   while (i < source.length) {
+    // Markdown link labels may contain escaped brackets rather than math delimiters.
+    if (source[i] === '[' && !escaped(source, i)) {
+      const link = source.slice(i).match(/^\[((?:\\.|[^\]\\\n])+)\]\((?:https?:\/\/[^)\s]+|cmd:\/\/[^)]+)\)/)
+      if (link && /\\[\[\]]/.test(link[1])) {
+        output += link[0]
+        i += link[0].length
+        continue
+      }
+    }
     // Preserve literal code spans and fences.
     if (source[i] === '`' && !escaped(source, i)) {
       let end = i

@@ -301,6 +301,64 @@ def test_explicit_type_only_overrides_single_request():
             "surface3d"]
 
 
+def test_plan_diagram_retries_once_after_invalid_output(monkeypatch):
+    monkeypatch.setattr(rd.llm, "is_configured", lambda role="main", **k: True)
+    calls = {"n": 0}
+
+    async def fake_stream(system, user, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            yield '{"type":"flow","nodes":"bad"}'
+        else:
+            yield json.dumps({
+                "type": "flow",
+                "nodes": [{"id": "a", "label": "Step"}],
+                "edges": [],
+            })
+
+    monkeypatch.setattr(rd.llm, "stream_chat", fake_stream)
+    result = asyncio.run(plan_diagram(
+        "Explain the steps", "First do this, then do that.", [], "flow", strict=True))
+    assert calls["n"] == 2
+    assert result is not None and result["type"] == "flow"
+
+
+def test_surface_normal_is_not_forced_vertical():
+    """z=f(x,y) 上的法向量必须按 -f_x,-f_y,1 修正,不能画成 (0,0,1)。"""
+    raw = {
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "surface", "expr": "x^2+y^2",
+             "domain": [-2, 2, -2, 2], "rows": 8, "cols": 8},
+            {"kind": "vector", "from": [1, 1, 2], "to": [1, 1, 3],
+             "label": "n"},
+        ],
+    }
+    diagram = rd.prepare_diagram(raw)
+    vector = next(s for s in diagram["shapes"] if s["kind"] == "vector")
+    dx = vector["to"][0] - vector["from"][0]
+    dy = vector["to"][1] - vector["from"][1]
+    dz = vector["to"][2] - vector["from"][2]
+    assert abs(dx) > 0.1 and abs(dy) > 0.1
+    assert dz > 0
+    # 方向应平行于 (-2,-2,1)
+    assert abs(dx - dy) < 1e-4
+    assert abs(dx / dz + 2) < 1e-4
+
+
+def test_projection_circle_gets_radius_and_sits_on_xy_plane():
+    question = "抛物面 z=x^2+y^2 被平面 z=1 截下，画出投影区域"
+    assert rd._surface_question_terms(question) == ("x^2+y^2", 1.0)
+    raw = {
+        "type": "surface3d",
+        "shapes": [{"kind": "circle", "label": "投影区域 D"}],
+    }
+    repaired = rd.repair_surface_shapes(raw, question)
+    circle = next(s for s in repaired["shapes"] if s["kind"] == "circle")
+    assert circle["z"] == 0.0
+    assert circle["r"] == 1.0
+
+
 def test_plan_diagram_fills_missing_type_and_samples_curve(monkeypatch):
     monkeypatch.setattr(rd.llm, "is_configured", lambda role="main": True)
 

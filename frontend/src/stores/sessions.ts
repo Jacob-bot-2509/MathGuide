@@ -26,6 +26,12 @@ export interface ChatAttachment {
   size?: number
   /** 粘贴导入的文本文件正文(截断保存,随提示词发给模型阅读理解) */
   text?: string
+  /** 教材 PDF:原文在 IndexedDB 书库,按内容哈希取;不把全文塞进 localStorage */
+  bookId?: string
+  /** 教材总页数 */
+  bookPages?: number
+  /** PDF 是否带书签目录 */
+  bookOutline?: boolean
 }
 
 export interface ClarifyRequest {

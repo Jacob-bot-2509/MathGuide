@@ -92,7 +92,7 @@ function parseInline(src: string, formulas: IsolatedFormula[]): Seg[] {
 // 行内 markdown 链接:[文字](url);解析失败按纯文本保留。
 // 支持 cmd:// 内部契约链接(章节跳转 / 「返回」按钮),http(s) 为常规外链;
 // cmd 链接允许空格(章节名带空格时仍可点击),http 链接保持常规约束
-const LINK_RE = /\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|cmd:\/\/[^)]+)\)/g
+const LINK_RE = /\[((?:\\.|[^\]\\\n])+)\]\((https?:\/\/[^)\s]+|cmd:\/\/[^)]+)\)/g
 
 function parseInlineLinks(src: string): Seg[] {
   const segs: Seg[] = []
@@ -100,7 +100,7 @@ function parseInlineLinks(src: string): Seg[] {
   let m: RegExpExecArray | null
   while ((m = LINK_RE.exec(src))) {
     if (m.index > last) segs.push({ type: 'text', value: src.slice(last, m.index) })
-    segs.push({ type: 'link', value: m[1], href: m[2] })
+    segs.push({ type: 'link', value: m[1].replace(/\\([\[\]\\])/g, '$1'), href: m[2] })
     last = m.index + m[0].length
   }
   if (last < src.length) segs.push({ type: 'text', value: src.slice(last) })

@@ -49,7 +49,12 @@ export function updateSettings(patch: Partial<AppSettings>) {
 /** 把设置作用到界面:主题写入根节点 data-theme,全站 CSS 变量随之切换 */
 export function applySettings() {
   if (typeof document === 'undefined') return
+  const light = settingsState.theme === 'light'
   document.documentElement.dataset.theme = settingsState.theme
+  // theme-init.js 为防首屏闪烁会在 <html> 上写死一个内联背景色;
+  // 切换主题时必须同步更新,否则 iPad 滚动到 body 之外或底部区域仍显示旧色。
+  document.documentElement.style.background = light ? '#f5f7fa' : '#05060a'
+  document.documentElement.style.colorScheme = light ? 'light' : 'dark'
 }
 
 applySettings()

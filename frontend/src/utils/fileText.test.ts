@@ -85,7 +85,11 @@ describe('extractPdfText', () => {
   })
 
   it('解析失败时向上抛错,由调用方提示用户', async () => {
-    getDocument.mockReturnValue({ promise: Promise.reject(new Error('broken pdf')) })
+    const broken = Promise.reject(new Error('broken pdf'))
+    // 先挂一个 catch,避免 mock 返回的已拒绝 Promise 在 await 前被 Node 判为未处理;
+    // 被测代码仍会 await 原 Promise 并收到 rejection。
+    broken.catch(() => {})
+    getDocument.mockReturnValue({ promise: broken })
     await expect(extractPdfText(pdfFile())).rejects.toThrow('broken pdf')
   })
 })

@@ -18,6 +18,12 @@ import { rmSync } from 'node:fs'
 
 const CASES = [
   {
+    name: 'Graph continuous pointer gestures',
+    bundle: 'node --check scripts/graph-gesture-interaction-test.mjs',
+    run: 'node scripts/graph-gesture-interaction-test.mjs',
+    artifact: '.graph-gesture-interaction-test.cjs',
+  },
+  {
     name: 'Formula variable mapping',
     bundle: 'node --check scripts/formula-import-test.mjs',
     run: 'node scripts/formula-import-test.mjs',

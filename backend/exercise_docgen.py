@@ -11,17 +11,50 @@ import random
 from collections.abc import Iterable
 from pathlib import Path
 
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import config
 import exercise_history
 import math_render
 import quota
-from chat import _rate_check, require_auth
+from chat import require_auth
 from exercises.schema import SchemaError
 from exercises.store import ExerciseStore, tiers_from_env
 from exercises.taxonomy import CATEGORY_KEYS
 from http_utils import read_json_object
+from rate_limit import NullLimiter, SlidingWindowLimiter
+
+# 习题生成/预览只查本地题库,不调用模型,但原先复用了聊天的 6 次/分桶:
+# 「换一批」每点一次就是一次请求,连点几下就 429,界面把它显示成「生成失败」。
+# 这里单独计桶,默认 30 次/分(MG_EXERCISE_RATE_MAX 可调,0 = 关闭)。
+_RATE_LIMIT_MAX = 30
+_RATE_WINDOW = 60.0
+_rate_limiter: SlidingWindowLimiter | NullLimiter = SlidingWindowLimiter(_RATE_LIMIT_MAX, _RATE_WINDOW)
+
+
+def configure_rate_limit() -> None:
+    """按环境变量重建习题限流器(main.py 在 env 装载后调用,与 chat 同一口径)。
+
+    MG_EXERCISE_RATE_MAX     默认 30 次;0 = 关闭
+    MG_EXERCISE_RATE_WINDOW  默认 60 秒
+    """
+    global _RATE_LIMIT_MAX, _RATE_WINDOW, _rate_limiter
+    _RATE_LIMIT_MAX = int(config.env_number("MG_EXERCISE_RATE_MAX", 30, 0))
+    _RATE_WINDOW = config.env_number("MG_EXERCISE_RATE_WINDOW", 60.0, 1.0)
+    _rate_limiter = (
+        SlidingWindowLimiter(_RATE_LIMIT_MAX, _RATE_WINDOW)
+        if _RATE_LIMIT_MAX > 0
+        else NullLimiter()
+    )
+
+
+def _rate_check(uid: str) -> None:
+    """习题接口专用限流(与聊天的 6 次/分互不影响)。"""
+    if not _rate_limiter.allow(uid or "anonymous"):
+        raise HTTPException(429, "rate limited",
+                            headers={"Retry-After": str(int(_RATE_WINDOW) or 60)})
 
 DATA_DIR = Path(__file__).resolve().parent / "data" / "exercises" / "staging"
 BILINGUAL_FILE = Path(__file__).resolve().parent / "data" / "exercises" / "bilingual" / "all.jsonl"

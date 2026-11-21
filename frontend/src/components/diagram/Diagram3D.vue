@@ -166,6 +166,8 @@ function createLeaderLine(
 /** 语义配色:曲面、梯度、方向、关键点尽量拉开色相,不靠相近青色区分。 */
 function shapeColor(shape: DiagramShape, kind: string): number {
   const label = String(shape.label || '')
+  // 投影区域单独用洋红,和蓝色曲面、紫色平面、黄色点区分开
+  if (/(^D\b|投影|projection|圆盘|disk)/i.test(label)) return 0xff4dd2
   if (/梯度|∇|gradient/i.test(label)) return 0xff8a3d
   if (/方向|direction|^e|^u|l\b/i.test(label)) return 0x67e8a5
   if (/路径|path|轨迹/i.test(label)) return 0xffd166
@@ -357,6 +359,8 @@ function addShape(
   const y = num(shape.y)
   const z = num(shape.z)
   const kind = shape.kind
+  // 投影区域是“辅助注记”,用洋红 + 覆盖线绘制,不能被曲面挡住或和主体混色
+  const projection = /投影|projection|圆盘|disk/i.test(String(shape.label || ''))
   let color = new THREE.Color(shapeColor(shape, kind))
   if (typeof shape.color === 'string' && shape.color) {
     try {
@@ -374,6 +378,10 @@ function addShape(
     // 平面/多边形/盒体必须双面渲染:否则转到背面时整块面被剔除、直接消失。
     side: THREE.DoubleSide,
   })
+  if (kind === 'plane' && projection) {
+    material.depthTest = false
+    material.opacity = 0.28
+  }
   const lineMaterial = new THREE.LineBasicMaterial({ color })
   const overlayLine = new THREE.LineBasicMaterial({
     color, depthTest: false, transparent: true, opacity: 0.95,
@@ -456,6 +464,7 @@ function addShape(
     } else {
       mesh.rotation.x = -Math.PI / 2
     }
+    if (projection) mesh.renderOrder = 3
     root.add(mesh)
   } else if (kind === 'circle') {
     // 圆在 3D 里是轮廓注记,不画实心圆盘,避免原点出现“盘子”。
@@ -474,13 +483,33 @@ function addShape(
     )
     circle.renderOrder = 5
     root.add(circle)
+    if (projection) {
+      // 投影区域补一层半透明圆盘:只描边时用户会以为“投影没画全”
+      const disk = new THREE.Mesh(
+        new THREE.CircleGeometry(radius, 64),
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.14,
+          side: THREE.DoubleSide,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      )
+      disk.position.copy(vec3([x, y, z], THREE))
+      disk.rotation.x = -Math.PI / 2
+      disk.renderOrder = 4
+      root.add(disk)
+    }
   } else if (kind === 'polygon') {
     const pts = points(shape.points)
     if (pts.length) {
       const geometry = new THREE.BufferGeometry().setFromPoints(
         pts.map((item) => vec3(item, THREE)),
       )
-      root.add(new THREE.LineLoop(geometry, lineMaterial))
+      const line = new THREE.LineLoop(geometry, projection ? overlayLine : lineMaterial)
+      if (projection) line.renderOrder = 6
+      root.add(line)
     }
   } else if (kind === 'curve') {
     const pts = points(shape.points)
@@ -488,50 +517,46 @@ function addShape(
       const geometry = new THREE.BufferGeometry().setFromPoints(
         pts.map((item) => vec3(item, THREE)),
       )
-      root.add(new THREE.Line(geometry, lineMaterial))
+      const line = new THREE.Line(geometry, projection ? overlayLine : lineMaterial)
+      if (projection) line.renderOrder = 6
+      root.add(line)
     }
   } else if (kind === 'surface') {
     addSurface(shape, THREE, root, color)
   }
   if (shape.label) {
-    const vectorLabels = props.spec.shapes.filter(
-      (item) => item.kind === 'vector' && item.label,
-    ).length
-    const auxiliaryVector = kind === 'vector' && vectorLabels > 2
-      && !/梯度|∇|gradient/i.test(String(shape.label))
-    if (!auxiliaryVector) {
-      const sprite = labelSprite(
-        plainLabel(shape.label), THREE, labelScale, '#dbe4f0',
-      )
-      if (sprite) {
-        const to = triple(shape.to)
-        const hasLine = ['segment', 'line', 'vector', 'axis'].includes(kind)
-        const surfacePoint = kind === 'surface' && Array.isArray(shape.points)
-          && shape.points.length
-          ? shape.points[Math.floor(shape.points.length * 0.5)]
-          : null
-        const curvePoint = kind === 'curve' && Array.isArray(shape.points)
-          && shape.points.length
-          ? shape.points[Math.floor(shape.points.length * 0.5)]
-          : null
-        const anchor = hasLine
-          ? vec3(to, THREE)
-          : surfacePoint
-            ? vec3(surfacePoint, THREE)
-            : curvePoint
-              ? vec3(curvePoint, THREE)
-              : vec3([x, y, z], THREE)
-        anchor.y += hasLine ? unit * 0.18 : unit * 0.25
-        sprite.position.copy(anchor)
-        root.add(sprite)
-        rememberBaseScale(sprite)
-        labels.push({
-          id: `shape-${labels.length}`,
-          role: 'shape',
-          anchor,
-          sprite,
-        })
-      }
+    // 所有带 label 的可渲染对象都要显示标签,不再按向量数量隐藏辅助向量标签。
+    const sprite = labelSprite(
+      plainLabel(shape.label), THREE, labelScale, '#dbe4f0',
+    )
+    if (sprite) {
+      const to = triple(shape.to)
+      const hasLine = ['segment', 'line', 'vector', 'axis'].includes(kind)
+      const surfacePoint = kind === 'surface' && Array.isArray(shape.points)
+        && shape.points.length
+        ? shape.points[Math.floor(shape.points.length * 0.5)]
+        : null
+      const curvePoint = kind === 'curve' && Array.isArray(shape.points)
+        && shape.points.length
+        ? shape.points[Math.floor(shape.points.length * 0.5)]
+        : null
+      const anchor = hasLine
+        ? vec3(to, THREE)
+        : surfacePoint
+          ? vec3(surfacePoint, THREE)
+          : curvePoint
+            ? vec3(curvePoint, THREE)
+            : vec3([x, y, z], THREE)
+      anchor.y += hasLine ? unit * 0.18 : unit * 0.25
+      sprite.position.copy(anchor)
+      root.add(sprite)
+      rememberBaseScale(sprite)
+      labels.push({
+        id: `shape-${labels.length}`,
+        role: 'shape',
+        anchor,
+        sprite,
+      })
     }
   }
 }
@@ -597,11 +622,9 @@ function layoutLabels(THREE: typeof import('three')): void {
     const placement = byId.get(entry.id)
     const point = project(entry.anchor)
     if (!placement || !point) continue
-    // 排不下时宁可少一个标签,也不能让文字压在图形或其他标签上。
-    const hide = (entry.role === 'shape'
-      && (placement.overlapsAvoid || placement.overlapsLabel))
-      || (entry.role === 'note' && placement.overlapsLabel)
-    entry.sprite.visible = !hide
+    // 用户要求图上标注过的对象都要能看到标签:不再因避碰失败而隐藏,
+    // 允许轻微重叠,由 placeScreenLabels 尽量错开。
+    entry.sprite.visible = true
     const dx = (placement.centerX - point.x) / point.ppw
     const dy = -(placement.centerY - point.y) / point.ppw
     entry.sprite.position.copy(entry.anchor)
@@ -611,7 +634,7 @@ function layoutLabels(THREE: typeof import('three')): void {
       const distance = Math.hypot(
         placement.centerX - point.x, placement.centerY - point.y,
       )
-      entry.leader.visible = !hide && distance > 4
+      entry.leader.visible = distance > 4
       if (entry.leader.visible) {
         const geometry = entry.leader.geometry as import('three').BufferGeometry
         geometry.setFromPoints([entry.anchor, entry.sprite.position])

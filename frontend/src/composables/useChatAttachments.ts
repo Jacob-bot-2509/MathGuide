@@ -10,9 +10,10 @@
  */
 import { ref } from 'vue'
 import { compressImage } from '@/utils/avatar'
+import { loadBook, saveBook } from '@/utils/bookStore'
 import { FALLBACK_CATEGORY } from '@/utils/classifier'
-import { extractPdfText } from '@/utils/fileText'
 import { t } from '@/utils/i18n'
+import { MAX_BOOK_PAGES, readPdfBook } from '@/utils/pdfBook'
 import type { ChatAttachment, ChatMsg, ChatSession } from '@/stores/sessions'
 import type { ChatMeta } from '@/services/chatService'
 
@@ -20,9 +21,9 @@ import type { ChatMeta } from '@/services/chatService'
 const MAX_DROP_FILES = 3
 /** 粘贴文本上限(移动端一次粘贴整页讲义的量级) */
 const PASTE_TEXT_MAX = 3000
-/** 随附件保存的正文类型;上限 3 万字(发挥长上下文能力,移动端粘贴仍 3 千) */
+/** 随附件保存的正文类型;上限 20 万字(发挥长上下文能力,移动端粘贴仍 3 千) */
 const FILE_TEXT_EXT = /\.(txt|md|markdown)$/i
-const FILE_TEXT_MAX = 30000
+const FILE_TEXT_MAX = 200_000
 /** 论文类扩展名:科研区里这类文件走「临时语料 → 询问是否入库」 */
 const PAPER_EXT = /\.(pdf|docx|epub|html?|xml|rtf|tex)$/i
 
@@ -59,41 +60,71 @@ export function useChatAttachments(deps: ChatAttachmentDeps) {
   const dragging = ref(false)
   let dragHideTimer: ReturnType<typeof setTimeout> | null = null
 
-  /** 文件入库:PDF(pdfjs 提取文本层)/ 文本类(.txt/.md)读取正文随附件保存,其余仅元信息 */
-  async function attachFileItem(file: File) {
+  /** 文件入库:PDF 解析成教材书库(页文本 + 书签);.txt/.md 读正文;其余仅元信息 */
+  async function attachFileItem(file: File, expectedSession = deps.activeSession()) {
     if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
       try {
-        const text = await extractPdfText(file)
-        if (!text) {
-          // 扫描版 PDF(无文本层):按普通文件接收并提示
-          attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name)
-          deps.toast(t('learn.toastPdfNoText'))
+        const book = await readPdfBook(file, { maxPages: MAX_BOOK_PAGES })
+        if (book.pageCount > MAX_BOOK_PAGES) {
+          deps.toast(t('learn.toastBookTooLarge'))
           return
         }
-        attachMessage({ kind: 'file', name: file.name, size: file.size, text }, file.name)
+        if (!book.pages.some((page) => page.trim())) {
+          // 扫描版 PDF(无文本层):按普通文件接收并提示
+          if (attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name, expectedSession)) {
+            deps.toast(t('learn.toastPdfNoText'))
+          }
+          return
+        }
+        if (!(await loadBook(book.hash))) {
+          await saveBook({
+            hash: book.hash,
+            name: file.name,
+            pageCount: book.pageCount,
+            pages: book.pages,
+            outline: book.outline,
+            createdAt: Date.now(),
+            lastUsedAt: Date.now(),
+            size: book.pages.reduce((sum, page) => sum + page.length, 0),
+          })
+        }
+        if (attachMessage({
+          kind: 'file',
+          name: file.name,
+          size: file.size,
+          bookId: book.hash,
+          bookPages: book.pageCount,
+          bookOutline: book.outline.length > 0,
+        }, file.name, expectedSession)) {
+          deps.toast(t('learn.toastBookReady', { n: book.pageCount }))
+        }
         return
       } catch {
         /* 解析失败按普通文件处理 */
+        if (attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name, expectedSession)) {
+          deps.toast(t('learn.toastBookFailed'))
+        }
+        return
       }
     }
     if (FILE_TEXT_EXT.test(file.name)) {
       try {
         const raw = await file.text()
         const capped = raw.trim().slice(0, FILE_TEXT_MAX)
-        attachMessage({ kind: 'file', name: file.name, size: file.size, text: capped }, file.name)
+        attachMessage({ kind: 'file', name: file.name, size: file.size, text: capped }, file.name, expectedSession)
         return
       } catch {
         /* 读取失败按普通文件处理 */
       }
     }
-    attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name)
+    attachMessage({ kind: 'file', name: file.name, size: file.size }, file.name, expectedSession)
   }
 
   /** 图片统一入库:压缩为缩略 dataURL 后作为图片附件发送(相册/拍照/拖入/粘贴共用) */
-  async function importImageFile(file: File) {
+  async function importImageFile(file: File, expectedSession = deps.activeSession()) {
     try {
       const url = await compressImage(file, 800)
-      attachMessage({ kind: 'image', name: file.name, url, size: file.size }, file.name)
+      attachMessage({ kind: 'image', name: file.name, url, size: file.size }, file.name, expectedSession)
     } catch {
       deps.toast(t('acc.toastAvatarFail'))
     }
@@ -107,12 +138,19 @@ export function useChatAttachments(deps: ChatAttachmentDeps) {
   }
 
   /** 附件消息:留在当前会话(未分类会话归入未归类),MG 给出附件接收回复 */
-  function attachMessage(attachment: ChatAttachment, content: string) {
+  function attachMessage(attachment: ChatAttachment, content: string, expectedSession?: ChatSession | null): boolean {
     let session = deps.activeSession()
+    if (expectedSession !== undefined && (session?.id ?? null) !== (expectedSession?.id ?? null)) {
+      deps.toast(t('learn.toastAttachSessionChanged'))
+      return false
+    }
     if (!session) session = deps.createSession(FALLBACK_CATEGORY)
     if (!session.cat) session.cat = FALLBACK_CATEGORY
     if (session.messages.some((m) => m.streaming)) {
-      if (!session.messages[0]?.streaming) return
+      if (!session.messages[0]?.streaming) {
+        deps.toast(t('learn.toastAttachBusy'))
+        return false
+      }
       deps.cancelReply(session.messages[0].id)
       session.messages.shift()
     }
@@ -139,6 +177,7 @@ export function useChatAttachments(deps: ChatAttachmentDeps) {
       categoryKey: session.cat?.key,
       history: deps.history(session),
     })
+    return true
   }
 
   function fmtSize(bytes?: number): string {
@@ -193,10 +232,11 @@ export function useChatAttachments(deps: ChatAttachmentDeps) {
       deps.toast(t('learn.toastDropTooMany'))
       return
     }
+    const expectedSession = deps.activeSession()
     for (const f of files) {
-      if (f.type.startsWith('image/')) await importImageFile(f)
+      if (f.type.startsWith('image/')) await importImageFile(f, expectedSession)
       else if (deps.isResearch() && isPaperFile(f)) await deps.stagePaper(f)
-      else await attachFileItem(f)
+      else await attachFileItem(f, expectedSession)
     }
   }
 
@@ -219,6 +259,7 @@ export function useChatAttachments(deps: ChatAttachmentDeps) {
   /** 移动端「粘贴导入」按钮:优先读剪贴板图片,退而读文本
       (作为 .txt 附件导入,正文随提示词交给模型阅读理解) */
   async function pasteImport() {
+    const expectedSession = deps.activeSession()
     deps.closeAttachMenu()
     // 剪贴板图片(截图/复制的图片)
     try {
@@ -229,7 +270,7 @@ export function useChatAttachments(deps: ChatAttachmentDeps) {
           if (!imgType) continue
           const blob = await item.getType(imgType)
           const ext = imgType.split('/')[1] || 'png'
-          await importImageFile(new File([blob], `粘贴图片.${ext}`, { type: imgType }))
+          await importImageFile(new File([blob], `粘贴图片.${ext}`, { type: imgType }), expectedSession)
           return
         }
       }
@@ -247,6 +288,7 @@ export function useChatAttachments(deps: ChatAttachmentDeps) {
       attachMessage(
         { kind: 'file', name: '粘贴文本.txt', size: new Blob([capped]).size, text: capped },
         '粘贴文本.txt',
+        expectedSession,
       )
     } catch {
       deps.toast(t('learn.toastPasteEmpty'))

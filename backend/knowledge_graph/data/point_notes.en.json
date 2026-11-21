@@ -1,0 +1,642 @@
+{
+  "set-map": {
+    "summary": "The representation, inclusion and operations of sets (intersection, union, difference and complementation) provide the foundation for defining domains and ranges. A mapping is a rule of correspondence between sets that assigns a unique image to each element of its domain. Injectivity, surjectivity and bijectivity characterize this correspondence; an inverse mapping exists only for a bijection. Composition and inversion provide the underlying language of operations on functions.",
+    "keyPoints": [
+      "A mapping must assign exactly one image to each element of its domain, although distinct elements may have the same image.",
+      "An inverse mapping exists if and only if the mapping is bijective; the ability to calculate backwards alone is insufficient.",
+      "Account for the empty set and the universal set in set operations; specify the universal set before taking a complement."
+    ]
+  },
+  "elementary-functions": {
+    "summary": "Basic elementary functions include power, exponential, logarithmic, trigonometric and inverse trigonometric functions. Elementary functions are obtained from these by finitely many arithmetic operations and compositions. Knowledge of the domain, range, monotonicity and graph of each class is a prerequisite for limits and differentiation.",
+    "keyPoints": [
+      "Examine the domain first: the argument of a logarithm must be positive, the radicand of an even root must be nonnegative, and inverse trigonometric functions have fixed ranges.",
+      "A piecewise-defined function is not necessarily non-elementary; the criterion is whether it can be obtained from basic elementary functions by finitely many compositions and arithmetic operations.",
+      "The domain of the power function $x^\\alpha$ varies according to whether $\\alpha$ is an integer or a fraction."
+    ]
+  },
+  "function-properties": {
+    "summary": "Fundamental properties of functions include boundedness, monotonicity, parity and periodicity. They can be established from definitions or inferred intuitively from graphs, and are frequently used in studying limits, extrema and properties of integrals.",
+    "keyPoints": [
+      "Parity requires a domain symmetric about the origin; otherwise the function is neither odd nor even.",
+      "A periodic function need not have a least positive period; a constant function is an example.",
+      "Specify the interval when discussing boundedness: boundedness on one interval does not imply boundedness over the entire domain."
+    ]
+  },
+  "sequence-limit-def": {
+    "summary": "The $\\varepsilon$-$N$ definition of convergence of a sequence $\\{a_n\\}$ to $A$ is as follows: for every $\\varepsilon>0$, there exists a positive integer $N$ such that $|a_n-A|<\\varepsilon$ whenever $n>N$. It makes the notion of approaching arbitrarily closely precise by requiring every arbitrarily small error eventually to be controlled.",
+    "keyPoints": [
+      "$N$ depends on $\\varepsilon$; typically, the smaller $\\varepsilon$ is, the larger $N$ must be.",
+      "Changing or removing finitely many terms does not affect the limit of a sequence.",
+      "Convergence requires the existence of a limit; divergence includes both divergence to infinity and oscillation."
+    ]
+  },
+  "sequence-limit-props": {
+    "summary": "A convergent sequence has a unique limit and is bounded; it also satisfies the sign-preservation and arithmetic properties. The squeeze theorem can be used to handle more complicated sequences. These properties make limits of sequences amenable to calculation.",
+    "keyPoints": [
+      "Boundedness is necessary but not sufficient for convergence; a bounded sequence may still diverge (for example, $(-1)^n$).",
+      "The converse of the sign-preservation property does not hold: a nonnegative limit does not imply that every term is nonnegative.",
+      "The arithmetic rules require the limits of all participating sequences to exist and the limit of the denominator to be nonzero."
+    ]
+  },
+  "limit-existence-criteria": {
+    "summary": "The squeeze theorem and the monotone bounded sequence theorem are two principal tools for establishing the existence of limits. The squeeze theorem bounds the target sequence between two sequences with known limits; the monotone bounded sequence theorem states that every monotone bounded sequence converges. For recursively defined sequences, the latter is commonly applied by first proving boundedness and then monotonicity.",
+    "keyPoints": [
+      "The squeeze theorem requires the lower and upper bounding sequences to have the same limit; boundedness between them alone is insufficient.",
+      "Monotonicity and boundedness are sufficient, but not necessary, conditions for convergence.",
+      "For a recursively defined sequence, first prove boundedness and monotonicity, and then take limits on both sides of the recurrence to determine the limit."
+    ]
+  },
+  "function-limit-def": {
+    "summary": "The $\\varepsilon$-$\\delta$ definition of $\\lim_{x\\to x_0}f(x)=A$ requires that for every $\\varepsilon>0$, there exists $\\delta>0$ such that $|f(x)-A|<\\varepsilon$ whenever $0<|x-x_0|<\\delta$. When $x\\to\\infty$, the definition instead uses $\\varepsilon$-$X$ language. A limit describes the behaviour as $x$ becomes sufficiently close to $x_0$.",
+    "keyPoints": [
+      "The limit is independent of whether the function is defined at $x_0$ or what value it takes there.",
+      "The punctured neighbourhood $0<|x-x_0|<\\delta$ is part of the definition and cannot be replaced by $|x-x_0|<\\delta$.",
+      "A two-sided limit exists only if both sides approach the same value."
+    ]
+  },
+  "one-sided-limits": {
+    "summary": "The left-hand and right-hand limits describe the behaviour as $x$ approaches $x_0$ from the left and right, respectively. A two-sided limit exists if and only if both one-sided limits exist and are equal. Piecewise-defined functions, absolute-value functions and rounding functions often require separate one-sided analysis.",
+    "keyPoints": [
+      "At a point where the definition changes, compute the left-hand and right-hand limits separately; direct substitution is insufficient.",
+      "If either one-sided limit does not exist or the two are unequal, the two-sided limit does not exist.",
+      "The existence of a one-sided limit describes behaviour on only one side and does not guarantee continuity at the point."
+    ]
+  },
+  "function-limit-props": {
+    "summary": "Limits of functions have uniqueness, local boundedness, local sign-preservation and arithmetic properties; limits of composite functions also satisfy a limit-transfer property. These properties underpin limit calculations and the subsequent definitions of continuity and derivatives.",
+    "keyPoints": [
+      "Boundedness and sign preservation are local: they hold only in some punctured neighbourhood of $x_0$.",
+      "The arithmetic rules require the relevant limits to exist and the denominator limit to be nonzero.",
+      "For the limit of a composite function, the inner limit must exist and the outer function must have a limit at the corresponding point."
+    ]
+  },
+  "limit-rules": {
+    "summary": "Standard methods of calculation include arithmetic and composition rules for limits, rationalization, cancellation of zero factors and equivalent transformations. For indeterminate forms such as $\\frac{0}{0}$ and $\\frac{\\infty}{\\infty}$, transform the expression before evaluating its limit.",
+    "keyPoints": [
+      "An indeterminate form cannot be evaluated by direct substitution; the resulting form is not the value of the limit.",
+      "When separating terms or factors, ensure that every resulting limit exists.",
+      "Rationalization is often useful for differences involving radicals; identify the source of a zero factor before cancellation."
+    ]
+  },
+  "two-important-limits": {
+    "summary": "The two fundamental limits are $\\lim_{x\\to0}\\frac{\\sin x}{x}=1$ and $\\lim_{x\\to\\infty}(1+\\frac{1}{x})^x=e$. They yield many equivalent infinitesimals and methods for evaluating limits of the $1^\\infty$ form.",
+    "keyPoints": [
+      "The first limit requires angles in radians and the variables in the numerator and denominator to agree.",
+      "The second limit can be written as $\\lim_{t\\to0}(1+t)^{1/t}=e$ by setting $t=1/x$.",
+      "A limit of the $1^\\infty$ form is often written as $e^{\\lim (u-1)v}$; do not simply write $e$."
+    ]
+  },
+  "infinity-small-large": {
+    "summary": "An infinitesimal is a variable whose limit is zero; an infinite quantity is a variable whose absolute value increases without bound. They are related by reciprocation: when $f$ is infinite, $1/f$ is infinitesimal (near points where the denominator is nonzero). Operations on and comparisons of infinitesimals are important tools in limit calculations.",
+    "keyPoints": [
+      "An infinitesimal is a variable, not a very small constant; zero is the only constant infinitesimal.",
+      "An unbounded variable need not tend to infinity; for example, $x\\sin x$ is unbounded at infinity but does not tend to infinity.",
+      "A finite sum or product of infinitesimals is infinitesimal; the product of an infinitesimal and a bounded quantity is also infinitesimal."
+    ]
+  },
+  "infinity-small-compare": {
+    "summary": "Let $\\alpha,\\beta$ be infinitesimals in the same limiting process. Use $\\lim \\frac{\\alpha}{\\beta}$ to classify them as higher-order, same-order, equivalent or order-$k$ infinitesimals. Substitution of equivalent infinitesimals can greatly simplify limits involving products and quotients.",
+    "keyPoints": [
+      "Equivalent substitutions generally apply only to multiplicative factors; direct substitution in sums or differences may change the limit.",
+      "$\\alpha\\sim\\beta$ means $\\lim \\alpha/\\beta=1$; it does not mean equality.",
+      "Before comparing, specify the limiting process (such as $x\\to0$ or $x\\to\\infty$)."
+    ]
+  },
+  "continuity-def": {
+    "summary": "Continuity at $x_0$ requires three conditions simultaneously: $f(x_0)$ is defined, $\\lim_{x\\to x_0}f(x)$ exists, and the limit equals the function value. Continuity on an interval means continuity at every point of the interval; endpoint continuity is understood one-sidedly.",
+    "keyPoints": [
+      "Continuity means that the limit equals the function value; it is more precise than the intuition that the graph can be drawn without lifting the pen.",
+      "For a piecewise-defined function, check both one-sided limits and the function value at each breakpoint.",
+      "Continuity requires the function to be defined; a point at which it is undefined is necessarily a point of discontinuity."
+    ]
+  },
+  "discontinuity-types": {
+    "summary": "Discontinuities are classified as first or second kind according to their one-sided limits. The first kind includes removable discontinuities (the one-sided limits exist and are equal but differ from the function value) and jump discontinuities (the one-sided limits exist but differ); the second kind includes infinite and oscillatory discontinuities.",
+    "keyPoints": [
+      "First identify undefined points and breakpoints, then compute the one-sided limits separately.",
+      "A removable discontinuity can be eliminated by defining or changing the function value.",
+      "If at least one one-sided limit does not exist, the discontinuity is of the second kind and must not be classified as a jump."
+    ]
+  },
+  "closed-interval-continuity": {
+    "summary": "A continuous function on a closed interval is bounded and satisfies the extreme value theorem, intermediate value theorem and zero-point theorem. These results provide a theoretical basis for establishing roots of equations, proving inequalities and finding extrema.",
+    "keyPoints": [
+      "Both continuity and a closed interval are essential; the conclusions may fail on an open interval or in the presence of a discontinuity.",
+      "The intermediate value theorem guarantees existence, not uniqueness.",
+      "The zero-point theorem requires opposite signs at the endpoints; no direct conclusion follows when the signs agree."
+    ]
+  },
+  "derivative-def": {
+    "summary": "The derivative at $x_0$ is the limit of the difference quotient $\\frac{f(x_0+\\Delta x)-f(x_0)}{\\Delta x}$ as $\\Delta x\\to0$. It describes the instantaneous rate of change at that point; the left-hand and right-hand derivatives correspond to one-sided limits of the difference quotient.",
+    "keyPoints": [
+      "A derivative is defined at a point; first verify that the function is defined at that point and in a neighbourhood of it.",
+      "At a breakpoint of a piecewise-defined function, use the definition of the derivative rather than applying the formulas for the individual pieces directly.",
+      "Differentiability implies continuity, but continuity does not necessarily imply differentiability."
+    ]
+  },
+  "derivative-geometry": {
+    "summary": "The derivative $f'(x_0)$ is the slope of the tangent to the curve $y=f(x)$ at $(x_0,f(x_0))$. It yields equations for the tangent and normal lines and is used in approximation and related-rates problems.",
+    "keyPoints": [
+      "A vertical tangent may exist when the tangent slope is undefined; one cannot simply conclude that there is no tangent.",
+      "The normal slope is the negative reciprocal of the tangent slope when the latter is nonzero.",
+      "The existence of a tangent does not imply differentiability at that point; a cusp may have only one-sided tangents."
+    ]
+  },
+  "differentiability-continuity": {
+    "summary": "Differentiability implies continuity, but continuity need not imply differentiability. A standard counterexample is $f(x)=|x|$ at $x=0$: it is continuous there, but its left-hand and right-hand derivatives differ, so it is not differentiable.",
+    "keyPoints": [
+      "To determine differentiability of a piecewise-defined function, first check continuity and then compare the one-sided derivatives.",
+      "Continuity is necessary, but not sufficient, for differentiability.",
+      "A point of nondifferentiability may be a cusp, corner, vertical tangent or point of oscillation."
+    ]
+  },
+  "derivative-rules": {
+    "summary": "The sum, difference, constant-multiple, product and quotient rules reduce differentiation of complicated functions to derivatives of basic functions. The product rule is $(uv)'=u'v+uv'$, and the quotient rule is $\\left(\\frac{u}{v}\\right)'=\\frac{u'v-uv'}{v^2}$.",
+    "keyPoints": [
+      "The product rule is not $u'v'$; the order of the terms in the numerator of the quotient rule must not be reversed.",
+      "The quotient rule requires a nonzero denominator.",
+      "A constant factor may be taken outside the derivative, but sums and differences must be differentiated term by term."
+    ]
+  },
+  "basic-derivative-formulas": {
+    "summary": "The derivative formulas for power, exponential, logarithmic, trigonometric and inverse trigonometric functions form the basic table for differentiation. Correct application of the chain rule requires familiarity with these formulas and their domain restrictions.",
+    "keyPoints": [
+      "$(\\ln x)'=1/x$ holds only for $x>0$; $(\\ln|x|)'=1/x$ holds for $x\\ne0$.",
+      "The derivatives of inverse trigonometric functions differ in sign; for example, $(\\arcsin x)'=1/\\sqrt{1-x^2}$ and $(\\arccos x)'=-1/\\sqrt{1-x^2}$.",
+      "The derivative of the exponential function $a^x$ is $a^x\\ln a$; do not omit $\\ln a$."
+    ]
+  },
+  "chain-rule": {
+    "summary": "The chain rule expresses the derivative of a composite function as the product of the derivatives of its outer and inner functions: $\\frac{dy}{dx}=\\frac{dy}{du}\\cdot\\frac{du}{dx}$. For multiple compositions, differentiate successively from the outside inward.",
+    "keyPoints": [
+      "At each level, multiply by the derivative of the inner function; differentiating only the outer function is insufficient.",
+      "Identify the structure of the composition before differentiating each level; do not skip steps.",
+      "The chain rule is often used together with the product and quotient rules; use parentheses carefully."
+    ]
+  },
+  "inverse-derivative": {
+    "summary": "If $y=f(x)$ is differentiable and $f'(x)\\ne0$, the derivative of its inverse $x=f^{-1}(y)$ is $\\frac{dx}{dy}=\\frac{1}{f'(x)}$. This formula is used in differentiating inverse trigonometric functions, parametric equations and implicit functions.",
+    "keyPoints": [
+      "The values $x$ and $y$ in the formula must form a corresponding pair under the inverse functions.",
+      "$f'(x)\\ne0$ guarantees local differentiability; the inverse may fail to be differentiable where the derivative is zero.",
+      "For the second derivative, differentiate $\\frac{dx}{dy}$ again with respect to $y$, taking account of the chain rule."
+    ]
+  },
+  "high-order-derivative": {
+    "summary": "Derivatives of order two and above are collectively called higher-order derivatives and are denoted by $f^{(n)}(x)$ or $\\frac{d^ny}{dx^n}$. They are used in Taylor's formula, concavity, tests for extrema and differential equations.",
+    "keyPoints": [
+      "The existence of a higher-order derivative requires the lower-order derivatives to exist first; intermediate orders cannot be skipped.",
+      "Use Leibniz's formula for higher derivatives of a product; simply multiplying the corresponding derivatives is incorrect.",
+      "Write the notation and the order of a higher derivative clearly."
+    ]
+  },
+  "implicit-differentiation": {
+    "summary": "For an implicit function defined by $F(x,y)=0$, differentiate both sides with respect to $x$, treating $y$ as a function of $x$, and solve for $y'$. For a second derivative, differentiate the first-derivative result again and substitute $y'$.",
+    "keyPoints": [
+      "When differentiating terms containing $y$, multiply by $y'$ by the chain rule.",
+      "When finding the derivative at a point, substitute the coordinates of that point first to simplify the calculation.",
+      "Do not overlook the conditions of the implicit function theorem (continuity of partial derivatives and $F_y\\ne0$), which provide the theoretical guarantee."
+    ]
+  },
+  "parametric-derivative": {
+    "summary": "If $x=x(t)$ and $y=y(t)$, then $\\frac{dy}{dx}=\\frac{dy/dt}{dx/dt}$. To find the second derivative, differentiate again with respect to $t$ and divide by $\\frac{dx}{dt}$; do not simply divide the first-derivative result by $t$ again.",
+    "keyPoints": [
+      "The formula requires $\\frac{dx}{dt}\\ne0$; otherwise the curve may have a vertical tangent.",
+      "The second-derivative formula is $\\frac{d^2y}{dx^2}=\\frac{d}{dt}\\left(\\frac{dy}{dx}\\right)\\Big/\\frac{dx}{dt}$.",
+      "Specify the range of the parameter and the direction of the curve."
+    ]
+  },
+  "log-derivative": {
+    "summary": "For a variable-base variable-exponent function or a function involving products and quotients of many factors, first take logarithms to turn products and quotients into sums and differences, and powers into products; then differentiate both sides. This method is particularly suited to $y=u(x)^{v(x)}$ and complicated fractions.",
+    "keyPoints": [
+      "Ensure that the function value is positive before taking logarithms; where absolute values are involved, one may first take $\\ln|y|$.",
+      "Finally multiply by $y$ to obtain an explicit expression for $y'$.",
+      "A variable-base variable-exponent function can also be written as $e^{v\\ln u}$ and differentiated directly; the two methods are equivalent."
+    ]
+  },
+  "related-rates": {
+    "summary": "When variables are linked by a geometric or physical relation, differentiation with respect to time $t$ yields a relation among their rates of change. The procedure is to establish the relation, differentiate with respect to time, and substitute the known rates.",
+    "keyPoints": [
+      "Differentiate every variable with respect to time $t$, rather than differentiating only one of them.",
+      "Observe the signs: increases are positive and decreases negative; use consistent units.",
+      "Write the geometric relation before differentiating; do not infer the rate relation directly from intuition."
+    ]
+  },
+  "differential-def": {
+    "summary": "When a function increment can be written as $\\Delta y=A\\Delta x+o(\\Delta x)$, the function is differentiable and the principal linear term $dy=A\\,dx$ is its differential. For a function of one variable, differentiability in this sense is equivalent to the existence of a derivative, and $dy=f'(x)dx$.",
+    "keyPoints": [
+      "The differential $dy$ is the principal linear part of the increment and is not equal to the increment $\\Delta y$.",
+      "$dx$ is the differential of the independent variable and may be chosen independently.",
+      "When using differentials for approximation, $\\Delta x$ should be sufficiently small and the error should be estimated."
+    ]
+  },
+  "differential-invariance": {
+    "summary": "Whether $u$ is an independent or intermediate variable, the first differential has the form $dy=f'(u)du$. This invariance of form permits a unified treatment of differentiation of composite functions and integration by substitution.",
+    "keyPoints": [
+      "Invariance of form applies only to first differentials; higher differentials do not have the same invariance.",
+      "When writing $du$, specify the variable of which $u$ is a function.",
+      "When deriving the chain rule, keep track of the corresponding inner and outer variables."
+    ]
+  },
+  "rolle": {
+    "summary": "If $f$ is continuous on the closed interval $[a,b]$, differentiable on the open interval $(a,b)$, and $f(a)=f(b)$, then there exists $\\xi\\in(a,b)$ such that $f'(\\xi)=0$. This theorem underlies Lagrange's mean value theorem and Taylor's formula.",
+    "keyPoints": [
+      "All three conditions are essential; equality at the endpoints is an independent condition.",
+      "The theorem guarantees existence, not uniqueness, and does not specify the location of $\\xi$.",
+      "It is often used to prove the existence of a root of an equation or a zero of a derivative."
+    ]
+  },
+  "lagrange-mvt": {
+    "summary": "If $f$ is continuous on $[a,b]$ and differentiable on $(a,b)$, then there exists $\\xi\\in(a,b)$ such that $f(b)-f(a)=f'(\\xi)(b-a)$. The theorem relates the increment of a function to its derivative at a point and is a central tool for proving inequalities and monotonicity.",
+    "keyPoints": [
+      "$\\xi$ lies in the open interval and cannot be an endpoint.",
+      "The theorem requires continuity on the closed interval and differentiability on the open interval; its conclusion may fail without these conditions.",
+      "For inequalities, one often estimates $f'(\\xi)$, taking care to respect the range of $\\xi$."
+    ]
+  },
+  "cauchy-mvt": {
+    "summary": "If $f,g$ are continuous on $[a,b]$, differentiable on $(a,b)$, and $g'(x)\\ne0$, then there exists $\\xi\\in(a,b)$ such that $\\frac{f(b)-f(a)}{g(b)-g(a)}=\\frac{f'(\\xi)}{g'(\\xi)}$. This theorem provides the theoretical foundation for L'H?pital's rule.",
+    "keyPoints": [
+      "The conditions $g'(x)\\ne0$ and $g(b)\\ne g(a)$ are required; otherwise a denominator may vanish.",
+      "The result is not obtained by applying Lagrange's mean value theorem separately to the two functions and dividing.",
+      "Cauchy's mean value theorem reduces to Lagrange's mean value theorem when $g(x)=x$."
+    ]
+  },
+  "taylor": {
+    "summary": "A function may be expanded at $x_0$ as $f(x)=\\sum_{k=0}^{n}\\frac{f^{(k)}(x_0)}{k!}(x-x_0)^k+R_n(x)$. The remainder can be expressed in Peano or Lagrange form; the former is used for limits and the latter for error estimates and inequalities.",
+    "keyPoints": [
+      "State the expansion point, the order and the form of the remainder clearly.",
+      "The Peano remainder describes only a higher-order infinitesimal and cannot be used to quantify the error.",
+      "Taylor's formula is a local expansion; the error may be large far from the expansion point."
+    ]
+  },
+  "maclaurin": {
+    "summary": "Maclaurin's formula is Taylor's formula with $x_0=0$. Common expansions include $e^x$, $\\sin x$, $\\cos x$, $\\ln(1+x)$ and $(1+x)^\\alpha$. They are frequently used to evaluate limits and obtain approximations.",
+    "keyPoints": [
+      "Each expansion has a range of convergence and cannot be applied directly outside that range.",
+      "Expand to a sufficiently high order to cancel the leading terms; an insufficient order can give an incorrect limit.",
+      "The remainder must match the order of the expansion; writing only the polynomial is insufficient."
+    ]
+  },
+  "lhopital": {
+    "summary": "For an indeterminate form of type $\\frac{0}{0}$ or $\\frac{\\infty}{\\infty}$, subject to conditions including differentiability and a nonzero denominator derivative, the limit may be evaluated using $\\lim\\frac{f}{g}=\\lim\\frac{f'}{g'}$. This rule follows from Cauchy's mean value theorem.",
+    "keyPoints": [
+      "First verify that the form is $\\frac{0}{0}$ or $\\frac{\\infty}{\\infty}$; other forms cannot be treated directly by the rule.",
+      "The limit after differentiation must exist or tend to infinity; if it oscillates, the rule does not apply.",
+      "Avoid repeated cyclic applications that make the expression increasingly complicated; first apply an equivalent transformation when necessary."
+    ]
+  },
+  "indeterminate-forms": {
+    "summary": "Indeterminate forms include $\\frac{0}{0}$, $\\frac{\\infty}{\\infty}$, $0\\cdot\\infty$, $\\infty-\\infty$, $1^\\infty$, $0^0$ and $\\infty^0$. Common methods include combining fractions, taking logarithms, factoring, equivalent infinitesimals and L'H?pital's rule.",
+    "keyPoints": [
+      "Identify the form before choosing a method; different forms require different approaches.",
+      "A form of type $1^\\infty$ is commonly written as $e^{\\lim (u-1)v}$; do not simply write $e$.",
+      "Use equivalent infinitesimals cautiously in sums and differences; use a Taylor expansion when necessary."
+    ]
+  },
+  "monotonic": {
+    "summary": "On an interval, $f'(x)>0$ implies that the function is strictly increasing, whereas $f'(x)<0$ implies that it is strictly decreasing. Partition the domain at zeros of the derivative and determine its sign on each interval to find intervals of monotonicity.",
+    "keyPoints": [
+      "First determine the domain, then find zeros of the derivative and points where it does not exist.",
+      "An isolated point at which the derivative is zero does not affect monotonicity; the sign on the intervals is decisive.",
+      "State the intervals of monotonicity rather than writing only that the function is increasing."
+    ]
+  },
+  "extremum": {
+    "summary": "At a local extremum, the function has a maximum or minimum value relative to nearby points. A differentiable local extremum must be a stationary point ($f'=0$), but a stationary point need not be an extremum. Tests include the first-derivative sign-change test and the second-derivative test.",
+    "keyPoints": [
+      "A local extremum is a local concept, whereas an absolute extremum is global; endpoints are excluded from the definition of a local extremum.",
+      "A point where the derivative does not exist may also be a local extremum; do not look only for stationary points.",
+      "The second-derivative test is inconclusive when $f''=0$; return to the first-derivative test."
+    ]
+  },
+  "concavity": {
+    "summary": "When $f''(x)>0$, the curve is concave up; when $f''(x)<0$, it is concave down. An inflection point is a point where concavity changes, requiring $f''$ to change sign across it.",
+    "keyPoints": [
+      "Chinese textbooks may use different names for the two concavities; stating the sign of the second derivative is safer.",
+      "$f''=0$ identifies only a candidate inflection point; check for a sign change on both sides.",
+      "A point where the second derivative does not exist may also be an inflection point."
+    ]
+  },
+  "asymptote": {
+    "summary": "Asymptotes may be horizontal, vertical or oblique. A horizontal asymptote is determined by $f(x)\\to c$ as $x\\to\\pm\\infty$; a vertical asymptote by $f(x)\\to\\pm\\infty$ as $x\\to a$; and an oblique asymptote by $k=\\lim f(x)/x$ and $b=\\lim(f(x)-kx)$.",
+    "keyPoints": [
+      "For a vertical asymptote, divergence to infinity on one side suffices; the two sides need not behave alike.",
+      "Horizontal and oblique asymptotes may occur separately as $x\\to+\\infty$ and $x\\to-\\infty$.",
+      "First examine breaks in the domain, then examine behaviour at infinity."
+    ]
+  },
+  "curve-sketch": {
+    "summary": "Curve sketching usually proceeds by examining the domain, parity and periodicity, intercepts, asymptotes, monotonicity and extrema, and concavity and inflection points, before tabulating and plotting points. Derivative information determines the direction of increase or decrease and the bending of the curve.",
+    "keyPoints": [
+      "First determine the domain and its breaks to avoid drawing nonexistent portions.",
+      "Extrema, inflection points, asymptotes and intercepts are key features and must not be omitted.",
+      "The graph must be consistent with limiting behaviour, especially at infinity."
+    ]
+  },
+  "curvature": {
+    "summary": "Curvature measures the degree of bending of a curve; in Cartesian coordinates it is $K=\\frac{|y''|}{(1+y'^2)^{3/2}}$. The radius of curvature is $R=1/K$. Corresponding formulas exist for parametric equations and polar coordinates.",
+    "keyPoints": [
+      "Curvature is nonnegative, hence the absolute value in the formula.",
+      "A straight line has zero curvature and an infinite radius of curvature.",
+      "For a parametrically defined curve, do not apply the Cartesian formula directly without conversion."
+    ]
+  },
+  "optimization": {
+    "summary": "A continuous function on a closed interval attains its absolute extrema at stationary points, points of nondifferentiability or endpoints. In applications, first formulate the objective function and constraints, then compare candidates in the appropriate domain.",
+    "keyPoints": [
+      "First determine the domain in an application and state whether endpoints are admissible.",
+      "A local extremum need not be an absolute extremum; compare all candidates.",
+      "In modelling, attend to units and to the physical meaning of variables."
+    ]
+  },
+  "antiderivative": {
+    "summary": "If $F'(x)=f(x)$, then $F$ is an antiderivative of $f$, and $\\int f(x)\\,dx=F(x)+C$ is the indefinite integral. Every continuous function has an antiderivative; the indefinite integral represents the family of all antiderivatives.",
+    "keyPoints": [
+      "An indefinite integral must include $+C$; otherwise it gives only one antiderivative.",
+      "The existence of an antiderivative is distinct from elementary integrability; some antiderivatives cannot be expressed using elementary functions.",
+      "Differentiation and integration are inverse operations, subject to the difference by a constant."
+    ]
+  },
+  "indefinite-properties": {
+    "summary": "Indefinite integration is linear and is inverse to differentiation. Basic integration tables, substitution and integration by parts are the principal means of evaluating indefinite integrals.",
+    "keyPoints": [
+      "Constant factors may be taken outside the integral, but denominators cannot be split directly.",
+      "$\\left(\\int f(x)dx\\right)'=f(x)$, whereas $\\int f'(x)dx=f(x)+C$.",
+      "Check an integration result by differentiation."
+    ]
+  },
+  "basic-integral-table": {
+    "summary": "The basic integration table includes standard forms for power, exponential, trigonometric and inverse trigonometric functions, as well as $1/(1+x^2)$ and $1/\\sqrt{1-x^2}$. It underlies substitution and integration by parts.",
+    "keyPoints": [
+      "$\\int x^{-1}dx=\\ln|x|+C$; do not omit the absolute value.",
+      "Integration of the exponential function $a^x$ requires division by $\\ln a$.",
+      "Before applying a formula, check that the integrand matches its form exactly."
+    ]
+  },
+  "substitution-1": {
+    "summary": "If the integrand can be written as $f(\\varphi(x))\\varphi'(x)$, set $u=\\varphi(x)$ to reduce the integral to $\\int f(u)du$. The essential step is to identify the differential $du=\\varphi'(x)dx$.",
+    "keyPoints": [
+      "Substitute $u=\\varphi(x)$ back after integration unless the limits have also been changed, as in a definite integral.",
+      "Account for signs and constant factors when identifying the differential.",
+      "Not every substitution succeeds; first examine the structure of the integrand."
+    ]
+  },
+  "substitution-2": {
+    "summary": "Set $x=\\varphi(t)$ to transform radicals or complicated structures into trigonometric or rational functions before integration. Common choices include trigonometric, radical and reciprocal substitutions.",
+    "keyPoints": [
+      "The substitution function should be monotone and differentiable on the interval to ensure an inverse exists.",
+      "After a trigonometric substitution, substitute back and attend to angle ranges and signs.",
+      "A radical substitution must be applied to both $dx$ and the integrand."
+    ]
+  },
+  "by-parts": {
+    "summary": "The integration by parts formula $\\int u\\,dv=uv-\\int v\\,du$ transforms one integral into another. A common order for choosing $u$ is inverse trigonometric, logarithmic, power, exponential, then trigonometric; the aim is to simplify the new integral.",
+    "keyPoints": [
+      "The choice of $u$ and $dv$ determines success; an unsuitable choice may make the integral more complicated.",
+      "For cyclic integrals, move the original integral to one side and solve for it.",
+      "For definite integrals, include the limits and account for the boundary term."
+    ]
+  },
+  "rational-integral": {
+    "summary": "First reduce a rational function to a proper rational fraction, then decompose it into partial fractions and integrate term by term. The form of the decomposition depends on the denominator factors: linear, repeated and irreducible quadratic factors are treated separately.",
+    "keyPoints": [
+      "First use polynomial long division so that the numerator has lower degree than the denominator.",
+      "Solve for all undetermined coefficients in the partial fractions and omit no terms.",
+      "Completing the square for an irreducible quadratic factor often leads to logarithmic and inverse tangent terms."
+    ]
+  },
+  "trig-rational": {
+    "summary": "An integral of a rational expression in $\\sin x$ and $\\cos x$ can be reduced to an integral of a rational function by the universal substitution $t=\\tan(x/2)$. Depending on parity, a simpler substitution may also be available.",
+    "keyPoints": [
+      "The universal substitution introduces $\\frac{2t}{1+t^2}$, $\\frac{1-t^2}{1+t^2}$ and $dx=\\frac{2dt}{1+t^2}$.",
+      "After substitution, consider the domain and periodicity of $t$.",
+      "Try simpler substitutions first; the universal substitution usually involves more computation."
+    ]
+  },
+  "integral-table-use": {
+    "summary": "An integration table lists standard results by type of integrand. First use substitution or identities to put the integral into a tabulated form, then consult the table and substitute back.",
+    "keyPoints": [
+      "Before consulting the table, match the form, including constant factors and the range of the variable.",
+      "The conditions on parameters in the table must hold; otherwise the result may not apply.",
+      "After using the table, substitute back and include the constant of integration."
+    ]
+  },
+  "riemann-sum": {
+    "summary": "Divide an interval into subintervals, choose a point in each, multiply the function value there by the subinterval length, and sum to obtain a Riemann sum. The function is integrable when the limit of the sums exists as the partitions become finer.",
+    "keyPoints": [
+      "The partition and sample points may be chosen arbitrarily, but the limit must be unique.",
+      "Every continuous function is integrable; so is a bounded function with only finitely many discontinuities.",
+      "Riemann sums provide the construction of the definite integral; a Riemann sum is not itself the definite integral."
+    ]
+  },
+  "definite-def": {
+    "summary": "The definite integral is the limit of Riemann sums: $\\int_a^b f(x)dx=\\lim_{\\lambda\\to0}\\sum f(\\xi_i)\\Delta x_i$. It represents signed area: positive above the $x$ axis and negative below it.",
+    "keyPoints": [
+      "A definite integral is a number, not a function, and is independent of the symbol used for the integration variable.",
+      "Interchanging the limits changes the sign: $\\int_a^b=-\\int_b^a$.",
+      "Integrability requires boundedness; an integral of an unbounded function is an improper integral."
+    ]
+  },
+  "definite-props": {
+    "summary": "Definite integrals satisfy linearity, interval additivity, sign preservation, estimation bounds and an absolute-value inequality. Interval additivity permits an integral to be split into pieces, while sign preservation supports comparisons.",
+    "keyPoints": [
+      "Interval additivity does not require the split points to be in increasing order, but the orientations of the limits matter.",
+      "Sign preservation requires a nonnegative integrand on the interval; its converse cannot be used to infer that the function is nonnegative.",
+      "Estimation inequalities use the maximum and minimum values of the function."
+    ]
+  },
+  "definite-mean-value": {
+    "summary": "If $f$ is continuous on $[a,b]$, there exists $\\xi\\in[a,b]$ such that $\\int_a^b f(x)dx=f(\\xi)(b-a)$. Thus a continuous function attains its average value.",
+    "keyPoints": [
+      "Continuity is necessary for this conclusion; a discontinuous function may fail to attain its average value.",
+      "$\\xi$ lies in the closed interval and may be an endpoint.",
+      "The mean value theorem for integrals is often used to prove integral inequalities and estimate integrals."
+    ]
+  },
+  "ftc": {
+    "summary": "If $f$ is continuous, the variable-upper-limit integral $\\Phi(x)=\\int_a^x f(t)dt$ is differentiable and $\\Phi'(x)=f(x)$. This establishes the inverse relationship between differentiation and integration and underlies the Newton?Leibniz formula.",
+    "keyPoints": [
+      "The integrand must be continuous; otherwise an integral with variable upper limit need not be differentiable.",
+      "If the upper limit is a composite function, apply the chain rule: $\\frac{d}{dx}\\int_a^{\\varphi(x)}f(t)dt=f(\\varphi(x))\\varphi'(x)$.",
+      "Distinguish the variable of integration from the variable in the upper limit; do not interchange them."
+    ]
+  },
+  "newton-leibniz": {
+    "summary": "If $F$ is an antiderivative of $f$ on $[a,b]$, then $\\int_a^b f(x)dx=F(b)-F(a)$. The formula reduces evaluation of a definite integral to finding an antiderivative.",
+    "keyPoints": [
+      "Before applying the formula, verify that $f$ is continuous on the interval or satisfies the integrability condition, and that $F$ is an antiderivative throughout the interval.",
+      "At discontinuities, do not apply the formula directly; split the interval or treat the integral as improper.",
+      "An arbitrary constant can be added to the antiderivative without changing the difference."
+    ]
+  },
+  "definite-substitution": {
+    "summary": "For substitution in a definite integral, set $x=\\varphi(t)$ and change the limits to the corresponding values of $t$; no back-substitution is needed after integration. The formula is $\\int_a^b f(x)dx=\\int_\\alpha^\\beta f(\\varphi(t))\\varphi'(t)dt$.",
+    "keyPoints": [
+      "Change both limits and ensure that they correspond in the correct order.",
+      "The substitution function should be monotone and differentiable on the interval to ensure a one-to-one correspondence.",
+      "After substitution, do not retain limits expressed in the original variable."
+    ]
+  },
+  "definite-parts": {
+    "summary": "The integration by parts formula for definite integrals is $\\int_a^b u\\,dv=[uv]_a^b-\\int_a^b v\\,du$. It transforms one definite integral into another, and the limits must be substituted into the boundary term.",
+    "keyPoints": [
+      "Do not omit the boundary term $[uv]_a^b$; its sign must be correct.",
+      "The choice of $u$ and $dv$ follows principles similar to those for indefinite integration.",
+      "If the original integral reappears after integration by parts, rearrange the equation and solve for it."
+    ]
+  },
+  "definite-inequalities": {
+    "summary": "Inequalities for definite integrals commonly use sign preservation, estimation bounds, the Cauchy?Schwarz inequality and monotonicity. These tools estimate integral values, prove inequalities and assess convergence or divergence.",
+    "keyPoints": [
+      "Before applying sign preservation, verify the sign of the integrand on the interval.",
+      "The Cauchy?Schwarz inequality is $\\left(\\int fg\\right)^2\\le\\int f^2\\int g^2$.",
+      "Determine the equality conditions from the relationship between the functions."
+    ]
+  },
+  "improper": {
+    "summary": "Improper integrals include integrals over infinite intervals and integrals of unbounded functions, both defined using limits. Convergence means that the limit exists and is finite; divergence means that it does not exist or is infinite.",
+    "keyPoints": [
+      "Treat $+\\infty$ and $-\\infty$ separately in an integral over an infinite interval; do not combine them directly.",
+      "For an unbounded integrand, take a limit at each singularity, which may occur at an endpoint or in the interior.",
+      "An improper integral may contain several singularities and must be split so that each is assessed separately."
+    ]
+  },
+  "improper-convergence": {
+    "summary": "The comparison and limit comparison tests are commonly used to determine convergence of improper integrals. The $p$-integrals provide benchmarks: $\\int_1^\\infty \\frac{1}{x^p}dx$ converges for $p>1$ and diverges for $p\\le1$; $\\int_0^1 \\frac{1}{x^p}dx$ converges for $p<1$ and diverges for $p\\ge1$.",
+    "keyPoints": [
+      "The comparison test requires the functions being compared to be nonnegative.",
+      "Choose an appropriate benchmark for the limit comparison test, commonly a $p$-integral.",
+      "Convergence does not imply that a closed-form value can be found; justify a conclusion of divergence."
+    ]
+  },
+  "area": {
+    "summary": "The area of a plane region bounded by curves can be expressed using definite integrals: between upper and lower curves use $\\int_a^b[\\text{top}-\\text{bottom}]dx$, and between right and left curves use $\\int_c^d[\\text{right}-\\text{left}]dy$. First find the intersections to determine the limits.",
+    "keyPoints": [
+      "First sketch the region and find intersections; do not guess the limits of integration.",
+      "Distinguish the upper and lower curves to avoid a negative area.",
+      "If the region is piecewise defined, split the calculation into several integrals."
+    ]
+  },
+  "volume": {
+    "summary": "The volume of a solid obtained by rotating a region about a coordinate axis can be found by the disk or washer method: about the $x$ axis, $V=\\pi\\int_a^b[R(x)^2-r(x)^2]dx$. The shell method is also available.",
+    "keyPoints": [
+      "Distinguish the outer and inner radii; use the washer method for a hollow solid.",
+      "Match the axis of rotation to the integration variable; the formula changes accordingly for rotation about the $y$ axis.",
+      "First determine the region of rotation and the limits of integration."
+    ]
+  },
+  "arc-length": {
+    "summary": "In Cartesian coordinates the arc length is $\\int_a^b\\sqrt{1+[y'(x)]^2}dx$. Corresponding formulas exist for parametric equations and polar coordinates; each approximates a small arc by the length of a tangent segment.",
+    "keyPoints": [
+      "The function should be continuously differentiable on the interval, avoiding nondifferentiable cusps.",
+      "For parametric equations the formula is $\\int_\\alpha^\\beta\\sqrt{[x'(t)]^2+[y'(t)]^2}dt$.",
+      "In polar coordinates the formula is $\\int_\\alpha^\\beta\\sqrt{r^2+[r'(\\theta)]^2}d\\theta$."
+    ]
+  },
+  "polar-area": {
+    "summary": "The sector area bounded by the polar curve $r=r(\\theta)$ and two rays is calculated using $A=\\frac{1}{2}\\int_\\alpha^\\beta r^2(\\theta)d\\theta$.",
+    "keyPoints": [
+      "The angular range must cover the entire region; account for periodicity.",
+      "A curve may intersect itself, so identify the required region before integrating.",
+      "When $r$ is negative it represents a point in the opposite direction; interpret it using the graph."
+    ]
+  },
+  "parametric-area": {
+    "summary": "Area enclosed by a parametrically defined curve $x=x(t)$, $y=y(t)$ can be calculated using $\\int y\\,dx=\\int_\\alpha^\\beta y(t)x'(t)dt$; for a closed curve, attend to orientation.",
+    "keyPoints": [
+      "The orientation determines the sign of the integral; counterclockwise and clockwise traversals may differ by a minus sign.",
+      "First determine the parameter range and limits of integration.",
+      "Split the calculation when the curve intersects itself or is piecewise defined."
+    ]
+  },
+  "physical-applications": {
+    "summary": "Definite integrals can calculate physical quantities including work done by a variable force, fluid pressure, centre of mass and average value. The basic method is to write a local approximation for an infinitesimal element and integrate to sum the contributions.",
+    "keyPoints": [
+      "First establish a coordinate system and specify the integration variable; use consistent units.",
+      "The key to the element method is a correct local approximation.",
+      "Determine the direction and sign of each physical quantity relative to the coordinate system."
+    ]
+  },
+  "ode-basic": {
+    "summary": "A differential equation contains an unknown function and its derivatives; its order is the order of the highest derivative. A general solution contains arbitrary constants, while a particular solution is determined by initial conditions.",
+    "keyPoints": [
+      "The number of independent arbitrary constants in a general solution usually equals the order of the equation.",
+      "Distinguish linear from nonlinear and homogeneous from nonhomogeneous equations.",
+      "The interval on which a solution is defined must be consistent with the interval on which the equation is meaningful."
+    ]
+  },
+  "initial-value-problem": {
+    "summary": "An initial value problem consists of a differential equation and initial conditions. The number of initial conditions matches the order of the equation and is used to determine a particular solution from the general solution.",
+    "keyPoints": [
+      "An insufficient number of initial conditions cannot determine a unique solution.",
+      "Existence and uniqueness require suitable conditions on the equation; a unique solution must not be assumed automatically.",
+      "The initial conditions must lie within the interval on which the solution is defined."
+    ]
+  },
+  "separable": {
+    "summary": "An equation of the form $\\frac{dy}{dx}=f(x)g(y)$ is separable; rewrite it as $\\frac{dy}{g(y)}=f(x)dx$ and integrate both sides.",
+    "keyPoints": [
+      "Before separating, check whether $g(y)=0$ gives constant solutions so that none are lost.",
+      "After integration, account for absolute values and constants.",
+      "When substituting initial conditions to find a particular solution, attend to the domain."
+    ]
+  },
+  "homogeneous-ode": {
+    "summary": "An equation of the form $\\frac{dy}{dx}=f\\left(\\frac{y}{x}\\right)$ is called homogeneous; setting $u=y/x$ reduces it to a separable equation.",
+    "keyPoints": [
+      "After substitution, $dy/dx=u+x\\,du/dx$; do not omit $x\\,du/dx$.",
+      "After substituting back $u=y/x$, arrange the result as an explicit or implicit solution.",
+      "Pay attention to $x=0$ and the domain of $u$."
+    ]
+  },
+  "linear-first": {
+    "summary": "The standard form is $y'+P(x)y=Q(x)$. Multiplication by the integrating factor $\\mu(x)=e^{\\int P(x)dx}$ gives $(\\mu y)'=\\mu Q$, from which the general solution follows.",
+    "keyPoints": [
+      "First put the equation in standard form; the coefficient of $y'$ must be 1.",
+      "The integral in the integrating factor need not include an arbitrary constant.",
+      "The general solution is $y=e^{-\\int P dx}\\left(\\int Q e^{\\int P dx}dx+C\\right)$."
+    ]
+  },
+  "bernoulli": {
+    "summary": "An equation of the form $y'+P(x)y=Q(x)y^n$ with $n\\ne0,1$ can be reduced to a first-order linear equation by setting $z=y^{1-n}$.",
+    "keyPoints": [
+      "First check the degenerate cases $n=0,1$.",
+      "After substitution, rearrange the equation into standard linear form.",
+      "$y=0$ may be a solution and must not be omitted."
+    ]
+  },
+  "reducible-ode": {
+    "summary": "An equation of the form $y''=f(x,y')$ can be reduced to first order by setting $p=y'$. For an equation of the form $y''=f(y,y')$, set $p=y'$, treat $y$ as the independent variable and use $y''=p\\frac{dp}{dy}$ to reduce the order.",
+    "keyPoints": [
+      "First identify which variable is absent from the equation, then choose the substitution.",
+      "$y''=p\\frac{dp}{dy}$ applies only when $y$ is treated as the independent variable.",
+      "Substitute the constants obtained after reducing the order back step by step."
+    ]
+  },
+  "second-homogeneous": {
+    "summary": "The equation $y''+py'+qy=0$ is solved using the characteristic equation $r^2+pr+q=0$. Two distinct real roots, a repeated root and conjugate complex roots give different forms of the general solution.",
+    "keyPoints": [
+      "For a repeated root, the general solution includes a factor of $x$: $(C_1+C_2x)e^{rx}$.",
+      "Complex roots $\\alpha\\pm\\beta i$ correspond to $e^{\\alpha x}(C_1\\cos\\beta x+C_2\\sin\\beta x)$.",
+      "The characteristic equation must be formed from the homogeneous equation; the nonhomogeneous term does not affect its roots."
+    ]
+  },
+  "second-nonhomogeneous": {
+    "summary": "The general solution of a nonhomogeneous equation is the sum of the general solution of the corresponding homogeneous equation and one particular solution. A particular solution can be found by undetermined coefficients, choosing its form from the forcing term, or by variation of parameters.",
+    "keyPoints": [
+      "First find the general homogeneous solution, then a particular solution, and finally add them.",
+      "When the forcing term resonates with a characteristic root, multiply the trial particular solution by $x^k$.",
+      "For several forcing terms, particular solutions may be found separately and superposed."
+    ]
+  },
+  "ode-applications": {
+    "summary": "Differential equations model processes such as growth, decay, cooling, mixing and motion. The modelling procedure is to define variables, formulate relationships, write the equation, apply initial conditions, solve and interpret.",
+    "keyPoints": [
+      "Specify variables and units before establishing the differential relation.",
+      "Initial conditions must correspond to the actual situation.",
+      "After solving, check that the solution conforms to the physically meaningful range and long-term behaviour."
+    ]
+  }
+}

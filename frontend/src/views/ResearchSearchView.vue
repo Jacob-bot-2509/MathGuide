@@ -1236,6 +1236,8 @@ onMounted(async () => {
 <style scoped>
 .rs {
   min-height: 100vh;
+  /* iPad/手机 Safari 的 100vh 含工具栏区域,dvh 跟随可见视口,横竖屏都适用 */
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   position: relative;

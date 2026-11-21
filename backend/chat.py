@@ -104,6 +104,22 @@ from chat_sse import (  # noqa: F401
     _with_meta,
 )
 from http_utils import read_json_object
+
+
+def _answer_is_zh(text: str, history: list[dict] | None = None) -> bool:
+    """回答语言:有汉字→中文;有拉丁字母且无汉字→英文;
+    纯数字/符号(如 "1+1=?")→沿用最近一条带语言的历史,没有则默认中文。"""
+    if _is_chinese(text):
+        return True
+    if re.search(r"[A-Za-z]", text or ""):
+        return False
+    for item in reversed(history or []):
+        content = str(item.get("content") or "")
+        if _is_chinese(content):
+            return True
+        if re.search(r"[A-Za-z]", content):
+            return False
+    return True
 from log import get_logger
 from rag.research.types import SearchHit
 from rate_limit import NullLimiter, SlidingWindowLimiter
@@ -217,7 +233,8 @@ _RESEARCH_MAX = 32
 
 
 
-PROMPT_MAX = 32000  # 服务端输入上限(字符):覆盖长文档教材(3万字)+ 指令前缀,超出静默截断
+PROMPT_MAX = 210_000  # 服务端输入上限(字符):覆盖单章教材(20 万字)+ 指令前缀,超出静默截断
+ATTACH_READ_CAP = 30_000  # 上传时的文本附件只让模型读前 3 万字,避免上传即产生长上下文费用
 PAPER_CONTEXT_CHARS = 20000  # 当前论文问答带入的正文上限:足够覆盖摘要+方法+结果,不挤爆上下文
 
 # 限流:每用户滑动窗口(防脚本刷接口烧 token 费;正常学习节奏碰不到上限)。
@@ -393,19 +410,31 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
 
 
 
-async def _verify_answer(question: str, answer: str, role: str) -> dict | None:
+async def _verify_answer(question: str, answer: str, role: str, zh: bool = True) -> dict | None:
     """双角色验证:解答生成后用另一角色复核。
     返回 {"verdict": correct|wrong|uncertain, "issue": ..., "correction": ...};
     复核不可用时返回 None,不打断主回答。"""
-    system = (
-        "你是数学解答复核员。请核查用户问题与给出的解答,只输出一个 JSON 对象,"
-        "不要 Markdown、不要解释。字段:\n"
-        '{"verdict":"correct|wrong|uncertain","issue":"一句话指出问题或依据",'
-        '"correction":"若 verdict=wrong,给出可替换的更正解答;否则留空"}\n'
-        "判断以题目条件和数学定义为准;过程省略但结论正确也算 correct;"
-        "不确定时用 uncertain,不要强行判错。"
-    )
-    user = f"问题:{question[:500]}\n\n解答:\n{answer[:4000]}"
+    if zh:
+        system = (
+            "你是数学解答复核员。请核查用户问题与给出的解答,只输出一个 JSON 对象,"
+            "不要 Markdown、不要解释。字段:\n"
+            '{"verdict":"correct|wrong|uncertain","issue":"一句话指出问题或依据",'
+            '"correction":"若 verdict=wrong,给出可替换的更正解答;否则留空"}\n'
+            "判断以题目条件和数学定义为准;过程省略但结论正确也算 correct;"
+            "不确定时用 uncertain,不要强行判错。"
+        )
+        user = f"问题:{question[:500]}\n\n解答:\n{answer[:4000]}"
+    else:
+        system = (
+            "You are a math answer reviewer. Check the user's question and the proposed answer. "
+            "Output exactly one JSON object, with no Markdown and no extra prose. Fields:\n"
+            '{"verdict":"correct|wrong|uncertain","issue":"one sentence on the problem or basis",'
+            '"correction":"if verdict=wrong, give a replacement answer; otherwise leave empty"}\n'
+            "Judge against the problem conditions and mathematical definitions; a correct "
+            "conclusion with omitted steps still counts as correct; use uncertain rather than "
+            "forcing a verdict. Write both issue and correction entirely in English."
+        )
+        user = f"Question: {question[:500]}\n\nAnswer:\n{answer[:4000]}"
     parts: list[str] = []
     try:
         async for delta in rag.llm.stream_chat(
@@ -468,7 +497,7 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
     verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过);
     summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)。
     已经流出一部分后再失败时不回放直答,只追加中断提示,避免答案被拼接两遍。"""
-    zh = _is_chinese(prompt)
+    zh = _answer_is_zh(prompt, history)
     answer: list[str] = []
     try:
         system = rag.build_system(chunks, cmd, zh=zh)
@@ -748,18 +777,27 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
         if verify:
             # 解答者与复核者错开模型保证独立:deep 解答 → main 复核;main 解答 → deep 复核
             vrole = "main" if role == "deep" else rag.llm.pick("deep")
-            verdict = await _verify_answer(prompt, "".join(answer), vrole)
+            verdict = await _verify_answer(prompt, "".join(answer), vrole, zh)
             if verdict:
-                label = {"correct": "正确", "wrong": "有误",
-                         "uncertain": "需人工复核"}.get(verdict["verdict"], "需人工复核")
+                if zh:
+                    label = {"correct": "正确", "wrong": "有误",
+                             "uncertain": "需人工复核"}.get(verdict["verdict"], "需人工复核")
+                    prefix = "复核"
+                else:
+                    label = {"correct": "correct", "wrong": "needs correction",
+                             "uncertain": "needs review"}.get(
+                                 verdict["verdict"], "needs review")
+                    prefix = "Review"
                 log.info(f"[chat] 复核({vrole}): {label} | {len(verdict['issue'])} 字")
                 correction = verdict.get("correction", "")
                 if verdict["verdict"] == "wrong" and correction:
                     # 更正放在复核行之前:_clean_answer 只剥末尾复核行,更正会保留给评测
-                    yield (f"data: {json.dumps(f'**更正**\n\n{correction}', ensure_ascii=False)}\n\n")
+                    title = "**更正**" if zh else "**Correction**"
+                    yield (f"data: {json.dumps(f'{title}\n\n{correction}', ensure_ascii=False)}\n\n")
                 issue = verdict.get("issue", "")
                 suffix = f":{issue}" if issue else ""
-                yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}):{label}{suffix}', ensure_ascii=False)}\n\n"
+                head = f"🔍 {prefix}({vrole})" if zh else f"🔍 Review ({vrole})"
+                yield f"data: {json.dumps(f'\n\n> {head}:{label}{suffix}', ensure_ascii=False)}\n\n"
             # 解答完询问是否收录进问题记录(归纳本):前端渲染为「是/否」按钮。
             # 科研区不设问题归纳,不追加该入口。
             if workspace == "learn":
@@ -945,11 +983,12 @@ async def _gen_nav_list(question: str):
 
 async def _gen_nav_guide(question: str, tb: str = ""):
     """章节指引:用户点击章节后给出该章大概知识指引,末尾附「返回」按钮行;
-    tb 为按会话缓存的教材文本,缓存失效时按通用知识作答该章"""
-    prompt = question[:2000]
-    if tb:
+    tb 为按会话缓存的教材文本,缓存失效时按通用知识作答该章。
+    新链路(目录优先)由前端把本章切片内联在 question 里,不再重复拼缓存。"""
+    prompt = question[:PROMPT_MAX]
+    if tb and "<教材文本>" not in question:
         prompt += f"\n\n<教材文本>:\n{tb}"
-    else:
+    elif not tb and "<教材文本>" not in question:
         prompt += "\n\n(教材内容缓存已失效,请按通用知识作答该章)"
     emitted = False
     try:
@@ -978,7 +1017,7 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
     ).format(name=name)
     emitted = False
     try:
-        async for delta in rag.llm.stream_chat(system, body[:TEXTBOOK_CAP], role=rag.llm.pick("long"),
+        async for delta in rag.llm.stream_chat(system, body[:ATTACH_READ_CAP], role=rag.llm.pick("long"),
                                                thinking=False):
             emitted = True
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
@@ -1001,15 +1040,25 @@ async def _gen_attach_llm(name: str, body: str, zh: bool):
 
 
 
-async def _verify_clarify(question: str, answer: str, role: str) -> str | None:
+async def _verify_clarify(question: str, answer: str, role: str, zh: bool = True) -> str | None:
     """澄清步骤独立复核:另一角色核查是否只询问了知识点、没有提前列出公式
     (失败返回 None,不打断澄清提问)"""
-    system = (
-        "你是公式查询手册的澄清复核员。核查以下用户请求与助手回复:"
-        "回复是否只询问用户想查哪个具体知识点,没有列出任何公式、没有展开讲解。"
-        "只输出一行结论(符合要求 / 不符合要求)和一句依据,不要输出其他内容。"
-    )
-    user = f"用户请求:{question[:300]}\n\n助手回复:\n{answer[:600]}"
+    if zh:
+        system = (
+            "你是公式查询手册的澄清复核员。核查以下用户请求与助手回复:"
+            "回复是否只询问用户想查哪个具体知识点,没有列出任何公式、没有展开讲解。"
+            "只输出一行结论(符合要求 / 不符合要求)和一句依据,不要输出其他内容。"
+        )
+        user = f"用户请求:{question[:300]}\n\n助手回复:\n{answer[:600]}"
+    else:
+        system = (
+            "You are the clarification reviewer for the Formula Reference. Check the user "
+            "request and the assistant reply: did the reply only ask which specific topic the "
+            "user wants, without listing any formulas or explaining anything? "
+            "Output one line with the conclusion (valid / invalid) and one sentence of basis, "
+            "nothing else. Write in English."
+        )
+        user = f"User request: {question[:300]}\n\nAssistant reply:\n{answer[:600]}"
     parts: list[str] = []
     try:
         async for delta in rag.llm.stream_chat(system, user, role=role, thinking=False):
@@ -1027,12 +1076,21 @@ async def _gen_formula_clarify(question: str):
     不列公式、不展开讲解;澄清提问由另一角色独立复核(是否只问了知识点、
     没提前列公式),复核失败静默跳过;LLM 未配置/失败降级为静态澄清语,
     面板点击绝不无回应"""
-    system = (
-        "用户正在使用「公式查询手册」,想查询某一数学领域的公式和定理。"
-        "请只用一两句自然、有温度的话询问用户想查哪个具体知识点,"
-        "并举该领域 3~5 个常见知识点为例;不要列出任何公式,不要展开讲解,"
-        "等用户说出具体知识点后再作答。回答语言跟随用户语言。"
-    )
+    zh = _is_chinese(question)
+    if zh:
+        system = (
+            "用户正在使用「公式查询手册」,想查询某一数学领域的公式和定理。"
+            "请只用一两句自然、有温度的话询问用户想查哪个具体知识点,"
+            "并举该领域 3~5 个常见知识点为例;不要列出任何公式,不要展开讲解,"
+            "等用户说出具体知识点后再作答。回答语言跟随用户语言。"
+        )
+    else:
+        system = (
+            "The user is using the Formula Reference and wants formulas and theorems from a "
+            "mathematical area. In one or two natural sentences, ask which specific topic they "
+            "want to look up and give 3-5 common examples from that area; do not list any "
+            "formulas and do not explain anything yet. Answer entirely in English."
+        )
     answer: list[str] = []
     try:
         async for delta in rag.llm.stream_chat(system, question[:300], role="main"):
@@ -1040,7 +1098,6 @@ async def _gen_formula_clarify(question: str):
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
         log.warning(f"[chat] 公式手册澄清调用失败,降级为静态提示: {exc}")
-        zh = _is_chinese(question)
         if answer:
             text = ("⚠ 澄清提问中断,以上内容可能不完整。" if zh
                     else "⚠ Clarification interrupted; the text above may be incomplete.")
@@ -1054,10 +1111,11 @@ async def _gen_formula_clarify(question: str):
         return
     # 双角色复核:main 出澄清提问 → deep 独立核查(与解答复核同款模式,角色错开)
     vrole = rag.llm.pick("deep")
-    verdict = await _verify_clarify(question, "".join(answer), vrole)
+    verdict = await _verify_clarify(question, "".join(answer), vrole, zh)
     if verdict:
         log.info(f"[chat] 公式手册澄清复核({vrole}): {len(verdict)} 字")
-        yield f"data: {json.dumps(f'\n\n> 🔍 复核({vrole}): {verdict}', ensure_ascii=False)}\n\n"
+        head = f"复核({vrole})" if zh else f"Review ({vrole})"
+        yield f"data: {json.dumps(f'\n\n> 🔍 {head}: {verdict}', ensure_ascii=False)}\n\n"
 
 
 # ---------- 直观解释:按需生成 + 服务端缓存 ----------
@@ -1467,7 +1525,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
 
     # RAG:检索知识片段 → 路由 → LLM 或直答
     question = _strip_meta(prompt, cmd)
-    zh = _is_chinese(question)
+    history_hint = body.get("history") if isinstance(body.get("history"), list) else []
+    zh = _answer_is_zh(question, history_hint)
 
     # 知识点讲解:图谱“前往”进入,首轮讲主干与注意点,不检索知识库
     if cmd == "知识点讲解" and workspace == "learn":

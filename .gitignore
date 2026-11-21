@@ -14,6 +14,9 @@ backend/knowledge/.embeddings.json
 node_modules/
 dist/
 
+# 本地 HTTPS 开发证书(mkcert);私钥绝不入库
+.certs/
+
 # 本地环境变量
 *.local
 .env.local
@@ -64,3 +67,27 @@ review_packets/_incoming_zip/
 review_packets/book_extract/_*.txt
 _zip_p006.jpg
 _our_p006.jpg
+
+# 本地密钥备份(含 API key,绝不入库)
+backend/.env.local.bak*
+
+# 本机分析/截图/临时产物(不属于源码)
+.codex/
+.local-backups/
+/review_packets/
+/_cmc_pages/
+/_cmc_toc/
+/_*.jpg
+/_*.pdf
+/MathGuide-render-audit.json
+/Lean4_*.pdf
+/package.json
+/package-lock.json
+
+# 发布附件走 GitHub Release,不进仓库
+/deploy/mathguide-v*-web.tar.gz
+/deploy/mathguide-v*-web.tar.gz.sha256
+
+# 内部报告(仅本机归档)
+/docs/APPLICATION_ALIGNMENT_REPORT_*.html
+/docs/APPLICATION_ALIGNMENT_REPORT_*.pdf

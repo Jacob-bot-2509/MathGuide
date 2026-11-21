@@ -150,6 +150,53 @@ describe('ChatWorkspace 流式回复', () => {
     wrapper.unmount()
   })
 
+  it('标题在目录和正文均出现时提示无法定位,不请求通用知识', async () => {
+    const books = await import('@/utils/bookStore')
+    const load = vi.spyOn(books, 'loadBook').mockResolvedValue({
+      hash: 'ambiguous-book', name: 'book.pdf', pageCount: 2,
+      pages: ['目录\n第一章 .... 2', '第一章\n正文'], outline: [],
+      createdAt: 0, lastUsedAt: 0, size: 20,
+    })
+    const touch = vi.spyOn(books, 'touchBook').mockResolvedValue(undefined)
+    const wrapper = await mountWorkspace('learn')
+    await wait(100)
+    const session = sessionStore('learn').state.sessions[0]
+    session.messages.push({ id: 987653, role: 'user', content: 'book.pdf',
+      attachment: { kind: 'file', name: 'book.pdf', bookId: 'ambiguous-book' } })
+    const priorCalls = calls.length
+    const vm = wrapper.vm as unknown as { onNavChapter: (name: string) => void }
+    vm.onNavChapter('第一章')
+    await vi.waitFor(() => {
+      expect(session.messages.at(-1)?.content).toContain('无法可靠定位该章节')
+    })
+    await wait(500)
+    expect(calls).toHaveLength(priorCalls)
+    expect(session.messages.at(-1)?.navGuideFor).toBeUndefined()
+    wrapper.unmount()
+    load.mockRestore()
+    touch.mockRestore()
+  })
+
+  it('教材缓存丢失时提示重新上传,不请求通用知识冒充章节', async () => {
+    const wrapper = await mountWorkspace('learn')
+    await wait(100)
+    const session = sessionStore('learn').state.sessions[0]
+    session.messages.push({
+      id: 987654, role: 'user', content: 'book.pdf',
+      attachment: { kind: 'file', name: 'book.pdf', bookId: 'missing-book' },
+    })
+    const priorCalls = calls.length
+    const vm = wrapper.vm as unknown as { onNavChapter: (name: string) => void }
+    vm.onNavChapter('第一章')
+    await vi.waitFor(() => {
+      expect(session.messages.at(-1)?.content).toContain('教材缓存已失效')
+    })
+    await wait(500)
+    expect(calls).toHaveLength(priorCalls)
+    expect(session.messages.at(-1)?.navGuideFor).toBeUndefined()
+    wrapper.unmount()
+  })
+
   it('两个工作区各自存档,互不串档', async () => {
     const learn = await mountWorkspace('learn')
     await wait()

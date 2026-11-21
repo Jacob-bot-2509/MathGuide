@@ -114,6 +114,40 @@ npm run build
 产物在 `frontend/dist`。`theme-init.js` 已从内联脚本拆成独立文件,
 所以 CSP 不需要放开 `script-src 'unsafe-inline'`。
 
+### 2.1 本地 HTTPS(iPad / 手机调试,可选)
+
+生产用服务器证书;本地调试用 mkcert,代码不变,只是证书来源不同。
+
+```bash
+# 1. 电脑装 mkcert 并信任本地 CA
+winget install FiloSottile.mkcert      # Windows;macOS 用 brew install mkcert
+mkcert -install
+
+# 2. 给局域网 IP 与 localhost 签证书(把 IP 换成电脑当前地址;有 Tailscale 可一并加)
+cd .certs
+mkcert 172.30.43.234 100.83.78.113 localhost 127.0.0.1 ::1
+# 得到 172.30.43.234+4.pem / 172.30.43.234+4-key.pem 这类文件
+
+# 3. 带证书启动前端(host 会自动监听 0.0.0.0)
+cd frontend
+MG_HTTPS_CERT="D:/Works/code/.certs/172.30.43.234+4.pem" \
+MG_HTTPS_KEY="D:/Works/code/.certs/172.30.43.234+4-key.pem" \
+npx vite --port 5173
+```
+
+iPad 访问 `https://<电脑局域网 IP>:5173`,并安装一次根证书:
+
+1. 把 `mkcert -CAROOT` 下的 `rootCA.pem` 改名 `.crt`,通过 AirDrop/邮件/局域网发到 iPad;
+2. 设置 → 已下载描述文件 → 安装;
+3. 设置 → 通用 → 关于本机 → 证书信任设置 → 打开该根证书的完全信任。
+
+注意:
+
+- 只在本机开发用;`.certs/` 已加入 `.gitignore`,私钥绝不能入库或上传服务器。
+- 局域网 IP 变化后证书失效,需要重新签;建议给电脑固定 DHCP 或改用主机名。
+- 从 HTTP 切到 HTTPS 会换 origin,浏览器里的会话与教材缓存不会跟随;要重新登录/上传。
+- 生产不读 `MG_HTTPS_CERT/MG_HTTPS_KEY`,由 nginx/Caddy 终止 TLS。
+
 ## 3. 反向代理
 
 二选一:
@@ -133,6 +167,33 @@ npm run build
 - `X-Content-Type-Options` / `Referrer-Policy` / `X-Frame-Options` / `Permissions-Policy`
 
 首次上线先确认 HTTPS 与 SSE 正常,再长期保留 HSTS。
+
+### 3.1 证书:Let's Encrypt
+
+```bash
+# Debian/Ubuntu
+sudo apt install certbot python3-certbot-nginx
+# 两个子域写进同一张证书(或改用通配符证书)
+sudo certbot --nginx -d learn.example.com -d research.example.com
+# 自动续期演练(证书到期前 30 天会由 systemd timer 续期)
+sudo certbot renew --dry-run
+```
+
+然后把 `deploy/nginx.conf` 里的占位路径改成实际路径(通常是
+`/etc/letsencrypt/live/<主域名>/fullchain.pem` 与 `privkey.pem`),
+并确认:
+
+- `server_name` 是真实域名,80 端口的 301 覆盖所有子域;
+- `client_max_body_size 100m`(论文上传上限;教材单章 20 万字约 600 KB,也在内);
+- `/api/` 的 `proxy_set_header X-Forwarded-Proto $scheme;` 不能删,
+  Cookie 的 `Secure` 与 HSTS 都靠它;
+- 双域部署在 `backend/.env.local` 设 `MG_COOKIE_DOMAIN=.example.com`,
+  `MG_ENABLE_HSTS=1`;
+- 先在浏览器确认证书链完整,再打开 HSTS;
+- Caddy 用户不需要 certbot,Caddyfile 会自动申请和续期。
+
+迁移后第一次访问会换 origin:用户需要重新登录;会话与教材缓存在本机,
+不会自动带过去。`/api/account/export` 可导出服务端数据。
 
 ## 4. 上线前检查
 

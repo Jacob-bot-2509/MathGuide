@@ -262,3 +262,19 @@ def test_history_delete_removes_entry(client):
 
 def test_history_confirm_unknown_id_is_404(client):
     assert client.post("/api/doc/exercise/history/nope/confirm").status_code == 404
+
+
+def test_exercise_rate_limit_is_independent_from_chat(monkeypatch):
+    """习题预览/生成用自己的桶:聊天的 6 次/分不应殃及「换一批」。"""
+    from starlette.exceptions import HTTPException
+
+    from rate_limit import SlidingWindowLimiter
+
+    limiter = SlidingWindowLimiter(2, 60.0)
+    monkeypatch.setattr(exercise_docgen, "_rate_limiter", limiter)
+    exercise_docgen._rate_check("u-rate")
+    exercise_docgen._rate_check("u-rate")
+    with pytest.raises(HTTPException) as err:
+        exercise_docgen._rate_check("u-rate")
+    assert err.value.status_code == 429
+    assert err.value.headers["Retry-After"] == "60"

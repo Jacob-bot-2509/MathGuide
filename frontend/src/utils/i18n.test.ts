@@ -3,7 +3,7 @@
  *
  * 三条断言:
  *   1. ZH 与 EN 键集合完全一致 —— 少一条,该语言就会把 key 原文显示给用户;
- *   2. 词条总数与 M3-4 拆分前一致(964)—— 防止拆文件时悄悄丢词条;
+ *   2. 词条总数与 M3-4 拆分前一致(973)—— 防止拆文件时悄悄丢词条;
  *   3. 源码里 `t('x.y')` 用到的键必须存在 —— 防止加文案时只写模板不写词条。
  *
  * 这里直接 import 字典(纯数据、无副作用),比早期"解析源码文本"的写法可靠得多。
@@ -56,9 +56,9 @@ describe('i18n 词条', () => {
     expect(zhKeys).toEqual(enKeys)
   })
 
-  it('词条总数与拆分前一致(964)', () => {
-    expect(Object.keys(ZH)).toHaveLength(964)
-    expect(Object.keys(EN)).toHaveLength(964)
+  it('词条总数与拆分前一致(973)', () => {
+    expect(Object.keys(ZH)).toHaveLength(973)
+    expect(Object.keys(EN)).toHaveLength(973)
   })
 
   it('源码 t() 引用的键都已定义', () => {

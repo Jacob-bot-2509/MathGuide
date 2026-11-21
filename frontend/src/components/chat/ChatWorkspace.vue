@@ -49,6 +49,9 @@ import { getResearchDocMeta, uploadTempPaper, type PaperAction, type ResearchDoc
 import { deletePaperHistory, importTempPaper } from '@/services/literatureService'
 import { downloadBlob, exportSurveyPdf } from '@/services/docService'
 import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, categoryByKey, classifyQuestion, isChitchat } from '@/utils/classifier'
+import { buildChapterMarkdown, chapterKey, locateChapter, sliceChapter, withRanges } from '@/utils/bookChapters'
+import { getCachedGuide, getCachedToc, loadBook, saveGuide, saveToc, touchBook } from '@/utils/bookStore'
+import { historyQa } from '@/utils/docHistory'
 import { detectAmbiguous, topicById, type AmbiguousOption } from '@/utils/ambiguous'
 import { usePaperChat } from '@/composables/usePaperChat'
 import { settingsState } from '@/stores/settings'
@@ -64,7 +67,7 @@ import { addToTrash } from '@/stores/trash'
 import { notebookStore } from '@/stores/notebook'
 import { setTodoWorkspace } from '@/stores/todo'
 import { showToast } from '@/utils/toast'
-import { chapterNameFromCmd } from '@/utils/cmdLink'
+import { chapterNameFromCmd, chapterPageFromCmd } from '@/utils/cmdLink'
 import { splitStableBlocks } from '@/utils/mathBlocks'
 import { useChatAttachments } from '@/composables/useChatAttachments'
 import { useSpeechInput } from '@/composables/useSpeechInput'
@@ -340,7 +343,7 @@ function togglePanel(kind: PanelKind) {
 const panelAnchor = ref<{ left: number; top: number; width: number } | null>(null)
 
 /** 量取按钮位置(面板出现前调用;按钮一定在页面上,量不到则退化为不传) */
-function anchorTo(selector: string) {
+function anchorTo(selector: string, panelWidth = 560) {
   const btn = document.querySelector<HTMLElement>(selector)
   const root = document.querySelector<HTMLElement>('.learn')
   if (!btn || !root) {
@@ -349,11 +352,26 @@ function anchorTo(selector: string) {
   }
   const b = btn.getBoundingClientRect()
   const r = root.getBoundingClientRect()
-  panelAnchor.value = { left: b.left - r.left, top: b.bottom - r.top, width: b.width }
+  // iPad/窄屏上指令靠边时,以按钮中心展开的面板会伸出屏幕被裁掉。
+  // 这里把中心夹在 [半宽+边距, 屏宽-半宽-边距] 内:面板仍靠近按钮,
+  // 但整块落在可视区内。半宽取该面板的实际最大宽度。
+  const half = Math.min(panelWidth / 2, Math.max(0, (r.width - 24) / 2))
+  const center = Math.min(
+    Math.max(b.left - r.left + b.width / 2, half + 12),
+    Math.max(half + 12, r.width - half - 12),
+  )
+  panelAnchor.value = { left: center, top: b.bottom - r.top, width: 0 }
 }
 const tipsOpen = ref(false)
 const flashMsgId = ref(0)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
+
+/* 教材目录优先:有书签本地出目录;无书签只读前 20 页;点章节只发该章切片。
+   版本号用于缓存失效:解析口径或提示词变化时 +1。 */
+const TOC_SAMPLE_PAGES = 20
+const PARSER_VERSION = 1
+const PROMPT_VERSION = 1
+const CHAPTER_TEXT_CAP = 200_000
 
 /* 后台流:不同会话的输出并行生成,切换界面不中断;按消息 id 索引便于精确取消 */
 /* 一条回复的流式生命周期(排队/节流上屏/收尾/中断)在 composable 里;
@@ -416,6 +434,9 @@ const summary = computed(() => {
 
 /** 问题总数:直接取 summary 的汇总,不再单独遍历会话重数一遍 */
 const questionCount = computed(() => summary.value.reduce((n, c) => n + c.count, 0))
+
+/** 生成文档「在问题归纳中选择」的数据源:与问题归纳面板同口径的历史问答 */
+const docHistory = computed(() => historyQa(sessions.value))
 
 /* ---------- 会话管理(上下文栈) ---------- */
 
@@ -579,14 +600,22 @@ function messageBlocks(msg: ChatMsg): Array<{
 
 const diagramBusy = ref<number | null>(null)
 
-function previousQuestion(msg: ChatMsg): string {
+function previousUserMessage(msg: ChatMsg): ChatMsg | undefined {
   for (const session of sessions.value) {
     const index = session.messages.findIndex((item) => item.id === msg.id)
     if (index < 0) continue
-    return [...session.messages.slice(0, index)]
-      .reverse().find((item) => item.role === 'user')?.content || ''
+    return [...session.messages.slice(0, index)].reverse().find((item) => item.role === 'user')
   }
-  return ''
+  return undefined
+}
+
+function previousQuestion(msg: ChatMsg): string {
+  return previousUserMessage(msg)?.content || ''
+}
+
+/** 上一问是寒暄/闲聊时,回答只做对话,不提供图解与直觉解释入口。 */
+function isChitchatTurn(msg: ChatMsg): boolean {
+  return Boolean(previousUserMessage(msg)?.chitchat)
 }
 
 function hasDiagram(msg: ChatMsg): boolean {
@@ -703,8 +732,13 @@ function send(text?: string, cmd?: string, extra?: { pointId?: string }) {
     session.messages = session.messages.filter((m) => !m.clarify)
   }
 
-  // 章节知识导航:会话里已有教材文本时随指令携带正文,模型只划分章节列表
+  // 章节知识导航:教材书库优先(目录优先/按章切片);旧 text 教材仍随指令携带正文
   if (cmd === '章节知识导航') {
+    const book = latestBook(session)
+    if (book) {
+      startBookNav(content, book, session)
+      return
+    }
     const tb = latestTextbookText(session)
     if (tb) content = `${content}\n\n<教材文本>:\n${tb}`
   }
@@ -788,33 +822,42 @@ function runCommand(cmd: string) {
   // 搜索范围 = 本地设置(平台勾选):仅科研区有该链路,学习区忽略
   if (cmd === '搜索范围') {
     if (!isResearch.value) return
-    anchorTo('.cmd[data-cmd="搜索范围"]')
+    anchorTo('.cmd[data-cmd="搜索范围"]', 340)
     togglePanel('scope')
     return
   }
   // 研究档案 = 科研区的本地项目档案:打开面板,不发请求
   if (cmd === '研究档案') {
-    anchorTo('.cmd[data-cmd="研究档案"]')
+    anchorTo('.cmd[data-cmd="研究档案"]', 640)
     togglePanel('archive')
     return
   }
   // 公式查询手册 = 板块词条面板:选板块后发该板块公式的提问
   if (cmd === '公式查询手册') {
-    anchorTo('.cmd[data-cmd="公式查询手册"]')
+    anchorTo('.cmd[data-cmd="公式查询手册"]', 420)
     togglePanel('formula')
     return
   }
   // 待办清单 = 本地任务面板:草稿/日程,不发请求
   if (cmd === '待办清单') {
-    anchorTo('.cmd[data-cmd="待办清单"]')
+    anchorTo('.cmd[data-cmd="待办清单"]', 560)
     togglePanel('todo')
     return
   }
   // 学习分析 = 本地快照面板:先看覆盖与薄弱点,再由用户决定是否让模型分析
   if (cmd === '学习分析') {
-    anchorTo('.cmd[data-cmd="学习分析"]')
+    anchorTo('.cmd[data-cmd="学习分析"]', 420)
     togglePanel('analysis')
     return
+  }
+  // 章节知识导航 = 教材书库:有书签本地出目录,无书签只送前 20 页
+  if (cmd === '章节知识导航') {
+    const session = activeSession.value
+    const book = session ? latestBook(session) : null
+    if (session && book) {
+      startBookNav(input.value.trim() || cmdDefault(cmd) || cmd, book, session)
+      return
+    }
   }
   // 输入为空用指令默认问题;不清空输入,由 send 在成功发出后统一清空
   const text = input.value.trim() || cmdDefault(cmd) || cmd
@@ -905,6 +948,171 @@ function latestTextbookText(session: ChatSession): string {
   return ''
 }
 
+interface SessionBook {
+  bookId: string
+  bookPages?: number
+  bookOutline?: boolean
+}
+
+/** 会话内最新的教材 PDF 书库引用;旧版 text 教材返回 null */
+function latestBook(session: ChatSession): SessionBook | null {
+  for (const m of [...session.messages].reverse()) {
+    const attachment = m.attachment
+    if (m.role === 'user' && attachment?.bookId) {
+      return {
+        bookId: attachment.bookId,
+        bookPages: attachment.bookPages,
+        bookOutline: attachment.bookOutline,
+      }
+    }
+  }
+  return null
+}
+
+/** 流结束后写缓存:错误提示不缓存,避免把失败结果固化 */
+function cacheStreamResult(reply: ChatMsg, save: (content: string) => void): void {
+  const stop = watch(() => reply.streaming, (streaming) => {
+    if (streaming) return
+    stop()
+    if (reply.content && !reply.content.startsWith('⚠')) save(reply.content)
+  })
+}
+
+/** 章节导航:书签本地出目录;无书签只送前 20 页,结果按哈希缓存 */
+function startBookNav(text: string, book: SessionBook, session: ChatSession): void {
+  if (session.messages.some((m) => m.streaming)) {
+    showToast(t('learn.toastBusy'))
+    return
+  }
+  input.value = ''
+  activePanel.value = null
+  session.messages.push({ id: nextMsgId(), role: 'user', content: text, cmd: '章节知识导航' })
+  const reply: ChatMsg = { id: nextMsgId(), role: 'assistant', content: '', nav: 'list' }
+  session.messages.push(reply)
+  const live = session.messages[session.messages.length - 1]
+  persistSessions()
+  scrollBottom()
+
+  void (async () => {
+    let stored = null
+    try {
+      stored = await loadBook(book.bookId)
+    } catch {
+      stored = null
+    }
+    if (!stored) {
+      live.content = t('learn.bookCacheLost')
+      persistSessions()
+      return
+    }
+    void touchBook(book.bookId)
+    if (stored.outline.length) {
+      live.content = buildChapterMarkdown(withRanges(stored.outline, stored.pages.length))
+      persistSessions()
+      scrollBottom()
+      return
+    }
+    const cached = await getCachedToc(book.bookId, PARSER_VERSION)
+    if (cached) {
+      live.content = cached
+      persistSessions()
+      scrollBottom()
+      return
+    }
+    const sample = stored.pages.slice(0, TOC_SAMPLE_PAGES).join('\n')
+    if (!sample.trim()) {
+      live.content = t('learn.bookNoToc')
+      persistSessions()
+      return
+    }
+    live.streaming = true
+    live.thinking = true
+    persistSessions()
+    scrollBottom()
+    scheduleStream(session, live, `${text}\n\n<教材文本>:\n${sample}`, 450, {
+      cmd: '章节知识导航',
+      sessionId: session.id,
+      categoryKey: session.cat?.key,
+      history: buildHistory(session),
+    })
+    cacheStreamResult(live, (content) => {
+      void saveToc(book.bookId, PARSER_VERSION, content)
+    })
+  })()
+}
+
+/** 点章节:命中缓存直接显示;否则只发送该章切片(≤20 万字) */
+function startChapterGuide(session: ChatSession, book: SessionBook, name: string, page: number | null, guideId: string): void {
+  const reply: ChatMsg = {
+    id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true,
+    navGuideFor: guideId,
+  }
+  session.messages.push(reply)
+  const live = session.messages[session.messages.length - 1]
+  scrollBottom()
+
+  void (async () => {
+    let stored = null
+    try {
+      stored = await loadBook(book.bookId)
+    } catch {
+      stored = null
+    }
+    const unavailable = (message: string) => {
+      live.content = message
+      live.streaming = false
+      live.thinking = false
+      delete live.navGuideFor
+      persistSessions()
+      scrollBottom()
+    }
+    if (!stored) {
+      unavailable(t('learn.bookCacheLost'))
+      return
+    }
+    let prompt = `请给出「${name}」这一章的大概知识指引`
+    let key = ''
+    if (stored) {
+      void touchBook(book.bookId)
+      const chapters = withRanges(stored.outline, stored.pages.length)
+      const chapter = locateChapter(stored.pages, chapters, name, page)
+      if (!chapter) {
+        unavailable(t('learn.bookChapterNotFound'))
+        return
+      }
+      if (chapter) {
+        key = chapterKey(chapter)
+        const cached = await getCachedGuide(book.bookId, key, PROMPT_VERSION)
+        if (cached) {
+          live.content = cached
+          live.streaming = false
+          live.thinking = false
+          persistSessions()
+          scrollBottom()
+          return
+        }
+        const slice = sliceChapter(stored.pages, chapter, CHAPTER_TEXT_CAP)
+        prompt += `\n\n<教材文本>:\n${slice.text}`
+        if (slice.truncated) prompt += '\n\n(本章过长,仅提供前 20 万字)'
+      }
+    }
+    live.streaming = true
+    live.thinking = true
+    persistSessions()
+    scheduleStream(session, live, prompt, 450, {
+      cmd: '章节知识指引',
+      sessionId: session.id,
+      categoryKey: session.cat?.key,
+      history: buildHistory(session),
+    })
+    if (key) {
+      cacheStreamResult(live, (content) => {
+        void saveGuide(book.bookId, key, PROMPT_VERSION, content)
+      })
+    }
+  })()
+}
+
 /** 对话区点击:承接 MathText 渲染的 cmd:// 契约按钮(章节胶囊 / 返回黄框 / 收录是否) */
 function onListClick(e: MouseEvent) {
   const el = (e.target as HTMLElement).closest<HTMLElement>('[data-mg-cmd]')
@@ -921,7 +1129,7 @@ function onListClick(e: MouseEvent) {
   if (url.startsWith('cmd://chapter/')) {
     // 模型输出的百分号编码可能是畸形的:安全解码,失败时保留原文
     const name = chapterNameFromCmd(url)
-    if (name !== null) onNavChapter(name)
+    if (name !== null) onNavChapter(name, chapterPageFromCmd(url))
     return
   }
   if (url.startsWith('cmd://point/')) {
@@ -970,13 +1178,13 @@ function onNotebookChoice(yes: boolean, msgId: number) {
 /** 点击「问题记录」指令:打开归纳本词条面板 —— 不往对话框刷记录,
     词条滚动陈列,选中后跳回该问答所在的原对话上下文 */
 function showNotebook() {
-  anchorTo('.cmd[data-cmd="问题记录"]')
+  anchorTo('.cmd[data-cmd="问题记录"]', 560)
   togglePanel('notebook')
 }
 
 /** 打开问题归纳面板(顶部「问题归纳」按钮):面板对齐按钮、从按钮下方展开 */
 function toggleSummaryPanel() {
-  anchorTo('.sum-btn')
+  anchorTo('.sum-btn', 320)
   togglePanel('summary')
 }
 
@@ -1006,10 +1214,12 @@ function jumpToNotebookEntry(id: number) {
 }
 
 /** 点击章节:已讲解过 → 直接跳转到已生成的指引;未讲解 → 请求该章知识指引 */
-function onNavChapter(name: string) {
+function onNavChapter(name: string, page: number | null = null) {
   const session = activeSession.value
   if (!session) return
-  const done = session.messages.find((m) => m.role === 'assistant' && m.navGuideFor === name && m.content)
+  const book = latestBook(session)
+  const guideId = book ? JSON.stringify([book.bookId, name, page]) : name
+  const done = session.messages.find((m) => m.role === 'assistant' && m.navGuideFor === guideId && m.content)
   if (done) {
     jumpTo(done.id)
     return
@@ -1018,13 +1228,17 @@ function onNavChapter(name: string) {
     showToast(t('learn.toastBusy'))
     return
   }
+  if (book) {
+    startChapterGuide(session, book, name, page, guideId)
+    return
+  }
   const reply: ChatMsg = {
     id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true,
     navGuideFor: name,
   }
   session.messages.push(reply)
   const live = session.messages[session.messages.length - 1]
-  // 教材文本已由后端按 sessionId 缓存(章节导航生成列表时入库),这里只发章节名
+  // 旧版 text 教材:正文已由后端按 sessionId 缓存(章节导航生成列表时入库),这里只发章节名
   scheduleStream(session, live, `请给出「${name}」这一章的大概知识指引`, 450, {
     cmd: '章节知识指引',
     sessionId: session.id,
@@ -1358,7 +1572,12 @@ onBeforeUnmount(() => {
           {{ catName(activeSession.cat.key) }}{{ t('learn.context') }}
         </span>
         <span v-else-if="!activeSession?.cat" class="session-chip session-chip--dim">{{ t('learn.newSession') }}</span>
-        <button v-if="!isResearch" class="sum-btn" @click="toggleSummaryPanel()">
+        <button
+          v-if="!isResearch"
+          class="sum-btn"
+          :class="{ 'sum-btn--on': activePanel === 'summary' }"
+          @click="toggleSummaryPanel()"
+        >
           {{ t('learn.archive') }}<span v-if="questionCount" class="sum-badge">{{ questionCount }}</span>
         </button>
         <span class="badge tech-label">{{ t(isResearch ? 'common.mgResearch' : 'common.mgLearn') }}</span>
@@ -1496,14 +1715,14 @@ onBeforeUnmount(() => {
               </div>
               <button
                 v-if="m.content && !m.streaming && !m.paperImport
-                  && previousQuestion(m) && !hasDiagram(m)"
+                  && previousQuestion(m) && !isChitchatTurn(m) && !hasDiagram(m)"
                 class="diagram-btn"
                 type="button"
                 :disabled="diagramBusy === m.id"
                 @click.stop="requestDiagram(m)"
               >{{ diagramBusy === m.id ? t('diagram.generating') : t('diagram.generate') }}</button>
               <button
-                v-if="m.content && !m.streaming && !m.paperImport && previousQuestion(m)"
+                v-if="m.content && !m.streaming && !m.paperImport && previousQuestion(m) && !isChitchatTurn(m)"
                 class="diagram-btn"
                 type="button"
                 :disabled="intuitionBusy === m.id"
@@ -1835,6 +2054,7 @@ onBeforeUnmount(() => {
       v-if="docOpen"
       :messages="activeSession?.messages ?? []"
       :entries="notebooks.state.entries"
+      :history-qa="docHistory"
       @close="docOpen = false"
     />
 
@@ -1846,6 +2066,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .learn {
   height: 100vh;
+  /* iPad/手机 Safari 的 100vh 含工具栏区域,底部输入条会被切掉;dvh 跟随可见视口 */
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -2132,6 +2354,24 @@ onBeforeUnmount(() => {
   color: var(--cyan);
   border-color: var(--line-bright);
   box-shadow: var(--glow-cyan);
+}
+
+/* 面板打开时保持高亮 */
+.sum-btn--on {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+  box-shadow: var(--glow-cyan);
+}
+
+/* 触屏设备没有 hover:默认样式一直偏暗,点按后才闪一下。
+   iPad 等无悬停设备上常亮高亮,保留可发现性。 */
+@media (hover: none) {
+  .sum-btn {
+    color: var(--cyan);
+    border-color: var(--line-bright);
+    background: color-mix(in srgb, var(--cyan) 8%, transparent);
+  }
 }
 
 .sum-badge {
@@ -3052,5 +3292,39 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(255, 77, 210, 0.4);
   border-radius: 999px;
   padding: 0 6px;
+}
+
+/* 窄屏(竖屏 iPad:768–834):默认字号的指令行放不下,「生成文档」会被挤到第二行。
+   改为单行紧凑布局,放不下时横向滚动,不再换行。 */
+@media (max-width: 900px) {
+  .input-bar {
+    padding: 10px 12px 12px;
+  }
+
+  .commands {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 6px;
+    scrollbar-width: none;
+  }
+
+  .commands::-webkit-scrollbar {
+    display: none;
+  }
+
+  .cmd-label {
+    display: none;
+  }
+
+  .cmd {
+    flex: none;
+    padding: 4px 9px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .voice-label {
+    display: none;
+  }
 }
 </style>
