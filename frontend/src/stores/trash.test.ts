@@ -189,6 +189,8 @@ describe('恢复', () => {
 
   it('旧记录没有 workspace 字段时按学习区处理', async () => {
     const { trash, sessions } = await boot()
+    sessions.sessionStore('learn').state.sessions = []
+    sessions.sessionStore('research').state.sessions = []
     trash.addToTrash(item({ id: 7, sessionId: 42, workspace: undefined }))
 
     expect(trash.restoreTrashItem(7)).toBe(true)
@@ -198,6 +200,8 @@ describe('恢复', () => {
 
   it('workspace=research 的记录写回科研区', async () => {
     const { trash, sessions } = await boot()
+    sessions.sessionStore('learn').state.sessions = []
+    sessions.sessionStore('research').state.sessions = []
     trash.addToTrash(item({ id: 8, sessionId: 11, workspace: 'research' }))
 
     expect(trash.restoreTrashItem(8)).toBe(true)
