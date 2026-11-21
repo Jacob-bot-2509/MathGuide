@@ -104,6 +104,21 @@ from chat_sse import (  # noqa: F401
     _with_meta,
 )
 from http_utils import read_json_object
+from log import get_logger
+from rag.research.types import SearchHit
+from rate_limit import NullLimiter, SlidingWindowLimiter
+from session_cache import (
+    TEXTBOOK_CAP,
+    bump_tick,
+    cache_textbook,
+    get_summary,
+    get_textbook,
+    set_summary,
+    valid_session_id,
+    valid_workspace,
+)
+
+log = get_logger(__name__)
 
 
 def _answer_is_zh(text: str, history: list[dict] | None = None) -> bool:
@@ -120,21 +135,6 @@ def _answer_is_zh(text: str, history: list[dict] | None = None) -> bool:
         if re.search(r"[A-Za-z]", content):
             return False
     return True
-from log import get_logger
-from rag.research.types import SearchHit
-from rate_limit import NullLimiter, SlidingWindowLimiter
-from session_cache import (
-    TEXTBOOK_CAP,
-    bump_tick,
-    cache_textbook,
-    get_summary,
-    get_textbook,
-    set_summary,
-    valid_session_id,
-    valid_workspace,
-)
-
-log = get_logger(__name__)
 
 DIAGRAM_TIMEOUT = 45.0  # 单张图规划上限(秒);3D 采样较慢,但不能无限拖住回答
 # 普通问答检索条数:前 3 条在 prompt 里标「重点」,后 2 条标「备选」。
