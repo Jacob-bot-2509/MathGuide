@@ -19,6 +19,7 @@ MathGuide 后端(Starlette):RAG 检索增强生成 + 科研工作台。
     /api/profile                     学习画像与分析快照
     /api/doc/*                      综述、组卷生成与排版(PDF/Markdown/Word)
     /api/speech/math                语音 → 数学符号
+    /api/speech/transcribe          语音音频 → 文字(后端 ASR)
     /api/stats                      用量统计(管理员)
 
 知识库:knowledge/*.md → rag 切片索引 → 检索 → LLM(未配置则直答)。
@@ -64,6 +65,7 @@ import research_report
 import research_tables
 import research_vision
 import retention
+import speech_asr
 import store
 import usage
 from log import RequestIdMiddleware, get_logger
@@ -194,6 +196,7 @@ routes = [
     Route("/api/profile", profile.learning_profile),
     Route("/api/profile/analysis", learning_analysis.analysis_endpoint),
     Route("/api/speech/math", chat.speech_to_math, methods=["POST"]),
+    Route("/api/speech/transcribe", speech_asr.transcribe, methods=["POST"]),
     Route("/api/doc/export", doc.export_pdf, methods=["POST"]),
     Route("/api/doc/questions", docgen.questions, methods=["POST"]),
     Route("/api/doc/qa", docgen.qa_export, methods=["POST"]),

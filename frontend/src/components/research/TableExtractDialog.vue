@@ -183,13 +183,20 @@ async function save(): Promise<void> {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: calc(16px + env(safe-area-inset-top))
+    calc(16px + env(safe-area-inset-right))
+    calc(16px + env(safe-area-inset-bottom))
+    calc(16px + env(safe-area-inset-left));
   background: rgba(2, 8, 18, 0.66);
   backdrop-filter: blur(3px);
 }
 
 .te-panel {
   width: min(880px, calc(100vw - 32px));
+  width: min(880px, 100%);
   max-height: min(82vh, 720px);
+  max-height: min(82dvh, 720px);
+  max-height: min(82dvh, 720px, 100%);
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);

@@ -2307,7 +2307,9 @@ onBeforeUnmount(() => {
 .grid-wrap {
   margin-top: 12px;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
   max-height: 56vh;
+  max-height: 56dvh;
   border: 1px solid var(--line);
   border-radius: 8px;
 }
@@ -2641,11 +2643,61 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 760px) {
-  .side {
-    width: 150px;
-  }
-  .head-right {
+  .rt-head {
     flex-wrap: wrap;
+    gap: 10px;
+    padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+  }
+
+  .title-box {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .title {
+    font-size: 14px;
+  }
+
+  .head-right {
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  .project-select {
+    max-width: 100%;
+  }
+
+  /* 手机上侧栏置顶,不再和表格抢 150px 宽度 */
+  .rt-main {
+    flex-direction: column;
+  }
+
+  .side {
+    width: 100%;
+    max-height: 30vh;
+    max-height: 30dvh;
+    flex-shrink: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .editor {
+    padding: 12px 12px calc(28px + env(safe-area-inset-bottom));
+  }
+
+  .editor-bar {
+    gap: 6px;
+  }
+
+  .title-input {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .grid-wrap {
+    max-height: 50vh;
+    max-height: 50dvh;
   }
 }
 </style>

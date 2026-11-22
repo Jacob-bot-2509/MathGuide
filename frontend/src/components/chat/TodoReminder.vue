@@ -176,14 +176,20 @@ onBeforeUnmount(() => {
   z-index: 80;
   display: grid;
   place-items: center;
-  padding: 20px;
+  padding: calc(20px + env(safe-area-inset-top))
+    calc(20px + env(safe-area-inset-right))
+    calc(20px + env(safe-area-inset-bottom))
+    calc(20px + env(safe-area-inset-left));
   background: rgba(3, 6, 12, 0.72);
   backdrop-filter: blur(3px);
 }
 
 .todo-dialog {
   width: min(460px, calc(100vw - 32px));
+  width: min(460px, 100%);
   max-height: min(68vh, 560px);
+  max-height: min(68dvh, 560px);
+  max-height: min(68dvh, 560px, 100%);
   overflow-y: auto;
   box-sizing: border-box;
   padding: 22px 22px 18px;
@@ -220,6 +226,7 @@ onBeforeUnmount(() => {
   margin: 0 0 16px;
   padding: 0;
   max-height: 34vh;
+  max-height: 34dvh;
   overflow-y: auto;
   border-top: 1px solid var(--line);
 }

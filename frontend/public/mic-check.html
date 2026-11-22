@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>MathGuide 麦克风自检</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; padding: 20px; background: #05060a; color: #e8f2ff;
+        font: 15px/1.6 system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+      }
+      h1 { font-size: 20px; margin: 0 0 14px; color: #4dd6ff; }
+      .card { border: 1px solid rgba(96,165,250,.35); border-radius: 10px; padding: 14px; margin: 0 0 12px; }
+      .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+      .ok { color: #6ee7a8; } .bad { color: #ff8a8a; } .dim { color: #8b9bb0; }
+      button {
+        width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #4dd6ff;
+        background: rgba(77,214,255,.12); color: #4dd6ff; font-size: 16px;
+      }
+      #bar { height: 18px; border-radius: 9px; background: #101827; overflow: hidden; margin-top: 12px; }
+      #fill { height: 100%; width: 0; background: linear-gradient(90deg,#2f7bff,#4dd6ff,#6ee7a8); }
+      #msg { margin-top: 10px; white-space: pre-wrap; word-break: break-word; }
+      code { color: #ffd166; }
+    </style>
+  </head>
+  <body>
+    <h1>MathGuide · 麦克风自检</h1>
+    <p class="dim">红字是检测结果，不是页面崩溃。先看「HTTPS 安全上下文」。</p>
+    <div class="card" id="env"></div>
+    <div class="card">
+      <button id="test">开始 5 秒麦克风电平测试</button>
+      <div id="bar"><div id="fill"></div></div>
+      <div id="msg" class="dim">点按钮后说话,看绿色条是否动。</div>
+    </div>
+    <p class="dim">本页只读浏览器能力与麦克风电平,不上传、不录音保存。</p>
+    <script>
+      const env = document.getElementById('env')
+      const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+      const rows = [
+        ['HTTPS 安全上下文', window.isSecureContext === true],
+        ['navigator.mediaDevices', !!navigator.mediaDevices],
+        ['getUserMedia', !!navigator.mediaDevices?.getUserMedia],
+        ['MediaRecorder', typeof window.MediaRecorder === 'function'],
+        ['Web Speech API', !!(window.SpeechRecognition || window.webkitSpeechRecognition)],
+        ['AudioContext', !!(window.AudioContext || window.webkitAudioContext)],
+      ]
+      env.innerHTML = rows.map(([name, ok]) =>
+        `<div class="row"><span>${name}</span><span class="${ok ? 'ok' : 'bad'}">${ok ? '可用' : '不可用'}</span></div>`
+      ).join('') + `<div class="row"><span>Origin</span><span class="dim">${esc(location.origin)}</span></div>`
+        + `<div class="row"><span>UA</span><span class="dim" style="max-width:60%;text-align:right">${esc(navigator.userAgent)}</span></div>`
+      const mediaOk = !!navigator.mediaDevices?.getUserMedia
+      const conclusion = !window.isSecureContext
+        ? '结论：不是安全上下文（证书未信任/仍是 HTTP），浏览器会拦麦克风。先装 CA 或改用受信任的 HTTPS。'
+        : !mediaOk
+          ? '结论：浏览器不支持麦克风采集，需要换 Chrome。'
+          : typeof window.MediaRecorder !== 'function'
+            ? '结论：麦克风可采集，但浏览器没有 MediaRecorder，语音兜底不可用。'
+            : '结论：安全上下文与录音接口都满足；点下面的电平测试确认麦克风是否有声。'
+      env.innerHTML += `<div class="card" style="margin:12px 0 0"><b>${conclusion}</b></div>`
+
+      const msg = document.getElementById('msg')
+      const fill = document.getElementById('fill')
+      document.getElementById('test').addEventListener('click', async () => {
+        fill.style.width = '0%'
+        msg.className = 'dim'
+        msg.textContent = '请求麦克风权限…'
+        let stream
+        try {
+          if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia 不可用')
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        } catch (err) {
+          msg.className = 'bad'
+          msg.textContent = '打开麦克风失败: ' + (err && (err.name + ': ' + err.message) || err)
+          return
+        }
+        const Ctx = window.AudioContext || window.webkitAudioContext
+        if (!Ctx) {
+          msg.className = 'bad'
+          msg.textContent = 'AudioContext 不可用,无法测电平;但麦克风权限已通过。'
+          stream.getTracks().forEach((t) => t.stop())
+          return
+        }
+        const ctx = new Ctx()
+        const source = ctx.createMediaStreamSource(stream)
+        const analyser = ctx.createAnalyser()
+        analyser.fftSize = 2048
+        source.connect(analyser)
+        const data = new Uint8Array(analyser.fftSize)
+        const started = performance.now()
+        let peak = 0
+        const tick = () => {
+          analyser.getByteTimeDomainData(data)
+          let sum = 0
+          for (const v of data) { const d = (v - 128) / 128; sum += d * d }
+          const rms = Math.sqrt(sum / data.length)
+          peak = Math.max(peak, rms)
+          fill.style.width = Math.min(100, Math.round(rms * 400)) + '%'
+          if (performance.now() - started < 5000) {
+            requestAnimationFrame(tick)
+          } else {
+            stream.getTracks().forEach((t) => t.stop())
+            void ctx.close()
+            msg.className = peak > 0.01 ? 'ok' : 'bad'
+            msg.textContent = peak > 0.01
+              ? `麦克风有输入,峰值 RMS=${peak.toFixed(3)}。若识别仍无文字,是 ASR/浏览器语音服务问题。`
+              : '5 秒内电平几乎为 0:系统麦克风被静音、被其他应用占用,或保护壳/孔位遮挡。'
+          }
+        }
+        msg.className = 'dim'
+        msg.textContent = '正在测 5 秒,请持续说话…'
+        requestAnimationFrame(tick)
+      })
+    </script>
+  </body>
+</html>

@@ -338,6 +338,7 @@ Chat 请求体的 `workspace` 只在单域部署时生效;`learn.*` / `research.
 | GET | `/api/profile` | 学习画像:诊断次数、掌握/薄弱、章节分布与最近 10 条 |
 | GET | `/api/profile/analysis` | 学习分析快照:覆盖度、掌握结构、章节均衡、前置瓶颈、待复核与下一步 |
 | POST | `/api/speech/math` | 语音识别文本 → 数学符号转写(SSE) |
+| POST | `/api/speech/transcribe` | 浏览器录音(WAV/MP3 base64)→ 后端 ASR 文字;默认智谱,可切 Qwen Omni |
 | POST | `/api/doc/export` | 研究综述 → 结构化 → PDF 下载 |
 | POST | `/api/doc/questions` | 从当前会话提取问答对 → `{items}` |
 | POST | `/api/doc/qa` | 选定问答 → 原答案排版 → PDF/Markdown/Word |

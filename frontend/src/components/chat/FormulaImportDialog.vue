@@ -533,12 +533,17 @@ function onApply(): void {
   backdrop-filter: blur(2px);
   display: grid;
   place-items: center;
-  padding: 16px;
+  padding: calc(16px + env(safe-area-inset-top))
+    calc(16px + env(safe-area-inset-right))
+    calc(16px + env(safe-area-inset-bottom))
+    calc(16px + env(safe-area-inset-left));
 }
 
 .fd {
   width: min(760px, 100%);
   max-height: 86vh;
+  max-height: 86dvh;
+  max-height: min(86dvh, 100%);
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);

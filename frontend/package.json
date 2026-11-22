@@ -1,7 +1,7 @@
 {
   "name": "mathguide-frontend",
   "private": true,
-  "version": "1.30.0",
+  "version": "1.31.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +13,7 @@
     "test:unit": "vitest run",
     "test:scripts": "node scripts/run-tests.mjs",
     "check:build": "node scripts/check-build.mjs",
+    "check:responsive": "node scripts/responsive-audit-test.mjs",
     "coverage": "vitest run --coverage"
   },
   "dependencies": {

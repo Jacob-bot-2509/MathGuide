@@ -9,6 +9,7 @@ import { useRouter } from 'vue-router'
 import { statusOf } from '@/api/http'
 import { fetchLearningAnalysis, submitSelfRating, type AnalysisPoint, type LearningAnalysis } from '@/services/graphService'
 import { t } from '@/utils/i18n'
+import { settingsState } from '@/stores/settings'
 import { showToast } from '@/utils/toast'
 
 const props = defineProps<{ left?: number; width?: number }>()
@@ -87,6 +88,11 @@ function retentionLabel(point: AnalysisPoint): string {
   return t('analysis.retention', { pct })
 }
 
+function pointName(point: AnalysisPoint): string {
+  if (settingsState.language === 'en' && point.nameEn) return point.nameEn
+  return point.name
+}
+
 onMounted(load)
 </script>
 
@@ -129,7 +135,7 @@ onMounted(load)
           <h3>{{ t('analysis.bottlenecks') }}</h3>
           <ul class="ana-list">
             <li v-for="row in bottlenecks" :key="`b-${row.pointId}`">
-              <button class="ana-link" @click="openInGraph(row.pointId)">{{ row.name }}</button>
+              <button class="ana-link" @click="openInGraph(row.pointId)">{{ pointName(row) }}</button>
               <em>{{ t('analysis.blocks', { n: row.descendantCount }) }}</em>
             </li>
           </ul>
@@ -139,7 +145,7 @@ onMounted(load)
           <h3>{{ t('analysis.staleSection') }}</h3>
           <ul class="ana-list">
             <li v-for="row in stale" :key="`s-${row.pointId}`">
-              <button class="ana-link" @click="openInGraph(row.pointId)">{{ row.name }}</button>
+              <button class="ana-link" @click="openInGraph(row.pointId)">{{ pointName(row) }}</button>
               <em>
                 {{ retentionLabel(row) }} · {{ t('analysis.daysAgo', { n: row.days ?? 0 }) }}
               </em>
@@ -152,7 +158,7 @@ onMounted(load)
           <p class="ana-note">{{ t('analysis.quickDiagnosisHint') }}</p>
           <ul class="ana-rate">
             <li v-for="row in suggested" :key="`d-${row.pointId}`">
-              <button class="ana-link" @click="openInGraph(row.pointId)">{{ row.name }}</button>
+              <button class="ana-link" @click="openInGraph(row.pointId)">{{ pointName(row) }}</button>
               <span class="ana-scores">
                 <button
                   v-for="score in 5"
@@ -169,7 +175,7 @@ onMounted(load)
           <h3>{{ t('analysis.next') }}</h3>
           <ul class="ana-list">
             <li v-for="row in nextSteps" :key="`n-${row.pointId}`">
-              <button class="ana-link" @click="openInGraph(row.pointId)">{{ row.name }}</button>
+              <button class="ana-link" @click="openInGraph(row.pointId)">{{ pointName(row) }}</button>
               <em>{{ reasonLabel(row) }}</em>
             </li>
           </ul>
@@ -197,8 +203,9 @@ onMounted(load)
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  width: min(420px, calc(100vw - 32px));
+  width: min(420px, calc(100vw - 32px - var(--safe-inline)));
   max-height: 58vh;
+  max-height: 58dvh;
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 12px;

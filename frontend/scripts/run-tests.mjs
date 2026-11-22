@@ -18,6 +18,12 @@ import { rmSync } from 'node:fs'
 
 const CASES = [
   {
+    name: '移动端视口与安全区护栏',
+    bundle: 'node --check scripts/responsive-audit-test.mjs',
+    run: 'node scripts/responsive-audit-test.mjs',
+    artifact: '.responsive-audit-test.cjs',
+  },
+  {
     name: 'Graph continuous pointer gestures',
     bundle: 'node --check scripts/graph-gesture-interaction-test.mjs',
     run: 'node scripts/graph-gesture-interaction-test.mjs',

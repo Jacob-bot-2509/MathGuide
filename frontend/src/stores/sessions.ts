@@ -49,6 +49,8 @@ export interface ChatMsg {
   attachment?: ChatAttachment
   /** 非问题语句(寒暄/闲聊):不参与问题归纳统计 */
   chitchat?: boolean
+  /** 欢迎语:内容按当前界面语言实时渲染,切换语言后旧会话也能跟着变 */
+  welcome?: boolean
   streaming?: boolean
   thinking?: boolean
   /** 章节导航:标记该回复为章节列表(「返回」跳转目标) */

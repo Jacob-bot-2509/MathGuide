@@ -9,12 +9,18 @@ export type MasteryStatus = 'mastered' | 'weak' | 'new'
 export interface GraphNode {
   id: string
   name: string
+  /** 英文名;英文界面缺失时回退中文 */
+  nameEn?: string
   chapter: string
+  chapterEn?: string
   difficulty: number
   descendantCount: number
   prerequisites: string[]
   summary?: string
+  /** 英文摘要/要点;英文界面缺失时回退中文 */
+  summaryEn?: string
   keyPoints?: string[]
+  keyPointsEn?: string[]
   mastery: number | null
   /** 艾宾浩斯记忆保持率;仅由后端计算 */
   retention?: number | null
@@ -36,6 +42,7 @@ export interface GraphData {
   nodes: GraphNode[]
   edges: GraphEdge[]
   chapters: string[]
+  chaptersEn?: Record<string, string>
 }
 
 export type RecommendStrategy = 'difficulty' | 'coreness'
@@ -72,7 +79,9 @@ export interface DiagnosisResult {
 export interface AnalysisPoint {
   pointId: string
   name: string
+  nameEn?: string
   chapter: string
+  chapterEn?: string
   difficulty: number
   score: number | null
   effectiveScore: number | null
@@ -97,6 +106,7 @@ export interface AnalysisPoint {
 
 export interface AnalysisChapter {
   chapter: string
+  chapterEn?: string
   total: number
   diagnosed: number
   mastered: number
@@ -147,8 +157,9 @@ export function fetchLearningAnalysis(): Promise<LearningAnalysis> {
 }
 
 /** 下载可独立打开的 Pyvis HTML 图谱(vis 资源内联)。 */
-export async function exportGraphHtml(): Promise<Blob> {
-  const res = await fetch('/api/graph/export', { headers: authHeaders() })
+export async function exportGraphHtml(language: string = 'zh'): Promise<Blob> {
+  const suffix = language === 'en' ? '?lang=en' : ''
+  const res = await fetch(`/api/graph/export${suffix}`, { headers: authHeaders() })
   if (!res.ok) throw httpError(res)
   return res.blob()
 }

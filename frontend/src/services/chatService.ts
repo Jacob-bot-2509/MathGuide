@@ -4,7 +4,7 @@
  * streamReply 签名固定,可额外携带会话元数据(契约 ChatRequest)。
  */
 import type { ChatRequest, ChatStreamHandle, StreamCallbacks } from '@/api/types'
-import { postSSE, statusOf } from '@/api/http'
+import { post, postSSE, statusOf } from '@/api/http'
 import { getToken, logout as clearUser } from '@/stores/user'
 import router from '@/router'
 import { showToast } from '@/utils/toast'
@@ -40,6 +40,25 @@ export interface ChatMeta {
 function authHeaders(): Record<string, string> {
   const token = getToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+export interface SpeechTranscript {
+  text: string
+  provider?: string
+  model?: string
+}
+
+/** 录音(已转成 16kHz 单声道 WAV)→ 后端 ASR;用于浏览器没有 Web Speech 的兜底。 */
+export function transcribeSpeech(
+  audio: string,
+  format = 'wav',
+  language?: string,
+): Promise<SpeechTranscript> {
+  return post<SpeechTranscript>(
+    '/api/speech/transcribe',
+    { audio, format, language },
+    authHeaders(),
+  )
 }
 
 /** 语音识别文本 → 数学符号转写(SSE 流式):首帧即上屏,逐帧回调累计全文;

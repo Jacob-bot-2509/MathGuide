@@ -1005,6 +1005,7 @@ focusPanel()
 <style scoped>
 .doc-preview {
   max-height: 42vh;
+  max-height: 42dvh;
   overflow-y: auto;
   margin: 12px 0;
   padding: 14px 16px;
@@ -1058,7 +1059,10 @@ focusPanel()
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
+  padding: calc(16px + env(safe-area-inset-top))
+    calc(16px + env(safe-area-inset-right))
+    calc(16px + env(safe-area-inset-bottom))
+    calc(16px + env(safe-area-inset-left));
   background: rgba(3, 6, 12, 0.72);
   backdrop-filter: blur(3px);
 }
@@ -1068,6 +1072,8 @@ focusPanel()
   flex-direction: column;
   width: min(720px, 100%);
   max-height: 88vh;
+  max-height: 88dvh;
+  max-height: min(88dvh, 100%);
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -1256,6 +1262,7 @@ focusPanel()
 
 .pick-list {
   max-height: 42vh;
+  max-height: 42dvh;
   overflow-y: auto;
   margin: 0;
   padding: 0;
@@ -1548,6 +1555,8 @@ focusPanel()
 @media (max-width: 560px) {
   .doc-panel {
     max-height: 92vh;
+    max-height: 92dvh;
+    max-height: min(92dvh, 100%);
   }
 
   .doc-body {

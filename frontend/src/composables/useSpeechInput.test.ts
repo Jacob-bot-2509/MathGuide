@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   saveConvert: vi.fn(),
   cancelSpeechToMath: vi.fn(),
+  transcribeSpeech: vi.fn(),
 }))
 
 vi.mock('@/stores/settings', () => ({
@@ -27,6 +28,11 @@ vi.mock('@/utils/speechMath', () => ({
 }))
 vi.mock('@/services/chatService', () => ({
   speechToMath: () => ({ cancel: mocks.cancelSpeechToMath }),
+  transcribeSpeech: mocks.transcribeSpeech,
+}))
+vi.mock('@/utils/wav', () => ({
+  blobToWav: async () => new Blob(['wav'], { type: 'audio/wav' }),
+  blobToBase64: async () => 'd2F2',
 }))
 
 import { useSpeechInput } from '@/composables/useSpeechInput'
@@ -62,8 +68,38 @@ function makeHarness() {
   return { input, toasts, api }
 }
 
-function withRecognition(ctor: unknown) {
-  vi.stubGlobal('window', { SpeechRecognition: ctor })
+class FakeRecorder {
+  static last: FakeRecorder | null = null
+  static isTypeSupported(): boolean { return true }
+  state: 'inactive' | 'recording' = 'inactive'
+  ondataavailable: ((e: { data: Blob }) => void) | null = null
+  onstop: (() => void) | null = null
+  onerror: (() => void) | null = null
+
+  constructor(_stream: unknown, _options?: unknown) {
+    FakeRecorder.last = this
+  }
+
+  start() { this.state = 'recording' }
+  stop() {
+    this.state = 'inactive'
+    this.onstop?.()
+  }
+}
+
+function withRecorder() {
+  const track = { stop: vi.fn() }
+  vi.stubGlobal('window', {
+    isSecureContext: true,
+    MediaRecorder: FakeRecorder,
+  })
+  vi.stubGlobal('navigator', {
+    mediaDevices: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) },
+  })
+}
+
+function withRecognition(ctor: unknown, secure = true) {
+  vi.stubGlobal('window', { SpeechRecognition: ctor, isSecureContext: secure })
 }
 
 beforeEach(() => {
@@ -74,6 +110,8 @@ beforeEach(() => {
   mocks.updateSettings.mockClear()
   mocks.saveConvert.mockClear()
   mocks.cancelSpeechToMath.mockClear()
+  mocks.transcribeSpeech.mockReset()
+  FakeRecorder.last = null
 })
 
 describe('useSpeechInput 启动条件', () => {
@@ -99,6 +137,17 @@ describe('useSpeechInput 启动条件', () => {
     expect(toasts).toContain(t('learn.toastNoSR'))
   })
 
+  it('HTTP 非安全上下文先提示 HTTPS,不创建识别器', () => {
+    withRecognition(FakeSR, false)
+    const { toasts, api } = makeHarness()
+
+    api.toggleMic()
+
+    expect(api.listening.value).toBe(false)
+    expect(FakeSR.last).toBeNull()
+    expect(toasts).toContain(t('learn.toastVoiceInsecure'))
+  })
+
   it('启动后进入听写态,语言跟随界面设置', () => {
     mocks.settings.language = 'en'
     withRecognition(FakeSR)
@@ -121,6 +170,22 @@ describe('useSpeechInput 启动条件', () => {
 
     expect(FakeSR.last?.stopped).toBe(1)
     expect(FakeSR.last?.started).toBe(1)
+  })
+
+  it('没有 Web Speech 时走录音 + 后端 ASR 兜底', async () => {
+    withRecorder()
+    mocks.transcribeSpeech.mockResolvedValue({ text: '根号二' })
+    const { input, api } = makeHarness()
+
+    api.toggleMic()
+    await vi.waitFor(() => expect(FakeRecorder.last).not.toBeNull())
+    FakeRecorder.last?.ondataavailable?.({ data: new Blob(['pcm']) })
+    FakeRecorder.last?.stop()
+
+    await vi.waitFor(() => expect(mocks.transcribeSpeech).toHaveBeenCalledWith(
+      'd2F2', 'wav', 'zh',
+    ))
+    await vi.waitFor(() => expect(input.value).toBe('[local]根号二'))
   })
 })
 
@@ -166,7 +231,7 @@ describe('useSpeechInput 识别与转写', () => {
     expect(api.listening.value).toBe(false)
 
     FakeSR.last?.onerror?.({ error: 'network' })
-    expect(toasts).toContain(t('learn.toastVoiceNetwork'))
+    expect(toasts).toContain(t('learn.toastVoiceFallback'))
   })
 
   it('aborted(用户打断)不弹错误', () => {
@@ -183,6 +248,73 @@ describe('useSpeechInput 识别与转写', () => {
 })
 
 describe('useSpeechInput 卸载与模型语音开关', () => {
+  it('识别服务失败切换录音时旧识别器结束事件不会关闭听写态', async () => {
+    withRecorder()
+    vi.stubGlobal('window', { isSecureContext: true, MediaRecorder: FakeRecorder, SpeechRecognition: FakeSR })
+    const { api } = makeHarness()
+    api.toggleMic()
+    FakeSR.last?.onerror?.({ error: 'network' })
+    FakeSR.last?.onend?.()
+    await vi.waitFor(() => expect(FakeRecorder.last?.state).toBe('recording'))
+    expect(api.listening.value).toBe(true)
+    api.dispose()
+  })
+
+  it('取消等待后再次录音,旧授权不会干扰新录音', async () => {
+    withRecorder()
+    const oldStop = vi.fn()
+    const newStop = vi.fn()
+    let grantOld!: (stream: { getTracks: () => { stop: typeof oldStop }[] }) => void
+    const pending = new Promise<{ getTracks: () => { stop: typeof oldStop }[] }>((resolve) => { grantOld = resolve })
+    const getUserMedia = vi.fn().mockReturnValueOnce(pending)
+      .mockResolvedValueOnce({ getTracks: () => [{ stop: newStop }] })
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+    const { api } = makeHarness()
+    api.toggleMic()
+    api.toggleMic()
+    expect(api.listening.value).toBe(false)
+    api.toggleMic()
+    await vi.waitFor(() => expect(FakeRecorder.last?.state).toBe('recording'))
+    grantOld({ getTracks: () => [{ stop: oldStop }] })
+    await vi.waitFor(() => expect(oldStop).toHaveBeenCalledOnce())
+    expect(api.listening.value).toBe(true)
+    expect(newStop).not.toHaveBeenCalled()
+    api.dispose()
+    expect(newStop).toHaveBeenCalledOnce()
+  })
+
+  it('卸载后迟到的麦克风授权不会启动录音', async () => {
+    withRecorder()
+    const stop = vi.fn()
+    let grant!: (stream: { getTracks: () => { stop: typeof stop }[] }) => void
+    const pending = new Promise<{ getTracks: () => { stop: typeof stop }[] }>((resolve) => { grant = resolve })
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: () => pending } })
+    const { api } = makeHarness()
+    api.toggleMic()
+    api.dispose()
+    grant({ getTracks: () => [{ stop }] })
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce())
+    expect(FakeRecorder.last).toBeNull()
+    expect(api.listening.value).toBe(false)
+  })
+
+  it('转写等待期间手动编辑不会被迟到结果覆盖', async () => {
+    withRecorder()
+    let finish!: (result: { text: string }) => void
+    mocks.transcribeSpeech.mockReturnValue(new Promise((resolve) => { finish = resolve }))
+    const { input, api } = makeHarness()
+    input.value = '原文'
+    api.toggleMic()
+    await vi.waitFor(() => expect(FakeRecorder.last).not.toBeNull())
+    FakeRecorder.last?.ondataavailable?.({ data: new Blob(['pcm']) })
+    FakeRecorder.last?.stop()
+    await vi.waitFor(() => expect(mocks.transcribeSpeech).toHaveBeenCalled())
+    input.value = '原文和新输入'
+    finish({ text: '语音' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(input.value).toBe('原文和新输入语音')
+  })
+
   it('卸载时停掉识别并取消进行中的转写', () => {
     withRecognition(FakeSR)
     const { input, api } = makeHarness()

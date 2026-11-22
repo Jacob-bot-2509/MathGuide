@@ -177,6 +177,21 @@ function clearLocalData() {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+@media (max-width: 560px) {
+  .row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .row-text {
+    flex-basis: 100%;
+  }
 }
 
 .k {

@@ -26,7 +26,7 @@ from starlette.responses import JSONResponse
 import auth
 import diagnosis
 import ebbinghaus
-from knowledge_graph import KnowledgeGraph, KnowledgePoint
+from knowledge_graph import KnowledgeGraph, KnowledgePoint, localization
 from recommendation import MASTERED_SCORE
 
 MIN_SAMPLE = 8
@@ -47,6 +47,22 @@ def _effective_score(score: int | None, retention: float | None) -> float | None
     return round(1 + (score - 1) * retention, 2)
 
 
+def _row_name(row: dict, zh: bool) -> str:
+    if not zh:
+        english = row.get("nameEn")
+        if isinstance(english, str) and english:
+            return english
+    return str(row.get("name") or "")
+
+
+def _row_chapter(row: dict, zh: bool) -> str:
+    if not zh:
+        english = row.get("chapterEn")
+        if isinstance(english, str) and english:
+            return english
+    return str(row.get("chapter") or "")
+
+
 def _quality(diagnosed: int) -> str:
     if diagnosed <= 0:
         return "none"
@@ -62,6 +78,7 @@ def _chapter_rows(graph: KnowledgeGraph, info: dict[str, dict]) -> list[dict]:
     for point_id, point in graph.points.items():
         row = rows.setdefault(point.chapter, {
             "chapter": point.chapter,
+            "chapterEn": localization.chapter_en(point.chapter),
             "total": 0,
             "diagnosed": 0,
             "mastered": 0,
@@ -154,7 +171,9 @@ def build_snapshot(uid: str, graph: KnowledgeGraph | None = None,
         return {
             "pointId": point_id,
             "name": point.name,
+            "nameEn": localization.english_name(point_id),
             "chapter": point.chapter,
+            "chapterEn": localization.chapter_en(point.chapter),
             "difficulty": point.difficulty,
             "score": item["score"],
             "effectiveScore": item["effectiveScore"],
@@ -269,9 +288,24 @@ def build_snapshot(uid: str, graph: KnowledgeGraph | None = None,
     }
 
 
+def _localized_snapshot(snapshot: dict, zh: bool) -> dict:
+    """英文分析时把事实里的 name/chapter 换成英文,避免模型照抄中文事实。"""
+    if zh:
+        return snapshot
+    data = json.loads(json.dumps(snapshot, ensure_ascii=False))
+    for key in ("bottlenecks", "stale", "nextSteps", "suggestedDiagnosis"):
+        for row in data.get(key) or []:
+            if isinstance(row, dict) and isinstance(row.get("nameEn"), str) and row["nameEn"]:
+                row["name"] = row["nameEn"]
+    for row in data.get("chapters") or []:
+        if isinstance(row, dict) and isinstance(row.get("chapterEn"), str) and row["chapterEn"]:
+            row["chapter"] = row["chapterEn"]
+    return data
+
+
 def system_prompt(snapshot: dict, zh: bool = True) -> str:
     """把算好的快照交给模型;只允许解读,不允许补数。"""
-    facts = json.dumps(snapshot, ensure_ascii=False, indent=2)
+    facts = json.dumps(_localized_snapshot(snapshot, zh), ensure_ascii=False, indent=2)
     if zh:
         return (
             "你是 MathGuide 的学习分析师。下面【学习事实】由服务端根据知识图谱和"
@@ -340,27 +374,27 @@ def fallback_report(snapshot: dict, zh: bool = True) -> str:
             for row in chapters:
                 average = row["averageScore"]
                 parts.append(
-                    f"{row['chapter']} {row['diagnosed']}/{row['total']}"
+                    f"{_row_chapter(row, zh)} {row['diagnosed']}/{row['total']}"
                     + (f"（平均 {average}）" if average is not None else ""))
             lines.append("**章节均衡**：" + "；".join(parts) + "。")
         bottlenecks = snapshot["bottlenecks"]
         if bottlenecks:
             lines.append("**前置瓶颈**：" + "；".join(
-                f"{row['name']}（影响 {row['descendantCount']} 个后续知识点）"
+                f"{_row_name(row, zh)}（影响 {row['descendantCount']} 个后续知识点）"
                 for row in bottlenecks) + "。")
         else:
             lines.append("**前置瓶颈**：暂未发现。")
         stale = snapshot["stale"]
         lines.append("**待复核**：" + (
             "；".join(
-                f"{row['name']}（{row['days']} 天前，记忆 "
+                f"{_row_name(row, zh)}（{row['days']} 天前，记忆 "
                 f"{round((row['retention'] or 0) * 100)}%）"
                 for row in stale)
             if stale else "无。"))
         next_steps = snapshot["nextSteps"]
         if next_steps:
             lines.append("**下一步**：" + "；".join(
-                f"{row['name']}（{'复习' if row['reason'] == 'review' else '新学'}）"
+                f"{_row_name(row, zh)}（{'复习' if row['reason'] == 'review' else '新学'}）"
                 for row in next_steps) + "。")
         else:
             lines.append("**下一步**：暂无可推荐知识点,请先补充诊断。")
@@ -384,23 +418,23 @@ def fallback_report(snapshot: dict, zh: bool = True) -> str:
     chapters = snapshot["chapters"]
     if chapters:
         lines.append("**Chapter balance**: " + "; ".join(
-            f"{row['chapter']} {row['diagnosed']}/{row['total']}"
+            f"{_row_chapter(row, zh)} {row['diagnosed']}/{row['total']}"
             + (f" (avg {row['averageScore']})" if row["averageScore"] is not None else "")
             for row in chapters) + ".")
     bottlenecks = snapshot["bottlenecks"]
     lines.append("**Prerequisite bottlenecks**: " + (
-        "; ".join(f"{row['name']} (blocks {row['descendantCount']})"
+        "; ".join(f"{_row_name(row, zh)} (blocks {row['descendantCount']})"
                   for row in bottlenecks) if bottlenecks else "none found."))
     stale_rows = snapshot["stale"]
     lines.append("**Stale reviews**: " + (
         "; ".join(
-            f"{row['name']} ({row['days']} days, retention "
+            f"{_row_name(row, zh)} ({row['days']} days, retention "
             f"{round((row['retention'] or 0) * 100)}%)"
             for row in stale_rows)
         if stale_rows else "none."))
     next_steps = snapshot["nextSteps"]
     lines.append("**Next steps**: " + (
-        "; ".join(f"{row['name']} ({'review' if row['reason'] == 'review' else 'new'})"
+        "; ".join(f"{_row_name(row, zh)} ({'review' if row['reason'] == 'review' else 'new'})"
                   for row in next_steps)
         if next_steps else "none yet; add more diagnoses."))
     if snapshot["dataQuality"] == "none":
@@ -423,7 +457,7 @@ def footer_links(snapshot: dict, zh: bool = True) -> str:
             break
     if not rows:
         return ""
-    links = " · ".join(f"[{row['name']}](cmd://point/{row['pointId']})" for row in rows)
+    links = " · ".join(f"[{_row_name(row, zh)}](cmd://point/{row['pointId']})" for row in rows)
     return f"\n\n{'**定位到图谱**' if zh else '**Open in graph**'}：{links}"
 
 

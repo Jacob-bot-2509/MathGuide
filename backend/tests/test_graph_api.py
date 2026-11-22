@@ -60,6 +60,9 @@ def test_graph_returns_all_nodes_and_edges(client):
 
     node = next(item for item in body["nodes"] if item["id"] == "chain-rule")
     assert node["name"] == graph.points["chain-rule"].name
+    assert node["nameEn"] == "Chain Rule"
+    assert node["chapterEn"] == "Derivatives and Differentials"
+    assert node["summaryEn"] and len(node["keyPointsEn"]) == 3
     assert node["prerequisites"] == list(graph.points["chain-rule"].prerequisites)
     assert node["descendantCount"] == graph.descendant_count("chain-rule")
     assert node["status"] == "new"
@@ -67,6 +70,7 @@ def test_graph_returns_all_nodes_and_edges(client):
     assert node["summary"]
     assert node["keyPoints"] == list(graph.points["chain-rule"].key_points)
     assert body["chapters"][0] == "函数与极限"
+    assert body["chaptersEn"]["函数与极限"] == "Functions and Limits"
 
     edge = next(item for item in body["edges"]
                 if item["target"] == "chain-rule")
@@ -129,3 +133,12 @@ def test_graph_marks_review_due_with_ebbinghaus(client, monkeypatch):
     assert node["mastery"] == 5
     assert node["reviewDue"] is True
     assert node["retention"] < 0.6
+
+
+def test_graph_export_english_labels(client):
+    token, _ = _register(client)
+    res = client.get("/api/graph/export?lang=en",
+                     headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    assert "Chain Rule" in res.text
+    assert "程度" not in res.text and "难度" not in res.text

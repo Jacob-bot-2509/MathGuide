@@ -694,6 +694,13 @@ onBeforeUnmount(() => {
   flex: none;
 }
 
+/* 分栏布局时输入条在屏幕底部;上下堆叠时输入条在中部,不重复留安全区 */
+@media (min-width: 601px) {
+  .pw-input {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+}
+
 .pw-input input {
   flex: 1;
   min-width: 0;
@@ -765,6 +772,10 @@ onBeforeUnmount(() => {
     border-radius: 0;
   }
 
+  .pw-head {
+    padding-top: calc(7px + env(safe-area-inset-top));
+  }
+
   .pw-chat {
     width: 42%;
     min-width: 220px;
@@ -772,6 +783,79 @@ onBeforeUnmount(() => {
 
   .pw-body.with-insights .pw-chat {
     display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  /* 标题、选文、结构/展开/关闭在 320–600px 内分三行,不再挤成一条 */
+  .pw-head {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .pw-title {
+    order: 0;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .pw-close {
+    order: 1;
+    margin-left: auto;
+  }
+
+  .pw-select {
+    order: 2;
+    flex: 1 1 100%;
+    max-width: 100%;
+  }
+
+  .pw-progress,
+  .pw-spacer {
+    display: none;
+  }
+
+  .pw-btn {
+    order: 3;
+  }
+
+  /* 竖屏手机:左右分栏会把阅读器压到 <150px,改为上下布局 */
+  .pw-body {
+    flex-direction: column;
+  }
+
+  .pw-chat,
+  .pw-body.with-insights .pw-chat {
+    width: 100%;
+    min-width: 0;
+    max-height: 40vh;
+    max-height: 40dvh;
+    flex: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .pw-body.with-insights .pw-chat {
+    display: none;
+  }
+
+  .pw-reader {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* 结构/导图在手机上覆盖阅读器,不再挤成 32vw 窄条 */
+  .pw-body.with-insights {
+    position: relative;
+  }
+
+  .pw-body :deep(.pi) {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    z-index: 2;
   }
 }
 </style>

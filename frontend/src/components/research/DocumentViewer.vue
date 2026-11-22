@@ -1866,6 +1866,7 @@ onBeforeUnmount(() => {
   bottom: 16px;
   width: min(360px, calc(100% - 32px));
   max-height: 46vh;
+  max-height: 46dvh;
   overflow-y: auto;
   background: var(--bg-card);
   border: 1px solid var(--line-bright);
@@ -1980,7 +1981,7 @@ onBeforeUnmount(() => {
   width: 260px;
   background: color-mix(in srgb, var(--bg-card) 96%, transparent);
   border-left: 1px solid var(--line);
-  padding: 10px;
+  padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
   overflow-y: auto;
   z-index: 45;
 }
@@ -2113,5 +2114,56 @@ onBeforeUnmount(() => {
   font-size: 11.5px;
   line-height: 1.5;
   margin-bottom: 12px;
+}
+
+@media (max-width: 760px) {
+  .viewer.expanded {
+    inset: 0;
+    width: 100%;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .v-head {
+    flex-wrap: wrap;
+    padding-top: calc(8px + env(safe-area-inset-top));
+  }
+
+  .v-title {
+    flex: 1 1 100%;
+  }
+
+  .v-spacer {
+    display: none;
+  }
+
+  .v-meta {
+    min-width: 0;
+  }
+
+  .v-region-answer {
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: 50vh;
+    max-height: 50dvh;
+  }
+
+  .v-pop,
+  .v-edit {
+    left: 12px !important;
+    right: 12px;
+    width: auto;
+    max-width: none;
+    max-height: 60vh;
+    max-height: 60dvh;
+    overflow-y: auto;
+  }
+
+  .v-notes {
+    width: 100%;
+    border-left: 0;
+  }
 }
 </style>

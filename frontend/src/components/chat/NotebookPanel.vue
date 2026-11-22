@@ -75,8 +75,9 @@ function fmtDate(ts: number): string {
   /* 宽度自适应词条长度:随最长词条伸缩,上下限兜底 */
   width: fit-content;
   min-width: 260px;
-  max-width: min(560px, calc(100vw - 32px));
+  max-width: min(560px, calc(100vw - 32px - var(--safe-inline)));
   max-height: 46vh;
+  max-height: 46dvh;
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 12px;

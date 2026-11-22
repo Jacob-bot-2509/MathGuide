@@ -333,8 +333,9 @@ onBeforeUnmount(() => {
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  width: min(560px, calc(100vw - 32px));
+  width: min(560px, calc(100vw - 32px - var(--safe-inline)));
   max-height: 46vh;
+  max-height: 46dvh;
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 12px;

@@ -88,13 +88,14 @@ const props = defineProps<{ left?: number; width?: number }>()
 
 .scope-panel {
   transform: translateX(-50%);
-  width: min(340px, calc(100vw - 32px));
+  width: min(340px, calc(100vw - 32px - var(--safe-inline)));
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
   padding: 12px 14px;
   max-height: 46vh;
+  max-height: 46dvh;
   overflow-y: auto;
 }
 

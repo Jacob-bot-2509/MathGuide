@@ -118,7 +118,8 @@ function open(m: (typeof MODULES)[number]) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 34px;
+  gap: 12px;
+  padding: calc(20px + env(safe-area-inset-top)) 34px 20px;
   position: relative;
   z-index: 2;
 }
@@ -405,7 +406,7 @@ function open(m: (typeof MODULES)[number]) {
 }
 
 .foot {
-  padding: 22px;
+  padding: 22px 22px calc(22px + env(safe-area-inset-bottom));
   text-align: center;
   font-size: 11px;
   position: relative;
@@ -415,6 +416,59 @@ function open(m: (typeof MODULES)[number]) {
 @media (max-width: 900px) {
   .modules {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .nav {
+    padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+  }
+
+  .brand-name {
+    font-size: 13px;
+    letter-spacing: 0.12em;
+  }
+
+  .nav-right,
+  .links {
+    gap: 12px;
+  }
+
+  .link {
+    font-size: 12px;
+    letter-spacing: 0.06em;
+  }
+
+  .hero {
+    padding: 40px 16px 28px;
+  }
+
+  .hero-title {
+    font-size: clamp(28px, 10vw, 34px);
+    letter-spacing: 0.08em;
+  }
+
+  .hero-sub {
+    max-width: 32ch;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .modules {
+    width: 100%;
+    margin-top: 40px;
+    gap: 18px;
+  }
+
+  .card {
+    padding: 22px 20px;
+  }
+}
+
+@media (max-width: 480px) {
+  /* 两张功能卡片已覆盖同样的入口,窄屏隐藏重复的顶部链接 */
+  .links {
+    display: none;
   }
 }
 </style>

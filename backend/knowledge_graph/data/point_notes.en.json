@@ -36,7 +36,7 @@
     "keyPoints": [
       "Boundedness is necessary but not sufficient for convergence; a bounded sequence may still diverge (for example, $(-1)^n$).",
       "The converse of the sign-preservation property does not hold: a nonnegative limit does not imply that every term is nonnegative.",
-      "The arithmetic rules require the limits of all participating sequences to exist and the limit of the denominator to be nonzero."
+      "The algebraic rules require the limits of all participating sequences to exist and the limit of the denominator to be nonzero."
     ]
   },
   "limit-existence-criteria": {
@@ -48,26 +48,26 @@
     ]
   },
   "function-limit-def": {
-    "summary": "The $\\varepsilon$-$\\delta$ definition of $\\lim_{x\\to x_0}f(x)=A$ requires that for every $\\varepsilon>0$, there exists $\\delta>0$ such that $|f(x)-A|<\\varepsilon$ whenever $0<|x-x_0|<\\delta$. When $x\\to\\infty$, the definition instead uses $\\varepsilon$-$X$ language. A limit describes the behaviour as $x$ becomes sufficiently close to $x_0$.",
+    "summary": "The $\\varepsilon$-$\\delta$ definition of $\\lim_{x\\to x_0}f(x)=A$ requires that for every $\\varepsilon>0$, there exists $\\delta>0$ such that $|f(x)-A|<\\varepsilon$ whenever $0<|x-x_0|<\\delta$. When $x\\to\\infty$, the definition instead uses $\\varepsilon$-$X$ language. A limit describes the behavior as $x$ becomes sufficiently close to $x_0$.",
     "keyPoints": [
       "The limit is independent of whether the function is defined at $x_0$ or what value it takes there.",
-      "The punctured neighbourhood $0<|x-x_0|<\\delta$ is part of the definition and cannot be replaced by $|x-x_0|<\\delta$.",
+      "The punctured neighborhood $0<|x-x_0|<\\delta$ is part of the definition and cannot be replaced by $|x-x_0|<\\delta$.",
       "A two-sided limit exists only if both sides approach the same value."
     ]
   },
   "one-sided-limits": {
-    "summary": "The left-hand and right-hand limits describe the behaviour as $x$ approaches $x_0$ from the left and right, respectively. A two-sided limit exists if and only if both one-sided limits exist and are equal. Piecewise-defined functions, absolute-value functions and rounding functions often require separate one-sided analysis.",
+    "summary": "The left-hand and right-hand limits describe the behavior as $x$ approaches $x_0$ from the left and right, respectively. A two-sided limit exists if and only if both one-sided limits exist and are equal. Piecewise-defined functions, absolute-value functions and rounding functions often require separate one-sided analysis.",
     "keyPoints": [
       "At a point where the definition changes, compute the left-hand and right-hand limits separately; direct substitution is insufficient.",
       "If either one-sided limit does not exist or the two are unequal, the two-sided limit does not exist.",
-      "The existence of a one-sided limit describes behaviour on only one side and does not guarantee continuity at the point."
+      "The existence of a one-sided limit describes behavior on only one side and does not guarantee continuity at the point."
     ]
   },
   "function-limit-props": {
     "summary": "Limits of functions have uniqueness, local boundedness, local sign-preservation and arithmetic properties; limits of composite functions also satisfy a limit-transfer property. These properties underpin limit calculations and the subsequent definitions of continuity and derivatives.",
     "keyPoints": [
-      "Boundedness and sign preservation are local: they hold only in some punctured neighbourhood of $x_0$.",
-      "The arithmetic rules require the relevant limits to exist and the denominator limit to be nonzero.",
+      "Boundedness and sign preservation are local: they hold only in some punctured neighborhood of $x_0$.",
+      "The algebraic rules require the relevant limits to exist and the denominator limit to be nonzero.",
       "For the limit of a composite function, the inner limit must exist and the outer function must have a limit at the corresponding point."
     ]
   },
@@ -88,7 +88,7 @@
     ]
   },
   "infinity-small-large": {
-    "summary": "An infinitesimal is a variable whose limit is zero; an infinite quantity is a variable whose absolute value increases without bound. They are related by reciprocation: when $f$ is infinite, $1/f$ is infinitesimal (near points where the denominator is nonzero). Operations on and comparisons of infinitesimals are important tools in limit calculations.",
+    "summary": "An infinitesimal is a variable whose limit is zero; an infinitely large quantity is a variable whose absolute value increases without bound. They are related by reciprocation: when $f$ is infinite, $1/f$ is infinitesimal (near points where the denominator is nonzero). Operations on and comparisons of infinitesimals are important tools in limit calculations.",
     "keyPoints": [
       "An infinitesimal is a variable, not a very small constant; zero is the only constant infinitesimal.",
       "An unbounded variable need not tend to infinity; for example, $x\\sin x$ is unbounded at infinity but does not tend to infinity.",
@@ -96,7 +96,7 @@
     ]
   },
   "infinity-small-compare": {
-    "summary": "Let $\\alpha,\\beta$ be infinitesimals in the same limiting process. Use $\\lim \\frac{\\alpha}{\\beta}$ to classify them as higher-order, same-order, equivalent or order-$k$ infinitesimals. Substitution of equivalent infinitesimals can greatly simplify limits involving products and quotients.",
+    "summary": "Let $\\alpha,\\beta$ be infinitesimals in the same limiting process. Use $\\lim \\frac{\\alpha}{\\beta}$ to classify them as higher-order, same-order, equivalent or infinitesimals of order $k$. Substitution of equivalent infinitesimals can greatly simplify limits involving products and quotients.",
     "keyPoints": [
       "Equivalent substitutions generally apply only to multiplicative factors; direct substitution in sums or differences may change the limit.",
       "$\\alpha\\sim\\beta$ means $\\lim \\alpha/\\beta=1$; it does not mean equality.",
@@ -120,17 +120,17 @@
     ]
   },
   "closed-interval-continuity": {
-    "summary": "A continuous function on a closed interval is bounded and satisfies the extreme value theorem, intermediate value theorem and zero-point theorem. These results provide a theoretical basis for establishing roots of equations, proving inequalities and finding extrema.",
+    "summary": "A continuous function on a closed interval is bounded and satisfies the extreme value theorem and the intermediate value theorem. These results provide a theoretical basis for establishing roots of equations, proving inequalities and finding extrema.",
     "keyPoints": [
       "Both continuity and a closed interval are essential; the conclusions may fail on an open interval or in the presence of a discontinuity.",
       "The intermediate value theorem guarantees existence, not uniqueness.",
-      "The zero-point theorem requires opposite signs at the endpoints; no direct conclusion follows when the signs agree."
+      "The intermediate value theorem guarantees a zero only when the endpoint values have opposite signs; no conclusion follows when the signs agree."
     ]
   },
   "derivative-def": {
     "summary": "The derivative at $x_0$ is the limit of the difference quotient $\\frac{f(x_0+\\Delta x)-f(x_0)}{\\Delta x}$ as $\\Delta x\\to0$. It describes the instantaneous rate of change at that point; the left-hand and right-hand derivatives correspond to one-sided limits of the difference quotient.",
     "keyPoints": [
-      "A derivative is defined at a point; first verify that the function is defined at that point and in a neighbourhood of it.",
+      "A derivative is defined at a point; first verify that the function is defined at that point and in a neighborhood of it.",
       "At a breakpoint of a piecewise-defined function, use the definition of the derivative rather than applying the formulas for the individual pieces directly.",
       "Differentiability implies continuity, but continuity does not necessarily imply differentiability."
     ]
@@ -256,7 +256,7 @@
     ]
   },
   "cauchy-mvt": {
-    "summary": "If $f,g$ are continuous on $[a,b]$, differentiable on $(a,b)$, and $g'(x)\\ne0$, then there exists $\\xi\\in(a,b)$ such that $\\frac{f(b)-f(a)}{g(b)-g(a)}=\\frac{f'(\\xi)}{g'(\\xi)}$. This theorem provides the theoretical foundation for L'H?pital's rule.",
+    "summary": "If $f,g$ are continuous on $[a,b]$, differentiable on $(a,b)$, and $g'(x)\\ne0$, then there exists $\\xi\\in(a,b)$ such that $\\frac{f(b)-f(a)}{g(b)-g(a)}=\\frac{f'(\\xi)}{g'(\\xi)}$. This theorem provides the theoretical foundation for L'Hôpital's rule.",
     "keyPoints": [
       "The conditions $g'(x)\\ne0$ and $g(b)\\ne g(a)$ are required; otherwise a denominator may vanish.",
       "The result is not obtained by applying Lagrange's mean value theorem separately to the two functions and dividing.",
@@ -288,7 +288,7 @@
     ]
   },
   "indeterminate-forms": {
-    "summary": "Indeterminate forms include $\\frac{0}{0}$, $\\frac{\\infty}{\\infty}$, $0\\cdot\\infty$, $\\infty-\\infty$, $1^\\infty$, $0^0$ and $\\infty^0$. Common methods include combining fractions, taking logarithms, factoring, equivalent infinitesimals and L'H?pital's rule.",
+    "summary": "Indeterminate forms include $\\frac{0}{0}$, $\\frac{\\infty}{\\infty}$, $0\\cdot\\infty$, $\\infty-\\infty$, $1^\\infty$, $0^0$ and $\\infty^0$. Common methods include combining fractions, taking logarithms, factoring, equivalent infinitesimals and L'Hôpital's rule.",
     "keyPoints": [
       "Identify the form before choosing a method; different forms require different approaches.",
       "A form of type $1^\\infty$ is commonly written as $e^{\\lim (u-1)v}$; do not simply write $e$.",
@@ -314,7 +314,7 @@
   "concavity": {
     "summary": "When $f''(x)>0$, the curve is concave up; when $f''(x)<0$, it is concave down. An inflection point is a point where concavity changes, requiring $f''$ to change sign across it.",
     "keyPoints": [
-      "Chinese textbooks may use different names for the two concavities; stating the sign of the second derivative is safer.",
+      "Terminology for the two concavities varies by convention; stating the sign of the second derivative is unambiguous.",
       "$f''=0$ identifies only a candidate inflection point; check for a sign change on both sides.",
       "A point where the second derivative does not exist may also be an inflection point."
     ]
@@ -324,7 +324,7 @@
     "keyPoints": [
       "For a vertical asymptote, divergence to infinity on one side suffices; the two sides need not behave alike.",
       "Horizontal and oblique asymptotes may occur separately as $x\\to+\\infty$ and $x\\to-\\infty$.",
-      "First examine breaks in the domain, then examine behaviour at infinity."
+      "First examine breaks in the domain, then examine behavior at infinity."
     ]
   },
   "curve-sketch": {
@@ -332,7 +332,7 @@
     "keyPoints": [
       "First determine the domain and its breaks to avoid drawing nonexistent portions.",
       "Extrema, inflection points, asymptotes and intercepts are key features and must not be omitted.",
-      "The graph must be consistent with limiting behaviour, especially at infinity."
+      "The graph must be consistent with limiting behavior, especially at infinity."
     ]
   },
   "curvature": {
@@ -348,7 +348,7 @@
     "keyPoints": [
       "First determine the domain in an application and state whether endpoints are admissible.",
       "A local extremum need not be an absolute extremum; compare all candidates.",
-      "In modelling, attend to units and to the physical meaning of variables."
+      "In modeling, attend to units and to the physical meaning of variables."
     ]
   },
   "antiderivative": {
@@ -400,7 +400,7 @@
     ]
   },
   "rational-integral": {
-    "summary": "First reduce a rational function to a proper rational fraction, then decompose it into partial fractions and integrate term by term. The form of the decomposition depends on the denominator factors: linear, repeated and irreducible quadratic factors are treated separately.",
+    "summary": "First reduce a rational function to a proper rational function, then decompose it into partial fractions and integrate term by term. The form of the decomposition depends on the denominator factors: linear, repeated and irreducible quadratic factors are treated separately.",
     "keyPoints": [
       "First use polynomial long division so that the numerator has lower degree than the denominator.",
       "Solve for all undetermined coefficients in the partial fractions and omit no terms.",
@@ -408,11 +408,11 @@
     ]
   },
   "trig-rational": {
-    "summary": "An integral of a rational expression in $\\sin x$ and $\\cos x$ can be reduced to an integral of a rational function by the universal substitution $t=\\tan(x/2)$. Depending on parity, a simpler substitution may also be available.",
+    "summary": "An integral of a rational expression in $\\sin x$ and $\\cos x$ can be reduced to an integral of a rational function by the tangent half-angle substitution (also called the Weierstrass substitution) $t=\\tan(x/2)$. Depending on parity, a simpler substitution may also be available.",
     "keyPoints": [
-      "The universal substitution introduces $\\frac{2t}{1+t^2}$, $\\frac{1-t^2}{1+t^2}$ and $dx=\\frac{2dt}{1+t^2}$.",
+      "The tangent half-angle substitution (also called the Weierstrass substitution) introduces $\\frac{2t}{1+t^2}$, $\\frac{1-t^2}{1+t^2}$ and $dx=\\frac{2dt}{1+t^2}$.",
       "After substitution, consider the domain and periodicity of $t$.",
-      "Try simpler substitutions first; the universal substitution usually involves more computation."
+      "Try simpler substitutions first; the tangent half-angle substitution (also called the Weierstrass substitution) usually involves more computation."
     ]
   },
   "integral-table-use": {
@@ -456,7 +456,7 @@
     ]
   },
   "ftc": {
-    "summary": "If $f$ is continuous, the variable-upper-limit integral $\\Phi(x)=\\int_a^x f(t)dt$ is differentiable and $\\Phi'(x)=f(x)$. This establishes the inverse relationship between differentiation and integration and underlies the Newton?Leibniz formula.",
+    "summary": "If $f$ is continuous, the variable-upper-limit integral $\\Phi(x)=\\int_a^x f(t)dt$ is differentiable and $\\Phi'(x)=f(x)$. This establishes the inverse relationship between differentiation and integration and underlies the Newton–Leibniz formula.",
     "keyPoints": [
       "The integrand must be continuous; otherwise an integral with variable upper limit need not be differentiable.",
       "If the upper limit is a composite function, apply the chain rule: $\\frac{d}{dx}\\int_a^{\\varphi(x)}f(t)dt=f(\\varphi(x))\\varphi'(x)$.",
@@ -488,10 +488,10 @@
     ]
   },
   "definite-inequalities": {
-    "summary": "Inequalities for definite integrals commonly use sign preservation, estimation bounds, the Cauchy?Schwarz inequality and monotonicity. These tools estimate integral values, prove inequalities and assess convergence or divergence.",
+    "summary": "Inequalities for definite integrals commonly use sign preservation, estimation bounds, the Cauchy–Schwarz inequality and monotonicity. These tools estimate integral values, prove inequalities and assess convergence or divergence.",
     "keyPoints": [
       "Before applying sign preservation, verify the sign of the integrand on the interval.",
-      "The Cauchy?Schwarz inequality is $\\left(\\int fg\\right)^2\\le\\int f^2\\int g^2$.",
+      "The Cauchy–Schwarz inequality is $\\left(\\int fg\\right)^2\\le\\int f^2\\int g^2$.",
       "Determine the equality conditions from the relationship between the functions."
     ]
   },
@@ -552,7 +552,7 @@
     ]
   },
   "physical-applications": {
-    "summary": "Definite integrals can calculate physical quantities including work done by a variable force, fluid pressure, centre of mass and average value. The basic method is to write a local approximation for an infinitesimal element and integrate to sum the contributions.",
+    "summary": "Definite integrals can calculate physical quantities including work done by a variable force, fluid pressure, center of mass and average value. The basic method is to write a local approximation for an infinitesimal element and integrate to sum the contributions.",
     "keyPoints": [
       "First establish a coordinate system and specify the integration variable; use consistent units.",
       "The key to the element method is a correct local approximation.",
@@ -616,7 +616,7 @@
     ]
   },
   "second-homogeneous": {
-    "summary": "The equation $y''+py'+qy=0$ is solved using the characteristic equation $r^2+pr+q=0$. Two distinct real roots, a repeated root and conjugate complex roots give different forms of the general solution.",
+    "summary": "The equation $y''+py'+qy=0$ is solved using the characteristic equation $r^2+pr+q=0$. Two distinct real roots, a repeated root and complex conjugate roots give different forms of the general solution.",
     "keyPoints": [
       "For a repeated root, the general solution includes a factor of $x$: $(C_1+C_2x)e^{rx}$.",
       "Complex roots $\\alpha\\pm\\beta i$ correspond to $e^{\\alpha x}(C_1\\cos\\beta x+C_2\\sin\\beta x)$.",
@@ -632,11 +632,11 @@
     ]
   },
   "ode-applications": {
-    "summary": "Differential equations model processes such as growth, decay, cooling, mixing and motion. The modelling procedure is to define variables, formulate relationships, write the equation, apply initial conditions, solve and interpret.",
+    "summary": "Differential equations model processes such as growth, decay, cooling, mixing and motion. The modeling procedure is to define variables, formulate relationships, write the equation, apply initial conditions, solve and interpret.",
     "keyPoints": [
       "Specify variables and units before establishing the differential relation.",
       "Initial conditions must correspond to the actual situation.",
-      "After solving, check that the solution conforms to the physically meaningful range and long-term behaviour."
+      "After solving, check that the solution conforms to the physically meaningful range and long-term behavior."
     ]
   }
 }

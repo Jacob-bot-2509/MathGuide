@@ -308,6 +308,18 @@ async function confirmDelete() {
   margin-top: 16px;
 }
 
+@media (max-width: 520px) {
+  .avatar-block {
+    flex-wrap: wrap;
+  }
+
+  /* 8×44px 在 320px 屏上会超出内容区;按可用宽度自动减列,保持 ≥40px 点击面 */
+  .preset-grid {
+    grid-template-columns: repeat(auto-fit, minmax(40px, 1fr));
+    gap: 8px;
+  }
+}
+
 .preset-item {
   background: transparent;
   border: 1px solid var(--line);
@@ -326,6 +338,7 @@ async function confirmDelete() {
 .field-row {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .input {

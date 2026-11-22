@@ -63,12 +63,19 @@ const choices = reactive<Record<string, 'import' | 'temp' | 'ignore'>>(
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: calc(16px + env(safe-area-inset-top))
+    calc(16px + env(safe-area-inset-right))
+    calc(16px + env(safe-area-inset-bottom))
+    calc(16px + env(safe-area-inset-left));
   background: rgba(0, 0, 0, 0.48);
 }
 
 .pip {
   width: min(460px, calc(100vw - 32px));
+  width: min(460px, 100%);
   max-height: 70vh;
+  max-height: 70dvh;
+  max-height: min(70dvh, 100%);
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);

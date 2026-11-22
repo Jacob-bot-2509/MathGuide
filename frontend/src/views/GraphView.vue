@@ -6,7 +6,7 @@
  * utils/graphLayout 的最长路径分层。节点按掌握度着色:
  * 已掌握 / 薄弱 / 未诊断。章节筛选会把视图聚焦到该章节的节点范围。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Starfield from '@/components/common/Starfield.vue'
 import MathText from '@/components/chat/MathText.vue'
@@ -25,6 +25,7 @@ import {
 import { resolveLayout } from '@/utils/graphLayout'
 import { panBy, pinchMetrics, zoomAround } from '@/utils/graphGesture'
 import { t } from '@/utils/i18n'
+import { settingsState } from '@/stores/settings'
 import { showToast } from '@/utils/toast'
 import { downloadBlob } from '@/services/docService'
 
@@ -34,6 +35,7 @@ const data = ref<GraphData | null>(null)
 const loading = ref(true)
 const error = ref('')
 const wrapEl = ref<HTMLElement | null>(null)
+const panelsEl = ref<HTMLElement | null>(null)
 const svgEl = ref<SVGSVGElement | null>(null)
 const selectedId = ref('')
 const activeChapter = ref('')
@@ -42,7 +44,6 @@ const recommendation = ref<Recommendation | null>(null)
 const strategy = ref<RecommendStrategy>('difficulty')
 const ratingBusy = ref(false)
 
-const NODE_HALF_W = 82
 const view = reactive({ x: 0, y: 0, w: 1200, h: 800 })
 
 const nodes = computed(() => data.value?.nodes ?? [])
@@ -73,13 +74,106 @@ const selectedPrerequisites = computed(() =>
 const selectedDependents = computed(() =>
   selected.value ? resolve(dependents.value.get(selected.value.id) ?? []) : [])
 
+function displayName(node: { name: string; nameEn?: string }): string {
+  return settingsState.language === 'en' ? node.nameEn || node.name : node.name
+}
+
+function chapterLabel(chapter: string): string {
+  if (settingsState.language !== 'en') return chapter
+  return data.value?.chaptersEn?.[chapter] || chapter
+}
+
+function summaryText(node: GraphNode): string {
+  return settingsState.language === 'en' ? node.summaryEn || node.summary || '' : node.summary || ''
+}
+
+function keyPointTexts(node: GraphNode): string[] {
+  if (settingsState.language === 'en' && node.keyPointsEn?.length) return node.keyPointsEn
+  return node.keyPoints ?? []
+}
+
+/* ---------- 节点框自适应 ----------
+   英文知识点名比中文长很多,固定 164px 会把名字截成 "Second-Order …"。
+   这里按完整名称测量宽度:一行放得下就一行,放不下自动换行,框的高度
+   随行数增高;宽度上限 240,避免挤占相邻层级。 */
+const NODE_MIN_W = 120
+const NODE_MAX_W = 220
+const NODE_TEXT_PAD = 40
+const NODE_LINE_H = 13
+const measureContext = document.createElement('canvas').getContext('2d')
+let measureFontSpec = ''
+
+/** 画布测量字体只初始化一次;字体令牌在模块加载后才稳定。 */
+function ensureMeasureFont(): void {
+  if (measureFontSpec) return
+  const font = getComputedStyle(document.documentElement)
+    .getPropertyValue('--font-ui').trim()
+  measureFontSpec = `12.5px ${font || 'sans-serif'}`
+  if (measureContext) measureContext.font = measureFontSpec
+}
+
+function measureLabel(text: string): number {
+  if (!measureContext) return Array.from(text).length * 7
+  ensureMeasureFont()
+  return measureContext.measureText(text).width
+}
+
+function wrapFullLabel(text: string, maxWidth: number): string[] {
+  if (measureLabel(text) <= maxWidth) return [text]
+  const words = text.split(/\s+/)
+  const lines: string[] = []
+  let line = ''
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word
+    if (measureLabel(candidate) <= maxWidth) {
+      line = candidate
+      continue
+    }
+    if (line) {
+      lines.push(line)
+      line = ''
+    }
+    if (measureLabel(word) <= maxWidth) {
+      line = word
+      continue
+    }
+    // 单个超长单词/中文长串:按字符切
+    let chunk = ''
+    for (const char of Array.from(word)) {
+      if (measureLabel(chunk + char) <= maxWidth) chunk += char
+      else {
+        if (chunk) lines.push(chunk)
+        chunk = char
+      }
+    }
+    line = chunk
+  }
+  if (line) lines.push(line)
+  return lines.length ? lines : [text]
+}
+
+const nodeSizes = computed(() => {
+  const map = new Map<string, { w: number; h: number; lines: string[] }>()
+  for (const node of nodes.value) {
+    const full = displayName(node)
+    const natural = measureLabel(full) + NODE_TEXT_PAD
+    const width = Math.min(NODE_MAX_W, Math.max(NODE_MIN_W, natural))
+    const lines = wrapFullLabel(full, width - NODE_TEXT_PAD)
+    const height = Math.max(44, 14 + lines.length * NODE_LINE_H)
+    map.set(node.id, { w: width, h: height, lines })
+  }
+  return map
+})
+
 const matches = computed(() => {
   const term = query.value.trim().toLowerCase()
   if (!term) return []
   return nodes.value.filter((node) =>
     node.name.toLowerCase().includes(term)
+    || (node.nameEn ?? '').toLowerCase().includes(term)
     || node.id.toLowerCase().includes(term)
-    || node.chapter.toLowerCase().includes(term),
+    || node.chapter.toLowerCase().includes(term)
+    || chapterLabel(node.chapter).toLowerCase().includes(term),
   ).slice(0, 8)
 })
 
@@ -95,11 +189,13 @@ const edgeGeoms = computed(() =>
     const to = layout.value.positions[edge.target] ?? { x: 0, y: 0, level: 0 }
     const source = nodeById.value.get(edge.source)
     const target = nodeById.value.get(edge.target)
+    const sourceHalf = (nodeSizes.value.get(edge.source)?.w ?? 164) / 2
+    const targetHalf = (nodeSizes.value.get(edge.target)?.w ?? 164) / 2
     return {
       key: `${edge.source}-${edge.target}-${index}`,
-      x1: from.x + NODE_HALF_W,
+      x1: from.x + sourceHalf,
       y1: from.y,
-      x2: to.x - NODE_HALF_W - 2,
+      x2: to.x - targetHalf - 2,
       y2: to.y,
       dim: Boolean(activeChapter.value)
         && (source?.chapter !== activeChapter.value || target?.chapter !== activeChapter.value),
@@ -110,11 +206,14 @@ const edgeGeoms = computed(() =>
 const nodeGeoms = computed(() =>
   nodes.value.map((node) => {
     const point = layout.value.positions[node.id] ?? { x: 0, y: 0, level: 0 }
+    const size = nodeSizes.value.get(node.id) ?? { w: 164, h: 44, lines: [displayName(node)] }
     return {
       node,
       x: point.x,
       y: point.y,
-      label: node.name.length > 12 ? `${node.name.slice(0, 11)}…` : node.name,
+      w: size.w,
+      h: size.h,
+      lines: size.lines,
       dim: Boolean(activeChapter.value) && node.chapter !== activeChapter.value,
     }
   }),
@@ -132,14 +231,8 @@ function aspectRatio(): number {
 
 function resetView() {
   activeChapter.value = ''
-  const graph = layout.value
-  const aspect = aspectRatio()
-  const height = Math.max(graph.height, 620)
-  const width = Math.min(graph.width, height * aspect)
-  view.w = Math.max(640, width)
-  view.h = view.w / aspect
-  view.x = 0
-  view.y = (graph.height - view.h) / 2
+  // 按节点实际范围取景:框宽随英文全名变化,旧的 640 固定宽度会裁掉两侧
+  fitTo(nodes.value.map((node) => node.id))
 }
 
 function fitTo(ids: string[]) {
@@ -180,6 +273,24 @@ function pick(node: GraphNode) {
   query.value = ''
   selectedId.value = node.id
   centerOn(node.id)
+  revealDetail()
+}
+
+/** 窄屏的推荐/详情是同一个横向滚动窗口:选中节点后滑到详情页。 */
+function revealDetail(): void {
+  void nextTick(() => {
+    const el = panelsEl.value
+    if (!el || el.clientWidth <= 0) return
+    el.scrollTo({ left: el.clientWidth, behavior: 'smooth' })
+  })
+}
+
+function closeDetail(): void {
+  const el = panelsEl.value
+  if (el && el.clientWidth > 0 && el.scrollLeft > 0) {
+    el.scrollTo({ left: 0, behavior: 'smooth' })
+  }
+  selectedId.value = ''
 }
 
 function svgPoint(screen: { x: number; y: number }): DOMPoint {
@@ -295,6 +406,7 @@ function select(node: GraphNode) {
     return
   }
   selectedId.value = node.id
+  revealDetail()
 }
 
 async function loadRecommendation() {
@@ -330,7 +442,7 @@ async function rate(score: number) {
 
 async function exportHtml() {
   try {
-    const blob = await exportGraphHtml()
+    const blob = await exportGraphHtml(settingsState.language)
     downloadBlob(blob, `mathguide-graph-${new Date().toISOString().slice(0, 10)}.html`)
   } catch {
     showToast(t('graph.exportError'))
@@ -351,7 +463,7 @@ function selectById(id: string) {
 function goLearn(node: GraphNode) {
   router.push({
     path: '/learn',
-    query: { point: node.id, name: node.name, start: '1' },
+    query: { point: node.id, name: displayName(node), start: '1' },
   })
 }
 
@@ -424,8 +536,8 @@ onBeforeUnmount(() => {
         />
         <ul v-if="matches.length" class="matches">
           <li v-for="node in matches" :key="node.id" @click="pick(node)">
-            <span>{{ node.name }}</span>
-            <em>{{ node.chapter }}</em>
+            <span>{{ displayName(node) }}</span>
+            <em>{{ chapterLabel(node.chapter) }}</em>
           </li>
         </ul>
         <p v-else-if="query.trim()" class="no-match">{{ t('graph.empty') }}</p>
@@ -441,7 +553,7 @@ onBeforeUnmount(() => {
           :class="{ on: activeChapter === chapter }"
           @click="chooseChapter(chapter)"
         >
-          {{ chapter }}
+          {{ chapterLabel(chapter) }}
         </button>
       </div>
 
@@ -452,19 +564,20 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <main ref="wrapEl" class="stage">
-      <p v-if="loading" class="hint">{{ t('graph.loading') }}</p>
-      <p v-else-if="error" class="hint error">{{ error }}</p>
+    <main class="stage">
+      <div ref="wrapEl" class="graph-viewport">
+        <p v-if="loading" class="hint">{{ t('graph.loading') }}</p>
+        <p v-else-if="error" class="hint error">{{ error }}</p>
 
-      <svg
-        v-else
-        ref="svgEl"
-        class="canvas"
-        :viewBox="viewBox"
-        preserveAspectRatio="xMidYMid meet"
-        @wheel.prevent="onWheel"
-        @pointerdown="onDown"
-      >
+        <svg
+          v-else
+          ref="svgEl"
+          class="canvas"
+          :viewBox="viewBox"
+          preserveAspectRatio="xMidYMid meet"
+          @wheel.prevent="onWheel"
+          @pointerdown="onDown"
+        >
         <defs>
           <marker
             id="mg-arrow"
@@ -501,16 +614,26 @@ onBeforeUnmount(() => {
             :transform="`translate(${geom.x} ${geom.y})`"
             @click.stop="select(geom.node)"
           >
-            <rect x="-82" y="-18" width="164" height="36" rx="8" />
-            <circle cx="-67" cy="0" r="4" class="dot" />
-            <text text-anchor="middle" dy="4.5">{{ geom.label }}</text>
+            <title>{{ geom.lines.join(' ') }}</title>
+            <rect :x="-geom.w / 2" :y="-geom.h / 2" :width="geom.w" :height="geom.h" rx="8" />
+            <circle :cx="-geom.w / 2 + 14" cy="0" r="4" class="dot" />
+            <text text-anchor="middle" x="10" :aria-label="geom.lines.join(' ')">
+              <tspan
+                v-for="(line, index) in geom.lines"
+                :key="index"
+                x="10"
+                :y="(index - (geom.lines.length - 1) / 2) * 13 + 4.5"
+              >{{ line }}</tspan>
+            </text>
           </g>
         </g>
       </svg>
+      </div>
 
-      <aside v-if="selected" class="detail">
-        <button class="close" :aria-label="t('graph.close')" @click="selectedId = ''">×</button>
-        <h2>{{ selected.name }}</h2>
+      <div ref="panelsEl" class="panels">
+        <aside v-if="selected" class="detail">
+          <button class="close" :aria-label="t('graph.close')" @click="closeDetail">×</button>
+        <h2>{{ displayName(selected) }}</h2>
         <span class="badge" :class="`is-${selected.status}`">{{ statusLabel(selected.status) }}</span>
         <span v-if="selected.reviewDue" class="badge is-review">{{ t('graph.reviewDue') }}</span>
         <span v-if="selected.reviewDue && selected.retention != null" class="retention-note">
@@ -518,7 +641,7 @@ onBeforeUnmount(() => {
         </span>
 
         <dl>
-          <div><dt>{{ t('graph.chapter') }}</dt><dd>{{ selected.chapter }}</dd></div>
+          <div><dt>{{ t('graph.chapter') }}</dt><dd>{{ chapterLabel(selected.chapter) }}</dd></div>
           <div><dt>{{ t('graph.difficulty') }}</dt><dd>{{ selected.difficulty }} / 5</dd></div>
           <div><dt>{{ t('graph.coreness') }}</dt><dd>{{ selected.descendantCount }}</dd></div>
           <div><dt>{{ t('graph.mastery') }}</dt><dd>{{ selected.mastery ?? '—' }}</dd></div>
@@ -547,17 +670,17 @@ onBeforeUnmount(() => {
             class="link-node"
             @click="pick(item)"
           >
-            {{ item.name }}
+            {{ displayName(item) }}
           </button>
         </section>
 
         <section>
           <h3>{{ t('graph.mainContent') }}</h3>
-          <MathText v-if="selected.summary" class="summary" :text="selected.summary" />
-          <ul v-if="selected.keyPoints?.length" class="key-points">
-            <li v-for="item in selected.keyPoints" :key="item"><MathText :text="item" /></li>
+          <MathText v-if="summaryText(selected)" class="summary" :text="summaryText(selected)" />
+          <ul v-if="keyPointTexts(selected).length" class="key-points">
+            <li v-for="item in keyPointTexts(selected)" :key="item"><MathText :text="item" /></li>
           </ul>
-          <p v-else-if="!selected.summary" class="none">{{ t('graph.noSummary') }}</p>
+          <p v-else-if="!summaryText(selected)" class="none">{{ t('graph.noSummary') }}</p>
           <button class="go-learn" @click="goLearn(selected)">{{ t('graph.goLearn') }}</button>
         </section>
 
@@ -570,45 +693,49 @@ onBeforeUnmount(() => {
             class="link-node"
             @click="pick(item)"
           >
-            {{ item.name }}
+            {{ displayName(item) }}
           </button>
         </section>
       </aside>
 
-      <aside v-if="recommendation" class="recommend">
-        <div class="rec-head">
-          <strong>{{ t('graph.recommend') }}</strong>
-          <div class="rec-strategy">
-            <button
-              :class="{ on: strategy === 'difficulty' }"
-              @click="switchStrategy('difficulty')"
-            >
-              {{ t('graph.strategyDifficulty') }}
-            </button>
-            <button
-              :class="{ on: strategy === 'coreness' }"
-              @click="switchStrategy('coreness')"
-            >
-              {{ t('graph.strategyCoreness') }}
-            </button>
+      <aside class="recommend" :class="{ 'is-empty': !recommendation }">
+        <template v-if="recommendation">
+          <div class="rec-head">
+            <strong>{{ t('graph.recommend') }}</strong>
+            <div class="rec-strategy">
+              <button
+                :class="{ on: strategy === 'difficulty' }"
+                @click="switchStrategy('difficulty')"
+              >
+                {{ t('graph.strategyDifficulty') }}
+              </button>
+              <button
+                :class="{ on: strategy === 'coreness' }"
+                @click="switchStrategy('coreness')"
+              >
+                {{ t('graph.strategyCoreness') }}
+              </button>
+            </div>
           </div>
-        </div>
-        <p v-if="!recommendation.items.length" class="none">{{ t('graph.noRecommendation') }}</p>
-        <button
-          v-for="item in recommendation.items"
-          :key="item.pointId"
-          class="rec-item"
-          @click="selectById(item.pointId)"
-        >
-          <span class="rec-name">{{ item.name }}</span>
-          <span class="rec-meta">
-            {{ recLabel(item) }} · {{ item.difficulty }}/5
-            <template v-if="item.reviewDue && item.retention != null">
-              · {{ retentionLabel(item.retention) }}
-            </template>
-          </span>
-        </button>
+          <p v-if="!recommendation.items.length" class="none">{{ t('graph.noRecommendation') }}</p>
+          <button
+            v-for="item in recommendation.items"
+            :key="item.pointId"
+            class="rec-item"
+            @click="selectById(item.pointId)"
+          >
+            <span class="rec-name">{{ displayName(nodeById.get(item.pointId) ?? item) }}</span>
+            <span class="rec-meta">
+              {{ recLabel(item) }} · {{ item.difficulty }}/5
+              <template v-if="item.reviewDue && item.retention != null">
+                · {{ retentionLabel(item.retention) }}
+              </template>
+            </span>
+          </button>
+        </template>
+        <p v-else class="none">{{ t('graph.noRecommendation') }}</p>
       </aside>
+      </div>
     </main>
   </div>
 </template>
@@ -644,13 +771,14 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 18px;
-  padding: 16px 26px;
+  padding: calc(16px + env(safe-area-inset-top)) 26px 16px;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--bg-void) 78%, transparent);
 }
 
 .titles {
   flex: 1;
+  min-width: 0;
   text-align: center;
 }
 
@@ -830,6 +958,16 @@ onBeforeUnmount(() => {
   min-height: 0;
   position: relative;
   overflow: hidden;
+}
+
+.graph-viewport {
+  position: absolute;
+  inset: 0;
+}
+
+/* 宽屏:推荐/详情仍是画布上的浮层;panels 不生成盒子 */
+.panels {
+  display: contents;
 }
 
 .canvas {
@@ -1128,6 +1266,13 @@ onBeforeUnmount(() => {
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
 }
 
+/* 桌面端推荐加载失败/无数据时不占画布;手机端保留占位作为左滑起点 */
+@media (min-width: 761px) {
+  .recommend.is-empty {
+    display: none;
+  }
+}
+
 .rec-head {
   display: flex;
   flex-direction: column;
@@ -1182,6 +1327,10 @@ onBeforeUnmount(() => {
 }
 
 .rec-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   color: var(--text-hi);
 }
@@ -1194,32 +1343,99 @@ onBeforeUnmount(() => {
 
 @media (max-width: 760px) {
   .topbar {
-    padding: 12px 14px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+  }
+
+  .titles {
+    order: -1;
+    flex-basis: 100%;
+    text-align: left;
   }
 
   .titles h1 {
     font-size: 16px;
   }
 
+  .titles p {
+    display: none;
+  }
+
   .toolbar {
+    gap: 8px;
     padding: 8px 14px;
   }
 
-  .detail {
-    top: auto;
-    left: 10px;
-    right: 10px;
-    bottom: 10px;
-    width: auto;
-    max-height: 46%;
+  .search {
+    flex: 1 1 100%;
+    min-width: 0;
   }
 
-  .recommend {
-    top: 10px;
-    left: 10px;
-    bottom: auto;
-    width: min(280px, calc(100% - 20px));
-    max-height: 38%;
+  .chapters {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  /* 手机:图谱在上,推荐/详情合并成下方横向滑动窗口 */
+  .stage {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .graph-viewport {
+    position: relative;
+    inset: auto;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .panels {
+    display: flex;
+    flex: none;
+    height: clamp(140px, 38dvh, 360px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--line);
+    scrollbar-width: none;
+  }
+
+  .panels::-webkit-scrollbar {
+    display: none;
+  }
+
+  .panels > .recommend,
+  .panels > .detail {
+    position: relative;
+    inset: auto;
+    flex: 0 0 100%;
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    margin: 0;
+    padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+  }
+
+  /* 视觉顺序固定为「推荐 → 详情」,与 DOM 顺序无关 */
+  .panels > .recommend {
+    order: 0;
+  }
+
+  .panels > .detail {
+    order: 1;
   }
 }
 </style>

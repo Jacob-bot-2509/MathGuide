@@ -474,8 +474,9 @@ onBeforeRouteLeave(() => confirmClose())
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  width: min(640px, calc(100vw - 32px));
+  width: min(640px, calc(100vw - 32px - var(--safe-inline)));
   max-height: min(62vh, calc(100vh - 96px));
+  max-height: min(62dvh, calc(100dvh - 96px));
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 12px;

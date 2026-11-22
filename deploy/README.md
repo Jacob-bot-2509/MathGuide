@@ -243,6 +243,9 @@ python -m locust -f tools/locustfile.py --headless -u 50 -r 10 -t 30s \
 
 浏览器检查:
 
+浏览器检查前,先对照 [REAL-DEVICE-MATRIX.md](REAL-DEVICE-MATRIX.md) 的真机矩阵与修补记录;
+三台设备(荣耀手机、iPad、红米安卓平板)的已修项、待复测项和回归清单都在那里。
+
 - `https://mg.example.com` 证书有效,HSTS 存在
 - 注册必须填邀请码;`123456` 验证码登录返回 400
 - 账号页可导出数据、可注销

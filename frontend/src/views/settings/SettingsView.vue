@@ -182,6 +182,31 @@ function doLogout() {
   font-size: 16px;
 }
 
+@media (max-width: 560px) {
+  .sub {
+    display: none;
+  }
+
+  .row {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+
+  .row-label {
+    min-width: 0;
+  }
+
+  .row-value,
+  .seg {
+    margin-left: auto;
+  }
+
+  :deep(.mg-select) {
+    margin-left: auto;
+  }
+}
+
 .select {
   background: var(--bg-void);
   border: 1px solid var(--line);

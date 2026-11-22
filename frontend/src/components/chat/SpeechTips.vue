@@ -43,6 +43,7 @@ const lang = ref<'zh' | 'en'>(settingsState.language === 'en' ? 'en' : 'zh')
   border-bottom: 1px solid var(--line);
   padding: 12px 22px 14px;
   max-height: 40vh;
+  max-height: 40dvh;
   overflow-y: auto;
 }
 

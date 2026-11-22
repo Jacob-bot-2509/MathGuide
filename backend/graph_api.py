@@ -15,6 +15,7 @@ import auth
 import diagnosis
 import ebbinghaus
 from graph_layout import layout_points
+from knowledge_graph import localization
 from recommendation import MASTERED_SCORE
 
 
@@ -45,15 +46,20 @@ async def graph_data(request: Request) -> JSONResponse:
         score = entry.get("score")
         due, retention, _age = ebbinghaus.review_due(entry.get("at"), score)
         position = layout.get(point.id, {"x": 0, "y": 0, "level": 0})
+        note = localization.english_note(point.id)
         nodes.append({
             "id": point.id,
             "name": point.name,
+            "nameEn": localization.english_name(point.id),
             "chapter": point.chapter,
+            "chapterEn": localization.chapter_en(point.chapter),
             "difficulty": point.difficulty,
             "descendantCount": graph.descendant_count(point.id),
             "prerequisites": list(point.prerequisites),
             "summary": point.summary,
             "keyPoints": list(point.key_points),
+            "summaryEn": note.get("summary", ""),
+            "keyPointsEn": list(note.get("keyPoints") or []),
             "mastery": score,
             "retention": retention,
             "reviewDue": due,
@@ -65,7 +71,14 @@ async def graph_data(request: Request) -> JSONResponse:
         for prereq in point.prerequisites:
             edges.append({"source": prereq, "target": point.id})
 
-    return JSONResponse({"nodes": nodes, "edges": edges, "chapters": chapters})
+    return JSONResponse({
+        "nodes": nodes,
+        "edges": edges,
+        "chapters": chapters,
+        "chaptersEn": {
+            chapter: localization.chapter_en(chapter) for chapter in chapters
+        },
+    })
 
 
 _STATUS_COLOR = {
@@ -85,6 +98,7 @@ async def graph_export(request: Request) -> Response:
     graph = diagnosis.get_graph()
     latest = diagnosis.latest(uid)
     layout = layout_points(graph)
+    english = request.query_params.get("lang") == "en"
 
     # 延迟导入:未安装 pyvis 时不影响主服务启动,只有导出接口不可用
     try:
@@ -98,10 +112,18 @@ async def graph_export(request: Request) -> Response:
         score = latest.get(point.id, {}).get("score")
         status = _status(score)
         position = layout.get(point.id, {"x": 0, "y": 0, "level": 0})
+        label = localization.english_name(point.id) if english else ""
+        label = label or point.name
+        chapter = (
+            localization.chapter_en(point.chapter) if english else "") or point.chapter
+        title = (
+            f"{label}\n{chapter} · Difficulty {point.difficulty}/5"
+            if english else
+            f"{label}\n{chapter} · 难度 {point.difficulty}/5")
         net.add_node(
             point.id,
-            label=point.name,
-            title=f"{point.name}\n{point.chapter} · 难度 {point.difficulty}/5",
+            label=label,
+            title=title,
             x=position["x"],
             y=position["y"],
             physics=False,

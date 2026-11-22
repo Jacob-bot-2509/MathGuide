@@ -290,3 +290,30 @@ def test_system_prompt_mentions_four_buckets():
     assert "forgotten" in en.lower()
     assert "reinforce" in en.lower()
     assert "not learned" in en.lower()
+
+
+def test_english_analysis_uses_localized_names():
+    snapshot = {
+        "coverage": {"diagnosed": 1, "total": 2, "ratio": 0.5,
+                     "frontierTotal": 1, "frontierDiagnosed": 1,
+                     "frontierRatio": 1.0},
+        "buckets": {"mastered": 0, "forgotten": 0, "reinforce": 1, "unlearned": 1},
+        "dataQuality": "ok",
+        "chapters": [{"chapter": "第一章", "chapterEn": "Chapter One",
+                      "diagnosed": 1, "total": 2, "averageScore": 2.0}],
+        "bottlenecks": [{"pointId": "a", "name": "点a", "nameEn": "Point A",
+                         "descendantCount": 1}],
+        "stale": [],
+        "nextSteps": [{"pointId": "a", "name": "点a", "nameEn": "Point A",
+                       "reason": "new"}],
+    }
+    localized = learning_analysis._localized_snapshot(snapshot, zh=False)
+    assert localized["bottlenecks"][0]["name"] == "Point A"
+    assert localized["chapters"][0]["chapter"] == "Chapter One"
+    assert learning_analysis._localized_snapshot(snapshot, zh=True) is snapshot
+
+    report = learning_analysis.fallback_report(snapshot, zh=False)
+    assert "Point A" in report and "Chapter One" in report and "点a" not in report
+
+    prompt = learning_analysis.system_prompt(snapshot, zh=False)
+    assert "Point A" in prompt and "点a" not in prompt

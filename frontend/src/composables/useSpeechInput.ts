@@ -1,5 +1,9 @@
 /** 语音输入:浏览器本地识别 + 「点停即转写」的四档编排。
  *
+ * 优先 Web Speech;浏览器没有 API 或 Google 语音服务不可达(network)时,
+ * 自动切到 MediaRecorder → 16kHz WAV → 后端 /api/speech/transcribe。
+ * 后台 ASR 默认智谱 glm-asr-2512,可用 MG_ASR_PROVIDER=qwen 切 Qwen Omni。
+ *
  * 从 ChatWorkspace 抽出的原因:这一块是自带状态机的独立子系统(识别会话、预热定时器、
  * 转写流序号、输入框回滚),与对话/会话模型无关,却占了组件近 240 行。
  *
@@ -18,7 +22,8 @@ import {
   speechMathConvert,
 } from '@/utils/speechMath'
 import { settingsState, updateSettings } from '@/stores/settings'
-import { speechToMath } from '@/services/chatService'
+import { speechToMath, transcribeSpeech } from '@/services/chatService'
+import { blobToBase64, blobToWav } from '@/utils/wav'
 import { t } from '@/utils/i18n'
 
 /* Web Speech API:results 里的每一项(SpeechRecognitionResult)只有 isFinal,
@@ -65,6 +70,13 @@ export function useSpeechInput(deps: SpeechInputDeps) {
   let sr: ISpeechRecognition | null = null
   let srBaseText = ''
   let srStopToConvert = false // 用户主动点停 → 结束后自动转写数学符号
+  let recorder: MediaRecorder | null = null
+  let recorderStream: MediaStream | null = null
+  let recorderTimer: ReturnType<typeof setTimeout> | null = null
+  let recorderMime = ''
+  let recorderStarting = false
+  let recorderSeq = 0
+  const RECORD_MAX_MS = 29_000
 
   /* 转写提速编排:说话中后台预热(停顿 800ms 起转,结果攒着不打扰输入框)+
      点停 0ms 本地速转先出符号 + LLM 精修流式覆盖;seq 保证新旧转换互不干扰 */
@@ -124,8 +136,180 @@ export function useSpeechInput(deps: SpeechInputDeps) {
     }).cancel
   }
 
+  /** 识别/转写完成后的四档上屏;Web Speech 与录音兜底共用。 */
+  function finalizeSpeech(raw: string): void {
+    if (!raw.trim() || raw === srBaseText) return
+    const cached = cachedConvert(raw)
+    if (cached && cached.source === 'llm') {
+      deps.input.value = cached.text
+      deps.autoGrow()
+    } else if (convRaw === raw && convAcc) {
+      convLive = true
+      // 与①③④同一口径:预热流是 LLM 原始输出(可能含 ^_{}、LaTeX 记号),
+      // 漏掉美化会让同一句话因走哪条路径而长得不一样
+      deps.input.value = beautifyMath(convAcc)
+      deps.autoGrow()
+    } else {
+      const local = cached?.text ?? speechMathConvert(raw)
+      if (!cached) saveConvert(raw, local, 'local')
+      deps.input.value = local
+      deps.autoGrow()
+      startConvert(raw, true)
+    }
+  }
+
+  function cleanupRecorder(): void {
+    if (recorderTimer) {
+      clearTimeout(recorderTimer)
+      recorderTimer = null
+    }
+    if (recorder) {
+      recorder.ondataavailable = null
+      recorder.onstop = null
+      recorder.onerror = null
+      if (recorder.state !== 'inactive') {
+        try { recorder.stop() } catch { /* already stopped */ }
+      }
+      recorder = null
+    }
+    recorderStream?.getTracks().forEach((track) => track.stop())
+    recorderStream = null
+    recorderStarting = false
+  }
+
+  function pickRecorderMime(Recorder: typeof MediaRecorder): string {
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4',
+      'audio/ogg;codecs=opus',
+    ]
+    for (const type of candidates) {
+      if (typeof Recorder.isTypeSupported !== 'function' || Recorder.isTypeSupported(type)) {
+        return type
+      }
+    }
+    return ''
+  }
+
+  async function finishRecording(chunks: Blob[], mime: string, seq: number, base: string): Promise<void> {
+    if (seq !== recorderSeq) return
+    listening.value = false
+    cleanupRecorder()
+    const blob = new Blob(chunks, { type: mime || 'audio/webm' })
+    if (!blob.size) return
+    try {
+      const wav = await blobToWav(blob)
+      if (seq !== recorderSeq) return
+      if (wav.size > 1_600_000) {
+        deps.toast(t('learn.toastTranscribeFail'), 5000)
+        return
+      }
+      const audio = await blobToBase64(wav)
+      if (seq !== recorderSeq) return
+      const language = settingsState.language === 'en' ? 'en' : 'zh'
+      const { text } = await transcribeSpeech(audio, 'wav', language)
+      if (seq !== recorderSeq) return
+      if (!text.trim()) {
+        deps.toast(t('learn.toastNoVoice'))
+        return
+      }
+      if (deps.input.value !== base) {
+        deps.input.value += text
+        deps.autoGrow()
+        return
+      }
+      deps.input.value = base + text
+      deps.autoGrow()
+      finalizeSpeech(deps.input.value)
+    } catch {
+      if (seq === recorderSeq) deps.toast(t('learn.toastTranscribeFail'), 5000)
+    }
+  }
+
+  /** 浏览器没有 Web Speech 时的兜底:MediaRecorder → WAV → 后端 ASR。 */
+  async function startRecorder(): Promise<void> {
+    if (recorderStarting) return
+    const Recorder = (window as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
+    if (!Recorder || !navigator.mediaDevices?.getUserMedia) {
+      deps.toast(t('learn.toastNoSR'))
+      return
+    }
+    const seq = ++recorderSeq
+    recorderStarting = true
+    // 先点亮麦克风:getUserMedia 的权限弹窗/系统响应可能很慢,
+    // 原先要等它 resolve 才改 listening,用户会以为按钮没反应。
+    listening.value = true
+    deps.toast(t('learn.listening'), 1500)
+    let request: Promise<MediaStream> | null = null
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      request = navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await Promise.race([
+        request,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('microphone timeout')), 8000)
+        }),
+      ])
+      if (seq !== recorderSeq) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
+      recorderStream = stream
+      recorderMime = pickRecorderMime(Recorder)
+      recorder = new Recorder(stream, recorderMime ? { mimeType: recorderMime } : undefined)
+      const chunks: Blob[] = []
+      const mime = recorderMime
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) chunks.push(event.data)
+      }
+      recorder.onerror = () => {
+        listening.value = false
+        cleanupRecorder()
+        deps.toast(t('learn.toastNoVoice'))
+      }
+      const base = deps.input.value
+      recorder.onstop = () => { void finishRecording(chunks, mime, seq, base) }
+      srBaseText = base
+      cancelConvert()
+      recorder.start()
+      listening.value = true
+      recorderTimer = setTimeout(() => {
+        if (recorder?.state === 'recording') recorder.stop()
+      }, RECORD_MAX_MS)
+    } catch (err) {
+      // 超时后 getUserMedia 仍可能晚到:拿到后立刻关掉,不让麦克风在后台常亮
+      void request?.then((stream) => {
+        stream.getTracks().forEach((track) => track.stop())
+      }).catch(() => {})
+      if (seq !== recorderSeq) return
+      cleanupRecorder()
+      listening.value = false
+      const name = (err as { name?: string } | null)?.name
+      deps.toast(
+        name === 'NotAllowedError' || name === 'SecurityError'
+          ? t('learn.toastMicDenied')
+          : t('learn.toastNoVoice'),
+        4000,
+      )
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      if (seq === recorderSeq) recorderStarting = false
+    }
+  }
+
   function toggleMic() {
+    if (recorderStarting) {
+      recorderSeq += 1
+      cleanupRecorder()
+      listening.value = false
+      return
+    }
     if (listening.value) {
+      if (recorder) {
+        try { recorder.stop() } catch { /* already stopped */ }
+        return
+      }
       srStopToConvert = true
       sr?.stop()
       return
@@ -134,12 +318,20 @@ export function useSpeechInput(deps: SpeechInputDeps) {
       deps.toast(t('learn.toastVoiceDenied'))
       return
     }
+    // Web Speech API 只在安全上下文可用;HTTP 局域网下权限可能显示已允许,
+    // 但识别器拿不到音频。先给明确原因,别让用户以为是麦克风坏了。
+    if (!window.isSecureContext) {
+      deps.toast(t('learn.toastVoiceInsecure'), 6000)
+      return
+    }
+    recorderSeq += 1
     const Ctor = getSR()
     if (!Ctor) {
-      deps.toast(t('learn.toastNoSR'))
+      void startRecorder()
       return
     }
     sr = new Ctor()
+    const recognition = sr
     sr.lang = settingsState.language === 'en' ? 'en-US' : 'zh-CN'
     sr.interimResults = true
     sr.continuous = true
@@ -147,6 +339,7 @@ export function useSpeechInput(deps: SpeechInputDeps) {
     convWarmDone = false
     cancelConvert() // 清理上一次语音遗留的转写流
     sr.onresult = (e) => {
+      if (sr !== recognition) return
       let final = ''
       let interim = ''
       for (let i = 0; i < e.results.length; i++) {
@@ -170,6 +363,7 @@ export function useSpeechInput(deps: SpeechInputDeps) {
       }, 800)
     }
     sr.onend = () => {
+      if (sr !== recognition) return
       listening.value = false
       if (convDebounce) {
         clearTimeout(convDebounce)
@@ -182,29 +376,11 @@ export function useSpeechInput(deps: SpeechInputDeps) {
       // ④ LLM 后台精修无感覆盖(结果回写缓存)。
       if (srStopToConvert) {
         srStopToConvert = false
-        const raw = deps.input.value
-        if (raw.trim() && raw !== srBaseText) {
-          const cached = cachedConvert(raw)
-          if (cached && cached.source === 'llm') {
-            deps.input.value = cached.text
-            deps.autoGrow()
-          } else if (convRaw === raw && convAcc) {
-            convLive = true
-            // 与①③④同一口径:预热流是 LLM 原始输出(可能含 ^_{}、LaTeX 记号),
-            // 漏掉美化会让同一句话因走哪条路径而长得不一样
-            deps.input.value = beautifyMath(convAcc)
-            deps.autoGrow()
-          } else {
-            const local = cached?.text ?? speechMathConvert(raw)
-            if (!cached) saveConvert(raw, local, 'local')
-            deps.input.value = local
-            deps.autoGrow()
-            startConvert(raw, true)
-          }
-        }
+        finalizeSpeech(deps.input.value)
       }
     }
     sr.onerror = (e) => {
+      if (sr !== recognition) return
       listening.value = false
       if (e.error === 'aborted') return
       // 麦克风权限被拒(not-allowed / service-not-allowed)单独提示
@@ -212,14 +388,23 @@ export function useSpeechInput(deps: SpeechInputDeps) {
         deps.toast(t('learn.toastMicDenied'), 3600)
         return
       }
-      // 安卓设备的识别走 Google 语音服务,国内网络不通时上报 network
-      deps.toast(e.error === 'network' ? t('learn.toastVoiceNetwork') : t('learn.toastNoVoice'))
+      // 安卓设备的识别走 Google 语音服务,国内网络不通时上报 network;
+      // 不再让用户卡在“有权限但没反应”,直接切到录音 + 后端 ASR。
+      if (e.error === 'network') {
+        deps.toast(t('learn.toastVoiceFallback'), 3600)
+        sr = null
+        void startRecorder()
+        return
+      }
+      deps.toast(t('learn.toastNoVoice'))
     }
     listening.value = true
     try {
       sr.start()
     } catch {
       listening.value = false
+      // 识别器同步拒绝启动时原先静默复位,用户只看到麦克风闪一下
+      deps.toast(t('learn.toastNoVoice'))
     }
   }
 
@@ -231,7 +416,12 @@ export function useSpeechInput(deps: SpeechInputDeps) {
 
   /** 离开页面:停掉识别、清掉预热/转写定时器,避免后台还在烧麦克风 */
   function dispose() {
-    sr?.stop()
+    recorderSeq += 1
+    const recognition = sr
+    sr = null
+    recognition?.stop()
+    cleanupRecorder()
+    listening.value = false
     cancelConvert()
     if (convDebounce) {
       clearTimeout(convDebounce)

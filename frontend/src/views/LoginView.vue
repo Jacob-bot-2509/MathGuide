@@ -274,7 +274,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: calc(24px + env(safe-area-inset-top)) 24px
+    calc(24px + env(safe-area-inset-bottom));
   position: relative;
 }
 
@@ -575,5 +576,16 @@ onBeforeUnmount(() => {
   border-top-color: var(--cyan);
   border-radius: 50%;
   animation: mg-spin 0.8s linear infinite;
+}
+
+@media (max-width: 480px) {
+  .login {
+    padding: calc(16px + env(safe-area-inset-top)) 16px
+      calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .panel {
+    padding: 26px 18px 22px;
+  }
 }
 </style>

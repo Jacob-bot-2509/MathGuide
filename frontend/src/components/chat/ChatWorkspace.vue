@@ -574,6 +574,15 @@ function blocksOf(text: string): string[] {
 }
 
 /** 消息正文按图解锚点切成文本/图块;文本仍走稳定块渲染。 */
+function isWelcomeMessage(msg: ChatMsg): boolean {
+  if (msg.role !== 'assistant') return false
+  return Boolean(msg.welcome)
+    || /^\*\*(欢迎回到|Welcome (?:back )?to) MATHGUIDE/.test(msg.content.trim())
+}
+
+const welcomeText = computed(() =>
+  t(isResearch.value ? 'learn.welcomeResearch' : 'learn.welcome'))
+
 function messageBlocks(msg: ChatMsg): Array<{
   key: string
   kind: 'text' | 'diagram'
@@ -586,7 +595,8 @@ function messageBlocks(msg: ChatMsg): Array<{
     text?: string
     diagram?: DiagramBlock
   }> = []
-  splitMessageBlocks(msg.content, msg.diagrams).forEach((segment, si) => {
+  const content = isWelcomeMessage(msg) ? welcomeText.value : msg.content
+  splitMessageBlocks(content, msg.diagrams).forEach((segment, si) => {
     if (segment.kind === 'diagram') {
       out.push({ key: `d-${si}-${segment.diagram.id}`, kind: 'diagram', diagram: segment.diagram })
       return
@@ -867,7 +877,7 @@ function runCommand(cmd: string) {
 /** 在分析面板点「让 MG 分析」:关闭面板,把分析请求发进聊天流。 */
 function runLearningAnalysis() {
   activePanel.value = null
-  const text = cmdDefault('学习分析') || '分析我的学习进度'
+  const text = t('analysis.askPrompt') || cmdDefault('学习分析') || '分析我的学习进度'
   send(text, '学习分析')
 }
 
@@ -1462,7 +1472,7 @@ const {
 
 function greet() {
   const session = activeSession.value ?? createSession()
-  const reply: ChatMsg = { id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true }
+  const reply: ChatMsg = { id: nextMsgId(), role: 'assistant', content: '', streaming: true, thinking: true, welcome: true }
   session.messages.push(reply)
   // 欢迎语是罐头文案:零延迟立即请求,配合首帧立即上屏 → 进入面板即刻出字。
   // live 取数组里的响应式代理:流式回调改它的字段,界面才会实时刷新
@@ -2239,7 +2249,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px 22px;
+  padding: calc(12px + env(safe-area-inset-top)) 22px 12px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-panel);
   backdrop-filter: blur(8px);
@@ -2266,6 +2276,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
 .title {
@@ -2689,14 +2700,14 @@ onBeforeUnmount(() => {
   position: relative; /* 问题记录面板与附件弹层以此为定位锚点 */
   border-top: 1px solid var(--line);
   background: var(--bg-panel);
-  padding: 12px 22px 14px;
+  padding: 12px 22px calc(14px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
 .workspace-body.with-focus .input-bar {
-  padding: 8px 12px 10px;
+  padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
   gap: 6px;
 }
 
@@ -2825,6 +2836,7 @@ onBeforeUnmount(() => {
 
 .input {
   flex: 1;
+  min-width: 0;
   resize: none;
   background: var(--bg-card);
   border: 1px solid var(--line);
@@ -3019,7 +3031,8 @@ onBeforeUnmount(() => {
 }
 
 .paper-imp {
-  min-width: 240px;
+  min-width: 0;
+  max-width: 100%;
   margin-bottom: 6px;
   padding: 10px;
   border: 1px solid var(--line-bright);
@@ -3325,6 +3338,63 @@ onBeforeUnmount(() => {
 
   .voice-label {
     display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .chat-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: calc(8px + env(safe-area-inset-top)) 10px 8px;
+  }
+
+  .chat-header .badge,
+  .chat-header .sub {
+    display: none;
+  }
+
+  .title {
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .right {
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .session-chip {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-list {
+    padding: 14px 12px;
+  }
+
+  .bubble {
+    max-width: 92%;
+  }
+
+  .input-bar {
+    padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .input-row {
+    gap: 8px;
+  }
+
+  .diagram-toggle {
+    padding: 11px 8px;
+  }
+
+  .send {
+    padding: 11px 16px;
   }
 }
 </style>

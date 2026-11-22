@@ -46,7 +46,7 @@ const router = useRouter()
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 16px 26px;
+  padding: calc(16px + env(safe-area-inset-top)) 26px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-panel);
 }
@@ -88,5 +88,24 @@ const router = useRouter()
   margin: 24px 0 10px;
   font-size: 11px;
   color: var(--text-dim);
+}
+
+@media (max-width: 560px) {
+  .head {
+    gap: 10px;
+    padding: calc(12px + env(safe-area-inset-top)) 14px 12px;
+  }
+
+  .title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+  }
+
+  .body {
+    padding: 18px 14px calc(40px + env(safe-area-inset-bottom));
+  }
 }
 </style>

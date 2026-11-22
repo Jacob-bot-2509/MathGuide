@@ -117,6 +117,7 @@ const paperDiagram = computed(() => props.structure
   flex: none;
   min-height: 0;
   height: 100%;
+  padding-bottom: env(safe-area-inset-bottom);
   background: var(--bg-panel);
   border-left: 1px solid var(--line);
 }

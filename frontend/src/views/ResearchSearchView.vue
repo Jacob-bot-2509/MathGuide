@@ -2189,4 +2189,78 @@ onMounted(async () => {
 .lp-candidates .lit-pdf {
   text-align: left;
 }
+
+@media (max-width: 760px) {
+  .rs-head {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+  }
+
+  .title-box {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .title {
+    font-size: 14px;
+  }
+
+  .head-right {
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  .rs-main {
+    width: calc(100% - 28px);
+    padding: 14px 0 calc(32px + env(safe-area-inset-bottom));
+  }
+
+  .rs-main.embedded {
+    width: 100%;
+    padding: 12px 12px calc(24px + env(safe-area-inset-bottom));
+  }
+
+  .search-box,
+  .panel {
+    padding: 12px;
+  }
+
+  .search-row {
+    flex-wrap: wrap;
+  }
+
+  .search-input {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .search-btn {
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 16px;
+  }
+
+  .opts,
+  .lit-filters {
+    gap: 10px;
+  }
+
+  .lit-filters .adv-input.field-select,
+  .project-filter {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .stat {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .hit-head,
+  .lp-actions {
+    flex-wrap: wrap;
+  }
+}
 </style>

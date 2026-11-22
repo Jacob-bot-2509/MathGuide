@@ -359,8 +359,8 @@ onBeforeUnmount(() => {
 
 .skip {
   position: fixed;
-  top: 14px;
-  right: 18px;
+  top: calc(14px + env(safe-area-inset-top));
+  right: calc(18px + env(safe-area-inset-right));
   z-index: 5;
   opacity: 0;
   background: transparent;

@@ -137,13 +137,20 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: calc(16px + env(safe-area-inset-top))
+    calc(16px + env(safe-area-inset-right))
+    calc(16px + env(safe-area-inset-bottom))
+    calc(16px + env(safe-area-inset-left));
   background: rgba(2, 8, 18, 0.66);
   backdrop-filter: blur(3px);
 }
 
 .fm-panel {
   width: min(620px, calc(100vw - 32px));
+  width: min(620px, 100%);
   max-height: 78vh;
+  max-height: 78dvh;
+  max-height: min(78dvh, 100%);
   overflow-y: auto;
   background: var(--bg-panel);
   border: 1px solid var(--line);
