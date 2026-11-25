@@ -25,6 +25,7 @@ import {
   type ExpiredEntry,
   type InstanceStatus,
   type RepeatMode,
+  type TodoAnchor,
   type TodoTask,
 } from '../utils/todoTime'
 
@@ -65,6 +66,7 @@ export interface TodoDraftInput {
   time: string
   repeat: RepeatMode
   weekdays: number[]
+  anchor?: TodoAnchor
 }
 
 function emptyData(): TodoData {
@@ -304,6 +306,7 @@ export function saveTask(input: TodoDraftInput, editingId?: string | null, now: 
     paused: existing?.paused ?? false,
     createdAt: existing?.createdAt ?? stamp,
     updatedAt: stamp,
+    anchor: input.anchor ?? existing?.anchor,
   }
   if (existing) {
     Object.assign(existing, task)

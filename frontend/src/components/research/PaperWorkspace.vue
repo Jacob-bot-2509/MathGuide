@@ -4,8 +4,19 @@
  * 对话只在本篇论文内检索;关闭后聊天记录丢弃,页码与批注保留。
  */
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { t } from '@/utils/i18n'
 import { showToast } from '@/utils/toast'
+import { settingsState } from '@/stores/settings'
+import {
+  MAX_COMPARE_DOCS,
+  compareIds,
+  hasCompareId,
+  toggleCompareId,
+} from '@/stores/compareQueue'
+import { saveTask, setTodoWorkspace } from '@/stores/todo'
+import { dateKeyOf, pad2 } from '@/utils/todoTime'
+import { crossWorkspaceHref } from '@/utils/workspace'
 import { usePaperChat } from '@/composables/usePaperChat'
 import MathText from '@/components/chat/MathText.vue'
 import DiagramBlockView from '@/components/diagram/DiagramBlock.vue'
@@ -28,6 +39,81 @@ import {
 
 const props = defineProps<{ docId: string }>()
 const emit = defineEmits<{ close: [] }>()
+const router = useRouter()
+
+const inCompare = computed(() => hasCompareId(currentId.value))
+
+function toggleCompareCurrent(): void {
+  if (!currentId.value) return
+  if (!toggleCompareId(currentId.value)) {
+    showToast(t('stage.compareHint'))
+  }
+}
+
+/** R3 增强:保留三栏专注精读,同时支持一键把当前论文与页码转入主科研工作台继续综合 */
+async function handoffToMainWorkbench(): Promise<void> {
+  const docId = currentId.value
+  const docTitle = currentDoc.value?.title || currentDoc.value?.name || docId
+  await flushProgress()
+  const payload = { workspace: 'research', sessionId: 0, docId, docTitle }
+  try {
+    sessionStorage.setItem('mg-jump-session', JSON.stringify(payload))
+  } catch {
+    /* 忽略 */
+  }
+  emit('close')
+  window.dispatchEvent(new CustomEvent('mg:jump-session', { detail: payload }))
+}
+
+function pinPaperNoteToTodo(msg: Msg): void {
+  const q = previousQuestion(msg)
+  const paperTitle = currentDoc.value?.title || currentDoc.value?.name || currentId.value
+  const next = new Date(Date.now() + 60 * 60 * 1000)
+  next.setSeconds(0, 0)
+  setTodoWorkspace('research')
+  saveTask({
+    content: `${q || msg.content.slice(0, 60)} — 《${paperTitle}》 p.${lastPage.value}`.slice(0, 280),
+    date: dateKeyOf(next),
+    time: `${pad2(next.getHours())}:${pad2(next.getMinutes())}`,
+    repeat: 'once',
+    weekdays: [],
+    anchor: {
+      kind: 'paper',
+      id: currentId.value,
+      page: lastPage.value || 1,
+      label: `${paperTitle} · p.${lastPage.value || 1}`,
+    },
+  })
+  showToast(t('research.pinnedTodo'))
+}
+
+/** 以研促学:在精读论文时把难懂推导/定理带入学习辅助做教学级拆解与图解 */
+function studyPrerequisitesFromPaper(msg: Msg): void {
+  const q = previousQuestion(msg)
+  const paperTitle = currentDoc.value?.title || currentDoc.value?.name || ''
+  const excerpt = msg.content.replace(/\s+/g, ' ').trim().slice(0, 260)
+  const prompt = settingsState.language === 'en'
+    ? `I encountered a difficult derivation while reading "${paperTitle}". Please break down the prerequisite undergraduate/graduate mathematical theory step by step with intuition and diagrams.\n\nOriginal question: ${q}\nExcerpt: ${excerpt}`
+    : `我在精读论文《${paperTitle}》时遇到了较难理解的推导，请帮我系统梳理其中的前置基础数学理论，并用教学级步骤与直观图解讲透：\n\n原问题：${q}\n相关推导摘录：${excerpt}`
+  try {
+    sessionStorage.setItem('mg-learn-seed', prompt)
+    sessionStorage.setItem('mg-learn-origin', JSON.stringify({
+      workspace: 'research',
+      sessionId: 0,
+      docId: currentId.value,
+      label: paperTitle.slice(0, 60),
+    }))
+  } catch {
+    /* 忽略隐私模式限制 */
+  }
+  const href = crossWorkspaceHref('learn', '/learn')
+  if (href !== '/learn') {
+    window.location.assign(href)
+    return
+  }
+  finishClose()
+  void router.push('/learn')
+}
 
 const docs = ref<ResearchDoc[]>([])
 const currentId = ref(props.docId)
@@ -343,6 +429,9 @@ function send(): void {
     workspace: 'research',
     paperId: currentId.value,
     history,
+    profile: settingsState.researchProfile === 'standard'
+      ? undefined
+      : settingsState.researchProfile,
   })
 }
 
@@ -394,6 +483,18 @@ onBeforeUnmount(() => {
       <span class="pw-spacer"></span>
       <button
         class="pw-btn"
+        :class="{ on: inCompare }"
+        type="button"
+        :title="t('stage.compareHint')"
+        @click="toggleCompareCurrent"
+      >{{ inCompare ? `${t('stage.inCompare')} (${compareIds.length}/${MAX_COMPARE_DOCS})` : t('stage.addCompare') }}</button>
+      <button
+        class="pw-btn"
+        type="button"
+        @click="handoffToMainWorkbench"
+      >{{ t('research.toMainWorkbench') }}</button>
+      <button
+        class="pw-btn"
         :class="{ on: showInsights }"
         type="button"
         @click="toggleInsights"
@@ -430,14 +531,29 @@ onBeforeUnmount(() => {
                     <DiagramBlockView :spec="block.diagram.spec" />
                   </DiagramBoundary>
                 </template>
-                <button
-                  v-if="m.content && !m.streaming && previousQuestion(m)
-                    && !hasDiagram(m)"
-                  class="pw-diagram-btn"
-                  type="button"
-                  :disabled="diagramBusy === m.id"
-                  @click.stop="requestDiagram(m)"
-                >{{ diagramBusy === m.id ? t('diagram.generating') : t('diagram.generate') }}</button>
+                <div
+                  v-if="m.content && !m.streaming && previousQuestion(m)"
+                  class="pw-msg-actions"
+                >
+                  <button
+                    v-if="!hasDiagram(m)"
+                    class="pw-diagram-btn"
+                    type="button"
+                    :disabled="diagramBusy === m.id"
+                    @click.stop="requestDiagram(m)"
+                  >{{ diagramBusy === m.id ? t('diagram.generating') : t('diagram.generate') }}</button>
+                  <button
+                    class="pw-diagram-btn pw-prereq-btn"
+                    type="button"
+                    :title="t('research.studyPrereqHint')"
+                    @click.stop="studyPrerequisitesFromPaper(m)"
+                  >{{ t('research.studyPrereq') }}</button>
+                  <button
+                    class="pw-diagram-btn"
+                    type="button"
+                    @click.stop="pinPaperNoteToTodo(m)"
+                  >{{ t('research.pinTodo') }}</button>
+                </div>
                 <span v-if="m.streaming" class="pw-cursor">▍</span>
               </template>
               <template v-else>{{ m.content }}</template>
@@ -503,7 +619,7 @@ onBeforeUnmount(() => {
   z-index: 1100;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  background: color-mix(in srgb, var(--bg-void) 78%, transparent);
   border: 1px solid var(--line-bright);
   border-radius: 10px;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
@@ -656,15 +772,26 @@ onBeforeUnmount(() => {
   color: var(--text-dim);
 }
 
+.pw-msg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
 .pw-diagram-btn {
-  margin-top: 6px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 10px;
-  padding: 2px 9px;
+  font-size: 11px;
+  padding: 3px 9px;
   cursor: pointer;
+}
+
+.pw-prereq-btn {
+  color: var(--accent-primary);
+  border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--line));
 }
 
 .pw-diagram-btn:hover {
@@ -735,7 +862,7 @@ onBeforeUnmount(() => {
 }
 
 .pw-send.stop {
-  color: #ff8a8a;
+  color: var(--danger);
   border-color: rgba(255, 138, 138, 0.45);
 }
 

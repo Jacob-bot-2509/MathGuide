@@ -28,6 +28,7 @@ import { t } from '@/utils/i18n'
 import { settingsState } from '@/stores/settings'
 import { showToast } from '@/utils/toast'
 import { downloadBlob } from '@/services/docService'
+import { crossWorkspaceHref } from '@/utils/workspace'
 
 const router = useRouter()
 const route = useRoute()
@@ -467,6 +468,27 @@ function goLearn(node: GraphNode) {
   })
 }
 
+/** 学以致研:携带该知识点的中英文规范术语直达科研区发起前沿文献检索。 */
+function goResearch(node: GraphNode) {
+  const en = node.nameEn || node.name
+  const zh = node.name
+  const term = en !== zh ? `${zh} (${en})` : zh
+  const prompt = settingsState.language === 'en'
+    ? `Survey recent research literature and key modern extensions/applications of "${term}" (chapter: ${chapterLabel(node.chapter)}). Provide numbered citations.`
+    : `请围绕「${term}」（所属章节：${chapterLabel(node.chapter)}）检索近期前沿研究文献、代表性理论拓展与现代应用场景，并给出带编号的学术引用。`
+  try {
+    sessionStorage.setItem('mg-research-seed', prompt)
+  } catch {
+    /* 忽略隐私模式限制 */
+  }
+  const href = crossWorkspaceHref('research', '/research')
+  if (href !== '/research') {
+    window.location.assign(href)
+    return
+  }
+  router.push('/research')
+}
+
 function statusLabel(status: GraphNode['status']): string {
   if (status === 'mastered') return t('graph.legendMastered')
   if (status === 'weak') return t('graph.legendWeak')
@@ -681,7 +703,10 @@ onBeforeUnmount(() => {
             <li v-for="item in keyPointTexts(selected)" :key="item"><MathText :text="item" /></li>
           </ul>
           <p v-else-if="!summaryText(selected)" class="none">{{ t('graph.noSummary') }}</p>
-          <button class="go-learn" @click="goLearn(selected)">{{ t('graph.goLearn') }}</button>
+          <div class="detail-actions">
+            <button class="go-learn" @click="goLearn(selected)">{{ t('graph.goLearn') }}</button>
+            <button class="go-research" @click="goResearch(selected)">{{ t('graph.goResearch') }}</button>
+          </div>
         </section>
 
         <section>
@@ -1206,21 +1231,44 @@ onBeforeUnmount(() => {
   margin-bottom: 4px;
 }
 
-.go-learn {
+.detail-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.go-learn,
+.go-research {
   width: 100%;
-  margin-top: 6px;
+  min-height: 36px;
   padding: 8px 10px;
-  border: 1px solid var(--line-bright);
   border-radius: 7px;
-  background: rgba(77, 214, 255, 0.1);
-  color: var(--cyan);
   font-family: var(--font-ui);
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.go-learn {
+  border: 1px solid var(--line-bright);
+  background: color-mix(in srgb, var(--accent-primary) 12%, var(--bg-card));
+  color: var(--accent-primary);
 }
 
 .go-learn:hover {
-  box-shadow: var(--glow-cyan);
+  background: color-mix(in srgb, var(--accent-primary) 20%, var(--bg-card));
+}
+
+.go-research {
+  border: 1px solid color-mix(in srgb, var(--accent-cite) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent-cite) 12%, var(--bg-card));
+  color: var(--accent-cite);
+}
+
+.go-research:hover {
+  background: color-mix(in srgb, var(--accent-cite) 20%, var(--bg-card));
 }
 
 .rating {

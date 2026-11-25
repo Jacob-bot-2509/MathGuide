@@ -16,6 +16,13 @@ export type InstanceStatus =
   | 'paused'       // 已暂停
   | 'upcoming'     // 未到开始日期 / 今天不重复
 
+export interface TodoAnchor {
+  kind: 'paper' | 'table' | 'session'
+  id: string
+  page?: number
+  label: string
+}
+
 export interface TodoTask {
   id: string
   content: string
@@ -30,6 +37,8 @@ export interface TodoTask {
   paused: boolean
   createdAt: number
   updatedAt: number
+  /** 可选溯源锚点:用于从科研待办一键还原论文页/数据表/会话现场 */
+  anchor?: TodoAnchor
 }
 
 export interface ExpiredEntry {

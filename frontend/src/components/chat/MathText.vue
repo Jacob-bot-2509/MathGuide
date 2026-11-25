@@ -467,18 +467,27 @@ export default defineComponent({
 .math-text {
   white-space: pre-wrap;
   word-break: break-word;
+  line-height: 1.82;
+}
+
+.math-text :deep(strong),
+.math-text strong {
+  color: var(--text-hi);
+  font-weight: 600;
 }
 
 .seg-code {
   display: block;
-  background: rgba(5, 8, 14, 0.7);
+  background: var(--surface-1);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px 14px;
-  margin: 8px 0;
+  padding: 11px 14px;
+  margin: 10px 0;
   overflow-x: auto;
+  color: var(--text-hi);
   font-family: var(--font-tech);
   font-size: 13px;
+  line-height: 1.65;
 }
 
 .seg-math {
@@ -494,8 +503,9 @@ export default defineComponent({
 
 /* 可点击链接(引用跳转) */
 .seg-link {
-  color: var(--cyan);
+  color: var(--accent-cite);
   text-decoration: underline;
+  text-underline-offset: 2px;
   word-break: break-all;
 }
 
@@ -506,11 +516,11 @@ export default defineComponent({
 /* 可点击章节胶囊(章节导航列表) */
 .seg-cmd {
   display: inline-block;
-  margin: 2px 4px 2px 0;
-  padding: 3px 12px;
+  margin: 3px 6px 3px 0;
+  padding: 4px 12px;
   border: 1px solid var(--line-bright);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--cyan) 8%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--cyan) 8%, var(--surface-1));
   color: var(--cyan);
   font-size: 13px;
   cursor: pointer;
@@ -518,8 +528,8 @@ export default defineComponent({
 }
 
 .seg-cmd:hover {
-  background: color-mix(in srgb, var(--cyan) 18%, transparent);
-  box-shadow: var(--glow-cyan);
+  background: color-mix(in srgb, var(--cyan) 16%, var(--surface-1));
+  box-shadow: var(--focus-ring);
 }
 
 /* 「返回」按钮行:章节指引末尾右对齐的醒目黄框 */
@@ -531,54 +541,55 @@ export default defineComponent({
 
 .back-btn {
   padding: 4px 16px;
-  border: 1px solid #ffd166;
-  border-radius: 6px;
-  background: rgba(255, 209, 102, 0.12);
-  color: #ffd166;
+  border: 1px solid color-mix(in srgb, var(--warn) 65%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
   font-size: 12px;
   cursor: pointer;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   transition: all var(--dur-fast) var(--ease-out);
 }
 
 .back-btn:hover {
-  background: rgba(255, 209, 102, 0.25);
-  box-shadow: 0 0 10px rgba(255, 209, 102, 0.4);
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
 }
 
 /* 分隔线(正文与引用区之间) */
 .seg-hr {
   border: none;
   border-top: 1px solid var(--line);
-  margin: 12px 0;
+  margin: 14px 0;
 }
 
 .seg-table-wrap {
-  margin: 10px 0;
+  margin: 12px 0;
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
+  background: var(--surface-1);
 }
 
 .seg-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.6;
+  font-variant-numeric: tabular-nums;
 }
 
 .seg-table th,
 .seg-table td {
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--line);
   vertical-align: top;
 }
 
 .seg-table th {
-  color: var(--cyan);
+  color: var(--text-hi);
   font-weight: 600;
   white-space: nowrap;
-  background: color-mix(in srgb, var(--cyan) 6%, transparent);
+  background: color-mix(in srgb, var(--cyan) 7%, var(--surface-1));
 }
 
 .seg-table tbody tr:last-child td {
@@ -589,20 +600,27 @@ export default defineComponent({
   white-space: nowrap;
 }
 
-/* 引用区:小字、醒目、可跳转(回答末尾的来源列表) */
+/* 引用区:学术脚注/来源溯源块 */
 .seg-quote {
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 12.5px;
+  line-height: 1.65;
   color: var(--text-dim);
-  border-left: 2px solid color-mix(in srgb, var(--cyan) 55%, transparent);
-  padding-left: 10px;
-  margin: 4px 0;
+  border-left: 2px solid color-mix(in srgb, var(--accent-cite) 70%, transparent);
+  background: color-mix(in srgb, var(--accent-cite) 6%, transparent);
+  border-radius: 0 6px 6px 0;
+  padding: 6px 12px;
+  margin: 6px 0;
   word-break: break-word;
 }
 
+/* 块级公式:论文级独立居中公式框 */
 .seg-mathd {
   display: block;
-  margin: 10px 0;
+  margin: 12px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-1);
   overflow-x: auto;
 }
 </style>

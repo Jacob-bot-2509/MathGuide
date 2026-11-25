@@ -29,6 +29,7 @@ import CategoryPanel from '@/components/chat/CategoryPanel.vue'
 import ResearchScopePanel from '@/components/chat/ResearchScopePanel.vue'
 import ResearchArchivePanel from '@/components/chat/ResearchArchivePanel.vue'
 import PaperWorkspace from '@/components/research/PaperWorkspace.vue'
+import PaperInsights from '@/components/research/PaperInsights.vue'
 import PaperImportPrompt from '@/components/research/PaperImportPrompt.vue'
 import TodoPanel from '@/components/chat/TodoPanel.vue'
 import AnalysisPanel from '@/components/chat/AnalysisPanel.vue'
@@ -44,8 +45,20 @@ import {
   requestIntuition,
   type ChatMeta,
 } from '@/services/chatService'
-import { getResearchTable } from '@/services/researchTableService'
-import { getResearchDocMeta, uploadTempPaper, type PaperAction, type ResearchDoc } from '@/services/researchService'
+import { createResearchTable, getResearchTable } from '@/services/researchTableService'
+import {
+  compareResearchDocs,
+  downloadResearchReport,
+  generateResearchDocInsights,
+  getResearchDocInsights,
+  getResearchDocMeta,
+  listResearchProjects,
+  uploadTempPaper,
+  type PaperAction,
+  type PaperStructure,
+  type ResearchDoc,
+  type ResearchProject,
+} from '@/services/researchService'
 import { deletePaperHistory, importTempPaper } from '@/services/literatureService'
 import { downloadBlob, exportSurveyPdf } from '@/services/docService'
 import { CATEGORIES, DISPLAY_KEYS, FALLBACK_CATEGORY, categoryByKey, classifyQuestion, isChitchat } from '@/utils/classifier'
@@ -55,6 +68,15 @@ import { historyQa } from '@/utils/docHistory'
 import { detectAmbiguous, topicById, type AmbiguousOption } from '@/utils/ambiguous'
 import { usePaperChat } from '@/composables/usePaperChat'
 import { settingsState } from '@/stores/settings'
+import {
+  clearCompareIds,
+  compareIds,
+  hasCompareId,
+  toggleCompareId,
+} from '@/stores/compareQueue'
+import { activeProjectId, setActiveProjectId } from '@/stores/researchProject'
+import { saveTask } from '@/stores/todo'
+import { dateKeyOf, pad2 } from '@/utils/todoTime'
 import { isAllSelected, scopeForRequest, selectedSources } from '@/stores/researchScope'
 import {
   MAX_SESSIONS,
@@ -75,6 +97,7 @@ import { useChatStream } from '@/composables/useChatStream'
 import { useResearchSplit } from '@/composables/useResearchSplit'
 import { useDiagramFocus } from '@/composables/useDiagramFocus'
 import { SPLIT_MIN_WIDTH } from '@/utils/splitPane'
+import { crossWorkspaceHref, hostWorkspace } from '@/utils/workspace'
 
 const props = withDefaults(defineProps<{ workspace?: Workspace }>(), { workspace: 'learn' })
 
@@ -133,6 +156,13 @@ const tableContext = ref<{
   id: string; title: string; regression?: RegressionSpec
 } | null>(null)
 const researchDiagrams = ref(false)
+/** 科研区显式独立双角色低温复核开关(真实二阶段复核,非提示词人设) */
+const researchVerify = ref(false)
+/** 由结构化工作流(如对比表→挖掘研究缺口)触发的一次性后端 profile */
+const pendingProfileOnce = ref('')
+/** 课题上下文透镜 */
+const researchProjects = ref<ResearchProject[]>([])
+const exportingReport = ref(false)
 
 function onPaperChange(paper: { docId: string; title: string } | null): void {
   currentPaper.value = paper
@@ -210,13 +240,18 @@ function openResearchSearch(): void {
     router.push('/research/search')
     return
   }
-  searchOpen.value = !searchOpen.value
-  if (searchOpen.value) {
-    nextTick(() => {
-      splitRatio.value = clampSplit(
-        splitRatio.value, workspaceBodyRef.value?.clientWidth ?? 0)
-    })
+  if (stageOpen.value && stageTab.value === 'reader' && searchOpen.value) {
+    stageOpen.value = false
+    searchOpen.value = false
+    return
   }
+  stageTab.value = 'reader'
+  stageOpen.value = true
+  searchOpen.value = true
+  nextTick(() => {
+    splitRatio.value = clampSplit(
+      splitRatio.value, workspaceBodyRef.value?.clientWidth ?? 0)
+  })
 }
 
 function onSplitAsk(prompt: string): void {
@@ -262,12 +297,17 @@ async function applyPaperActionsFromModel(
   const target = targetOverride || currentPaper.value || stagedPaper.value
   if (!target) return
   if (!searchPaneRef.value) {
-    if (settingsState.researchSearchMode === 'page'
-      || window.innerWidth < SPLIT_MIN_WIDTH) return
+    if (window.innerWidth < SPLIT_MIN_WIDTH) return
+    stageTab.value = 'reader'
+    stageOpen.value = true
     searchOpen.value = true
     for (let i = 0; i < 20 && !searchPaneRef.value; i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
+  } else if (!stageOpen.value || stageTab.value !== 'reader') {
+    stageTab.value = 'reader'
+    stageOpen.value = true
+    searchOpen.value = true
   }
   if (currentPaper.value) {
     await searchPaneRef.value?.applyPaperActions(actions, requestId)
@@ -285,6 +325,458 @@ function onWorkspaceResize(): void {
 
 /** 科研区:独占研究检索链路与搜索范围面板;学习区不跨区查文献 */
 const isResearch = computed(() => props.workspace === 'research')
+
+async function loadResearchProjects(): Promise<void> {
+  if (!isResearch.value) return
+  try {
+    const list = await listResearchProjects()
+    researchProjects.value = Array.isArray(list) ? list : []
+  } catch {
+    /* 离线/未登录时静默 */
+  }
+}
+
+function onProjectSelect(e: Event): void {
+  const val = (e.target as HTMLSelectElement).value
+  setActiveProjectId(val)
+}
+
+async function exportActiveProjectReport(): Promise<void> {
+  if (!activeProjectId.value || exportingReport.value) return
+  exportingReport.value = true
+  try {
+    await downloadResearchReport(activeProjectId.value)
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('tables.exportFail'))
+  } finally {
+    exportingReport.value = false
+  }
+}
+
+const activeReaderPaper = computed(() =>
+  isResearch.value ? (currentPaper.value || stagedPaper.value) : null,
+)
+const readerInsightsOpen = ref(false)
+const readerInsightsStructure = ref<PaperStructure | null>(null)
+const readerInsightsLoading = ref(false)
+const readerInsightsError = ref('')
+const readerInsightCache = new Map<string, PaperStructure>()
+let readerInsightsSeq = 0
+
+async function loadReaderInsights(docId: string, refresh = false): Promise<void> {
+  const seq = ++readerInsightsSeq
+  if (!refresh) {
+    const cached = readerInsightCache.get(docId)
+    if (cached) {
+      readerInsightsStructure.value = cached
+      readerInsightsError.value = ''
+      readerInsightsLoading.value = false
+      return
+    }
+  }
+  readerInsightsStructure.value = null
+  readerInsightsError.value = ''
+  readerInsightsLoading.value = true
+  try {
+    let data = refresh
+      ? await generateResearchDocInsights(docId, true)
+      : await getResearchDocInsights(docId)
+    if (!data.cached || !data.structure) {
+      data = await generateResearchDocInsights(docId, false)
+    }
+    if (seq !== readerInsightsSeq) return
+    if (!data.structure) throw new Error(t('workspace.generateFail'))
+    readerInsightsStructure.value = data.structure
+    readerInsightCache.set(docId, data.structure)
+  } catch (err) {
+    if (seq !== readerInsightsSeq) return
+    readerInsightsError.value = err instanceof Error && err.message
+      ? err.message : t('workspace.generateFail')
+  } finally {
+    if (seq === readerInsightsSeq) readerInsightsLoading.value = false
+  }
+}
+
+function toggleReaderInsights(): void {
+  const paper = activeReaderPaper.value
+  if (!paper) return
+  readerInsightsOpen.value = !readerInsightsOpen.value
+  if (readerInsightsOpen.value) void loadReaderInsights(paper.docId)
+}
+
+/** 阅读器快捷多论文对比清单(与全科研区共享唯一 5 篇待对比篮,复用 /api/research/literature/compare) */
+const compareRunning = ref(false)
+const isPaperInCompare = computed(() => {
+  const id = activeReaderPaper.value?.docId
+  return Boolean(id && hasCompareId(id))
+})
+
+function toggleComparePaper(): void {
+  const id = activeReaderPaper.value?.docId
+  if (!id) return
+  if (!toggleCompareId(id)) {
+    showToast(t('stage.compareHint'))
+  }
+}
+
+async function runCompareQueue(): Promise<void> {
+  if (compareRunning.value || compareIds.value.length < 2) return
+  compareRunning.value = true
+  try {
+    const data = await compareResearchDocs(compareIds.value)
+    const projectId = activeProjectId.value || null
+    const created = await createResearchTable({
+      title: data.title,
+      columns: data.columns,
+      rows: data.rows,
+      formulas: {},
+      rowLabels: data.rowLabels,
+      merges: [],
+      colWidths: data.columns.map(() => 160),
+      rowHeights: data.rows.map(() => 30),
+      projectId,
+      rowSources: data.rowSources,
+    })
+    if (data.warnings.length) showToast(data.warnings[0])
+    clearCompareIds()
+    const query: Record<string, string> = { tableId: created.id }
+    if (projectId) query.projectId = projectId
+    await router.push({ path: '/research/tables', query })
+  } catch (err) {
+    showToast(err instanceof Error && err.message ? err.message : t('search.compareFail'))
+  } finally {
+    compareRunning.value = false
+  }
+}
+
+watch(() => activeReaderPaper.value?.docId, (nextId) => {
+  if (!nextId) {
+    readerInsightsOpen.value = false
+    readerInsightsStructure.value = null
+    return
+  }
+  if (readerInsightsOpen.value) void loadReaderInsights(nextId)
+})
+
+/* ---------- 左侧科研仪器栏(桌面宽屏展开,可折叠记忆) ---------- */
+const RAIL_KEY = 'mg-rail-open'
+function loadRailOpen(): boolean {
+  try {
+    return localStorage.getItem(RAIL_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+const railOpen = ref(loadRailOpen())
+const lockedHost = hostWorkspace()
+
+function toggleRail(): void {
+  railOpen.value = !railOpen.value
+  try {
+    localStorage.setItem(RAIL_KEY, railOpen.value ? '1' : '0')
+  } catch {
+    /* 忽略隐私模式存储限制 */
+  }
+}
+
+function switchWorkspace(target: Workspace): void {
+  if (target === props.workspace) return
+  const path = target === 'research' ? '/research' : '/learn'
+  const href = crossWorkspaceHref(target, path)
+  if (href !== path) {
+    window.location.assign(href)
+    return
+  }
+  router.push(path)
+}
+
+function isCommandActive(key: string): boolean {
+  if (key === '问题记录') return activePanel.value === 'notebook'
+  if (key === '公式查询手册') return activePanel.value === 'formula'
+  if (key === '待办清单') return activePanel.value === 'todo'
+  if (key === '学习分析') return activePanel.value === 'analysis'
+  if (key === '搜索范围') return activePanel.value === 'scope' || !isAllSelected()
+  if (key === '研究档案') return activePanel.value === 'archive'
+  if (key === '生成文档') return docOpen.value
+  return false
+}
+
+/* ---------- 右侧可折叠多子窗科研演示台(Science Stage:单窗 / 上下双窗 / 多窗堆叠) ---------- */
+type StageTab = 'figures' | 'files' | 'reader'
+type StageLayout = 'single' | 'split' | 'stack'
+const STAGE_KEY = 'mg-stage-open'
+const STAGE_LAYOUT_KEY = 'mg-stage-layout'
+const STAGE_PANES_KEY = 'mg-stage-panes'
+const STAGE_ROW_SPLIT_KEY = 'mg-stage-row-split'
+const VALID_TABS: StageTab[] = ['figures', 'files', 'reader']
+
+function loadStageOpen(): boolean {
+  try {
+    return localStorage.getItem(STAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function loadStageLayout(): StageLayout {
+  try {
+    const raw = localStorage.getItem(STAGE_LAYOUT_KEY)
+    if (raw === 'single' || raw === 'split' || raw === 'stack') return raw
+  } catch {
+    /* 忽略隐私模式限制 */
+  }
+  return 'split'
+}
+
+function loadStagePanes(): StageTab[] {
+  try {
+    const raw = localStorage.getItem(STAGE_PANES_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        const clean = parsed.filter((item): item is StageTab => VALID_TABS.includes(item as StageTab))
+        if (clean.length) return Array.from(new Set(clean))
+      }
+    }
+  } catch {
+    /* 忽略损坏存档 */
+  }
+  return ['figures', 'files']
+}
+
+function clampRowRatio(v: number): number {
+  if (!Number.isFinite(v)) return 0.52
+  return Math.min(0.78, Math.max(0.22, v))
+}
+
+function loadStageRowRatio(): number {
+  try {
+    const raw = Number(localStorage.getItem(STAGE_ROW_SPLIT_KEY))
+    return raw ? clampRowRatio(raw) : 0.52
+  } catch {
+    return 0.52
+  }
+}
+
+const stageOpen = ref(loadStageOpen())
+const stageTab = ref<StageTab>('figures')
+const stageLayout = ref<StageLayout>(loadStageLayout())
+const stageOpenPanes = ref<StageTab[]>(loadStagePanes())
+const stageCollapsed = ref<Record<StageTab, boolean>>({
+  figures: false,
+  files: false,
+  reader: false,
+})
+const stageMaximized = ref<StageTab | null>(null)
+const stageRowRatio = ref(loadStageRowRatio())
+const stageRowResizing = ref(false)
+const stageDockRef = ref<HTMLElement | null>(null)
+const activeFigureKey = ref('')
+const activeFileKey = ref('')
+
+const showRightStage = computed(() =>
+  !focusDiagram.value && (stageOpen.value || (isResearch.value && searchOpen.value)),
+)
+
+/** 当前工作区允许打开的子窗口列表(学习区不含 reader) */
+const allowedOpenPanes = computed<StageTab[]>(() => {
+  const list = stageOpenPanes.value.filter((tab) => isResearch.value || tab !== 'reader')
+  if (list.length) return list
+  return ['figures']
+})
+
+/** 当前实际渲染在演示台中的子窗口有序列表 */
+const visibleStagePanes = computed<StageTab[]>(() => {
+  const allowed = allowedOpenPanes.value
+  if (stageMaximized.value && (isResearch.value || stageMaximized.value !== 'reader')) {
+    return [stageMaximized.value]
+  }
+  if (stageLayout.value === 'single') {
+    const active = !isResearch.value && stageTab.value === 'reader' ? 'figures' : stageTab.value
+    return [active]
+  }
+  if (stageLayout.value === 'split') {
+    return allowed.slice(0, 2)
+  }
+  return allowed
+})
+
+/** 是否显示上下双窗之间的横向拖拽分隔条 */
+const showStageRowDivider = computed(() =>
+  stageLayout.value === 'split'
+  && !stageMaximized.value
+  && visibleStagePanes.value.length === 2
+  && !stageCollapsed.value[visibleStagePanes.value[0]]
+  && !stageCollapsed.value[visibleStagePanes.value[1]],
+)
+
+function isPaneVisible(tab: StageTab): boolean {
+  return visibleStagePanes.value.includes(tab)
+}
+
+function isStageTabOn(tab: StageTab): boolean {
+  return visibleStagePanes.value.includes(tab)
+}
+
+function paneFlexStyle(tab: StageTab): Record<string, string> {
+  const idx = visibleStagePanes.value.indexOf(tab)
+  if (idx < 0) return {}
+  // 留出 order: 1 给双窗横向拖拽分隔条
+  const order = showStageRowDivider.value ? (idx === 0 ? '0' : '2') : String(idx)
+  if (stageCollapsed.value[tab] && visibleStagePanes.value.length > 1) {
+    return { order, flex: '0 0 auto' }
+  }
+  if (showStageRowDivider.value) {
+    return idx === 0
+      ? { order, flex: `0 0 calc(${(stageRowRatio.value * 100).toFixed(2)}% - 3px)` }
+      : { order, flex: '1 1 0%' }
+  }
+  return { order, flex: '1 1 0%' }
+}
+
+function saveStageOpen(val: boolean): void {
+  try {
+    localStorage.setItem(STAGE_KEY, val ? '1' : '0')
+  } catch {
+    /* 忽略隐私模式限制 */
+  }
+}
+
+function saveStageLayout(layout: StageLayout): void {
+  try {
+    localStorage.setItem(STAGE_LAYOUT_KEY, layout)
+  } catch {
+    /* 忽略隐私模式限制 */
+  }
+}
+
+function saveStagePanes(panes: StageTab[]): void {
+  try {
+    localStorage.setItem(STAGE_PANES_KEY, JSON.stringify(panes))
+  } catch {
+    /* 忽略隐私模式限制 */
+  }
+}
+
+function saveStageRowRatio(): void {
+  try {
+    localStorage.setItem(STAGE_ROW_SPLIT_KEY, String(stageRowRatio.value))
+  } catch {
+    /* 忽略隐私模式限制 */
+  }
+}
+
+function ensurePaneOpen(tab: StageTab, promote = false): void {
+  if (tab === 'reader' && !isResearch.value) return
+  let next = [...stageOpenPanes.value]
+  if (!next.includes(tab)) {
+    next = promote ? [tab, ...next] : [...next, tab]
+  } else if (promote && stageLayout.value === 'split' && next.indexOf(tab) >= 2) {
+    next = [tab, ...next.filter((item) => item !== tab)]
+  }
+  stageOpenPanes.value = next
+  stageCollapsed.value[tab] = false
+  saveStagePanes(next)
+}
+
+function setStageLayout(layout: StageLayout): void {
+  stageLayout.value = layout
+  stageMaximized.value = null
+  saveStageLayout(layout)
+  if (layout !== 'single' && allowedOpenPanes.value.length < 2) {
+    const fallback: StageTab = allowedOpenPanes.value[0] === 'figures' ? 'files' : 'figures'
+    ensurePaneOpen(fallback)
+  }
+}
+
+function selectStageTab(tab: StageTab): void {
+  if (tab === 'reader' && !isResearch.value) return
+  stageTab.value = tab
+  stageOpen.value = true
+  stageMaximized.value = null
+  saveStageOpen(true)
+  ensurePaneOpen(tab, true)
+  if (tab === 'reader') {
+    if (window.innerWidth <= 960) {
+      router.push('/research/search')
+      return
+    }
+    searchOpen.value = true
+  }
+}
+
+function togglePaneCollapse(tab: StageTab): void {
+  stageCollapsed.value[tab] = !stageCollapsed.value[tab]
+}
+
+function togglePaneMaximize(tab: StageTab): void {
+  stageMaximized.value = stageMaximized.value === tab ? null : tab
+  stageCollapsed.value[tab] = false
+}
+
+function closeSubPane(tab: StageTab): void {
+  if (stageMaximized.value === tab) stageMaximized.value = null
+  const remaining = allowedOpenPanes.value.filter((item) => item !== tab)
+  if (stageLayout.value === 'single' || !remaining.length) {
+    closeStage()
+    return
+  }
+  stageOpenPanes.value = remaining
+  saveStagePanes(remaining)
+  if (stageTab.value === tab) stageTab.value = remaining[0]
+  if (tab === 'reader') searchOpen.value = false
+}
+
+function startStageRowDrag(e: PointerEvent): void {
+  const dock = stageDockRef.value
+  if (!dock) return
+  e.preventDefault()
+  stageRowResizing.value = true
+  const rect = dock.getBoundingClientRect()
+  const move = (ev: PointerEvent) => {
+    if (!rect.height) return
+    stageRowRatio.value = clampRowRatio((ev.clientY - rect.top) / rect.height)
+  }
+  const up = () => {
+    stageRowResizing.value = false
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+    saveStageRowRatio()
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+}
+
+function nudgeStageRow(delta: number): void {
+  stageRowRatio.value = clampRowRatio(stageRowRatio.value + delta)
+  saveStageRowRatio()
+}
+
+function resetStageRow(): void {
+  stageRowRatio.value = 0.52
+  saveStageRowRatio()
+}
+
+function closeStage(): void {
+  stageOpen.value = false
+  stageMaximized.value = null
+  searchOpen.value = false
+  saveStageOpen(false)
+}
+
+function stageLabel(zh: string, en: string): string {
+  return settingsState.language === 'en' ? en : zh
+}
+
+// 窄屏关闭分栏时保持同步
+watch(searchOpen, (open) => {
+  if (open && isResearch.value) {
+    stageOpen.value = true
+    stageTab.value = 'reader'
+    stageMaximized.value = null
+    ensurePaneOpen('reader', true)
+  }
+})
 
 
 /** 触屏设备判定:手机/平板用「粘贴导入」替代拖拽(拖拽仅限电脑端) */
@@ -342,10 +834,11 @@ function togglePanel(kind: PanelKind) {
 /** 面板锚点:对齐所属按钮(相对 .learn 的 left/top/width) */
 const panelAnchor = ref<{ left: number; top: number; width: number } | null>(null)
 
-/** 量取按钮位置(面板出现前调用;按钮一定在页面上,量不到则退化为不传) */
-function anchorTo(selector: string, panelWidth = 560) {
-  const btn = document.querySelector<HTMLElement>(selector)
-  const root = document.querySelector<HTMLElement>('.learn')
+/** 量取按钮位置(优先寻找当前可见触发源;桌面左栏触发时底部指令隐藏 → 返回 null 居中悬浮) */
+function anchorTo(selector: string, panelWidth = 560, containerSelector = '.input-bar') {
+  const btn = Array.from(document.querySelectorAll<HTMLElement>(selector))
+    .find((el) => el.offsetParent !== null) ?? null
+  const root = document.querySelector<HTMLElement>(containerSelector)
   if (!btn || !root) {
     panelAnchor.value = null
     return
@@ -798,6 +1291,8 @@ function send(text?: string, cmd?: string, extra?: { pointId?: string }) {
   // 流式回调必须操作响应式代理(数组里读出的那条),而不是 push 进去的裸对象;
   // 裸对象上的修改不触发 Vue 更新 → 界面会"凝固"到下一次交互才刷新
   const live = session.messages[session.messages.length - 1]
+  const onceProfile = pendingProfileOnce.value
+  pendingProfileOnce.value = ''
   scheduleStream(session, live, content, 450, {
     cmd,
     sessionId: session.id,
@@ -812,6 +1307,8 @@ function send(text?: string, cmd?: string, extra?: { pointId?: string }) {
     tableId: isResearch.value ? tableContext.value?.id : undefined,
     tableRegression: isResearch.value ? tableContext.value?.regression : undefined,
     diagrams: isResearch.value ? researchDiagrams.value : undefined,
+    profile: onceProfile || undefined,
+    verify: isResearch.value && researchVerify.value ? true : undefined,
   })
 }
 
@@ -856,6 +1353,10 @@ function runCommand(cmd: string) {
   }
   // 学习分析 = 本地快照面板:先看覆盖与薄弱点,再由用户决定是否让模型分析
   if (cmd === '学习分析') {
+    if (!settingsState.personalized) {
+      showToast(t('learn.personalOff'))
+      return
+    }
     anchorTo('.cmd[data-cmd="学习分析"]', 420)
     togglePanel('analysis')
     return
@@ -1194,7 +1695,7 @@ function showNotebook() {
 
 /** 打开问题归纳面板(顶部「问题归纳」按钮):面板对齐按钮、从按钮下方展开 */
 function toggleSummaryPanel() {
-  anchorTo('.sum-btn', 320)
+  anchorTo('.sum-btn', 320, '.learn')
   togglePanel('summary')
 }
 
@@ -1314,6 +1815,189 @@ const {
   flush: () => flushSessions(true),
   toast: showToast,
   stagePaper: stagePaperFile,
+})
+
+/* ---------- 右侧科研演示台数据汇总(依赖 activeSession 与 fmtSize) ---------- */
+interface StageFigureItem {
+  key: string
+  msgId: number
+  diagram: DiagramBlock
+  title: string
+}
+
+interface StageFileItem {
+  key: string
+  kind: 'image' | 'book' | 'file' | 'paper' | 'table'
+  msgId?: number
+  title: string
+  subtitle: string
+  url?: string
+  preview?: string
+  bookId?: string
+  docId?: string
+  tableId?: string
+}
+
+/** 当前会话全部数学图解(2D/3D/GeoGebra),按时间倒序方便优先查看最新成果 */
+const sessionDiagrams = computed<StageFigureItem[]>(() => {
+  const session = activeSession.value
+  if (!session) return []
+  const items: StageFigureItem[] = []
+  for (const m of session.messages) {
+    if (!m.diagrams?.length) continue
+    for (const diagram of m.diagrams) {
+      items.push({
+        key: `${m.id}-${diagram.id}`,
+        msgId: m.id,
+        diagram,
+        title: diagram.spec.title || t('diagram.figure'),
+      })
+    }
+  }
+  return items.reverse()
+})
+
+/** 当前会话全部文件、图片、教材与科研上下文(论文/实验表) */
+const sessionFiles = computed<StageFileItem[]>(() => {
+  const session = activeSession.value
+  const items: StageFileItem[] = []
+  if (isResearch.value && tableContext.value) {
+    items.push({
+      key: `table-${tableContext.value.id}`,
+      kind: 'table',
+      title: tableContext.value.title,
+      subtitle: tableContext.value.regression
+        ? `Regression · ${tableContext.value.regression.model.toUpperCase()}`
+        : t('chat.tableContext'),
+      tableId: tableContext.value.id,
+    })
+  }
+  if (isResearch.value && stagedPapers.value.length) {
+    for (const p of [...stagedPapers.value].reverse()) {
+      items.push({
+        key: `paper-${p.docId}`,
+        kind: 'paper',
+        msgId: p.msgId,
+        title: p.title,
+        subtitle: t('learn.paperPages', { n: p.pages }),
+        docId: p.docId,
+      })
+    }
+  }
+  if (session) {
+    for (const m of [...session.messages].reverse()) {
+      if (!m.attachment) continue
+      const att = m.attachment
+      if (att.kind === 'image') {
+        items.push({
+          key: `img-${m.id}`,
+          kind: 'image',
+          msgId: m.id,
+          title: att.name,
+          subtitle: fmtSize(att.size),
+          url: att.url,
+        })
+      } else if (att.bookId) {
+        items.push({
+          key: `book-${m.id}`,
+          kind: 'book',
+          msgId: m.id,
+          title: att.name,
+          subtitle: `${att.bookPages ? `${att.bookPages}p · ` : ''}${fmtSize(att.size)}`,
+          bookId: att.bookId,
+          preview: att.text,
+        })
+      } else {
+        items.push({
+          key: `file-${m.id}`,
+          kind: 'file',
+          msgId: m.id,
+          title: att.name,
+          subtitle: fmtSize(att.size),
+          preview: att.text,
+        })
+      }
+    }
+  }
+  return items
+})
+
+const stageArtifactCount = computed(() => sessionDiagrams.value.length + sessionFiles.value.length)
+
+const activeStageFigure = computed(() =>
+  sessionDiagrams.value.find((item) => item.key === activeFigureKey.value)
+  ?? sessionDiagrams.value[0]
+  ?? null,
+)
+
+const activeStageFile = computed(() =>
+  sessionFiles.value.find((item) => item.key === activeFileKey.value)
+  ?? sessionFiles.value[0]
+  ?? null,
+)
+
+function toggleStage(preferredTab?: StageTab): void {
+  if (focusDiagram.value) {
+    closeDiagramFocus({ restoreSearch: false })
+  }
+  if (preferredTab) {
+    if (stageOpen.value && stageTab.value === preferredTab) {
+      stageOpen.value = false
+      searchOpen.value = false
+      saveStageOpen(false)
+      return
+    }
+    stageTab.value = preferredTab
+    stageOpen.value = true
+    if (preferredTab === 'reader' && isResearch.value) searchOpen.value = true
+    saveStageOpen(true)
+    return
+  }
+  const next = !showRightStage.value
+  stageOpen.value = next
+  saveStageOpen(next)
+  if (!next) {
+    searchOpen.value = false
+    return
+  }
+  if (stageTab.value === 'reader' && !isResearch.value) {
+    stageTab.value = sessionDiagrams.value.length ? 'figures' : 'files'
+  } else if (stageTab.value === 'figures' && !sessionDiagrams.value.length && sessionFiles.value.length) {
+    stageTab.value = 'files'
+  } else if (stageTab.value === 'reader' && isResearch.value) {
+    searchOpen.value = true
+  }
+  nextTick(() => {
+    splitRatio.value = clampSplit(
+      splitRatio.value, workspaceBodyRef.value?.clientWidth ?? 0)
+  })
+}
+
+// 演示台已展开时,新生成图解或新导入文件自动唤醒对应子窗口(多窗模式下不挤掉阅读器)
+watch(() => sessionDiagrams.value[0]?.key, (nextKey, prevKey) => {
+  if (nextKey && nextKey !== prevKey) {
+    activeFigureKey.value = nextKey
+    if (stageOpen.value) {
+      if (stageLayout.value === 'single') {
+        if (stageTab.value !== 'reader') stageTab.value = 'figures'
+      } else {
+        ensurePaneOpen('figures', true)
+      }
+    }
+  }
+})
+
+watch(() => sessionFiles.value[0]?.key, (nextKey, prevKey) => {
+  if (nextKey && nextKey !== prevKey) {
+    activeFileKey.value = nextKey
+    if (stageOpen.value) {
+      if (stageLayout.value === 'single') {
+        if (stageTab.value !== 'reader') stageTab.value = 'files'
+      } else {
+        ensurePaneOpen('files', true)
+      }
+    }
+  }
 })
 
 function findMessage(id: number): ChatMsg | null {
@@ -1512,26 +2196,186 @@ function restoreStagedPapers(): void {
   }
 }
 
+/** 以研促学:把科研区里难懂的推导或定理带入学习辅助做教学级拆解与图解,不污染原科研上下文 */
+function studyPrerequisites(msg: ChatMsg): void {
+  const q = previousQuestion(msg)
+  const excerpt = msg.content.replace(/\s+/g, ' ').trim().slice(0, 280)
+  const prompt = settingsState.language === 'en'
+    ? `I encountered a challenging derivation in my research and want to reinforce the prerequisite mathematical theory step by step with intuition and diagrams.\n\nResearch question: ${q}\nDerivation excerpt: ${excerpt}`
+    : `我在科研推演中遇到了较难理解的定理/推导，请帮我夯实其中的前置基础数学理论，并用教学级步骤与图解讲透：\n\n科研原问题：${q}\n相关推导摘录：${excerpt}`
+  const originLabel = (currentPaper.value?.title || stagedPaper.value?.title || q).slice(0, 60)
+  try {
+    sessionStorage.setItem('mg-learn-seed', prompt)
+    sessionStorage.setItem('mg-learn-origin', JSON.stringify({
+      workspace: 'research',
+      sessionId: activeSession.value?.id || 0,
+      docId: currentPaper.value?.docId || stagedPaper.value?.docId || undefined,
+      label: originLabel,
+    }))
+  } catch {
+    /* 忽略隐私模式限制 */
+  }
+  const href = crossWorkspaceHref('learn', '/learn')
+  if (href !== '/learn') {
+    window.location.assign(href)
+    return
+  }
+  void router.push('/learn')
+}
+
+/** 创新 4:将科研推演中的发现/待验证点一键 Pin 到科研区独立待办桶(带现场还原锚点) */
+function pinReplyToTodo(msg: ChatMsg): void {
+  const q = previousQuestion(msg)
+  const paper = currentPaper.value || stagedPaper.value
+  const tbl = tableContext.value
+  const next = new Date(Date.now() + 60 * 60 * 1000)
+  next.setSeconds(0, 0)
+  const anchor = paper
+    ? { kind: 'paper' as const, id: paper.docId, label: paper.title }
+    : tbl
+      ? { kind: 'table' as const, id: tbl.id, label: tbl.title }
+      : { kind: 'session' as const, id: String(activeSession.value?.id || 0), label: (q || t('research.title')).slice(0, 48) }
+  saveTask({
+    content: `${q || msg.content.slice(0, 80)}`.slice(0, 280),
+    date: dateKeyOf(next),
+    time: `${pad2(next.getHours())}:${pad2(next.getMinutes())}`,
+    repeat: 'once',
+    weekdays: [],
+    anchor,
+  })
+  showToast(t('research.pinnedTodo'))
+}
+
+/** 补课完成后一键返回原科研会话(只传会话引用,不破坏双区存档隔离) */
+function returnToOriginSession(): void {
+  const origin = activeSession.value?.origin
+  if (!origin) return
+  try {
+    sessionStorage.setItem('mg-jump-session', JSON.stringify(origin))
+  } catch {
+    /* 忽略隐私模式限制 */
+  }
+  const targetPath = origin.workspace === 'research' ? '/research' : '/learn'
+  const href = crossWorkspaceHref(origin.workspace, targetPath)
+  if (href !== targetPath) {
+    window.location.assign(href)
+    return
+  }
+  void router.push(targetPath)
+}
+
+function openQuickPalette(): void {
+  window.dispatchEvent(new Event('mg:open-palette'))
+}
+
+function applySessionJump(payload: {
+  workspace?: string
+  sessionId?: number
+  docId?: string
+  docTitle?: string
+  label?: string
+} | null): boolean {
+  if (!payload) return false
+  if (payload.workspace && payload.workspace !== props.workspace) return false
+  let jumped = false
+  if (typeof payload.sessionId === 'number' && payload.sessionId > 0) {
+    const found = sessions.value.find((s) => s.id === payload.sessionId)
+    if (found) {
+      activeId.value = found.id
+      jumped = true
+      scrollBottom()
+    }
+  }
+  if (isResearch.value && payload.docId) {
+    const docId = payload.docId
+    const title = payload.docTitle || payload.label || docId
+    stagedPaper.value = { docId, title }
+    if (window.innerWidth >= 960) {
+      selectStageTab('reader')
+      void nextTick(() => {
+        void searchPaneRef.value?.openDocForActions(docId, title, [], '')
+      })
+    }
+    jumped = true
+  }
+  return jumped
+}
+
+function onJumpSessionEvent(e: Event): void {
+  const detail = (e as CustomEvent<{ workspace?: string; sessionId?: number; docId?: string }>).detail
+  if (!detail) return
+  try { sessionStorage.removeItem('mg-jump-session') } catch { /* ignore */ }
+  applySessionJump(detail)
+}
+
 onMounted(() => {
   // 每次进入页面都开启全新对话;旧会话自动归档到相应板块
   // (会话档案由 stores/sessions 在应用启动时恢复)
   sessions.value = sessions.value.filter((s) => s.cat
     || s.messages.some((m) => m.role === 'user' || m.paperImport))
   restoreStagedPapers()
-  createSession()
-  greet()
+  let jumpedToExisting = false
+  try {
+    const rawJump = sessionStorage.getItem('mg-jump-session')
+    if (rawJump) {
+      const parsed = JSON.parse(rawJump) as { workspace?: string; sessionId?: number; docId?: string }
+      if (!parsed.workspace || parsed.workspace === props.workspace) {
+        sessionStorage.removeItem('mg-jump-session')
+        jumpedToExisting = applySessionJump(parsed)
+      }
+    }
+  } catch {
+    /* 忽略损坏数据 */
+  }
+  if (!jumpedToExisting || !activeSession.value) {
+    createSession()
+    greet()
+  }
   consumePointLink()
-  // 文献检索页「基于这些结果提问」:证据已拼好,进对话后直接发送
+  // 科研区「夯实前置理论」桥接:消费一次种子提问后立即清理,开启独立学习推演
+  if (!isResearch.value) {
+    const learnSeed = sessionStorage.getItem('mg-learn-seed')
+    const rawOrigin = sessionStorage.getItem('mg-learn-origin')
+    if (rawOrigin) sessionStorage.removeItem('mg-learn-origin')
+    if (learnSeed) {
+      sessionStorage.removeItem('mg-learn-seed')
+      if (rawOrigin && activeSession.value) {
+        try {
+          const parsed = JSON.parse(rawOrigin) as { workspace?: string; sessionId?: number; docId?: string; label?: string }
+          if (parsed.workspace === 'research' || parsed.workspace === 'learn') {
+            activeSession.value.origin = {
+              workspace: parsed.workspace,
+              sessionId: typeof parsed.sessionId === 'number' ? parsed.sessionId : 0,
+              docId: typeof parsed.docId === 'string' ? parsed.docId : undefined,
+              label: typeof parsed.label === 'string' ? parsed.label : undefined,
+            }
+            persistSessions()
+          }
+        } catch {
+          /* 忽略格式错误 */
+        }
+      }
+      nextTick(() => send(learnSeed))
+    }
+  }
+  // 文献检索页「基于这些结果提问」/ 知识图谱「查前沿论文」/ 对比表「挖掘研究缺口」:进科研区后直接发送
   if (isResearch.value) {
+    const onceProfile = sessionStorage.getItem('mg-research-profile-once')
+    if (onceProfile) {
+      sessionStorage.removeItem('mg-research-profile-once')
+      pendingProfileOnce.value = onceProfile
+    }
     const seed = sessionStorage.getItem('mg-research-seed')
     if (seed) {
       sessionStorage.removeItem('mg-research-seed')
       nextTick(() => send(seed))
     }
     void loadTableContext()
+    void loadResearchProjects()
   }
   window.addEventListener('resize', onWorkspaceResize)
   window.addEventListener('beforeunload', warnPendingPapers)
+  window.addEventListener('mg:jump-session', onJumpSessionEvent)
 })
 
 onBeforeRouteLeave(async () => {
@@ -1549,6 +2393,7 @@ function warnPendingPapers(event: BeforeUnloadEvent): void {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onWorkspaceResize)
   window.removeEventListener('beforeunload', warnPendingPapers)
+  window.removeEventListener('mg:jump-session', onJumpSessionEvent)
   stopAllStreams()
   disposeSpeech()
   if (flashTimer) clearTimeout(flashTimer)
@@ -1556,26 +2401,40 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="learn" @click="onRootClick" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDropFiles">
+  <div
+    class="learn"
+    :class="[isResearch ? 'ws-research' : 'ws-learn', { 'rail-open': railOpen, 'stage-open': showRightStage }]"
+    @click="onRootClick"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDropFiles"
+  >
     <header class="chat-header">
+      <button
+        class="rail-toggle"
+        type="button"
+        :aria-expanded="railOpen"
+        aria-label="Toggle sidebar"
+        @click="toggleRail"
+      >◧</button>
       <button class="back" @click="router.push('/home')">{{ t('common.back') }}</button>
       <div class="title-box">
         <span class="title">{{ t(isResearch ? 'research.title' : 'learn.title') }}</span>
-        <span class="tech-label sub">{{ isResearch ? 'MODULE 02 · RESEARCH' : 'MODULE 01 · LEARN' }}</span>
+        <span class="tech-label sub">{{ isResearch ? 'DISCOVERY WORKBENCH' : 'STUDY STUDIO' }}</span>
       </div>
       <div class="right">
         <button
           v-if="isResearch"
-          class="new-btn"
-          :class="{ 'new-btn--active': searchOpen }"
+          class="new-btn header-dup"
+          :class="{ 'new-btn--active': showRightStage && stageTab === 'reader' }"
           @click="openResearchSearch"
         >
           {{ t('search.button') }}
         </button>
-        <button v-if="isResearch" class="new-btn" @click="router.push('/research/tables')">
+        <button v-if="isResearch" class="new-btn header-dup" @click="router.push('/research/tables')">
           {{ t('tables.entry') }}
         </button>
-        <button class="new-btn" @click="newConversation">{{ t('learn.newChat') }}</button>
+        <button class="new-btn header-dup" @click="newConversation">{{ t('learn.newChat') }}</button>
         <!-- 板块上下文徽章(未归类会话不显示标题) -->
         <span v-if="activeSession?.cat && activeSession.cat.key !== 'other'" class="session-chip">
           <span class="dot" :style="{ background: activeSession.cat.color }"></span>
@@ -1590,7 +2449,24 @@ onBeforeUnmount(() => {
         >
           {{ t('learn.archive') }}<span v-if="questionCount" class="sum-badge">{{ questionCount }}</span>
         </button>
-        <span class="badge tech-label">{{ t(isResearch ? 'common.mgResearch' : 'common.mgLearn') }}</span>
+        <button
+          class="stage-toggle"
+          type="button"
+          :class="{ 'stage-toggle--on': showRightStage }"
+          :aria-expanded="showRightStage"
+          :title="stageLabel('切换右侧科研演示台（图表 / 文件 / 文献）', 'Toggle Science Stage (Figures / Files / Reader)')"
+          @click="toggleStage()"
+        >
+          <span class="stage-toggle-ico" aria-hidden="true">◨</span>
+          <span class="stage-toggle-label">{{ stageLabel('演示台', 'Stage') }}</span>
+          <span v-if="stageArtifactCount" class="stage-toggle-badge">{{ stageArtifactCount }}</span>
+        </button>
+        <button
+          type="button"
+          class="palette-trigger"
+          :title="t('palette.openHint')"
+          @click="openQuickPalette"
+        >⌘K</button>
         <button class="dots-btn" :title="t('common.settings')" @click="router.push('/settings')">···</button>
       </div>
     </header>
@@ -1614,11 +2490,105 @@ onBeforeUnmount(() => {
     <!-- 念法速查贴士(语音输入中点击麦克风旁的📓打开) -->
     <SpeechTips v-if="tipsOpen" @close="tipsOpen = false" />
 
-    <!-- 对话区(当前会话) -->
+    <!-- 三栏科研工作台主区:左仪器栏 + 中文档流 + 右文献/图解检查器 -->
     <div ref="workspaceBodyRef" class="workspace-body" :class="{ 'with-search': searchOpen, 'with-focus': focusDiagram }">
+      <!-- 左侧可折叠科研仪器栏(宽屏桌面自动展示,窄屏/移动端优雅退回底部指令条) -->
+      <aside v-show="railOpen" class="sci-rail" aria-label="Workspace Instruments">
+        <div v-if="!lockedHost" class="rail-seg" role="tablist">
+          <button
+            type="button"
+            class="rail-seg-btn"
+            :class="{ on: !isResearch }"
+            @click="switchWorkspace('learn')"
+          >{{ t('home.learnTitle') }}</button>
+          <button
+            type="button"
+            class="rail-seg-btn"
+            :class="{ on: isResearch }"
+            @click="switchWorkspace('research')"
+          >{{ t('home.researchTitle') }}</button>
+        </div>
+
+        <div class="rail-section">
+          <div class="rail-heading tech-label">{{ isResearch ? 'RESEARCH LAB' : 'STUDIO TOOLS' }}</div>
+          <div v-if="isResearch && researchProjects.length" class="rail-project">
+            <select
+              class="rail-project-select"
+              :value="activeProjectId"
+              :aria-label="t('research.projectAll')"
+              @change="onProjectSelect"
+            >
+              <option value="">{{ t('research.projectAll') }}</option>
+              <option v-for="p in researchProjects" :key="p.id" :value="p.id">{{ p.title }}</option>
+            </select>
+            <button
+              v-if="activeProjectId"
+              type="button"
+              class="rail-report-btn"
+              :disabled="exportingReport"
+              @click="exportActiveProjectReport"
+            >{{ exportingReport ? '…' : t('research.exportReport') }}</button>
+          </div>
+          <button
+            v-if="isResearch"
+            type="button"
+            class="rail-item"
+            :class="{ 'rail-item--on': showRightStage && stageTab === 'reader' }"
+            @click="openResearchSearch"
+          >
+            <span class="rail-icon">⌕</span>
+            <span class="rail-text">{{ t('search.button') }}</span>
+          </button>
+          <button
+            v-if="isResearch"
+            type="button"
+            class="rail-item"
+            @click="router.push('/research/tables')"
+          >
+            <span class="rail-icon">⊞</span>
+            <span class="rail-text">{{ t('tables.entry') }}</span>
+          </button>
+          <button
+            v-for="c in commands"
+            :key="`rail-${c.key}`"
+            type="button"
+            class="rail-item"
+            :class="{ 'rail-item--on': isCommandActive(c.key) }"
+            :title="cmdHint(c.key)"
+            @click="runCommand(c.key)"
+          >
+            <span class="rail-icon">{{ c.icon }}</span>
+            <span class="rail-text">{{ cmdName(c.key) }}</span>
+            <span v-if="c.key === '搜索范围' && !isAllSelected()" class="rail-badge">{{ selectedSources.length }}</span>
+            <span v-else-if="c.key === '问题记录' && notebooks.state.entries.length" class="rail-tag">{{ notebooks.state.entries.length }}</span>
+          </button>
+        </div>
+
+        <div class="rail-foot">
+          <button type="button" class="rail-new" @click="newConversation">{{ t('learn.newChat') }}</button>
+          <div v-if="!isResearch" class="rail-voice">
+            <span class="rail-voice-label">{{ t('learn.voiceLabel') }}</span>
+            <MgSwitch
+              size="sm"
+              :model-value="settingsState.modelVoice"
+              :title="t('learn.voiceHint')"
+              @update:model-value="setModelVoice"
+            />
+          </div>
+        </div>
+      </aside>
+
       <div class="chat-pane" @click="onChatPaneClick">
         <div ref="listEl" class="chat-list" @scroll="onListScroll" @click="onListClick">
-      <template v-if="activeSession">
+      <div v-if="activeSession" class="chat-stream">
+        <div v-if="!isResearch && activeSession.origin" class="origin-banner">
+          <span class="origin-meta">
+            {{ t('bridge.fromResearch') }}<template v-if="activeSession.origin.label"> · {{ activeSession.origin.label }}</template>
+          </span>
+          <button type="button" class="origin-back" @click="returnToOriginSession">
+            ← {{ t('bridge.returnResearch') }}
+          </button>
+        </div>
         <div
           v-for="m in activeSession.messages"
           :key="m.id"
@@ -1627,6 +2597,19 @@ onBeforeUnmount(() => {
           :data-msg-id="m.id"
         >
           <div class="bubble">
+            <!-- 消息元信息抬头:将对话从社交气泡升级为科研推演/综述文档单元 -->
+            <div v-if="m.role === 'user'" class="cell-meta cell-meta--user">
+              <span class="cell-role tech-label">PROMPT</span>
+              <span v-if="m.cmd" class="cmd-tag">{{ cmdName(m.cmd) }}</span>
+              <span v-if="activeSession.cat" class="cat-chip">
+                <span class="cat-dot" :style="{ background: activeSession.cat.color }"></span>{{ catName(activeSession.cat.key) }}
+              </span>
+            </div>
+            <div v-else class="cell-meta cell-meta--assistant">
+              <span class="cell-role tech-label">{{ isResearch ? 'MATHGUIDE · RESEARCH' : 'MATHGUIDE · PROOF & STUDY' }}</span>
+              <span v-if="m.research" class="cell-pill cell-pill--cite tech-label">SYNTHESIS</span>
+            </div>
+
             <div v-if="m.attachment" class="attach">
               <img
                 v-if="m.attachment.kind === 'image' && m.attachment.url"
@@ -1659,11 +2642,6 @@ onBeforeUnmount(() => {
                 {{ m.paperImport.status === 'imported' ? t('learn.paperImported') : t('learn.paperKept') }}
               </p>
             </div>
-            <!-- 走 cmdName 而非裸键:契约键是中文,英文界面下会露出中文 -->
-            <span v-if="m.role === 'user' && m.cmd" class="cmd-tag">{{ cmdName(m.cmd) }}</span>
-            <span v-if="m.role === 'user' && activeSession.cat" class="cat-chip">
-              <span class="cat-dot" :style="{ background: activeSession.cat.color }"></span>{{ catName(activeSession.cat.key) }}
-            </span>
             <template v-if="m.role === 'assistant'">
               <span v-if="m.thinking" class="thinking">{{ t('learn.thinking') }}<span class="dots">···</span></span>
               <!-- 跨板块知识点:先选方向,再发请求 -->
@@ -1723,53 +2701,73 @@ onBeforeUnmount(() => {
                 <div class="intuition-title">{{ t('intuition.title') }}</div>
                 <MathText :text="m.intuition" />
               </div>
-              <button
-                v-if="m.content && !m.streaming && !m.paperImport
-                  && previousQuestion(m) && !isChitchatTurn(m) && !hasDiagram(m)"
-                class="diagram-btn"
-                type="button"
-                :disabled="diagramBusy === m.id"
-                @click.stop="requestDiagram(m)"
-              >{{ diagramBusy === m.id ? t('diagram.generating') : t('diagram.generate') }}</button>
-              <button
-                v-if="m.content && !m.streaming && !m.paperImport && previousQuestion(m) && !isChitchatTurn(m)"
-                class="diagram-btn"
-                type="button"
-                :disabled="intuitionBusy === m.id"
-                @click.stop="requestIntuitionFor(m)"
-              >{{ intuitionBusy === m.id
-                ? t('intuition.generating')
-                : (m.intuition ? t('intuition.regenerate') : t('intuition.generate')) }}</button>
               <span v-if="m.streaming && !m.thinking" class="cursor">▍</span>
               <!-- 半截回答的标记:与完整回答同形,不点明用户看不出缺了一段 -->
               <span v-if="m.interrupted" class="cut-note">{{ t('learn.interrupted') }}</span>
-              <!-- 研究综述的导出入口(仅后端标记过的研究消息显示) -->
-              <template v-if="m.research && !m.streaming">
+              <!-- 统一操作栏:图解 / 直观解释 / 综述导出 / 停止后续写 -->
+              <div
+                v-if="m.content && !m.streaming && !m.paperImport && ((previousQuestion(m) && !isChitchatTurn(m)) || m.research || m.stopped)"
+                class="msg-actions"
+              >
                 <button
-                  class="export-btn"
+                  v-if="previousQuestion(m) && !isChitchatTurn(m) && !hasDiagram(m)"
+                  class="diagram-btn"
                   type="button"
-                  :disabled="exportingMsg === m.id"
-                  @click.stop="exportMenu = exportMenu === m.id ? null : m.id"
+                  :disabled="diagramBusy === m.id"
+                  @click.stop="requestDiagram(m)"
+                >{{ diagramBusy === m.id ? t('diagram.generating') : t('diagram.generate') }}</button>
+                <button
+                  v-if="previousQuestion(m) && !isChitchatTurn(m)"
+                  class="diagram-btn"
+                  type="button"
+                  :disabled="intuitionBusy === m.id"
+                  @click.stop="requestIntuitionFor(m)"
+                >{{ intuitionBusy === m.id
+                  ? t('intuition.generating')
+                  : (m.intuition ? t('intuition.regenerate') : t('intuition.generate')) }}</button>
+                <button
+                  v-if="isResearch && previousQuestion(m) && !isChitchatTurn(m)"
+                  class="diagram-btn prereq-btn"
+                  type="button"
+                  :title="t('research.studyPrereqHint')"
+                  @click.stop="studyPrerequisites(m)"
+                >{{ t('research.studyPrereq') }}</button>
+                <button
+                  v-if="isResearch && previousQuestion(m) && !isChitchatTurn(m)"
+                  class="diagram-btn"
+                  type="button"
+                  @click.stop="pinReplyToTodo(m)"
+                >{{ t('research.pinTodo') }}</button>
+                <template v-if="m.research">
+                  <button
+                    class="export-btn"
+                    type="button"
+                    :disabled="exportingMsg === m.id"
+                    @click.stop="exportMenu = exportMenu === m.id ? null : m.id"
+                  >
+                    {{ exportingMsg === m.id ? t('learn.exporting') : t('learn.exportPdf') }}
+                  </button>
+                </template>
+                <button
+                  v-if="m.stopped"
+                  class="resume-btn"
+                  type="button"
+                  :title="t('learn.resumeHint')"
+                  @click.stop="resumeReply(m)"
                 >
-                  {{ exportingMsg === m.id ? t('learn.exporting') : t('learn.exportPdf') }}
-                </button>
-                <div v-if="exportMenu === m.id" class="export-menu" @click.stop>
-                  <span class="export-menu-title">{{ t('learn.exportLangTitle') }}</span>
-                  <button type="button" @click="doExport(m, 'zh')">{{ t('learn.exportLangZh') }}</button>
-                  <button type="button" @click="doExport(m, 'en')">{{ t('learn.exportLangEn') }}</button>
-                </div>
-              </template>
-              <!-- 用户停止生成后的续写入口:右下角小按钮 -->
-              <div v-if="m.stopped && m.content && !m.streaming" class="resume-row">
-                <button class="resume-btn" type="button" :title="t('learn.resumeHint')" @click.stop="resumeReply(m)">
                   {{ t('learn.resume') }}
                 </button>
               </div>
+              <div v-if="m.research && !m.streaming && exportMenu === m.id" class="export-menu" @click.stop>
+                <span class="export-menu-title">{{ t('learn.exportLangTitle') }}</span>
+                <button type="button" @click="doExport(m, 'zh')">{{ t('learn.exportLangZh') }}</button>
+                <button type="button" @click="doExport(m, 'en')">{{ t('learn.exportLangEn') }}</button>
+              </div>
             </template>
-            <template v-else>{{ m.content }}</template>
+            <div v-else class="user-text">{{ m.content }}</div>
           </div>
         </div>
-      </template>
+      </div>
     </div>
 
     <!-- 拖拽导入遮罩(电脑端):pointer-events 穿透,事件仍落在 .learn 上 -->
@@ -1777,8 +2775,30 @@ onBeforeUnmount(() => {
       <div class="drop-box">📂 {{ t('learn.dropHint') }}</div>
     </div>
 
-    <!-- 输入区:输入行 + 指令栏 -->
+    <!-- 一体化科研输入工作台 -->
     <footer class="input-bar">
+      <div class="composer-card">
+      <div v-if="isResearch" class="ai4s-tools-bar">
+        <button
+          type="button"
+          class="ai4s-pill"
+          :class="{ active: researchVerify }"
+          :aria-pressed="researchVerify"
+          data-ai4s-tool="verify"
+          :title="t('research.verifyToggleHint')"
+          @click="researchVerify = !researchVerify"
+        >✓ {{ t('research.verifyToggle') }}</button>
+        <button
+          type="button"
+          class="ai4s-pill"
+          :class="{ active: researchDiagrams }"
+          :aria-pressed="researchDiagrams"
+          data-ai4s-tool="diagrams"
+          :title="t('chat.diagramToggleHint')"
+          @click="researchDiagrams = !researchDiagrams"
+        >◈ {{ t('chat.diagramToggle') }}</button>
+      </div>
+      <div v-if="(isResearch && stagedPaper) || (isResearch && tableContext)" class="context-bar">
       <div v-if="isResearch && stagedPaper" class="context-chip">
         <span class="context-label">{{ t('chat.paperContext') }}</span>
         <span class="context-name" :title="stagedPaper.title">{{ stagedPaper.title }}</span>
@@ -1796,6 +2816,7 @@ onBeforeUnmount(() => {
           :title="t('chat.removeTable')"
           @click="tableContext = null"
         >✕</button>
+      </div>
       </div>
       <div class="input-row">
         <!-- 附件:相册照片 / 拍照 / 文件 -->
@@ -1850,17 +2871,11 @@ onBeforeUnmount(() => {
           @paste="onPaste"
         ></textarea>
         <!-- 生成中变为「停止生成」:可中断长回答,已生成内容保留 -->
-        <button
-          v-if="isResearch"
-          class="diagram-toggle"
-          :class="{ on: researchDiagrams }"
-          :title="t('chat.diagramToggleHint')"
-          @click="researchDiagrams = !researchDiagrams"
-        >{{ t('chat.diagramToggle') }}</button>
         <button class="send" :class="{ 'is-stop': busy }" @click="busy ? stopGenerating() : send()">
           {{ busy ? t('learn.stop') : t('learn.send') }}
         </button>
       </div>
+      </div><!-- /composer-card -->
       <!-- 三个底部浮层面板:各包独立 Transition(Transition 要求恰好一个子元素);
            遮罩统一挂在页尾(见下),点任意暗处收起 -->
       <Transition name="nb-rise">
@@ -2014,8 +3029,8 @@ onBeforeUnmount(() => {
       </aside>
 
       <div
-        v-if="searchOpen && !focusDiagram"
-        class="split-divider"
+        v-if="showRightStage"
+        class="split-divider stage-divider"
         :class="{ dragging: splitResizing }"
         role="separator"
         aria-orientation="vertical"
@@ -2025,18 +3040,390 @@ onBeforeUnmount(() => {
         @keydown.left.prevent="nudgeSplit(-0.02)"
         @keydown.right.prevent="nudgeSplit(0.02)"
       ></div>
+      <div
+        v-if="showRightStage"
+        class="stage-backdrop"
+        @click="closeStage"
+      ></div>
       <aside
-        v-if="searchOpen || searchWasOpen"
-        v-show="searchOpen && !focusDiagram"
-        class="search-pane"
+        v-if="showRightStage || (isResearch && (searchOpen || searchWasOpen))"
+        v-show="showRightStage"
+        class="stage-pane"
+        :class="`stage-pane--${stageLayout}`"
         :style="{ width: `${splitRatio * 100}%` }"
+        aria-label="Science Stage"
       >
-        <ResearchSearchView
-          ref="searchPaneRef"
-          embedded
-          @ask="onSplitAsk"
-          @paper-change="onPaperChange"
-        />
+        <header class="stage-head">
+          <div class="stage-tabs" role="tablist">
+            <button
+              type="button"
+              class="stage-tab"
+              :class="{ on: isStageTabOn('figures'), active: stageTab === 'figures' }"
+              @click="selectStageTab('figures')"
+            >
+              <span>{{ stageLabel('图解', 'Figures') }}</span>
+              <span v-if="sessionDiagrams.length" class="stage-tab-count">{{ sessionDiagrams.length }}</span>
+            </button>
+            <button
+              type="button"
+              class="stage-tab"
+              :class="{ on: isStageTabOn('files'), active: stageTab === 'files' }"
+              @click="selectStageTab('files')"
+            >
+              <span>{{ stageLabel('文件与资料', 'Files') }}</span>
+              <span v-if="sessionFiles.length" class="stage-tab-count">{{ sessionFiles.length }}</span>
+            </button>
+            <button
+              v-if="isResearch"
+              type="button"
+              class="stage-tab"
+              :class="{ on: isStageTabOn('reader'), active: stageTab === 'reader' }"
+              @click="selectStageTab('reader')"
+            >
+              <span>{{ stageLabel('文献阅读', 'Reader') }}</span>
+            </button>
+          </div>
+          <div class="stage-head-right">
+            <!-- 多子窗布局切换器:单窗 / 上下双窗 / 多窗堆叠 -->
+            <div class="stage-layout-switch" role="group" :aria-label="stageLabel('子窗口排版', 'Stage Layout')">
+              <button
+                type="button"
+                class="layout-btn"
+                :class="{ on: stageLayout === 'single' }"
+                :title="stageLabel('单窗聚焦', 'Single Pane')"
+                data-layout="single"
+                @click="setStageLayout('single')"
+              >▢</button>
+              <button
+                type="button"
+                class="layout-btn"
+                :class="{ on: stageLayout === 'split' }"
+                :title="stageLabel('上下双窗分屏', 'Dual Split')"
+                data-layout="split"
+                @click="setStageLayout('split')"
+              >⊟</button>
+              <button
+                type="button"
+                class="layout-btn"
+                :class="{ on: stageLayout === 'stack' }"
+                :title="stageLabel('多子窗平铺堆叠', 'Multi-Pane Stack')"
+                data-layout="stack"
+                @click="setStageLayout('stack')"
+              >▤</button>
+            </div>
+            <button
+              class="stage-close"
+              type="button"
+              :aria-label="t('common.close')"
+              @click="closeStage"
+            >✕</button>
+          </div>
+        </header>
+
+        <!-- 多子窗口停靠工作区 -->
+        <div ref="stageDockRef" class="stage-dock">
+          <!-- 双窗模式下可拖拽横向分隔条(通过 CSS order 精准置于两子窗之间) -->
+          <div
+            v-if="showStageRowDivider"
+            class="stage-h-divider"
+            :class="{ dragging: stageRowResizing }"
+            role="separator"
+            aria-orientation="horizontal"
+            tabindex="0"
+            @pointerdown="startStageRowDrag"
+            @dblclick="resetStageRow"
+            @keydown.up.prevent="nudgeStageRow(-0.04)"
+            @keydown.down.prevent="nudgeStageRow(0.04)"
+          ></div>
+
+          <!-- 子窗口 1: 数学图解与 2D/3D/GeoGebra 画布 -->
+          <section
+            v-show="isPaneVisible('figures')"
+            class="subwin"
+            :class="{ 'subwin--focused': stageTab === 'figures', 'subwin--collapsed': stageCollapsed.figures && visibleStagePanes.length > 1 }"
+            :style="paneFlexStyle('figures')"
+            data-subwin="figures"
+            @pointerdown="stageTab = 'figures'"
+          >
+            <header class="subwin-head">
+              <span class="subwin-dot subwin-dot--primary"></span>
+              <span class="subwin-title">{{ stageLabel('图解画布', 'Figures') }}</span>
+              <span v-if="sessionDiagrams.length" class="subwin-count">{{ sessionDiagrams.length }}</span>
+              <div class="subwin-tools">
+                <button
+                  v-if="visibleStagePanes.length > 1"
+                  type="button"
+                  class="subwin-btn subwin-collapse"
+                  :title="stageCollapsed.figures ? stageLabel('展开子窗', 'Expand') : stageLabel('折叠子窗', 'Collapse')"
+                  @click.stop="togglePaneCollapse('figures')"
+                >{{ stageCollapsed.figures ? '+' : '−' }}</button>
+                <button
+                  v-if="visibleStagePanes.length > 1 || stageMaximized === 'figures'"
+                  type="button"
+                  class="subwin-btn subwin-max"
+                  :title="stageMaximized === 'figures' ? stageLabel('还原分屏', 'Restore') : stageLabel('最大化子窗', 'Maximize')"
+                  @click.stop="togglePaneMaximize('figures')"
+                >{{ stageMaximized === 'figures' ? '⤡' : '⤢' }}</button>
+                <button
+                  type="button"
+                  class="subwin-btn subwin-close"
+                  :title="stageLabel('关闭子窗', 'Close Pane')"
+                  @click.stop="closeSubPane('figures')"
+                >✕</button>
+              </div>
+            </header>
+            <div v-show="!stageCollapsed.figures || visibleStagePanes.length === 1" class="stage-body">
+              <template v-if="activeStageFigure">
+                <div v-if="sessionDiagrams.length > 1" class="stage-strip">
+                  <button
+                    v-for="(item, idx) in sessionDiagrams"
+                    :key="item.key"
+                    type="button"
+                    class="stage-pill"
+                    :class="{ on: activeStageFigure.key === item.key }"
+                    @click="activeFigureKey = item.key"
+                  >
+                    <span class="stage-pill-idx">{{ String(sessionDiagrams.length - idx).padStart(2, '0') }}</span>
+                    <span class="stage-pill-name">{{ item.title }}</span>
+                  </button>
+                </div>
+                <div class="stage-card-head">
+                  <div class="stage-card-meta">
+                    <span class="tech-label stage-kicker">FIGURE · INTERACTIVE CANVAS</span>
+                    <h3 class="stage-card-title">{{ activeStageFigure.title }}</h3>
+                  </div>
+                  <div class="stage-card-actions">
+                    <button
+                      type="button"
+                      class="stage-action-btn"
+                      @click="jumpTo(activeStageFigure.msgId)"
+                    >{{ stageLabel('定位消息', 'Jump') }}</button>
+                    <button
+                      type="button"
+                      class="stage-action-btn stage-action-btn--primary"
+                      @click="openDiagramFocus(activeStageFigure.diagram, activeStageFigure.msgId)"
+                    >{{ stageLabel('全幅聚焦', 'Focus') }}</button>
+                  </div>
+                </div>
+                <div class="stage-figure-canvas">
+                  <DiagramBoundary
+                    :title="activeStageFigure.diagram.spec.title"
+                    :notes="activeStageFigure.diagram.spec.annotations.map((note) => note.text)"
+                  >
+                    <DiagramBlockView :spec="activeStageFigure.diagram.spec" />
+                  </DiagramBoundary>
+                </div>
+              </template>
+              <div v-else class="stage-empty">
+                <div class="stage-empty-glyph" aria-hidden="true">∫</div>
+                <p class="stage-empty-title">{{ stageLabel('尚未生成数学图解', 'No figures in this session yet') }}</p>
+                <p class="stage-empty-desc">
+                  {{ stageLabel('在对话中提出几何、函数或矩阵问题，或点击回答下方的「生成图解」，2D/3D 与 GeoGebra 交互图表会自动汇聚到此子窗口。', 'Ask a geometry, calculus, or matrix question—or click Generate Diagram on any reply—to inspect 2D/3D and GeoGebra figures here.') }}
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <!-- 子窗口 2: 文件、图片、教材与科研数据表 -->
+          <section
+            v-show="isPaneVisible('files')"
+            class="subwin"
+            :class="{ 'subwin--focused': stageTab === 'files', 'subwin--collapsed': stageCollapsed.files && visibleStagePanes.length > 1 }"
+            :style="paneFlexStyle('files')"
+            data-subwin="files"
+            @pointerdown="stageTab = 'files'"
+          >
+            <header class="subwin-head">
+              <span class="subwin-dot subwin-dot--proof"></span>
+              <span class="subwin-title">{{ stageLabel('文件与资料', 'Files & Context') }}</span>
+              <span v-if="sessionFiles.length" class="subwin-count">{{ sessionFiles.length }}</span>
+              <div class="subwin-tools">
+                <button
+                  v-if="visibleStagePanes.length > 1"
+                  type="button"
+                  class="subwin-btn subwin-collapse"
+                  :title="stageCollapsed.files ? stageLabel('展开子窗', 'Expand') : stageLabel('折叠子窗', 'Collapse')"
+                  @click.stop="togglePaneCollapse('files')"
+                >{{ stageCollapsed.files ? '+' : '−' }}</button>
+                <button
+                  v-if="visibleStagePanes.length > 1 || stageMaximized === 'files'"
+                  type="button"
+                  class="subwin-btn subwin-max"
+                  :title="stageMaximized === 'files' ? stageLabel('还原分屏', 'Restore') : stageLabel('最大化子窗', 'Maximize')"
+                  @click.stop="togglePaneMaximize('files')"
+                >{{ stageMaximized === 'files' ? '⤡' : '⤢' }}</button>
+                <button
+                  type="button"
+                  class="subwin-btn subwin-close"
+                  :title="stageLabel('关闭子窗', 'Close Pane')"
+                  @click.stop="closeSubPane('files')"
+                >✕</button>
+              </div>
+            </header>
+            <div v-show="!stageCollapsed.files || visibleStagePanes.length === 1" class="stage-body">
+              <template v-if="activeStageFile">
+                <div v-if="sessionFiles.length > 1" class="stage-strip">
+                  <button
+                    v-for="file in sessionFiles"
+                    :key="file.key"
+                    type="button"
+                    class="stage-pill"
+                    :class="{ on: activeStageFile.key === file.key }"
+                    @click="activeFileKey = file.key"
+                  >
+                    <span class="stage-pill-idx">{{ file.kind.toUpperCase() }}</span>
+                    <span class="stage-pill-name">{{ file.title }}</span>
+                  </button>
+                </div>
+                <div class="stage-card-head">
+                  <div class="stage-card-meta">
+                    <span class="tech-label stage-kicker">{{ activeStageFile.kind.toUpperCase() }} · {{ activeStageFile.subtitle }}</span>
+                    <h3 class="stage-card-title">{{ activeStageFile.title }}</h3>
+                  </div>
+                  <div class="stage-card-actions">
+                    <button
+                      v-if="activeStageFile.msgId"
+                      type="button"
+                      class="stage-action-btn"
+                      @click="jumpTo(activeStageFile.msgId)"
+                    >{{ stageLabel('定位消息', 'Jump') }}</button>
+                    <button
+                      v-if="activeStageFile.kind === 'book'"
+                      type="button"
+                      class="stage-action-btn stage-action-btn--primary"
+                      @click="runCommand('章节知识导航')"
+                    >{{ cmdName('章节知识导航') }}</button>
+                    <button
+                      v-if="activeStageFile.kind === 'table'"
+                      type="button"
+                      class="stage-action-btn stage-action-btn--primary"
+                      @click="router.push('/research/tables')"
+                    >{{ t('tables.entry') }}</button>
+                    <button
+                      v-if="activeStageFile.kind === 'paper' && isResearch"
+                      type="button"
+                      class="stage-action-btn stage-action-btn--primary"
+                      @click="selectStageTab('reader')"
+                    >{{ stageLabel('打开阅读器', 'Open Reader') }}</button>
+                  </div>
+                </div>
+
+                <div v-if="activeStageFile.kind === 'image' && activeStageFile.url" class="stage-img-wrap">
+                  <img :src="activeStageFile.url" :alt="activeStageFile.title" class="stage-img" />
+                </div>
+                <div v-else-if="activeStageFile.preview" class="stage-doc-preview">
+                  <div class="tech-label stage-preview-label">{{ stageLabel('文本节选预览', 'EXCERPT PREVIEW') }}</div>
+                  <pre class="stage-preview-text">{{ activeStageFile.preview.slice(0, 2400) }}{{ activeStageFile.preview.length > 2400 ? '\n…' : '' }}</pre>
+                </div>
+                <div v-else class="stage-meta-card">
+                  <p class="stage-meta-note">
+                    {{ activeStageFile.kind === 'book'
+                      ? stageLabel('教材已载入本地书库，点击上方「章节知识导航」可按目录切片精读。', 'Textbook cached locally. Click Chapter Navigation above to inspect by section.')
+                      : activeStageFile.kind === 'paper'
+                        ? stageLabel('论文已绑定为当前对话上下文，可直接追问定理细节或切到「文献阅读」对照全文。', 'Paper is active as conversation context. Ask about theorems directly or open Reader.')
+                        : activeStageFile.kind === 'table'
+                          ? stageLabel('实验数据表已接入科研推演上下文，提问时会自动携带结构化数据与回归模型。', 'Experimental table is linked to this session context along with its regression model.')
+                          : stageLabel('文件已关联至当前会话，可直接围绕内容提问。', 'File is attached to this session and ready for follow-up questions.') }}
+                  </p>
+                </div>
+              </template>
+              <div v-else class="stage-empty">
+                <div class="stage-empty-glyph" aria-hidden="true">◫</div>
+                <p class="stage-empty-title">{{ stageLabel('当前会话暂无文件或资料', 'No files or attachments yet') }}</p>
+                <p class="stage-empty-desc">
+                  {{ stageLabel('拖入教材 PDF、题目照片、科研论文，或从数据表带入实验记录，即可在右侧实时对照查看。', 'Drop a textbook PDF, problem image, paper, or linked table to inspect side by side.') }}
+                </p>
+                <div class="stage-empty-actions">
+                  <button type="button" class="stage-action-btn stage-action-btn--primary" @click="pickFile()">
+                    ＋ {{ t('learn.attachFile') }}
+                  </button>
+                  <button type="button" class="stage-action-btn" @click="pickAlbum()">
+                    {{ t('learn.attachAlbum') }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 子窗口 3 (科研区): 文献全文检索与联动 PDF 阅读器 -->
+          <section
+            v-if="isResearch && (isPaneVisible('reader') || searchOpen || searchWasOpen)"
+            v-show="isPaneVisible('reader')"
+            class="subwin"
+            :class="{ 'subwin--focused': stageTab === 'reader', 'subwin--collapsed': stageCollapsed.reader && visibleStagePanes.length > 1 }"
+            :style="paneFlexStyle('reader')"
+            data-subwin="reader"
+            @pointerdown="stageTab = 'reader'"
+          >
+            <header class="subwin-head">
+              <span class="subwin-dot subwin-dot--cite"></span>
+              <span class="subwin-title">{{ stageLabel('文献检索与阅读', 'Literature Reader') }}</span>
+              <div class="subwin-tools">
+                <button
+                  v-if="activeReaderPaper"
+                  type="button"
+                  class="subwin-pill-btn"
+                  :class="{ on: isPaperInCompare }"
+                  :title="t('stage.compareHint')"
+                  @click.stop="toggleComparePaper"
+                >{{ isPaperInCompare ? t('stage.inCompare') : t('stage.addCompare') }}</button>
+                <button
+                  v-if="compareIds.length >= 2"
+                  type="button"
+                  class="subwin-pill-btn on"
+                  :disabled="compareRunning"
+                  @click.stop="runCompareQueue"
+                >{{ compareRunning ? '…' : t('stage.runCompare', { n: compareIds.length }) }}</button>
+                <button
+                  v-if="activeReaderPaper"
+                  type="button"
+                  class="subwin-pill-btn"
+                  :class="{ on: readerInsightsOpen }"
+                  :title="t('workspace.structure')"
+                  @click.stop="toggleReaderInsights"
+                >{{ t('workspace.structureToggle') }}</button>
+                <button
+                  v-if="visibleStagePanes.length > 1"
+                  type="button"
+                  class="subwin-btn subwin-collapse"
+                  :title="stageCollapsed.reader ? stageLabel('展开子窗', 'Expand') : stageLabel('折叠子窗', 'Collapse')"
+                  @click.stop="togglePaneCollapse('reader')"
+                >{{ stageCollapsed.reader ? '+' : '−' }}</button>
+                <button
+                  v-if="visibleStagePanes.length > 1 || stageMaximized === 'reader'"
+                  type="button"
+                  class="subwin-btn subwin-max"
+                  :title="stageMaximized === 'reader' ? stageLabel('还原分屏', 'Restore') : stageLabel('最大化子窗', 'Maximize')"
+                  @click.stop="togglePaneMaximize('reader')"
+                >{{ stageMaximized === 'reader' ? '⤡' : '⤢' }}</button>
+                <button
+                  type="button"
+                  class="subwin-btn subwin-close"
+                  :title="stageLabel('关闭子窗', 'Close Pane')"
+                  @click.stop="closeSubPane('reader')"
+                >✕</button>
+              </div>
+            </header>
+            <div v-show="!stageCollapsed.reader || visibleStagePanes.length === 1" class="stage-reader">
+              <div v-if="readerInsightsOpen && activeReaderPaper" class="stage-insights-wrap">
+                <PaperInsights
+                  :structure="readerInsightsStructure"
+                  :loading="readerInsightsLoading"
+                  :error="readerInsightsError"
+                  :title="activeReaderPaper.title"
+                  @refresh="loadReaderInsights(activeReaderPaper.docId, true)"
+                />
+              </div>
+              <ResearchSearchView
+                v-show="!readerInsightsOpen"
+                ref="searchPaneRef"
+                embedded
+                @ask="onSplitAsk"
+                @paper-change="onPaperChange"
+              />
+            </div>
+          </section>
+        </div>
       </aside>
     </div><!-- /workspace-body -->
 
@@ -2075,18 +3462,208 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .learn {
+  --ws-accent: var(--accent-primary);
   height: 100vh;
   /* iPad/手机 Safari 的 100vh 含工具栏区域,底部输入条会被切掉;dvh 跟随可见视口 */
   height: 100dvh;
   display: flex;
   flex-direction: column;
   position: relative;
+  background: var(--bg-void);
+}
+
+.learn.ws-research {
+  --ws-accent: var(--accent-cite);
 }
 
 .workspace-body {
   flex: 1;
   min-height: 0;
   display: flex;
+}
+
+/* ---------- 左侧可折叠科研仪器栏(宽屏桌面展示) ---------- */
+.sci-rail {
+  flex: none;
+  width: 224px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 12px calc(14px + env(safe-area-inset-bottom));
+  border-right: 1px solid var(--line);
+  background: var(--surface-1);
+  overflow-y: auto;
+}
+
+.rail-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-0);
+}
+
+.rail-seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.rail-seg-btn:hover {
+  color: var(--text-hi);
+}
+
+.rail-seg-btn.on {
+  background: var(--bg-card);
+  color: var(--text-hi);
+  box-shadow: var(--shadow-sm);
+}
+
+.rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.rail-heading {
+  font-size: 10px;
+  padding: 2px 8px 4px;
+  color: var(--text-dim);
+}
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.rail-item:hover {
+  background: var(--bg-card);
+  color: var(--text-hi);
+}
+
+.rail-item--on {
+  background: color-mix(in srgb, var(--ws-accent) 13%, var(--bg-card));
+  border-color: color-mix(in srgb, var(--ws-accent) 34%, var(--line));
+  color: var(--ws-accent);
+  font-weight: 500;
+}
+
+.rail-icon {
+  width: 18px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--ws-accent);
+  flex: none;
+}
+
+.rail-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-tag {
+  font-family: var(--font-tech);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-0);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-badge {
+  font-family: var(--font-tech);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--ws-accent);
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-foot {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rail-new {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text-hi);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color var(--dur-fast), color var(--dur-fast);
+}
+
+.rail-new:hover {
+  border-color: var(--line-bright);
+  color: var(--ws-accent);
+}
+
+.rail-voice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+}
+
+.rail-voice-label {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.rail-toggle {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  transition: border-color var(--dur-fast), color var(--dur-fast), background-color var(--dur-fast);
+}
+
+.rail-toggle:hover {
+  color: var(--text-hi);
+  border-color: var(--line-bright);
+  background: var(--bg-card);
 }
 
 .chat-pane {
@@ -2114,11 +3691,643 @@ onBeforeUnmount(() => {
   outline: none;
 }
 
-.search-pane {
+.stage-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.stage-toggle:hover {
+  color: var(--text-hi);
+  border-color: var(--line-bright);
+  background: var(--bg-card);
+}
+
+.stage-toggle--on {
+  color: var(--ws-accent);
+  border-color: color-mix(in srgb, var(--ws-accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--ws-accent) 12%, var(--bg-card));
+}
+
+.stage-toggle-ico {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.stage-toggle-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ws-accent) 18%, var(--surface-0));
+  color: var(--ws-accent);
+  font-family: var(--font-tech);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 右侧可折叠科研演示台(AI for Science Stage) ---------- */
+.stage-backdrop {
+  display: none;
+}
+
+.stage-pane {
   flex: none;
-  min-width: 0;
+  min-width: 300px;
+  max-width: 60%;
   height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-1);
+  border-left: 1px solid var(--line);
   overflow: hidden;
+}
+
+.stage-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-1);
+}
+
+.stage-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-0);
+}
+
+.stage-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.stage-tab:hover {
+  color: var(--text-hi);
+}
+
+.stage-tab.on {
+  background: var(--bg-card);
+  color: var(--text-hi);
+  box-shadow: var(--shadow-sm);
+}
+
+.stage-tab-count {
+  font-family: var(--font-tech);
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ws-accent) 16%, transparent);
+  color: var(--ws-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.stage-head-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.stage-layout-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-0);
+}
+
+.layout-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.layout-btn:hover {
+  color: var(--text-hi);
+}
+
+.layout-btn.on {
+  background: var(--bg-card);
+  color: var(--ws-accent);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- 多子窗口停靠容器与子窗外壳 ---------- */
+.stage-dock {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  gap: 8px;
+  overflow: hidden;
+  background: var(--surface-0);
+}
+
+.stage-pane--split .stage-dock {
+  gap: 0;
+}
+
+.stage-h-divider {
+  order: 1;
+  flex: none;
+  height: 8px;
+  cursor: row-resize;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+
+.stage-h-divider::before {
+  content: "";
+  width: 44px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background-color var(--dur-fast), width var(--dur-fast);
+}
+
+.stage-h-divider:hover::before,
+.stage-h-divider:focus-visible::before,
+.stage-h-divider.dragging::before {
+  width: 68px;
+  background: var(--ws-accent);
+}
+
+.stage-h-divider:focus-visible {
+  outline: none;
+}
+
+.subwin {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-1);
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.subwin--focused {
+  border-color: color-mix(in srgb, var(--ws-accent) 42%, var(--line));
+}
+
+.subwin--collapsed {
+  flex: 0 0 auto !important;
+}
+
+.subwin-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-card);
+  user-select: none;
+}
+
+.subwin--collapsed .subwin-head {
+  border-bottom: none;
+}
+
+.subwin-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.subwin-dot--primary {
+  background: var(--accent-primary);
+}
+
+.subwin-dot--proof {
+  background: var(--accent-proof);
+}
+
+.subwin-dot--cite {
+  background: var(--accent-cite);
+}
+
+.subwin-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-hi);
+  letter-spacing: 0.01em;
+}
+
+.subwin-count {
+  font-family: var(--font-tech);
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--surface-0);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.subwin-tools {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.subwin-btn {
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.subwin-btn:hover {
+  color: var(--text-hi);
+  border-color: var(--line);
+  background: var(--surface-1);
+}
+
+.subwin-pill-btn {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-1);
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.subwin-pill-btn:hover,
+.subwin-pill-btn.on {
+  color: var(--accent-cite);
+  border-color: color-mix(in srgb, var(--accent-cite) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent-cite) 12%, var(--surface-1));
+}
+
+.stage-insights-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+}
+
+.stage-insights-wrap :deep(.pi) {
+  width: 100%;
+  min-width: 0;
+  border-left: none;
+  background: var(--surface-1);
+}
+
+.prereq-btn {
+  color: var(--accent-primary);
+  border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--line));
+}
+
+.prereq-btn:hover {
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 12%, var(--surface-1));
+}
+
+.stage-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  display: grid;
+  place-items: center;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.stage-close:hover {
+  color: var(--text-hi);
+  border-color: var(--line);
+  background: var(--bg-card);
+}
+
+.stage-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stage-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.stage-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 190px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--surface-0);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.stage-pill:hover {
+  color: var(--text-hi);
+  border-color: var(--line-bright);
+}
+
+.stage-pill.on {
+  color: var(--ws-accent);
+  border-color: color-mix(in srgb, var(--ws-accent) 50%, var(--line));
+  background: color-mix(in srgb, var(--ws-accent) 10%, var(--bg-card));
+}
+
+.stage-pill-idx {
+  font-family: var(--font-tech);
+  font-size: 10px;
+  opacity: 0.78;
+}
+
+.stage-pill-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+
+.stage-card-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.stage-kicker {
+  font-size: 10px;
+  color: var(--ws-accent);
+}
+
+.stage-card-title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-hi);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.stage-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: none;
+}
+
+.stage-action-btn {
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.stage-action-btn:hover {
+  color: var(--text-hi);
+  border-color: var(--line-bright);
+}
+
+.stage-action-btn--primary {
+  background: color-mix(in srgb, var(--ws-accent) 14%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--ws-accent) 45%, var(--line));
+  color: var(--ws-accent);
+  font-weight: 500;
+}
+
+.stage-figure-canvas {
+  flex: 1;
+  min-height: 280px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background-color: var(--surface-0);
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--line) 42%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--line) 42%, transparent) 1px, transparent 1px);
+  background-size: 28px 28px;
+  padding: 10px;
+  overflow: auto;
+}
+
+.stage-img-wrap {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-0);
+  padding: 12px;
+  display: grid;
+  place-items: center;
+}
+
+.stage-img {
+  max-width: 100%;
+  max-height: 58vh;
+  max-height: 58dvh;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.stage-doc-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-card);
+  padding: 12px 14px;
+}
+
+.stage-preview-label {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.stage-preview-text {
+  margin: 0;
+  flex: 1;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  line-height: 1.72;
+  color: var(--text);
+}
+
+.stage-meta-card {
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--ws-accent);
+  border-radius: 0 10px 10px 0;
+  background: var(--bg-card);
+  padding: 14px 16px;
+}
+
+.stage-meta-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+.stage-empty {
+  flex: 1;
+  min-height: 240px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-0) 60%, transparent);
+  padding: 28px 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 8px;
+}
+
+.stage-empty-glyph {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-card);
+  color: var(--ws-accent);
+  font-family: var(--font-serif);
+  font-size: 22px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 4px;
+}
+
+.stage-empty-title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 15.5px;
+  font-weight: 500;
+  color: var(--text-hi);
+}
+
+.stage-empty-desc {
+  margin: 0;
+  max-width: 34ch;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+
+.stage-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.stage-reader {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.stage-reader > :deep(*) {
+  flex: 1;
+  min-height: 0;
 }
 
 .diagram-embed {
@@ -2143,18 +4352,9 @@ onBeforeUnmount(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #05070a;
+  background: var(--surface-1);
   border-left: 1px solid var(--line);
   overflow: hidden;
-  --bg-void: #05070a;
-  --bg-panel: rgba(13, 18, 30, 0.92);
-  --bg-card: #05070a;
-  --text-hi: #e8f2ff;
-  --text: #c2d2e4;
-  --text-dim: #8b9bb0;
-  --line: rgba(96, 165, 250, 0.18);
-  --line-bright: rgba(96, 165, 250, 0.45);
-  --cyan: #4dd6ff;
 }
 
 .diagram-focus-edge {
@@ -2248,60 +4448,71 @@ onBeforeUnmount(() => {
 .chat-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: calc(12px + env(safe-area-inset-top)) 22px 12px;
+  gap: 12px;
+  padding: calc(10px + env(safe-area-inset-top)) 20px 10px;
   border-bottom: 1px solid var(--line);
-  background: var(--bg-panel);
-  backdrop-filter: blur(8px);
+  background: var(--surface-1);
 }
 
 .back {
   background: transparent;
   border: 1px solid var(--line);
   color: var(--text);
-  padding: 7px 16px;
+  padding: 6px 13px;
   cursor: pointer;
-  border-radius: 4px;
-  font-size: 13px;
+  border-radius: 7px;
+  font-size: 12.5px;
   transition: all var(--dur-fast) var(--ease-out);
 }
 
 .back:hover {
-  color: var(--cyan);
+  color: var(--text-hi);
   border-color: var(--line-bright);
-  box-shadow: var(--glow-cyan);
+  background: var(--bg-card);
 }
 
 .title-box {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
 }
 
 .title {
   color: var(--text-hi);
-  font-size: 15px;
-  letter-spacing: 0.06em;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .sub {
   font-size: 10px;
+  color: var(--ws-accent);
 }
 
 .right {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
-.badge {
-  color: var(--cyan);
-  border: 1px solid var(--line-bright);
-  padding: 5px 12px;
-  border-radius: 999px;
-  font-size: 11px;
+@media (min-width: 961px) {
+  /* 宽屏左栏展开时,检索/数据表/新建对话已在左栏常驻,隐藏顶栏重复按钮 */
+  .learn.rail-open .header-dup {
+    display: none;
+  }
+
+  /* 三栏同时展开时适度收紧中间阅读列左右内边距,保留宽裕阅读空间 */
+  .learn.stage-open .chat-list {
+    padding: 20px 18px 24px;
+  }
+
+  .learn.stage-open .input-bar {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
 }
 
 .session-chip {
@@ -2398,46 +4609,135 @@ onBeforeUnmount(() => {
   font-size: 10px;
 }
 
-/* ---------- 对话区 ---------- */
+/* ---------- 出版级对话与证明文档流 ---------- */
 .chat-list {
   flex: 1;
   overflow-y: auto;
-  padding: 22px;
+  padding: 24px 28px 28px;
+}
+
+.chat-stream {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
+}
+
+.origin-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-cite) 10%, var(--bg-panel));
+  border: 1px solid color-mix(in srgb, var(--accent-cite) 30%, var(--line));
+}
+.origin-meta {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.origin-back {
+  flex: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-cite) 45%, var(--line));
+  background: var(--bg-card);
+  color: var(--accent-cite);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.origin-back:hover {
+  background: color-mix(in srgb, var(--accent-cite) 14%, var(--bg-card));
 }
 
 .msg {
   display: flex;
+  width: 100%;
   scroll-margin: 20px 0;
 }
 
 .msg.user {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .bubble {
-  max-width: 78%;
-  padding: 12px 16px;
-  border-radius: 12px;
-  font-size: 14px;
-  line-height: 1.75;
+  width: 100%;
+  max-width: 100%;
+  font-size: 14.5px;
+  line-height: 1.82;
+}
+
+.cell-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cell-role {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+}
+
+.cell-meta--assistant .cell-role {
+  color: var(--ws-accent);
+}
+
+.cell-pill {
+  font-size: 9.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+}
+
+.cell-pill--cite {
+  color: var(--accent-cite);
+  border-color: color-mix(in srgb, var(--accent-cite) 38%, var(--line));
+  background: color-mix(in srgb, var(--accent-cite) 10%, transparent);
+}
+
+.user-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-hi);
 }
 
 .msg.user .bubble {
-  background: color-mix(in srgb, var(--cyan) 9%, transparent);
-  border: 1px solid color-mix(in srgb, var(--cyan) 32%, transparent);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 13px 18px;
   color: var(--text-hi);
-  border-bottom-right-radius: 4px;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 .msg.assistant .bubble {
   background: var(--bg-card);
   border: 1px solid var(--line);
-  border-bottom-left-radius: 4px;
+  border-left: 2.5px solid var(--ws-accent);
+  border-radius: 10px;
+  padding: 16px 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.msg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
 }
 
 /* 跨板块澄清卡:给出范围 + 方向按钮 */
@@ -2574,45 +4874,38 @@ onBeforeUnmount(() => {
   line-height: 1.5;
 }
 
-/* 停止生成后的续写入口:气泡右下角 */
-.resume-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 8px;
-}
-
+/* 停止生成后的续写按钮(统一收拢在 .msg-actions 内) */
 .resume-btn {
-  padding: 3px 12px;
+  padding: 4px 12px;
   border: 1px solid var(--line-bright);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--cyan) 8%, transparent);
-  color: var(--cyan);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--ws-accent) 10%, transparent);
+  color: var(--ws-accent);
   font-size: 11.5px;
   cursor: pointer;
+  margin-left: auto;
   transition: all var(--dur-fast) var(--ease-out);
 }
 
 .resume-btn:hover {
-  background: color-mix(in srgb, var(--cyan) 16%, transparent);
-  box-shadow: var(--glow-cyan);
+  background: color-mix(in srgb, var(--ws-accent) 18%, transparent);
 }
 
 /* 研究综述导出:小按钮 + 语言选择菜单 */
 .export-btn {
   display: inline-block;
-  margin-top: 10px;
-  padding: 4px 14px;
-  border: 1px solid var(--line-bright);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--cyan) 8%, transparent);
-  color: var(--cyan);
-  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-cite) 45%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent-cite) 10%, transparent);
+  color: var(--accent-cite);
+  font-size: 11.5px;
   cursor: pointer;
   transition: all var(--dur-fast) var(--ease-out);
 }
 
 .export-btn:hover {
-  box-shadow: var(--glow-cyan);
+  background: color-mix(in srgb, var(--accent-cite) 18%, transparent);
 }
 
 .export-btn:disabled {
@@ -2622,19 +4915,18 @@ onBeforeUnmount(() => {
 
 .diagram-btn {
   display: inline-block;
-  margin-top: 8px;
-  margin-left: 6px;
-  padding: 3px 10px;
+  padding: 4px 11px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
+  border-radius: 7px;
+  background: var(--surface-1);
   color: var(--text-dim);
-  font-size: 10.5px;
+  font-size: 11.5px;
   cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
 }
 
 .diagram-btn:hover {
-  color: var(--cyan);
+  color: var(--text-hi);
   border-color: var(--line-bright);
 }
 
@@ -2695,15 +4987,110 @@ onBeforeUnmount(() => {
   color: var(--cyan);
 }
 
-/* ---------- 输入区 ---------- */
+/* ---------- 一体化科研输入工作台 ---------- */
 .input-bar {
   position: relative; /* 问题记录面板与附件弹层以此为定位锚点 */
   border-top: 1px solid var(--line);
-  background: var(--bg-panel);
-  padding: 12px 22px calc(14px + env(safe-area-inset-bottom));
+  background: var(--surface-0);
+  padding: 12px 24px calc(14px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 10px;
+}
+
+.composer-card {
+  width: 100%;
+  max-width: 1080px;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.composer-card:focus-within {
+  border-color: var(--line-bright);
+  box-shadow: var(--focus-ring);
+}
+
+.context-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.ai4s-tools-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.ai4s-tools-bar::-webkit-scrollbar { display: none; }
+.ai4s-pill {
+  flex: none;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.ai4s-pill:hover {
+  color: var(--text-hi);
+  border-color: var(--line-bright);
+}
+.ai4s-pill.active {
+  color: var(--ws-accent);
+  background: color-mix(in srgb, var(--ws-accent) 13%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--ws-accent) 42%, var(--line));
+  font-weight: 500;
+}
+
+.rail-project {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.rail-project-select {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--bg-card);
+  color: var(--text-hi);
+  font-size: 12px;
+}
+.rail-report-btn {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--ws-accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--ws-accent) 10%, var(--bg-card));
+  color: var(--ws-accent);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.rail-report-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .workspace-body.with-focus .input-bar {
@@ -2831,31 +5218,23 @@ onBeforeUnmount(() => {
 .input-row {
   display: flex;
   align-items: flex-end;
-  gap: 12px;
+  gap: 8px;
 }
 
 .input {
   flex: 1;
   min-width: 0;
   resize: none;
-  background: var(--bg-card);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-hi);
   font-family: var(--font-ui);
   font-size: 14px;
   line-height: 1.6;
-  padding: 11px 14px;
+  padding: 9px 8px;
   outline: none;
   max-height: 160px;
-  transition:
-    border-color var(--dur-fast),
-    box-shadow var(--dur-fast);
-}
-
-.input:focus {
-  border-color: var(--line-bright);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cyan) 10%, transparent);
 }
 
 .input::placeholder {
@@ -2863,37 +5242,38 @@ onBeforeUnmount(() => {
 }
 
 .diagram-toggle {
-  background: transparent;
+  background: var(--surface-1);
   border: 1px solid var(--line);
   color: var(--text-dim);
-  padding: 11px 12px;
-  border-radius: 10px;
+  padding: 9px 11px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 12px;
   white-space: nowrap;
-}
-
-.diagram-toggle.on {
-  color: var(--cyan);
-  border-color: var(--line-bright);
-  background: color-mix(in srgb, var(--cyan) 12%, transparent);
-}
-
-.send {
-  background: color-mix(in srgb, var(--cyan) 12%, transparent);
-  border: 1px solid var(--line-bright);
-  color: var(--cyan);
-  padding: 11px 26px;
-  border-radius: 10px;
-  cursor: pointer;
-  font-size: 14px;
-  letter-spacing: 0.1em;
   transition: all var(--dur-fast) var(--ease-out);
 }
 
+.diagram-toggle.on {
+  color: var(--ws-accent);
+  border-color: var(--line-bright);
+  background: color-mix(in srgb, var(--ws-accent) 12%, var(--surface-1));
+}
+
+.send {
+  background: var(--ws-accent);
+  border: 1px solid var(--ws-accent);
+  color: #ffffff;
+  padding: 9px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  transition: filter var(--dur-fast) var(--ease-out), opacity var(--dur-fast);
+}
+
 .send:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--cyan) 18%, transparent);
-  box-shadow: var(--glow-cyan);
+  filter: brightness(1.08);
 }
 
 .send:disabled {
@@ -2903,22 +5283,30 @@ onBeforeUnmount(() => {
 
 /* 停止生成态:暖黄色警示,点击中断当前回答 */
 .send.is-stop {
-  color: #ffd166;
-  border-color: rgba(255, 209, 102, 0.5);
-  background: rgba(255, 209, 102, 0.1);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
 .send.is-stop:hover {
-  background: rgba(255, 209, 102, 0.18);
-  box-shadow: 0 0 12px rgba(255, 209, 102, 0.25);
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  filter: none;
 }
 
-/* ---------- 指令栏(位于输入行下方) ---------- */
+/* ---------- 指令栏(窄屏或左栏收起时显示;宽屏左栏展开时自动让位给阅读区) ---------- */
 .commands {
+  width: 100%;
+  max-width: 1080px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+@media (min-width: 961px) {
+  .learn.rail-open .commands {
+    display: none;
+  }
 }
 
 .cmd-label {
@@ -2966,8 +5354,8 @@ onBeforeUnmount(() => {
   line-height: 1;
   padding: 2px 5px;
   border-radius: 999px;
-  background: var(--cyan);
-  color: #0b1220;
+  background: var(--ws-accent);
+  color: #ffffff;
 }
 
 /* ---------- 附件 ---------- */
@@ -3196,6 +5584,23 @@ onBeforeUnmount(() => {
 }
 
 /* ---------- 语音 ---------- */
+.palette-trigger {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.palette-trigger:hover {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+}
+
 .dots-btn {
   background: transparent;
   border: 1px solid var(--line);
@@ -3215,10 +5620,10 @@ onBeforeUnmount(() => {
 }
 
 .mic {
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  background: var(--bg-card);
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  background: var(--surface-1);
   border: 1px solid var(--line);
   color: var(--text-dim);
   cursor: pointer;
@@ -3237,16 +5642,16 @@ onBeforeUnmount(() => {
 }
 
 .tips-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  background: var(--bg-card);
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  background: var(--surface-1);
   border: 1px solid var(--line-bright);
   color: var(--cyan);
   cursor: pointer;
   display: grid;
   place-items: center;
-  font-size: 17px;
+  font-size: 16px;
   flex-shrink: 0;
   transition: all var(--dur-fast) var(--ease-out);
   animation: tips-pop 0.25s var(--ease-out);
@@ -3301,17 +5706,79 @@ onBeforeUnmount(() => {
 .dev-badge {
   font-size: 10px;
   font-family: var(--font-tech);
-  color: var(--magenta);
-  border: 1px solid rgba(255, 77, 210, 0.4);
+  color: var(--accent-cite);
+  border: 1px solid color-mix(in srgb, var(--accent-cite) 38%, var(--line));
   border-radius: 999px;
   padding: 0 6px;
 }
 
-/* 窄屏(竖屏 iPad:768–834):默认字号的指令行放不下,「生成文档」会被挤到第二行。
-   改为单行紧凑布局,放不下时横向滚动,不再换行。 */
-@media (max-width: 900px) {
+/* 窄屏(平板竖屏/手机 ≤960px):自动隐藏桌面左侧仪器栏,无缝回落到底部单行指令条;
+   右侧科研演示台改为贴边抽屉浮层,不挤占主阅读区 */
+@media (max-width: 960px) {
+  .sci-rail,
+  .rail-toggle,
+  .stage-divider {
+    display: none;
+  }
+
+  .stage-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    background: rgba(3, 6, 12, 0.45);
+    backdrop-filter: blur(2px);
+  }
+
+  .stage-pane {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 45;
+    width: min(480px, calc(100% - 24px)) !important;
+    min-width: 0;
+    max-width: none;
+    height: 100vh;
+    height: 100dvh;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .stage-toggle-label,
+  .stage-layout-switch,
+  .stage-h-divider,
+  .subwin-collapse,
+  .subwin-max {
+    display: none;
+  }
+
+  .stage-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+    max-width: calc(100% - 36px);
+  }
+
+  .stage-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .stage-card-head {
+    flex-wrap: wrap;
+  }
+
+  /* 窄屏抽屉空间有限,多子窗退回为聚焦子窗单页浏览 */
+  .stage-dock .subwin:not(.subwin--focused) {
+    display: none;
+  }
+
+  .stage-dock .subwin.subwin--focused {
+    flex: 1 1 auto !important;
+  }
+
   .input-bar {
-    padding: 10px 12px 12px;
+    padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
   }
 
   .commands {
@@ -3348,7 +5815,6 @@ onBeforeUnmount(() => {
     padding: calc(8px + env(safe-area-inset-top)) 10px 8px;
   }
 
-  .chat-header .badge,
   .chat-header .sub {
     display: none;
   }
@@ -3373,28 +5839,48 @@ onBeforeUnmount(() => {
     white-space: nowrap;
   }
 
+  .stage-pane {
+    width: 100% !important;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    border-left: none;
+  }
+
+  .stage-dock {
+    padding: 6px;
+  }
+
+  .stage-toggle {
+    padding: 0 8px;
+  }
+
   .chat-list {
     padding: 14px 12px;
   }
 
-  .bubble {
-    max-width: 92%;
+  .msg.user .bubble,
+  .msg.assistant .bubble {
+    padding: 12px 14px;
   }
 
   .input-bar {
     padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
   }
 
+  .composer-card {
+    padding: 6px 8px;
+  }
+
   .input-row {
-    gap: 8px;
+    gap: 6px;
   }
 
   .diagram-toggle {
-    padding: 11px 8px;
+    padding: 9px 8px;
   }
 
   .send {
-    padding: 11px 16px;
+    padding: 9px 14px;
   }
 }
 </style>

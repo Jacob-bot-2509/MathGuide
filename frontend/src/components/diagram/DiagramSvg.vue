@@ -802,7 +802,7 @@ resetView()
 }
 
 .diagram-warning {
-  fill: #ffd166;
+  fill: var(--warn);
   font-size: 10px;
 }
 
@@ -813,7 +813,7 @@ resetView()
 
 .diagram-curve {
   fill: none;
-  stroke: #ffd166;
+  stroke: var(--warn);
   stroke-width: 1.6;
 }
 

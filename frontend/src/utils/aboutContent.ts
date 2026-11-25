@@ -6,9 +6,9 @@
  */
 
 export const APP_NAME = 'MathGuide'
-export const APP_VERSION = 'v1.31.0'
-export const APP_STABLE_VERSION = 'v1.31.0'
-export const APP_STABLE_DATE = '2026-11-21'
+export const APP_VERSION = 'v1.32.0'
+export const APP_STABLE_VERSION = 'v1.32.0'
+export const APP_STABLE_DATE = '2026-11-26'
 export const APP_REPO_URL = 'https://github.com/Jacob-bot-2509/MathGuide'
 export const APP_ISSUES_URL = `${APP_REPO_URL}/issues`
 export const APP_RELEASES_URL = `${APP_REPO_URL}/releases`
@@ -51,6 +51,29 @@ export const RELEASES: ReleaseEntry[] = [
     version: APP_VERSION,
     date: APP_STABLE_DATE,
     status: 'latest',
+    items: [
+      {
+        zh: '全站升级为 AI for Science 科研工作台设计体系（深色天文台 / 浅色预印本双主题、10/10 WCAG 对比度达标），移除 CRT 扫描线与高耗能动态星空，并配套自动化 UI 审计、令牌迁移与离线预览脚本。',
+        en: 'Upgraded the workbench to an AI for Science design system (Observatory Dark / Archival Preprint Light, 10/10 WCAG contrast pass), replacing CRT scanlines and heavy starfields, with automated UI audit, token migration, and offline preview scripts.',
+      },
+      {
+        zh: '重构三栏学习与科研工作台：新增可折叠左侧仪器栏、右侧多子窗口科研演示台（支持单窗/双窗分屏/三窗堆叠、拖拽分栏与持久化）、内嵌论文结构/导图，以及全局快速跳转面板（Ctrl/⌘ + K），并完成平板与手机端全量响应式适配。',
+        en: 'Rebuilt the three-pane Study & Research workbench with a collapsible instrument rail, docked multi-pane Science Stage (single/split/stack layouts with drag dividers and persistence), inline PaperInsights mindmap, global Ctrl/⌘+K Command Palette, and full mobile/tablet responsiveness.',
+      },
+      {
+        zh: '支持最多 5 篇外部开放获取文献与本地论文并发批量导入（自动按 DOI/标题解析 OA PDF 或落地页），打通全科研区共享的 5 篇待对比篮，一键生成带页码溯源的多文献横向对比表并直通「挖掘研究缺口」。',
+        en: 'Added concurrent batch import for up to 5 external open-access or local papers (auto-resolving OA PDF/landing pages via DOI or title), a unified 5-paper compare queue across all research views, and one-click structured comparison tables feeding directly into Research Gap Discovery.',
+      },
+      {
+        zh: '强化 AI for Science 确定性闭环与双区协同：科研区接入独立双角色低温复核与综述配图工具条、论文数据表回归/统计结果一键回写原 PDF 批注、课题上下文透镜与一键 DOCX 报告、带现场还原锚点的科研待办，以及知识图谱「查前沿论文」与「夯实前置理论 ↔ 返回原科研会话」双向闭环。',
+        en: 'Strengthened deterministic AI for Science loops and Study⇄Research synergy: independent dual-role verification toggle in Research, one-click writeback of regression/stats notes to source PDF pages, Project Context Lens with one-click DOCX reports, source-anchored Research Todos, and Study⇄Research bridges with one-click return.',
+      },
+    ],
+  },
+  {
+    version: 'v1.31.0',
+    date: '2026-11-21',
+    status: 'released',
     items: [
       {
         zh: '整本教材不再一次塞给模型:PDF 最多 500 页,有书签直接本地出目录;没有书签只读前 20 页目录区。点某一章才送该章正文(≤20 万字),原文、目录和章节指引都缓存在本机 IndexedDB,重复访问不再调用模型。',

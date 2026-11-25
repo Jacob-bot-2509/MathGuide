@@ -5,6 +5,7 @@
  * 点「设置好了」才进入日程。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { showToast } from '@/utils/toast'
 import { settingsState } from '@/stores/settings'
 import {
@@ -29,12 +30,34 @@ import {
   pad2,
   type InstanceStatus,
   type RepeatMode,
+  type TodoAnchor,
   type TodoTask,
 } from '@/utils/todoTime'
 import { t } from '@/utils/i18n'
 
 const props = defineProps<{ left?: number; width?: number }>()
 const emit = defineEmits<{ close: [] }>()
+const router = useRouter()
+
+function openAnchor(anchor: TodoAnchor): void {
+  emit('close')
+  if (anchor.kind === 'table') {
+    void router.push({ path: '/research/tables', query: { tableId: anchor.id } })
+    return
+  }
+  if (anchor.kind === 'paper') {
+    const query: Record<string, string> = { docId: anchor.id }
+    if (anchor.page) query.page = String(anchor.page)
+    void router.push({ path: '/research/search', query })
+    return
+  }
+  const sid = Number(anchor.id)
+  if (Number.isFinite(sid) && sid > 0) {
+    const payload = { workspace: 'research', sessionId: sid }
+    try { sessionStorage.setItem('mg-jump-session', JSON.stringify(payload)) } catch { /* ignore */ }
+    window.dispatchEvent(new CustomEvent('mg:jump-session', { detail: payload }))
+  }
+}
 
 const en = computed(() => settingsState.language === 'en')
 const tab = ref<'draft' | 'schedule'>('draft')
@@ -277,6 +300,12 @@ onBeforeUnmount(() => {
               <span class="todo-item-meta">{{ dueText(task) }} · {{ repeatLabel(task, en) }}</span>
             </div>
             <div class="todo-item-actions">
+              <button
+                v-if="task.anchor"
+                class="todo-mini"
+                :title="task.anchor.label"
+                @click="openAnchor(task.anchor)"
+              >↗ {{ t('todo.jumpAnchor') }}</button>
               <button class="todo-mini" @click="startEdit(task)">{{ t('todo.edit') }}</button>
               <button class="todo-mini todo-mini--primary" @click="confirmDraft(task)">{{ t('todo.setScheduled') }}</button>
               <button class="todo-mini todo-mini--danger" @click="onDelete(task)">{{ t('todo.delete') }}</button>
@@ -297,6 +326,12 @@ onBeforeUnmount(() => {
                 :disabled="!isInProgress(task)"
                 @click="onStatus(task)"
               >{{ statusText(task) }}</button>
+              <button
+                v-if="task.anchor"
+                class="todo-mini"
+                :title="task.anchor.label"
+                @click="openAnchor(task.anchor)"
+              >↗ {{ t('todo.jumpAnchor') }}</button>
               <button class="todo-mini" @click="togglePause(task.id)">
                 {{ task.paused ? t('todo.resume') : t('todo.pause') }}
               </button>

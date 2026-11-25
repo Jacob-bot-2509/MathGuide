@@ -49,9 +49,9 @@ def _user_prompt(question: str, hits: list[SearchHit], extra: str = "") -> str:
 
 async def synthesize_stream(question: str, hits: list[SearchHit], zh: bool,
                             role: str = "main", fallback: bool = True,
-                            extra: str = "") -> AsyncIterator[str]:
+                            extra: str = "", style_hint: str = "") -> AsyncIterator[str]:
     """流式生成综合解答(正文);引用区由 citations_block 单独拼装"""
-    system = SYSTEM_ZH if zh else SYSTEM_EN
+    system = (SYSTEM_ZH if zh else SYSTEM_EN) + (style_hint or "")
     async for delta in llm.stream_chat(system, _user_prompt(question, hits, extra),
                                        role=role, fallback=fallback, thinking=False):
         yield delta

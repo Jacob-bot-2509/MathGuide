@@ -1,0 +1,1092 @@
+/**
+ * MathGuide AI-for-Science 交互式设计实验室生成脚本
+ *
+ * 从 migrate-science-tokens.mjs 读取同一份真实令牌定义，生成一个零外部依赖、
+ * 离线可直接用浏览器打开的交互式原型页：docs/design/ai-for-science-preview.html。
+ *
+ * 预览页包含：
+ *   1. 实时双主题切换：Observatory Slate（深色仪器盘）↔ Archival Preprint（学术纸张浅色）
+ *   2. 四个核心场景交互原型：
+ *      - Observatory Home（科研工作台首页）
+ *      - Discovery & Proof Workbench（三栏科研/证明工作台）
+ *      - Lab & Knowledge Graph（实验数据表 + 80 节点知识图谱）
+ *      - Before / After Contrast（当前黑色科幻 vs AI for Science 逐项对比）
+ *
+ * 用法：
+ *   node scripts/build-science-ui-preview.mjs
+ */
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { SCIENCE_TOKENS_CSS } from './migrate-science-tokens.mjs'
+
+const FRONTEND_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const REPO_ROOT = join(FRONTEND_ROOT, '..')
+const OUT_DIR = join(REPO_ROOT, 'docs', 'design')
+const OUT_FILE = join(OUT_DIR, 'ai-for-science-preview.html')
+const pkg = JSON.parse(readFileSync(join(FRONTEND_ROOT, 'package.json'), 'utf8'))
+
+const HTML = `<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MathGuide · AI for Science UI Design Lab (v${pkg.version})</title>
+  <style>
+${SCIENCE_TOKENS_CSS}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100dvh;
+  background: var(--surface-0);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  transition: background var(--dur-med) var(--ease-out), color var(--dur-med) var(--ease-out);
+}
+
+/* 精密坐标纸底纹（替代原 Starfield + 透视网格 + CRT 扫描线，0% 空闲 GPU 占用） */
+.blueprint-bg {
+  background-image:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--accent-primary) 9%, transparent), transparent 62%),
+    linear-gradient(to right, color-mix(in srgb, var(--border-subtle) 55%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--border-subtle) 55%, transparent) 1px, transparent 1px);
+  background-size: 100% 100%, 40px 40px, 40px 40px;
+}
+
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.serif { font-family: var(--font-serif); }
+
+/* 顶部设计实验室导航条 */
+.lab-bar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 24px;
+  background: var(--surface-glass);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.lab-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mg-emblem {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--accent-primary) 12%, var(--surface-2));
+  color: var(--accent-primary);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: -0.02em;
+}
+.lab-title { font-size: 14px; font-weight: 600; color: var(--ink-hi); letter-spacing: 0.01em; }
+.lab-ver { font-size: 11px; color: var(--ink-muted); padding: 2px 7px; border: 1px solid var(--border-subtle); border-radius: 999px; }
+
+.lab-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+}
+.lab-tab {
+  border: none;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 6px 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.lab-tab:hover { color: var(--ink-hi); }
+.lab-tab.active {
+  background: var(--surface-2);
+  color: var(--ink-hi);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-subtle);
+}
+
+.theme-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pill-btn {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: border-color var(--dur-fast), color var(--dur-fast);
+}
+.pill-btn:hover { border-color: var(--border-strong); color: var(--ink-hi); }
+.pill-btn.active { border-color: var(--accent-primary); color: var(--accent-primary); }
+
+.stage {
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 28px 24px 56px;
+}
+.view { display: none; animation: fadeIn 0.22s var(--ease-out); }
+.view.active { display: block; }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ==================== VIEW 1: OBSERVATORY HOME ==================== */
+.obs-shell {
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+  background: var(--surface-0);
+}
+.obs-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 28px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+.obs-hero {
+  padding: 44px 36px 36px;
+  display: grid;
+  grid-template-columns: 1.25fr 0.75fr;
+  gap: 28px;
+  align-items: end;
+}
+.kicker {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+  margin: 0 0 10px;
+}
+.obs-h1 {
+  margin: 0 0 12px;
+  font-family: var(--font-serif);
+  font-size: clamp(28px, 3.4vw, 40px);
+  font-weight: 500;
+  line-height: 1.18;
+  color: var(--ink-hi);
+  letter-spacing: -0.015em;
+}
+.obs-sub {
+  margin: 0;
+  max-width: 58ch;
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--ink-muted);
+}
+.obs-telemetry {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 16px 18px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+.tel-item .tel-k { font-size: 11px; color: var(--ink-muted); display: block; margin-bottom: 4px; }
+.tel-item .tel-v { font-size: 20px; font-weight: 600; color: var(--ink-hi); }
+.tel-item .tel-note { font-size: 11px; color: var(--accent-proof); margin-left: 4px; }
+
+.obs-grid {
+  padding: 0 36px 36px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px;
+}
+.ws-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 24px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color var(--dur-fast), transform var(--dur-fast), box-shadow var(--dur-fast);
+  cursor: pointer;
+}
+.ws-card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.ws-card-top { display: flex; align-items: center; justify-content: space-between; }
+.ws-glyph {
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-serif);
+  font-size: 21px;
+  background: color-mix(in srgb, var(--accent-primary) 12%, var(--surface-1));
+  color: var(--accent-primary);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
+}
+.ws-card.research .ws-glyph {
+  background: color-mix(in srgb, var(--accent-cite) 12%, var(--surface-1));
+  color: var(--accent-cite);
+  border-color: color-mix(in srgb, var(--accent-cite) 28%, transparent);
+}
+.ws-tag {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  color: var(--ink-muted);
+}
+.ws-title { margin: 0; font-family: var(--font-serif); font-size: 21px; font-weight: 500; color: var(--ink-hi); }
+.ws-desc { margin: 0; font-size: 13.5px; line-height: 1.65; color: var(--ink-muted); }
+.ws-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.chip {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  color: var(--ink);
+}
+
+.obs-subrow {
+  padding: 0 36px 32px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+.mini-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mini-card strong { font-size: 13px; color: var(--ink-hi); font-weight: 600; }
+.mini-card span { font-size: 12px; color: var(--ink-muted); line-height: 1.5; }
+
+/* ==================== VIEW 2: THREE-PANE WORKBENCH ==================== */
+.wb-shell {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr) 340px;
+  min-height: 680px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--surface-0);
+  box-shadow: var(--shadow-lg);
+}
+.wb-rail {
+  background: var(--surface-1);
+  border-right: 1px solid var(--border-subtle);
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.rail-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 3px;
+  background: var(--surface-0);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+.rail-seg button {
+  border: none;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 12px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.rail-seg button.on {
+  background: var(--surface-2);
+  color: var(--ink-hi);
+  font-weight: 600;
+}
+.rail-group-label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding: 0 8px;
+  margin-bottom: 6px;
+}
+.rail-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.rail-item:hover { background: var(--surface-2); color: var(--ink-hi); }
+.rail-item.active {
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  color: var(--accent-primary);
+  font-weight: 500;
+}
+.rail-badge {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  color: var(--ink-muted);
+}
+
+.wb-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface-0);
+}
+.wb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+.wb-breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-hi); font-weight: 500; }
+.dot-proof { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-proof); display: inline-block; }
+
+.wb-stream {
+  flex: 1;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+}
+.query-cell {
+  max-width: 720px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--ink-hi);
+}
+.query-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.doc-cell {
+  max-width: 720px;
+  border-left: 2px solid var(--accent-primary);
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.verify-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.badge-proof {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  color: var(--accent-proof);
+  background: color-mix(in srgb, var(--accent-proof) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-proof) 30%, transparent);
+}
+.badge-cite {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--accent-cite);
+  background: color-mix(in srgb, var(--accent-cite) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-cite) 28%, transparent);
+}
+.theorem-box {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 14px 18px;
+}
+.theorem-head {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-cite);
+  margin-bottom: 6px;
+}
+.theorem-body {
+  font-family: var(--font-serif);
+  font-size: 15.5px;
+  line-height: 1.75;
+  color: var(--ink-hi);
+  margin: 0;
+}
+.formula-block {
+  margin: 10px 0 2px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  text-align: center;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 17px;
+  color: var(--ink-hi);
+}
+.prose { margin: 0; font-size: 14px; line-height: 1.78; color: var(--ink); }
+.cite-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-cite);
+  background: color-mix(in srgb, var(--accent-cite) 12%, transparent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.composer {
+  margin: 0 24px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: var(--shadow-sm);
+}
+.composer-ctx {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.ctx-pill {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.composer-placeholder { font-size: 13.5px; color: var(--ink-muted); }
+.btn-primary {
+  border: none;
+  background: var(--accent-primary);
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+/* 右侧停靠证据/PDF 检查器 */
+.wb-inspector {
+  background: var(--surface-1);
+  border-left: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+}
+.insp-head {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-hi);
+}
+.insp-body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.paper-sheet {
+  background: #ffffff;
+  color: #18202c;
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--font-serif);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+.paper-sheet h4 { margin: 0 0 6px; font-size: 13.5px; color: #0f172a; }
+.paper-hl {
+  background: rgba(229, 179, 76, 0.28);
+  border-bottom: 1.5px solid #c98a12;
+  padding: 1px 2px;
+}
+.insp-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+/* ==================== VIEW 3: LAB & KNOWLEDGE GRAPH ==================== */
+.lab-split {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 20px;
+}
+.panel-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+}
+.panel-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.panel-head h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--ink-hi); }
+.sci-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.sci-table th, .sci-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: right;
+}
+.sci-table th:first-child, .sci-table td:first-child { text-align: left; }
+.sci-table th {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  background: var(--surface-1);
+}
+.sci-table td.computed { color: var(--accent-primary); font-weight: 500; }
+
+/* ==================== VIEW 4: BEFORE VS AFTER ==================== */
+.compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.legacy-card {
+  background: #05060a;
+  color: #c2d2e4;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  border-radius: 14px;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+}
+.legacy-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(180, 220, 255, 0.06) 0 1px, transparent 1px 3px);
+}
+.legacy-title {
+  font-family: Consolas, monospace;
+  letter-spacing: 0.16em;
+  background: linear-gradient(92deg, #4dd6ff, #8b5cf6 55%, #ff4dd2);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: 24px;
+  margin: 0 0 12px;
+}
+.legacy-btn {
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  color: #4dd6ff;
+  background: rgba(77, 214, 255, 0.1);
+  box-shadow: 0 0 10px rgba(77, 214, 255, 0.55), 0 0 28px rgba(77, 214, 255, 0.22);
+  padding: 8px 18px;
+  border-radius: 4px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+}
+.diff-list { margin: 16px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.85; }
+.swatches {
+  margin-top: 22px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+.swatch {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px;
+}
+.swatch-bar { height: 34px; border-radius: 6px; margin-bottom: 8px; border: 1px solid var(--border-subtle); }
+.swatch-name { font-size: 12px; font-weight: 600; color: var(--ink-hi); }
+.swatch-val { font-size: 11px; color: var(--ink-muted); }
+
+@media (max-width: 1080px) {
+  .obs-hero, .obs-grid, .obs-subrow, .lab-split, .compare-grid { grid-template-columns: 1fr; }
+  .wb-shell { grid-template-columns: 1fr; }
+  .wb-rail, .wb-inspector { display: none; }
+}
+  </style>
+</head>
+<body>
+  <header class="lab-bar">
+    <div class="lab-brand">
+      <div class="mg-emblem">MG</div>
+      <span class="lab-title">MathGuide · AI for Science UI Lab</span>
+      <span class="lab-ver mono">v${pkg.version}</span>
+    </div>
+
+    <nav class="lab-tabs" role="tablist">
+      <button class="lab-tab active" data-view="home">1. 科研首页</button>
+      <button class="lab-tab" data-view="workbench">2. 三栏证明与文献工作台</button>
+      <button class="lab-tab" data-view="lab">3. 实验数据与知识图谱</button>
+      <button class="lab-tab" data-view="compare">4. 改版前后对比 &amp; 令牌</button>
+    </nav>
+
+    <div class="theme-switch">
+      <button id="btn-dark" class="pill-btn active" type="button">Observatory 深色</button>
+      <button id="btn-light" class="pill-btn" type="button">Preprint 浅色纸张</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <!-- VIEW 1: OBSERVATORY HOME -->
+    <section id="view-home" class="view active">
+      <div class="obs-shell blueprint-bg">
+        <div class="obs-nav">
+          <div class="lab-brand">
+            <div class="mg-emblem">MG</div>
+            <span class="lab-title serif" style="font-size:17px;">MathGuide</span>
+            <span class="mono" style="font-size:11px;color:var(--ink-muted);">Scientific Mathematics Workbench</span>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <span class="chip mono">⌘K 命令面板</span>
+            <span class="chip">设置</span>
+          </div>
+        </div>
+
+        <div class="obs-hero">
+          <div>
+            <p class="kicker">AI FOR SCIENCE · MATHEMATICAL REASONING &amp; DISCOVERY</p>
+            <h1 class="obs-h1">面向高等数学推演与科学研究的智能工作台</h1>
+            <p class="obs-sub">
+              摒弃干扰阅读的星空与霓虹辉光，以精密仪器盘与学术预印本的视觉克制承载双模型证明复核、
+              五源学术文献溯源、结构化实验数据分析与 80 节点知识图谱。
+            </p>
+          </div>
+          <div class="obs-telemetry">
+            <div class="tel-item">
+              <span class="tel-k">知识图谱掌握度</span>
+              <span class="tel-v mono">54<span style="font-size:13px;color:var(--ink-muted);">/80</span></span>
+              <span class="tel-note mono">67.5%</span>
+            </div>
+            <div class="tel-item">
+              <span class="tel-k">科研文献库</span>
+              <span class="tel-v mono">18</span>
+              <span class="tel-note mono" style="color:var(--accent-cite);">已索引全文</span>
+            </div>
+            <div class="tel-item">
+              <span class="tel-k">实验数据表</span>
+              <span class="tel-v mono">6</span>
+              <span class="tel-note mono" style="color:var(--accent-primary);">Decimal AST</span>
+            </div>
+            <div class="tel-item">
+              <span class="tel-k">证明复核通过率</span>
+              <span class="tel-v mono">96%</span>
+              <span class="tel-note mono">双模型交叉</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="obs-grid">
+          <article class="ws-card" onclick="switchView('workbench')">
+            <div class="ws-card-top">
+              <div class="ws-glyph">∑</div>
+              <span class="ws-tag mono">STUDY STUDIO</span>
+            </div>
+            <h2 class="ws-title">学习辅助 · 数学推导工作室</h2>
+            <p class="ws-desc">
+              分板块上下文栈对话、定理直观解释、双模型证明验真、教材目录切片导航、
+              GeoGebra / Three.js 交互式 2D/3D 图解与掌握度诊断。
+            </p>
+            <div class="ws-chips">
+              <span class="chip">双模型证明复核</span>
+              <span class="chip">2D/3D 几何内核</span>
+              <span class="chip">教材目录导航</span>
+              <span class="chip">语音数学转写</span>
+            </div>
+          </article>
+
+          <article class="ws-card research" onclick="switchView('workbench')">
+            <div class="ws-card-top">
+              <div class="ws-glyph">∇</div>
+              <span class="ws-tag mono">DISCOVERY WORKBENCH</span>
+            </div>
+            <h2 class="ws-title">科学研究 · 文献与实验工作台</h2>
+            <p class="ws-desc">
+              跨 arXiv / zbMATH / Semantic Scholar / OpenAlex / StackExchange 深度检索，
+              PDF 论文联动高亮批注、实验数据表回归建模与中英综述 PDF 导出。
+            </p>
+            <div class="ws-chips">
+              <span class="chip">五学术源溯源</span>
+              <span class="chip">PDF 动作联动</span>
+              <span class="chip">OLS/多项式回归</span>
+              <span class="chip">综述导出 PDF</span>
+            </div>
+          </article>
+        </div>
+
+        <div class="obs-subrow">
+          <div class="mini-card" style="cursor:pointer;" onclick="switchView('lab')">
+            <strong>知识图谱导航（80 知识点）</strong>
+            <span>分层 DAG 拓扑、先修依赖追踪与中英学术术语双语视图。</span>
+          </div>
+          <div class="mini-card" style="cursor:pointer;" onclick="switchView('lab')">
+            <strong>实验数据表与回归分析</strong>
+            <span>高精度服务端公式计算、缺失值图表与一键带入科研对话。</span>
+          </div>
+          <div class="mini-card">
+            <strong>继续上次精读 · Spectral Graph Theory</strong>
+            <span class="mono">arXiv:2403.0912 · 第 14 / 38 页 · 3 条批注</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 2: THREE-PANE WORKBENCH -->
+    <section id="view-workbench" class="view">
+      <div class="wb-shell">
+        <aside class="wb-rail">
+          <div class="rail-seg">
+            <button type="button">学习辅助</button>
+            <button type="button" class="on">科学研究</button>
+          </div>
+          <div>
+            <div class="rail-group-label mono">INSTRUMENTS</div>
+            <div class="rail-item active"><span>推演与综述流</span><span class="rail-badge mono">当前</span></div>
+            <div class="rail-item"><span>论文库与检索</span><span class="rail-badge mono">18</span></div>
+            <div class="rail-item" onclick="switchView('lab')"><span>实验数据表</span><span class="rail-badge mono">6</span></div>
+            <div class="rail-item" onclick="switchView('lab')"><span>知识图谱</span><span class="rail-badge mono">80</span></div>
+            <div class="rail-item"><span>公式查询手册</span><span class="rail-badge mono">∫</span></div>
+            <div class="rail-item"><span>研究计划与待办</span><span class="rail-badge mono">3</span></div>
+          </div>
+          <div>
+            <div class="rail-group-label mono">SEARCH SCOPE (5/5)</div>
+            <div class="rail-item"><span>arXiv · zbMATH · OpenAlex</span></div>
+            <div class="rail-item"><span>Semantic Scholar · Local</span></div>
+          </div>
+        </aside>
+
+        <div class="wb-main">
+          <div class="wb-head">
+            <div class="wb-breadcrumb">
+              <span class="dot-proof"></span>
+              <span>数学分析 · 谱估计与收敛速度</span>
+              <span class="chip mono" style="font-size:11px;">Session #14</span>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <span class="chip">导出综述 PDF</span>
+              <span class="chip">新建会话</span>
+            </div>
+          </div>
+
+          <div class="wb-stream">
+            <div class="query-cell">
+              <div class="query-meta mono">
+                <span>USER PROMPT</span>
+                <span>·</span>
+                <span>CONTEXT: spectral_bounds.pdf (p.14)</span>
+              </div>
+              结合论文 Theorem 3.2 的假设条件，证明当步长满足 η ≤ 1/L 时，梯度流离散化的误差界为 O(1/T)，并指出与经典 Nesterov 加速界的差异。
+            </div>
+
+            <div class="doc-cell">
+              <div class="verify-bar">
+                <span class="badge-proof mono">✓ 双模型证明复核通过</span>
+                <span class="badge-cite mono">引用 2 处全文片段</span>
+                <span class="chip mono" style="font-size:11px;">+ 生成几何图解</span>
+                <span class="chip mono" style="font-size:11px;">直观解释</span>
+              </div>
+
+              <div class="theorem-box">
+                <div class="theorem-head">PROPOSITION · DESCENT LEMMA UNDER L-SMOOTHNESS</div>
+                <p class="theorem-body">
+                  设目标函数 f : ℝⁿ → ℝ 凸且梯度 L-Lipschitz 连续。取定常步长 η ∈ (0, 1/L]，迭代序列 {xₖ} 满足：
+                </p>
+                <div class="formula-block">
+                  f(x_T) − f(x*) ≤ ‖x₀ − x*‖² / (2ηT) = O(1/T)
+                </div>
+              </div>
+
+              <p class="prose">
+                <strong>关键推导：</strong>由 L-光滑性的二次上界不等式出发，结合凸性一阶条件与单调递减性累加 t = 0, …, T−1 项，即可得到伸缩和上界
+                <span class="cite-pill">[Theorem 3.2, p.14]</span>。相比之下，Nesterov 动量项在能量泛函中引入了 O(k²) 权重，将收敛速率提升至 O(1/T²)，但丧失了单调下降保证
+                <span class="cite-pill">[zbMATH:07281412]</span>。
+              </p>
+            </div>
+          </div>
+
+          <div class="composer">
+            <div class="composer-ctx">
+              <span class="ctx-pill mono">论文上下文: spectral_bounds.pdf · p.14</span>
+              <span class="ctx-pill mono">数据表: convergence_exp_04</span>
+              <span class="ctx-pill mono" style="color:var(--accent-primary);">检索范围: 全 5 学术源</span>
+            </div>
+            <div class="composer-row">
+              <span class="composer-placeholder">输入数学命题、追问论文细节，或按 / 呼出科研指令…</span>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <span class="chip mono">语音</span>
+                <span class="chip mono">图解</span>
+                <button class="btn-primary" type="button">发送 ↵</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="wb-inspector">
+          <div class="insp-head">
+            <span>证据阅读器 · PDF 联动</span>
+            <span class="mono" style="color:var(--ink-muted);">p. 14 / 38</span>
+          </div>
+          <div class="insp-body">
+            <div class="paper-sheet">
+              <h4>3.2 Convergence Guarantees</h4>
+              <p style="margin:0 0 8px;">
+                <strong>Theorem 3.2.</strong> Under Assumption 2.1 (L-smoothness) and convexity of f,
+                <span class="paper-hl">for any fixed step size η ≤ 1/L, the ergodic and last-iterate suboptimality decays at rate O(1/T).</span>
+              </p>
+              <p style="margin:0;color:#475569;font-size:11.5px;">
+                Proof. Applying the descent inequality f(xₖ₊₁) ≤ f(xₖ) − (η/2)‖∇f(xₖ)‖² and telescoping…
+              </p>
+            </div>
+            <div class="insp-card">
+              <div class="mono" style="font-size:10.5px;color:var(--accent-cite);margin-bottom:4px;">MODEL ACTION LOG</div>
+              已自动定位至 <strong>第 14 页</strong> 并高亮 Theorem 3.2 主结论；点击左侧引用胶囊可同步跳转至参考文献条目。
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- VIEW 3: LAB & KNOWLEDGE GRAPH -->
+    <section id="view-lab" class="view">
+      <div class="lab-split">
+        <div class="panel-card">
+          <div class="panel-head">
+            <h3>实验数据表 · 步长衰减误差验证（Decimal AST）</h3>
+            <span class="chip mono">OLS R² = 0.9984</span>
+          </div>
+          <table class="sci-table mono">
+            <thead>
+              <tr>
+                <th>迭代轮次 T</th>
+                <th>步长 η</th>
+                <th>观测误差 ε_T</th>
+                <th>理论界 1/(2ηT)</th>
+                <th>相对残差</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>100</td><td>0.050</td><td>0.0942</td><td class="computed">0.1000</td><td style="color:var(--accent-proof);">-5.8%</td></tr>
+              <tr><td>250</td><td>0.050</td><td>0.0381</td><td class="computed">0.0400</td><td style="color:var(--accent-proof);">-4.8%</td></tr>
+              <tr><td>500</td><td>0.050</td><td>0.0193</td><td class="computed">0.0200</td><td style="color:var(--accent-proof);">-3.5%</td></tr>
+              <tr><td>1000</td><td>0.050</td><td>0.0097</td><td class="computed">0.0100</td><td style="color:var(--accent-proof);">-3.0%</td></tr>
+            </tbody>
+          </table>
+          <div style="padding:16px 18px;">
+            <svg viewBox="0 0 460 150" style="width:100%;height:auto;display:block;">
+              <g stroke="var(--border-subtle)" stroke-width="1">
+                <line x1="40" y1="20" x2="40" y2="124" />
+                <line x1="40" y1="124" x2="440" y2="124" />
+                <line x1="40" y1="54" x2="440" y2="54" stroke-dasharray="3 4" />
+                <line x1="40" y1="89" x2="440" y2="89" stroke-dasharray="3 4" />
+              </g>
+              <path d="M 60 28 Q 165 92 420 116" fill="none" stroke="var(--accent-primary)" stroke-width="2" />
+              <path d="M 60 22 Q 165 88 420 114" fill="none" stroke="var(--accent-cite)" stroke-width="1.5" stroke-dasharray="4 4" />
+              <g fill="var(--accent-proof)">
+                <circle cx="60" cy="28" r="4" />
+                <circle cx="150" cy="78" r="4" />
+                <circle cx="260" cy="103" r="4" />
+                <circle cx="420" cy="116" r="4" />
+              </g>
+              <text x="46" y="16" fill="var(--ink-muted)" font-size="10" font-family="monospace">ε_T (实线: 观测值 · 虚线: 1/2ηT)</text>
+              <text x="395" y="140" fill="var(--ink-muted)" font-size="10" font-family="monospace">T = 1000</text>
+            </svg>
+          </div>
+        </div>
+
+        <div class="panel-card blueprint-bg">
+          <div class="panel-head">
+            <h3>知识图谱 · 精密 DAG 拓扑预览</h3>
+            <div style="display:flex;gap:8px;font-size:11px;">
+              <span style="color:var(--accent-proof);">● 已掌握</span>
+              <span style="color:var(--accent-warn);">● 薄弱</span>
+              <span style="color:var(--ink-muted);">● 未诊断</span>
+            </div>
+          </div>
+          <div style="padding:20px;">
+            <svg viewBox="0 0 420 260" style="width:100%;height:auto;display:block;">
+              <defs>
+                <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--ink-muted)" />
+                </marker>
+              </defs>
+              <g stroke="var(--border-strong)" stroke-width="1.2" fill="none" marker-end="url(#arr)">
+                <path d="M 128 52 C 155 52, 155 52, 182 52" />
+                <path d="M 128 52 C 155 52, 155 130, 182 130" />
+                <path d="M 298 52 C 320 52, 320 92, 338 92" />
+                <path d="M 298 130 C 320 130, 320 92, 338 92" />
+                <path d="M 298 130 C 320 130, 320 202, 338 202" />
+              </g>
+              <g font-family="sans-serif" font-size="11.5">
+                <rect x="14" y="30" width="114" height="44" rx="8" fill="var(--surface-2)" stroke="var(--accent-proof)" stroke-width="1.5" />
+                <text x="71" y="56" text-anchor="middle" fill="var(--ink-hi)">数列极限与收敛</text>
+
+                <rect x="184" y="30" width="114" height="44" rx="8" fill="var(--surface-2)" stroke="var(--accent-proof)" stroke-width="1.5" />
+                <text x="241" y="56" text-anchor="middle" fill="var(--ink-hi)">微分中值定理</text>
+
+                <rect x="184" y="108" width="114" height="44" rx="8" fill="var(--surface-2)" stroke="var(--accent-warn)" stroke-width="1.5" />
+                <text x="241" y="134" text-anchor="middle" fill="var(--ink-hi)">Fourier 级数</text>
+
+                <rect x="340" y="70" width="70" height="44" rx="8" fill="var(--surface-2)" stroke="var(--accent-primary)" stroke-width="1.5" />
+                <text x="375" y="96" text-anchor="middle" fill="var(--ink-hi)">Taylor</text>
+
+                <rect x="340" y="180" width="70" height="44" rx="8" fill="var(--surface-2)" stroke="var(--border-subtle)" stroke-width="1.2" />
+                <text x="375" y="206" text-anchor="middle" fill="var(--ink-muted)">Sobolev</text>
+              </g>
+            </svg>
+            <p class="prose" style="font-size:12.5px;color:var(--ink-muted);margin-top:8px;">
+              用静止坐标网格替代高频星空粒子，节点以克制描边编码掌握状态，英文长术语保持清晰换行且不再依赖霓虹外发光。
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 4: BEFORE VS AFTER -->
+    <section id="view-compare" class="view">
+      <div class="compare-grid">
+        <div class="legacy-card">
+          <p class="mono" style="font-size:11px;letter-spacing:0.24em;color:#718299;margin:0 0 8px;">CURRENT · 黑色科幻主题 (v0.1.0 遗留)</p>
+          <h3 class="legacy-title">MATHGUIDE</h3>
+          <button class="legacy-btn" type="button">ACCESS GRANTED ⏎</button>
+          <ul class="diff-list">
+            <li>全屏 CRT 扫描线 (<code>body::after</code>) 与暗角，削弱公式上下标与 PDF 清晰度</li>
+            <li>63 处 <code>--glow-*</code> 霓虹外发光 + 260 颗动态星空粒子消耗 GPU</li>
+            <li>开场动画使用黑客故障 RGB 分裂 + “ACCESS DENIED / OVERRIDE” 文案</li>
+            <li>学习与科研区视觉外观完全一致，顶部按钮与底部 emoji 指令栏拥挤</li>
+            <li>仅使用 Segoe UI / Consolas，缺乏学术衬线体与 <code>tabular-nums</code> 等宽数字</li>
+          </ul>
+        </div>
+
+        <div class="panel-card" style="padding:24px;">
+          <p class="kicker">PROPOSED · AI FOR SCIENCE (OBSERVATORY &amp; PREPRINT)</p>
+          <h3 class="serif" style="margin:0 0 12px;font-size:26px;font-weight:500;color:var(--ink-hi);">MathGuide 科研工作台</h3>
+          <button class="btn-primary" type="button">进入科研推演 →</button>
+          <ul class="diff-list" style="color:var(--ink);">
+            <li>清晰分层表面 (<code>--surface-0..3</code>) + 1px 精密发丝线，彻底移除扫描线与霓虹晕光</li>
+            <li>深色「天文台石板」+ 浅色「温润学术预印本纸张」双主题，均通过 WCAG AA 校验</li>
+            <li>三声部字体：衬线体排定理/标题、无衬线排 UI、等宽数字排实验表与 DOI</li>
+            <li>三栏工作台范式：左侧可折叠仪器轨 + 中央 68ch 文档流 + 右侧 PDF/图解检查器</li>
+            <li>令牌层 100% 兼容旧变量别名，分阶段渐进升级，1079 条前端单测保持全绿</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="swatches">
+        <div class="swatch"><div class="swatch-bar" style="background:var(--surface-0);"></div><div class="swatch-name">Surface 0</div><div class="swatch-val mono">--surface-0</div></div>
+        <div class="swatch"><div class="swatch-bar" style="background:var(--surface-2);"></div><div class="swatch-name">Surface 2 (Card)</div><div class="swatch-val mono">--surface-2</div></div>
+        <div class="swatch"><div class="swatch-bar" style="background:var(--accent-primary);"></div><div class="swatch-name">Primary Cobalt</div><div class="swatch-val mono">--accent-primary</div></div>
+        <div class="swatch"><div class="swatch-bar" style="background:var(--accent-proof);"></div><div class="swatch-name">Proof Emerald</div><div class="swatch-val mono">--accent-proof</div></div>
+        <div class="swatch"><div class="swatch-bar" style="background:var(--accent-cite);"></div><div class="swatch-name">Citation Indigo</div><div class="swatch-val mono">--accent-cite</div></div>
+        <div class="swatch"><div class="swatch-bar" style="background:var(--accent-warn);"></div><div class="swatch-name">Caution Amber</div><div class="swatch-val mono">--accent-warn</div></div>
+        <div class="swatch"><div class="swatch-bar" style="background:var(--accent-danger);"></div><div class="swatch-name">Refute Coral</div><div class="swatch-val mono">--accent-danger</div></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    function switchView(name) {
+      document.querySelectorAll('.view').forEach((el) => el.classList.remove('active'));
+      document.querySelectorAll('.lab-tab').forEach((el) => el.classList.remove('active'));
+      const target = document.getElementById('view-' + name);
+      if (target) target.classList.add('active');
+      const tab = document.querySelector('.lab-tab[data-view="' + name + '"]');
+      if (tab) tab.classList.add('active');
+    }
+
+    document.querySelectorAll('.lab-tab').forEach((btn) => {
+      btn.addEventListener('click', () => switchView(btn.dataset.view));
+    });
+
+    const btnDark = document.getElementById('btn-dark');
+    const btnLight = document.getElementById('btn-light');
+    function setTheme(mode) {
+      document.documentElement.dataset.theme = mode;
+      btnDark.classList.toggle('active', mode === 'dark');
+      btnLight.classList.toggle('active', mode === 'light');
+    }
+    btnDark.addEventListener('click', () => setTheme('dark'));
+    btnLight.addEventListener('click', () => setTheme('light'));
+  </script>
+</body>
+</html>
+`
+
+mkdirSync(OUT_DIR, { recursive: true })
+writeFileSync(OUT_FILE, HTML, 'utf8')
+console.log(`✓ 已生成 AI-for-Science 交互式设计预览：docs/design/ai-for-science-preview.html`)

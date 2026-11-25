@@ -258,7 +258,7 @@ onMounted(async () => {
 .fm-expr {
   display: block;
   margin-top: 5px;
-  color: #ffd166;
+  color: var(--warn);
   font-family: var(--font-tech);
   font-size: 12px;
   word-break: break-all;
@@ -279,7 +279,7 @@ onMounted(async () => {
 
 .fm-sample.bad,
 .fm-unit-warning {
-  color: #ff8a8a;
+  color: var(--danger);
 }
 
 .fm-map {

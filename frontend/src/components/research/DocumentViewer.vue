@@ -1611,7 +1611,7 @@ onBeforeUnmount(() => {
   z-index: 40;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background: var(--bg-void);
   border-left: 1px solid var(--line);
 }
 
@@ -1665,8 +1665,8 @@ onBeforeUnmount(() => {
 }
 
 .v-meta-chip.ok {
-  color: var(--green, #3fb950);
-  border-color: color-mix(in srgb, var(--green, #3fb950) 45%, transparent);
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
 }
 
 .v-meta-chip.oa {
@@ -1675,8 +1675,8 @@ onBeforeUnmount(() => {
 }
 
 .v-meta-chip.warn {
-  color: var(--red, #f85149);
-  border-color: color-mix(in srgb, var(--red, #f85149) 55%, transparent);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
 }
 
 .v-meta-link {
@@ -1728,7 +1728,7 @@ onBeforeUnmount(() => {
 }
 
 .v-close:hover {
-  color: #ff8a8a;
+  color: var(--danger);
 }
 
 .v-page {
@@ -1810,8 +1810,8 @@ onBeforeUnmount(() => {
 
 .v-annot-rect {
   position: absolute;
-  background: color-mix(in srgb, #ffd166 26%, transparent);
-  border: 1px solid color-mix(in srgb, #ffd166 65%, transparent);
+  background: color-mix(in srgb, var(--warn) 26%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 65%, transparent);
   border-radius: 2px;
   pointer-events: auto;
   cursor: pointer;
@@ -1823,13 +1823,13 @@ onBeforeUnmount(() => {
 }
 
 .v-annot-rect.c-green {
-  background: color-mix(in srgb, #6ee7a8 24%, transparent);
-  border-color: color-mix(in srgb, #6ee7a8 70%, transparent);
+  background: color-mix(in srgb, var(--success) 24%, transparent);
+  border-color: color-mix(in srgb, var(--success) 70%, transparent);
 }
 
 .v-annot-rect.c-red {
-  background: color-mix(in srgb, #ff8a8a 24%, transparent);
-  border-color: color-mix(in srgb, #ff8a8a 70%, transparent);
+  background: color-mix(in srgb, var(--danger) 24%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 70%, transparent);
 }
 
 .v-hit-layer {
@@ -1902,7 +1902,7 @@ onBeforeUnmount(() => {
 }
 
 .v-text :deep(.v-mark) {
-  background: color-mix(in srgb, #ffd166 30%, transparent);
+  background: color-mix(in srgb, var(--warn) 30%, transparent);
   color: var(--text-hi);
   border-radius: 2px;
 }
@@ -1914,7 +1914,7 @@ onBeforeUnmount(() => {
 }
 
 .v-error {
-  color: #ff8a8a;
+  color: var(--danger);
   font-size: 12px;
 }
 
@@ -2016,7 +2016,7 @@ onBeforeUnmount(() => {
 }
 
 .v-del:hover {
-  color: #ff8a8a;
+  color: var(--danger);
 }
 
 .v-note-quote {
@@ -2066,7 +2066,7 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   border: 2px solid transparent;
   cursor: pointer;
-  background: #ffd166;
+  background: var(--warn);
 }
 
 .v-color.c-cyan {
@@ -2074,11 +2074,11 @@ onBeforeUnmount(() => {
 }
 
 .v-color.c-green {
-  background: #6ee7a8;
+  background: var(--success);
 }
 
 .v-color.c-red {
-  background: #ff8a8a;
+  background: var(--danger);
 }
 
 .v-color.on {

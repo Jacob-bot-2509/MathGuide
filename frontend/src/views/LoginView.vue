@@ -287,13 +287,12 @@ onBeforeUnmount(() => {
 }
 
 .panel {
-  width: min(400px, 100%);
-  background: var(--bg-panel);
+  width: min(410px, 100%);
+  background: var(--bg-card);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 14px;
   padding: 36px 32px 28px;
-  backdrop-filter: blur(10px);
-  box-shadow: 0 0 60px rgba(77, 214, 255, 0.06);
+  box-shadow: var(--shadow-lg);
 }
 
 .brand {
@@ -304,21 +303,22 @@ onBeforeUnmount(() => {
 }
 
 .brand-mark {
-  font-family: var(--font-tech);
+  font-family: var(--font-serif);
   font-weight: 700;
   color: var(--cyan);
   border: 1px solid var(--line-bright);
-  padding: 3px 8px;
-  border-radius: 4px;
-  box-shadow: var(--glow-cyan);
+  background: color-mix(in srgb, var(--cyan) 10%, var(--surface-1));
+  padding: 3px 9px;
+  border-radius: 6px;
   font-size: 14px;
 }
 
 .brand-name {
-  font-family: var(--font-tech);
-  letter-spacing: 0.2em;
+  font-family: var(--font-serif);
+  letter-spacing: 0.04em;
   color: var(--text-hi);
-  font-size: 18px;
+  font-size: 21px;
+  font-weight: 600;
 }
 
 .slogan {
@@ -432,20 +432,20 @@ onBeforeUnmount(() => {
 
 .login-btn {
   width: 100%;
-  background: rgba(77, 214, 255, 0.12);
-  border: 1px solid var(--line-bright);
-  color: var(--cyan);
-  padding: 12px;
-  border-radius: 10px;
+  background: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+  color: #ffffff;
+  padding: 11px;
+  border-radius: 9px;
   cursor: pointer;
-  font-size: 15px;
-  letter-spacing: 0.2em;
-  transition: all var(--dur-fast) var(--ease-out);
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  transition: filter var(--dur-fast) var(--ease-out);
 }
 
 .login-btn:hover {
-  background: rgba(77, 214, 255, 0.2);
-  box-shadow: var(--glow-cyan);
+  filter: brightness(1.08);
 }
 
 .divider {
@@ -497,20 +497,18 @@ onBeforeUnmount(() => {
 }
 
 .third-btn.wechat:hover {
-  border-color: #4dffb8;
-  color: #4dffb8;
-  box-shadow: 0 0 10px rgba(77, 255, 184, 0.25);
+  border-color: var(--accent-proof);
+  color: var(--accent-proof);
 }
 
 .third-btn.wechat .icon {
-  background: #4dffb8;
-  color: #06281c;
+  background: var(--accent-proof);
+  color: #ffffff;
 }
 
 .third-btn.qq:hover {
   border-color: var(--blue);
   color: var(--blue);
-  box-shadow: 0 0 10px rgba(47, 123, 255, 0.25);
 }
 
 .third-btn.qq .icon {

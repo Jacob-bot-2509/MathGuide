@@ -1,81 +1,110 @@
 /* ============================================================
-   MathGuide 设计令牌 —— 黑色科幻主题
-   全站颜色 / 辉光 / 字体 / 动效节奏唯一的定义处。
-   新增页面时一律引用这里的变量,不写死色值。
+   MathGuide AI-for-Science 设计令牌 — Observatory & Preprint
+   视觉定位：精密科研仪器（深色）× 学术预印本工作台（浅色）
+   设计原则：
+     1. 层次靠表面明度与 1px 精密发丝线，不再使用霓虹外发光与扫描线；
+     2. 语义色独立成系（主色 / 证明通过 / 引用定理 / 警示 / 错误）；
+     3. 完整保留旧变量别名（--cyan / --bg-* / --glow-*），实现全站零破坏过渡。
    ============================================================ */
 :root {
-  /* 背景层(黑主调) */
-  --bg-void: #05060a;
-  --bg-panel: rgba(13, 18, 30, 0.72);
-  --bg-card: rgba(16, 22, 36, 0.6);
+  /* ---------- 1. 新语义表面层（Observatory Slate 深色仪器盘） ---------- */
+  --surface-0: #0b0e14;
+  --surface-1: #111622;
+  --surface-2: #171e2e;
+  --surface-3: #1e273b;
+  --surface-glass: rgba(17, 22, 34, 0.86);
 
-  /* 霓虹主色 */
-  --cyan: #4dd6ff;
-  --blue: #2f7bff;
-  --violet: #8b5cf6;
-  --magenta: #ff4dd2;
+  /* ---------- 2. 新语义墨色（WCAG 2.1 AA / AAA） ---------- */
+  --ink-hi: #edf2f8;
+  --ink: #c6d0df;
+  --ink-muted: #8a97ab;
 
-  /* 警示色(删除 / 退出登录 / 低置信度提示等危险与警告场景) */
-  --danger: #ff6b6b;
+  /* ---------- 3. 科学语义强调色 ---------- */
+  --accent-primary: #58b4e6;    /* 仪器钴青：主操作与焦点 */
+  --accent-secondary: #4e8df5;  /* 几何深蓝：次级交互与矢量 */
+  --accent-cite: #929ff8;       /* 学术靛蓝：文献引用与定理标签 */
+  --accent-proof: #46c29b;      /* 验真翠绿：双模型复核通过 / 已掌握 */
+  --accent-warn: #e5b34c;       /* 批注琥珀：知识缺口 / 待入库 / 弱项 */
+  --accent-danger: #e86c75;     /* 证伪珊瑚红：错误与高危操作 */
 
-  /* 文字 */
-  --text-hi: #e8f2ff;
-  --text: #c2d2e4;
-  /* 次要文字:在 --bg-panel(#0d1220)上仍需 ≥ 4.5:1,
-     旧值 #64748b 只有 3.9:1,设置页小字因此不达标 */
-  --text-dim: #718299;
+  /* ---------- 4. 结构描边与精密景深 ---------- */
+  --border-subtle: rgba(148, 163, 184, 0.14);
+  --border-strong: rgba(88, 180, 230, 0.42);
+  --shadow-sm: 0 1px 2px rgba(2, 6, 16, 0.35);
+  --shadow-md: 0 8px 24px rgba(2, 6, 16, 0.42);
+  --shadow-lg: 0 20px 48px rgba(2, 6, 16, 0.56);
+  --focus-ring: 0 0 0 2px rgba(88, 180, 230, 0.24);
 
-  /* 描边 */
-  --line: rgba(96, 165, 250, 0.14);
-  --line-bright: rgba(96, 165, 250, 0.45);
+  /* ---------- 5. 三声部科学排版系统（本地字体优先，兼容严格 CSP） ---------- */
+  --font-serif: "Newsreader", "Source Serif 4", "Noto Serif SC", "Songti SC", Georgia, serif;
+  --font-sans: "Inter", "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", "Cascadia Mono", "SF Mono", Consolas, monospace;
 
-  /* 辉光 */
-  --glow-cyan: 0 0 10px rgba(77, 214, 255, 0.55), 0 0 28px rgba(77, 214, 255, 0.22);
-  --glow-violet: 0 0 10px rgba(139, 92, 246, 0.55), 0 0 28px rgba(139, 92, 246, 0.22);
-  --glow-magenta: 0 0 10px rgba(255, 77, 210, 0.5), 0 0 28px rgba(255, 77, 210, 0.2);
+  /* ---------- 6. 动效节奏（克制、精密、不抢读数注意力） ---------- */
+  --dur-fast: 0.16s;
+  --dur-med: 0.28s;
+  --dur-slow: 0.64s;
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 
-  /* 字体 */
-  --font-ui: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
-  --font-tech: "Consolas", "SF Mono", "Cascadia Mono", monospace;
+  /* ---------- 7. 兼容别名层（全站组件零破坏映射） ---------- */
+  --bg-void: var(--surface-0);
+  --bg-panel: var(--surface-glass);
+  --bg-card: var(--surface-2);
 
-  /* 动效时长与曲线(全站统一节奏:交互快、演示慢) */
-  --dur-fast: 0.22s;
-  --dur-med: 0.5s;
-  --dur-slow: 1.2s;
-  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --cyan: var(--accent-primary);
+  --blue: var(--accent-secondary);
+  --violet: var(--accent-cite);
+  --magenta: var(--accent-cite);
+  --success: var(--accent-proof);
+  --warn: var(--accent-warn);
+  --danger: var(--accent-danger);
+
+  --text-hi: var(--ink-hi);
+  --text: var(--ink);
+  --text-dim: var(--ink-muted);
+
+  --line: var(--border-subtle);
+  --line-bright: var(--border-strong);
+
+  /* 将旧的霓虹外发光收敛为克制的仪器聚焦光环 */
+  --glow-cyan: var(--focus-ring);
+  --glow-violet: 0 0 0 2px rgba(146, 159, 248, 0.24);
+  --glow-magenta: 0 0 0 2px rgba(146, 159, 248, 0.24);
+
+  --font-ui: var(--font-sans);
+  --font-tech: var(--font-mono);
 }
 
 /* ============================================================
-   浅色主题:由 settings.ts 在根节点写入 data-theme="light" 切换。
-   白色背景 + 加深的霓虹点缀色,保证对比度与科幻感。
+   浅色主题：Archival Preprint（温润学术纸张，专为长时间推导与精读论文设计）
    ============================================================ */
 :root[data-theme='light'] {
-  /* 背景层(白主调) */
-  --bg-void: #f5f7fa;
-  --bg-panel: rgba(255, 255, 255, 0.85);
-  --bg-card: #ffffff;
+  --surface-0: #f6f5f0;
+  --surface-1: #efede6;
+  --surface-2: #ffffff;
+  --surface-3: #e8e5dc;
+  --surface-glass: rgba(255, 255, 255, 0.90);
 
-  /* 霓虹主色(加深适配白底) */
-  --cyan: #0891b2;
-  --blue: #2563eb;
-  --violet: #7c3aed;
-  --magenta: #db2777;
+  --ink-hi: #111827;
+  --ink: #2b3445;
+  --ink-muted: #566275;
 
-  /* 警示色(白底用更深的红保证对比度) */
-  --danger: #e11d48;
+  --accent-primary: #175c8a;    /* 普鲁士学术蓝（在白纸上对比度 > 7:1） */
+  --accent-secondary: #2458b8;
+  --accent-cite: #4b4fc4;
+  --accent-proof: #16795a;
+  --accent-warn: #a66208;
+  --accent-danger: #be2b3e;
 
-  /* 文字 */
-  --text-hi: #0f172a;
-  --text: #334155;
-  /* 白底上次要文字需 ≥ 4.5:1;#64748b 在 #f5f7fa 上只有 4.43:1 */
-  --text-dim: #5b6b80;
+  --border-subtle: rgba(15, 23, 42, 0.10);
+  --border-strong: rgba(23, 92, 138, 0.40);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 6px 18px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 18px 40px rgba(15, 23, 42, 0.12);
+  --focus-ring: 0 0 0 2px rgba(23, 92, 138, 0.20);
 
-  /* 描边 */
-  --line: rgba(15, 23, 42, 0.12);
-  --line-bright: rgba(8, 145, 178, 0.42);
-
-  /* 辉光(白底用柔和的浅光晕) */
-  --glow-cyan: 0 0 10px rgba(8, 145, 178, 0.28), 0 0 26px rgba(8, 145, 178, 0.12);
-  --glow-violet: 0 0 10px rgba(124, 58, 237, 0.28), 0 0 26px rgba(124, 58, 237, 0.12);
-  --glow-magenta: 0 0 10px rgba(219, 39, 119, 0.26), 0 0 26px rgba(219, 39, 119, 0.11);
+  --glow-cyan: var(--focus-ring);
+  --glow-violet: 0 0 0 2px rgba(75, 79, 196, 0.20);
+  --glow-magenta: 0 0 0 2px rgba(75, 79, 196, 0.20);
 }

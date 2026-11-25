@@ -38,7 +38,7 @@ function sseResponse(chunks: string[]) {
   }
 }
 
-type StreamCall = { prompt?: string; workspace?: string }
+type StreamCall = { prompt?: string; workspace?: string; profile?: string; verify?: boolean }
 const calls: StreamCall[] = []
 
 function stubFetch(chunks: string[] = REPLY) {
@@ -104,9 +104,82 @@ describe('ChatWorkspace 挂载与外壳', () => {
 
   it('科研区能挂载(走独占的检索链路)', async () => {
     const wrapper = await mountWorkspace('research')
-    expect(wrapper.find('.learn').exists()).toBe(true)
+    expect(wrapper.find('.learn.ws-research').exists()).toBe(true)
+    expect(wrapper.find('.sci-rail').exists()).toBe(true)
     expect(wrapper.find('.chat-list').exists()).toBe(true)
     wrapper.unmount()
+  })
+
+  it('左侧科研仪器栏支持折叠展开并持久化状态', async () => {
+    const wrapper = await mountWorkspace('learn')
+    expect(wrapper.find('.learn.ws-learn.rail-open').exists()).toBe(true)
+    const toggle = wrapper.find('button.rail-toggle')
+    expect(toggle.exists()).toBe(true)
+
+    await toggle.trigger('click')
+    expect(wrapper.find('.learn.rail-open').exists()).toBe(false)
+    expect(localStorage.getItem('mg-rail-open')).toBe('0')
+
+    await toggle.trigger('click')
+    expect(wrapper.find('.learn.rail-open').exists()).toBe(true)
+    expect(localStorage.getItem('mg-rail-open')).toBe('1')
+    wrapper.unmount()
+  })
+
+  it('右侧科研演示台支持开关、多子窗口排版、折叠最大化与持久化', async () => {
+    const wrapper = await mountWorkspace('research')
+    try {
+      const stageBtn = wrapper.find('button.stage-toggle')
+      expect(stageBtn.exists()).toBe(true)
+      expect(wrapper.find('.learn.stage-open').exists()).toBe(false)
+
+      await stageBtn.trigger('click')
+      expect(wrapper.find('.learn.stage-open').exists()).toBe(true)
+      expect(wrapper.find('.stage-pane').exists()).toBe(true)
+      expect(localStorage.getItem('mg-stage-open')).toBe('1')
+
+      // 科研区有 图解 / 文件与资料 / 文献阅读 三个标签
+      const tabs = wrapper.findAll('.stage-tab')
+      expect(tabs.length).toBe(3)
+      await tabs[1].trigger('click')
+      expect(tabs[1].classes()).toContain('on')
+
+      // 方案 A: 默认上下双窗模式同时承载 2 个子窗口 + 横向分隔条
+      expect(wrapper.find('.stage-h-divider').exists()).toBe(true)
+      expect(wrapper.find('[data-subwin="figures"]').attributes('style') ?? '').not.toContain('display: none')
+      expect(wrapper.find('[data-subwin="files"]').attributes('style') ?? '').not.toContain('display: none')
+
+      // 切换单窗 / 多窗布局并持久化
+      await wrapper.find('.layout-btn[data-layout="single"]').trigger('click')
+      expect(localStorage.getItem('mg-stage-layout')).toBe('single')
+      expect(wrapper.find('.stage-h-divider').exists()).toBe(false)
+
+      await wrapper.find('.layout-btn[data-layout="stack"]').trigger('click')
+      expect(localStorage.getItem('mg-stage-layout')).toBe('stack')
+
+      // 打开第三个子窗(文献阅读)并测试独立折叠与最大化
+      await tabs[2].trigger('click')
+      expect(wrapper.find('[data-subwin="reader"]').attributes('style') ?? '').not.toContain('display: none')
+      await wrapper.find('[data-subwin="files"] .subwin-collapse').trigger('click')
+      expect(wrapper.find('[data-subwin="files"]').classes()).toContain('subwin--collapsed')
+
+      await wrapper.find('[data-subwin="figures"] .subwin-max').trigger('click')
+      expect(wrapper.find('[data-subwin="figures"] .subwin-max').text()).toBe('⤡')
+      expect(wrapper.find('[data-subwin="figures"]').attributes('style') ?? '').not.toContain('display: none')
+      expect(wrapper.find('[data-subwin="files"]').attributes('style') ?? '').toContain('display: none')
+
+      // 还原并关闭单个子窗
+      await wrapper.find('[data-subwin="figures"] .subwin-max').trigger('click')
+      await wrapper.find('[data-subwin="files"] .subwin-close').trigger('click')
+      expect(wrapper.find('[data-subwin="files"]').attributes('style') ?? '').toContain('display: none')
+      expect(wrapper.find('.learn.stage-open').exists()).toBe(true)
+
+      await wrapper.find('button.stage-close').trigger('click')
+      expect(wrapper.find('.learn.stage-open').exists()).toBe(false)
+      expect(localStorage.getItem('mg-stage-open')).toBe('0')
+    } finally {
+      wrapper.unmount()
+    }
   })
 })
 
@@ -211,5 +284,46 @@ describe('ChatWorkspace 流式回复', () => {
     const learnId = savedSessions('learn')[0].id
     const researchId = savedSessions('research')[0].id
     expect(learnId).not.toBe(researchId)
+  })
+
+  it('以研促学桥接:学习区挂载时自动消费 mg-learn-seed 与 mg-learn-origin 并展示回跳条', async () => {
+    sessionStorage.setItem('mg-learn-seed', '请帮我夯实谱隙估计的前置理论')
+    sessionStorage.setItem('mg-learn-origin', JSON.stringify({
+      workspace: 'research',
+      sessionId: 42,
+      label: 'Spectral Gap Paper',
+    }))
+    const wrapper = await mountWorkspace('learn')
+    try {
+      await wait(600)
+      expect(sessionStorage.getItem('mg-learn-seed')).toBeNull()
+      expect(sessionStorage.getItem('mg-learn-origin')).toBeNull()
+      const sent = calls.find((c) => c.prompt === '请帮我夯实谱隙估计的前置理论')
+      expect(sent).toBeTruthy()
+      expect(sent?.workspace).toBe('learn')
+      expect(wrapper.find('.origin-banner').exists()).toBe(true)
+      expect(wrapper.find('.origin-banner').text()).toContain('Spectral Gap Paper')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('科研区 AI4S 工具条:开启双角色复核后透传 verify=true,且不渲染多余人设模式栏与侧栏图谱按钮', async () => {
+    const wrapper = await mountWorkspace('research')
+    try {
+      await wait()
+      expect(wrapper.find('.profile-strip').exists()).toBe(false)
+      const verifyBtn = wrapper.find('[data-ai4s-tool="verify"]')
+      expect(verifyBtn.exists()).toBe(true)
+      await verifyBtn.trigger('click')
+      const input = wrapper.find('textarea.input')
+      await input.setValue('核验谱隙定理的收敛边界')
+      await input.trigger('keydown.enter')
+      await wait(600)
+      const sent = calls.find((c) => c.prompt === '核验谱隙定理的收敛边界')
+      expect(sent?.verify).toBe(true)
+    } finally {
+      wrapper.unmount()
+    }
   })
 })

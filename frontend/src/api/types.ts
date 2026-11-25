@@ -45,6 +45,10 @@ export interface ChatRequest {
   diagrams?: boolean
   /** 图谱“前往”带入的知识点 id:会话级上下文,追问仍携带 */
   pointId?: string
+  /** 双区定制深度/范式预设(缺省 standard) */
+  profile?: string
+  /** 科研区显式开启独立双角色低温复核 */
+  verify?: boolean
 }
 
 /** 流式回调(OpenAI 兼容 SSE 的通用形态) */

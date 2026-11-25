@@ -35,6 +35,9 @@ import {
   type TableSummary,
 } from '@/services/researchTableService'
 import { listResearchProjects, downloadResearchReport, type ResearchProject } from '@/services/researchService'
+import { saveAnnotation } from '@/services/researchAnnotationService'
+import { activeProjectId, setActiveProjectId } from '@/stores/researchProject'
+import { settingsState } from '@/stores/settings'
 
 const router = useRouter()
 const route = useRoute()
@@ -43,7 +46,13 @@ const projects = ref<ResearchProject[]>([])
 const table = ref<ResearchTable | null>(null)
 const computed = ref<Record<string, string[]>>({})
 const errors = ref<TableError[]>([])
-const activeProject = ref('')
+const activeProject = ref(activeProjectId.value)
+watch(activeProject, (val) => {
+  if (val !== activeProjectId.value) setActiveProjectId(val)
+})
+watch(activeProjectId, (val) => {
+  if (val !== activeProject.value) activeProject.value = val
+})
 const importing = ref(false)
 const exportingReport = ref(false)
 const saving = ref(false)
@@ -727,6 +736,64 @@ async function openFormulaDialog(): Promise<void> {
   if (!table.value || saving.value || computing.value || printing.value || switching.value) return
   if (dirty.value && !(await saveNow(true))) return
   formulaDialogOpen.value = true
+}
+
+const isCompareTable = vueComputed(() =>
+  Boolean(table.value?.rowSources?.some((s) => Boolean(s?.docId))),
+)
+const writingBack = ref(false)
+
+/** 创新 1:复用既有 onChat() 自动保存与 tableId 链路,针对多文献对比表一键触发研究缺口挖掘 */
+async function onDiscoverGaps(): Promise<void> {
+  if (!table.value) return
+  const seed = settingsState.language === 'en'
+    ? `Based strictly on the attached multi-paper comparison table "${table.value.title}", synthesize the key methodological and empirical contrasts across the papers, identify 2–3 unresolved research gaps with concrete falsifiable hypotheses, and cite the corresponding paper and page for every point.`
+    : `请严格依据当前挂载的多文献对比表《${table.value.title}》，横向梳理各文献在方法机制、样本/数据条件与局限上的核心差异，提炼 2–3 个尚未解决的研究缺口（Research Gaps）及对应的可验证假设，并为每条判断注明对应文献与页码。`
+  try {
+    sessionStorage.setItem('mg-research-seed', seed)
+    sessionStorage.setItem('mg-research-profile-once', 'compare')
+  } catch {
+    /* 忽略隐私模式限制 */
+  }
+  await onChat()
+}
+
+/** 创新 3:将确定性回归/统计复核结论回写为原论文对应页的持久化批注 */
+async function writeVerificationNote(): Promise<void> {
+  const src = table.value?.source
+  if (!table.value || !src?.docId || writingBack.value) return
+  writingBack.value = true
+  try {
+    const page = src.page && src.page > 0 ? src.page : 1
+    const parts: string[] = []
+    if (regression.value) {
+      parts.push(
+        `[定量复核 · ${table.value.title}] ${regression.value.equation} `
+        + `(n=${regression.value.n}, R²=${regression.value.r2 ?? '—'}, `
+        + `adj R²=${regression.value.adjR2 ?? '—'}, p=${regression.value.pF ?? '—'})`,
+      )
+    } else if (analysis.value?.stats.length) {
+      const summary = analysis.value.stats
+        .slice(0, 4)
+        .map((c) => `${c.label}: mean=${c.mean}, sd=${c.stdev || '—'} (n=${c.n})`)
+        .join('; ')
+      parts.push(`[定量复核 · ${table.value.title}] ${summary}`)
+    } else {
+      parts.push(`[定量复核 · ${table.value.title}] ${table.value.rows.length}×${table.value.columns.length} 数据表已核对`)
+    }
+    await saveAnnotation(src.docId, {
+      page,
+      quote: (src.quote || table.value.title).slice(0, 200),
+      rects: [],
+      note: parts.join('\n').slice(0, 600),
+      color: '#38bdf8',
+    })
+    showToast(t('tables.writeBackDone', { p: page }))
+  } catch {
+    showToast(t('tables.writeBackFail'))
+  } finally {
+    writingBack.value = false
+  }
 }
 
 async function onChat(): Promise<void> {
@@ -1416,6 +1483,7 @@ onBeforeUnmount(() => {
           <button class="mini" @click="openAnalysis('stats')">{{ t('tables.stats') }}</button>
           <button class="mini" @click="openAnalysis('chart')">{{ t('tables.chart') }}</button>
           <button class="mini" @click="onChat">{{ t('tables.chat') }}</button>
+          <button v-if="isCompareTable" class="mini primary" @click="onDiscoverGaps">{{ t('tables.discoverGaps') }}</button>
           <button class="mini" @click="onExport('csv')">CSV</button>
           <button class="mini" @click="onExport('xlsx')">XLSX</button>
           <button class="mini" :disabled="printing" @click="onPrint">
@@ -1430,6 +1498,9 @@ onBeforeUnmount(() => {
           <button class="source-chip" :title="t('tables.openSource')" @click="openSource">
             {{ table.source.docName || table.source.docId }}
             <template v-if="table.source.page"> · {{ t('viewer.pageNo', { n: table.source.page }) }}</template>
+          </button>
+          <button class="mini" :disabled="writingBack" @click="writeVerificationNote">
+            {{ writingBack ? '…' : t('tables.writeBackNote') }}
           </button>
         </div>
 
@@ -1746,6 +1817,12 @@ onBeforeUnmount(() => {
                   </table>
                 </div>
                 <div class="chart-actions">
+                  <button
+                    v-if="table.source?.docId"
+                    class="mini primary"
+                    :disabled="writingBack"
+                    @click="writeVerificationNote"
+                  >{{ writingBack ? '…' : t('tables.writeBackNote') }}</button>
                   <button class="mini" @click="regressionChartRef?.downloadSvg(`${table.title || 'regression'}.svg`)">SVG</button>
                   <button class="mini" @click="regressionChartRef?.downloadPng(`${table.title || 'regression'}.png`)">PNG</button>
                 </div>
@@ -2009,7 +2086,7 @@ onBeforeUnmount(() => {
 }
 
 .ti-del:hover {
-  color: #ff8a8a;
+  color: var(--danger);
 }
 
 .ti-rename {
@@ -2076,7 +2153,7 @@ onBeforeUnmount(() => {
 }
 
 .dirty.on {
-  color: #ffd166;
+  color: var(--warn);
 }
 
 .mini {
@@ -2103,7 +2180,7 @@ onBeforeUnmount(() => {
 }
 
 .mini.danger {
-  color: #ff8a8a;
+  color: var(--danger);
   border-color: rgba(255, 138, 138, 0.4);
 }
 
@@ -2359,7 +2436,7 @@ onBeforeUnmount(() => {
 
 .computed-tag {
   flex: none;
-  color: #ffd166;
+  color: var(--warn);
   font-size: 9px;
   border: 1px solid rgba(255, 209, 102, 0.4);
   border-radius: 999px;
@@ -2380,7 +2457,7 @@ onBeforeUnmount(() => {
 }
 
 .role-tag.calculated {
-  color: #ffd166;
+  color: var(--warn);
   border-color: rgba(255, 209, 102, 0.4);
 }
 
@@ -2523,7 +2600,7 @@ onBeforeUnmount(() => {
 
 .row-del:hover,
 .col-del:hover {
-  color: #ff8a8a;
+  color: var(--danger);
 }
 
 .cell {
@@ -2544,7 +2621,7 @@ onBeforeUnmount(() => {
   display: block;
   padding: 6px 7px;
   min-width: 100px;
-  color: #ffd166;
+  color: var(--warn);
   font-family: var(--font-tech);
   font-size: 12.5px;
 }
@@ -2604,7 +2681,7 @@ onBeforeUnmount(() => {
 }
 
 .error-line {
-  color: #ff8a8a;
+  color: var(--danger);
   font-size: 11.5px;
   margin: 3px 0;
 }
@@ -2618,7 +2695,7 @@ onBeforeUnmount(() => {
 }
 
 .analysis-stale {
-  color: #f6c85f;
+  color: var(--warn);
   font-size: 12px;
   margin: 8px 0;
 }

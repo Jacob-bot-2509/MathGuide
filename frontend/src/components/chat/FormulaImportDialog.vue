@@ -743,13 +743,13 @@ function onApply(): void {
 
 .master-note {
   margin: 12px 0 0;
-  color: #ffd166;
+  color: var(--warn);
   font-size: 11.5px;
 }
 
 .warn {
   margin: 8px 0 0;
-  color: #ff8a8a;
+  color: var(--danger);
   font-size: 11.5px;
   line-height: 1.6;
 }
@@ -796,7 +796,7 @@ function onApply(): void {
 
 .f-hand {
   margin-left: auto;
-  color: #ffd166;
+  color: var(--warn);
   border: 1px solid rgba(255, 209, 102, 0.45);
   border-radius: 999px;
   padding: 0 6px;
@@ -808,7 +808,7 @@ function onApply(): void {
   align-items: center;
   gap: 6px;
   margin: 0 0 7px;
-  color: #ffd166;
+  color: var(--warn);
   font-size: 11px;
   cursor: pointer;
 }
@@ -852,7 +852,7 @@ function onApply(): void {
 }
 
 .preview code {
-  color: #ffd166;
+  color: var(--warn);
   font-family: var(--font-tech);
   font-size: 12px;
   word-break: break-all;

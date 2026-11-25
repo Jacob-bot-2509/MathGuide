@@ -66,6 +66,8 @@ from chat_prompts import (  # noqa: F401
     WELCOME_ZH,
     _nav_guide_system,
     _nav_system,
+    clean_profile,
+    profile_instruction,
 )
 from chat_routing import (  # noqa: F401
     _ANALYSIS_EN,
@@ -354,14 +356,21 @@ def _regression_summary(result: dict, stale: bool) -> str:
 
 async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: bool,
                         ck: str | None = None, extra: str = "",
-                        diagrams: bool = False, request_id: str = ""):
+                        diagrams: bool = False, request_id: str = "",
+                        profile: str = "", verify: bool = False):
     """研究型 LLM 综合:正文流式 + 引用区(后端拼装,不经过模型);
     模型失败自动降级为来源列表;ck 非空时全文入库缓存供重复问题秒回"""
     full: list[str] = []
+    style_hint = profile_instruction(profile, "research", zh)
     try:
+        synth_kwargs: dict[str, object] = {
+            "role": rag.llm.pick("deep"),
+            "extra": extra,
+        }
+        if style_hint:
+            synth_kwargs["style_hint"] = style_hint
         async for delta in rag.research.synthesize.synthesize_stream(
-                question, outcome.hits, zh, role=rag.llm.pick("deep"),
-                extra=extra):
+                question, outcome.hits, zh, **synth_kwargs):
             full.append(delta)
             yield f"data: {json.dumps(delta, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001
@@ -381,6 +390,29 @@ async def _gen_research(question: str, outcome: rag.research.SearchOutcome, zh: 
         full.append(citations)
         async for frame in _frames(citations, pace=False):
             yield frame
+    if verify and full:
+        verdict = await _verify_answer(question, "".join(full), "main", zh)
+        if verdict:
+            if zh:
+                label = {"correct": "正确", "wrong": "有误",
+                         "uncertain": "需人工复核"}.get(verdict["verdict"], "需人工复核")
+                prefix = "复核"
+            else:
+                label = {"correct": "correct", "wrong": "needs correction",
+                         "uncertain": "needs review"}.get(verdict["verdict"], "needs review")
+                prefix = "Review"
+            correction = verdict.get("correction", "")
+            if verdict["verdict"] == "wrong" and correction:
+                title = "**更正**" if zh else "**Correction**"
+                block = f"\n\n{title}\n\n{correction}"
+                full.append(block)
+                yield f"data: {json.dumps(block, ensure_ascii=False)}\n\n"
+            issue = verdict.get("issue", "")
+            suffix = f":{issue}" if issue else ""
+            head = f"🔍 {prefix}(main)" if zh else "🔍 Review (main)"
+            line = f"\n\n> {head}:{label}{suffix}"
+            full.append(line)
+            yield f"data: {json.dumps(line, ensure_ascii=False)}\n\n"
     if diagrams:
         text = "".join(full)
         try:
@@ -492,7 +524,8 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                    diagram_question: str = "",
                    diagram_excerpts: list[dict] | None = None,
                    diagram_request_id: str = "",
-                   temperature: float | None = None):
+                   temperature: float | None = None,
+                   profile: str = ""):
     """LLM 流式:模型增量原样转发(带多轮历史);调用失败自动降级为直答,不让前端假死。
     verify=True 时解答完成后用另一角色复核,结论追加在末尾(复核失败静默跳过);
     summary 为更早对话的滚动摘要(附在 system 中),回答结束后异步推进摘要(每 8 轮一次)。
@@ -515,6 +548,9 @@ async def _gen_llm(prompt: str, cmd: str | None, chunks: list[tuple[rag.Chunk, f
                 "If the sources are insufficient, say so directly; do not use "
                 "outside knowledge and do not fabricate citations."
             )
+        style_hint = profile_instruction(profile, workspace, zh)
+        if style_hint:
+            system += style_hint
         if paper_mode:
             # 论文窗口动作已由服务端规划、前端执行;模型不要在正文里否认能力,
             # 也不要重复输出动作清单,只解释内容并指出页码/章节。
@@ -859,7 +895,9 @@ async def _gen_paper_llm(question: str, cmd: str | None,
                          uid_for_actions: str = "", doc_id: str = "",
                          request_id: str = "",
                          excerpts: list[dict] | None = None,
-                         planner_history: list[dict] | None = None):
+                         planner_history: list[dict] | None = None,
+                         profile: str = "",
+                         verify: bool = False):
     """论文回答与窗口动作并行:回答边生成,动作规划完成即下发 meta 帧。
 
     先启动回答流和动作规划两路;谁先完成就先处理谁。这样模型不会为了
@@ -867,9 +905,10 @@ async def _gen_paper_llm(question: str, cmd: str | None,
     """
     answer = _gen_llm(
         question, cmd, chunks, history=history, role=_pick_role(question),
-        verify=False, summary=summary, sid=sid, uid=uid, workspace=workspace,
+        verify=verify, summary=summary, sid=sid, uid=uid, workspace=workspace,
         paper_mode=True, diagram_mode=True, diagram_question=question,
-        diagram_excerpts=excerpts, diagram_request_id=request_id)
+        diagram_excerpts=excerpts, diagram_request_id=request_id,
+        profile=profile)
     iterator = answer.__aiter__()
     planner = asyncio.create_task(research_actions.plan_actions(
         uid_for_actions, doc_id, question, excerpts, planner_history))
@@ -1570,6 +1609,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
     # 当前论文问答:论文已经解析入库,只用本地正文作答。
     # 不能再走外部文献检索:附件/阅读器里提问时第三方源不可达或限额,
     # 会把「论文已读完」的问题误答成「网络/限额无法查询」。
+    profile = clean_profile(body.get("profile"), workspace)
+    research_verify = bool(body.get("verify")) or profile in ("verify", "reviewer")
     if workspace == "research" and paper_id:
         ctx = await asyncio.to_thread(
             research_corpus.paper_context, uid, paper_id, question,
@@ -1637,7 +1678,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                 question, cmd, paper_chunks, history=history, summary=summary,
                 sid=sid, uid=uid, workspace=workspace,
                 uid_for_actions=uid, doc_id=paper_id, request_id=request_id,
-                excerpts=excerpts, planner_history=history))
+                excerpts=excerpts, planner_history=history, profile=profile,
+                verify=research_verify))
         # 未配置模型:至少做本地定位,再把直答内容返回。
         try:
             actions = await research_actions.plan_actions(
@@ -1665,7 +1707,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
         ck = _research_cache_key(question, scope,
                                  f"{uid}|{research_corpus.corpus_stamp(uid)}|"
                                  f"{paper_id}|{table_stamp}|"
-                                 f"diagrams={_diagram_requested(body)}")
+                                 f"diagrams={_diagram_requested(body)}|"
+                                 f"profile={profile}|verify={research_verify}")
         cached = _RESEARCH_ANSWER.get(ck)
         if cached and time.monotonic() - cached[0] < _RESEARCH_TTL:
             _RESEARCH_ANSWER.move_to_end(ck)  # 命中即刷新 LRU 顺序
@@ -1696,7 +1739,8 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             return _sse(_gen_research(
                 question, outcome, zh, ck=ck, extra=table_context,
                 diagrams=_diagram_requested(body),
-                request_id=secrets.token_hex(8)))
+                request_id=secrets.token_hex(8), profile=profile,
+                verify=research_verify))
         return _stream_text(_research_reply(outcome, zh))
 
     # 追问的检索词带上上一轮用户问题;只影响检索,不改发给模型的 prompt
@@ -1746,7 +1790,12 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
             else None
         )
         sid = valid_session_id(body.get("sessionId"))
-        verify = bool(chunks) or rag.is_math_question(question) or _is_formula_followup(history)
+        verify = (
+            research_verify
+            or bool(chunks)
+            or rag.is_math_question(question)
+            or _is_formula_followup(history)
+        )
         summary = get_summary(uid, sid, workspace=workspace) if sid is not None else ""
         diagram_allowed = not research_diagrams.diagram_suppressed(
             question, history)
@@ -1760,7 +1809,7 @@ async def _route_chat(prompt: str, cmd: str | None, body: dict, rec: dict, meta:
                 for chunk, _score in chunks
             ],
             diagram_request_id=secrets.token_hex(8),
-            temperature=temperature))
+            temperature=temperature, profile=profile))
     # 直答模式:
     # ① 检索到相关知识 → 知识直答(专业问询专业回答);
     # ② 未命中但检测为确切数学题(触发词/题目措辞)→ 方法论框架;

@@ -3,6 +3,9 @@
  */
 import { reactive } from 'vue'
 
+export type LearnProfile = 'standard' | 'rigorous' | 'drill'
+export type ResearchProfile = 'standard' | 'verify' | 'reviewer' | 'compare'
+
 export interface AppSettings {
   language: 'zh' | 'en'
   theme: 'dark' | 'light'
@@ -11,6 +14,8 @@ export interface AppSettings {
   voiceAccess: boolean
   personalized: boolean
   researchSearchMode: 'split' | 'page'
+  learnProfile: LearnProfile
+  researchProfile: ResearchProfile
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -21,6 +26,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   voiceAccess: true,
   personalized: true,
   researchSearchMode: 'split',
+  learnProfile: 'standard',
+  researchProfile: 'standard',
 }
 
 const SETTINGS_KEY = 'mg-settings'
@@ -53,7 +60,7 @@ export function applySettings() {
   document.documentElement.dataset.theme = settingsState.theme
   // theme-init.js 为防首屏闪烁会在 <html> 上写死一个内联背景色;
   // 切换主题时必须同步更新,否则 iPad 滚动到 body 之外或底部区域仍显示旧色。
-  document.documentElement.style.background = light ? '#f5f7fa' : '#05060a'
+  document.documentElement.style.background = light ? '#f6f5f0' : '#0b0e14'
   document.documentElement.style.colorScheme = light ? 'light' : 'dark'
 }
 

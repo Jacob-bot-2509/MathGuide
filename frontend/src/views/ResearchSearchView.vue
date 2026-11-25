@@ -45,6 +45,14 @@ import {
   type ResearchProject,
 } from '@/services/researchService'
 import { createResearchTable } from '@/services/researchTableService'
+import { compareIds, setCompareIds, toggleCompareId } from '@/stores/compareQueue'
+import { activeProjectId, setActiveProjectId } from '@/stores/researchProject'
+import {
+  MAX_BATCH_IMPORT,
+  batchImportExternalPapers,
+  batchUploadLocalFiles,
+  type BatchItemState,
+} from '@/utils/batchPaperImport'
 
 const props = defineProps<{ embedded?: boolean }>()
 const emit = defineEmits<{
@@ -68,7 +76,21 @@ const uploadEl = ref<HTMLInputElement | null>(null)
 const selectedDocIds = ref<string[]>([])
 const comparing = ref(false)
 const knownDocIds = new Set<string>()
-const activeProject = ref('')
+const activeProject = ref(activeProjectId.value)
+watch(activeProject, (val) => {
+  if (val !== activeProjectId.value) setActiveProjectId(val)
+})
+watch(activeProjectId, (val) => {
+  if (val !== activeProject.value) activeProject.value = val
+})
+watch(compareIds, (ids) => {
+  if (!docs.value.length) return
+  const valid = ids.filter((id) => docs.value.some((d) => d.id === id))
+  if (valid.length && valid.some((id) => !selectedDocIds.value.includes(id))) {
+    const merged = new Set([...selectedDocIds.value, ...valid])
+    selectedDocIds.value = docs.value.map((d) => d.id).filter((id) => merged.has(id))
+  }
+})
 const useTree = ref(false)
 const mode = ref('')
 const elapsed = ref(0)
@@ -90,6 +112,11 @@ const litWarnings = ref<string[]>([])
 const litIdentifier = ref<{ type: string; value: string } | null>(null)
 const openingPdf = ref('')
 const importingDoc = ref('')
+const selectedLitKeys = ref<string[]>([])
+const batchBusy = ref(false)
+const batchProgress = ref({ done: 0, total: 0 })
+const batchStates = ref<Record<string, BatchItemState>>({})
+const batchErrors = ref<Record<string, string>>({})
 const historyOpen = ref(false)
 const historyTab = ref<'active' | 'trash'>('active')
 const historyItems = ref<HistoryItem[]>([])
@@ -150,25 +177,28 @@ function toggleDoc(id: string): void {
   if (set.has(id)) set.delete(id)
   else set.add(id)
   selectedDocIds.value = docs.value.map((d) => d.id).filter((x) => set.has(x))
+  toggleCompareId(id)
 }
 
 function selectAllDocs(): void {
   selectedDocIds.value = docs.value.map((d) => d.id)
+  setCompareIds(selectedDocIds.value)
 }
 
 function clearSelectedDocs(): void {
   selectedDocIds.value = []
+  setCompareIds([])
 }
 
 /** 勾选 2~6 篇 → 模型逐篇抽取 → 建对比表并打开 */
-async function compareSelected(): Promise<void> {
-  if (comparing.value || selectedDocIds.value.length < 2) return
+async function compareDocIds(targetIds: string[]): Promise<void> {
+  if (comparing.value || targetIds.length < 2) return
   comparing.value = true
   try {
-    const data = await compareResearchDocs(selectedDocIds.value)
+    const data = await compareResearchDocs(targetIds)
     const selectedProjects = new Set(
       docs.value
-        .filter((d) => selectedDocIds.value.includes(d.id) && d.projectId)
+        .filter((d) => targetIds.includes(d.id) && d.projectId)
         .map((d) => d.projectId as string),
     )
     const projectId = activeProject.value
@@ -196,6 +226,96 @@ async function compareSelected(): Promise<void> {
   }
 }
 
+async function compareSelected(): Promise<void> {
+  await compareDocIds(selectedDocIds.value)
+}
+
+function litItemKey(item: LiteratureItem, index: number): string {
+  return fullTextKey(item) || `lit-${index}`
+}
+
+function isLitSelected(item: LiteratureItem, index: number): boolean {
+  return selectedLitKeys.value.includes(litItemKey(item, index))
+}
+
+function toggleLitSelect(item: LiteratureItem, index: number): void {
+  if (batchBusy.value) return
+  const key = litItemKey(item, index)
+  if (selectedLitKeys.value.includes(key)) {
+    selectedLitKeys.value = selectedLitKeys.value.filter((k) => k !== key)
+    return
+  }
+  if (selectedLitKeys.value.length >= MAX_BATCH_IMPORT) {
+    showToast(t('search.batchMax', { max: MAX_BATCH_IMPORT }))
+    return
+  }
+  selectedLitKeys.value = [...selectedLitKeys.value, key]
+}
+
+function clearLitSelection(): void {
+  if (batchBusy.value) return
+  selectedLitKeys.value = []
+}
+
+/** 外部文献批量并发导入(上限 5 篇),可选导入后直接执行多文献横向对比 */
+async function runBatchExternalImport(andCompare: boolean): Promise<void> {
+  if (batchBusy.value || comparing.value) return
+  const picked = litItems.value.filter((item, idx) =>
+    selectedLitKeys.value.includes(litItemKey(item, idx)),
+  )
+  if (!picked.length) return
+  if (andCompare && picked.length < 2) return
+  batchBusy.value = true
+  batchErrors.value = {}
+  try {
+    const outcome = await batchImportExternalPapers(picked, {
+      projectId: activeProject.value || undefined,
+      keyOf: (item) => {
+        const idx = litItems.value.indexOf(item)
+        return litItemKey(item, idx >= 0 ? idx : 0)
+      },
+      metaOf: tempMeta,
+      cachedFullText: fullTextFor,
+      onFullTextResolved: (key, res) => {
+        fullTextResults.value = { ...fullTextResults.value, [key]: res }
+      },
+      resolveFullText,
+      createTempPaper,
+      createTempPage,
+      importTempPaper,
+      noOaMessage: t('search.batchNoOa'),
+      defaultFailMessage: t('search.importFail'),
+      onStateChange: (key, state, error) => {
+        batchStates.value = { ...batchStates.value, [key]: state }
+        if (error) batchErrors.value = { ...batchErrors.value, [key]: error }
+      },
+      onProgress: (done, total) => {
+        batchProgress.value = { done, total }
+      },
+    })
+    await loadDocs()
+    if (outcome.docIds.length) {
+      const merged = new Set([...selectedDocIds.value, ...outcome.docIds])
+      selectedDocIds.value = docs.value.map((d) => d.id).filter((id) => merged.has(id))
+      setCompareIds(outcome.docIds)
+    }
+    if (andCompare) {
+      if (outcome.docIds.length < 2) {
+        showToast(t('search.batchCompareNeedTwo', { ok: outcome.okCount, total: outcome.total }))
+        return
+      }
+      showToast(t('search.batchCompareReady', { ok: outcome.okCount, total: outcome.total }))
+      await compareDocIds(outcome.docIds)
+      return
+    }
+    showToast(t('search.batchDone', { ok: outcome.okCount, total: outcome.total }))
+    const failedKeys = new Set(outcome.results.filter((r) => !r.ok).map((r) => r.key))
+    selectedLitKeys.value = selectedLitKeys.value.filter((k) => failedKeys.has(k))
+  } finally {
+    batchBusy.value = false
+  }
+}
+
 /** 外部文献发现:只取元数据/摘要,不下载全文;seq 保证只认最后一次查询 */
 async function searchExternal(qArg?: string): Promise<void> {
   const q = (qArg ?? query.value).trim()
@@ -216,6 +336,9 @@ async function searchExternal(qArg?: string): Promise<void> {
     })
     if (seq !== litSeq) return
     litItems.value = res.results
+    selectedLitKeys.value = []
+    batchStates.value = {}
+    batchErrors.value = {}
     litWarnings.value = res.warnings
     litIdentifier.value = res.identifier ?? null
     litSearched.value = true
@@ -238,6 +361,9 @@ async function findRelated(doc: ResearchDoc): Promise<void> {
     const res = await relatedLiterature({ doi: doc.doi, title: doc.title || doc.name })
     if (seq !== litSeq) return
     litItems.value = res.results
+    selectedLitKeys.value = []
+    batchStates.value = {}
+    batchErrors.value = {}
     litWarnings.value = res.warnings
     litSearched.value = true
     await nextTick()
@@ -712,19 +838,36 @@ function pickFile(): void {
 
 async function onFile(e: Event): Promise<void> {
   const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
+  const picked = input.files ? Array.from(input.files) : []
   input.value = ''
-  if (!file) return
-  if (uploading.value) return
+  if (!picked.length || uploading.value) return
   uploading.value = true
   try {
-    const res = await uploadResearchDoc(file)
-    if (res.duplicate) {
-      showToast(t('search.duplicate'))
-    } else {
-      showToast(t('search.uploaded', { n: res.pages ?? 0, c: res.chunks ?? 0 }))
+    if (picked.length === 1) {
+      const res = await uploadResearchDoc(picked[0])
+      if (res.duplicate) {
+        showToast(t('search.duplicate'))
+      } else {
+        showToast(t('search.uploaded', { n: res.pages ?? 0, c: res.chunks ?? 0 }))
+      }
+      await loadDocs()
+      return
     }
+    if (picked.length > MAX_BATCH_IMPORT) {
+      showToast(t('search.batchUploadLimit', { max: MAX_BATCH_IMPORT }))
+    }
+    const outcome = await batchUploadLocalFiles(picked, uploadResearchDoc)
     await loadDocs()
+    if (outcome.docIds.length) {
+      const merged = new Set([...selectedDocIds.value, ...outcome.docIds])
+      selectedDocIds.value = docs.value.map((d) => d.id).filter((id) => merged.has(id))
+      setCompareIds(outcome.docIds)
+    }
+    if (outcome.okCount > 0) {
+      showToast(t('search.batchUploadDone', { ok: outcome.okCount, total: outcome.total }))
+    } else {
+      showToast(outcome.firstError || t('search.uploadFail'))
+    }
   } catch (err) {
     showToast(err instanceof Error && err.message ? err.message : t('search.uploadFail'))
   } finally {
@@ -831,6 +974,7 @@ onMounted(async () => {
     <input
       ref="uploadEl"
       type="file"
+      multiple
       hidden
       accept=".pdf,.docx,.epub,.html,.htm,.xml,.rtf,.txt,.md,.markdown,.tex,.csv,.json,text/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/epub+zip,application/rtf"
       @change="onFile"
@@ -1066,13 +1210,66 @@ onMounted(async () => {
         <p v-if="litWarnings.length" class="lit-warn">
           {{ t('search.litPartial', { s: litWarnings.join(' / ') }) }}
         </p>
-        <article v-for="(item, i) in litItems" :key="(item.doi || item.title) + i" class="lit-item">
+        <div v-if="litItems.length" class="lit-batch-bar">
+          <span class="lit-batch-count">
+            {{ t('search.batchSelected', { n: selectedLitKeys.length, max: MAX_BATCH_IMPORT }) }}
+          </span>
+          <button
+            v-if="selectedLitKeys.length"
+            type="button"
+            class="pick-all"
+            :disabled="batchBusy"
+            @click="clearLitSelection"
+          >{{ t('search.batchClear') }}</button>
+          <button
+            type="button"
+            class="lit-batch-btn"
+            :disabled="!selectedLitKeys.length || batchBusy || comparing"
+            @click="runBatchExternalImport(false)"
+          >{{ batchBusy
+            ? t('search.batchImporting', { done: batchProgress.done, total: batchProgress.total })
+            : t('search.batchImport', { n: selectedLitKeys.length }) }}</button>
+          <button
+            type="button"
+            class="compare-btn lit-batch-compare"
+            :disabled="selectedLitKeys.length < 2 || batchBusy || comparing"
+            :title="t('search.compareHint')"
+            @click="runBatchExternalImport(true)"
+          >{{ comparing
+            ? t('search.comparing')
+            : t('search.batchImportCompare', { n: selectedLitKeys.length }) }}</button>
+        </div>
+        <article
+          v-for="(item, i) in litItems"
+          :key="(item.doi || item.title) + i"
+          class="lit-item"
+          :class="{ 'is-picked': isLitSelected(item, i) }"
+        >
           <div class="lit-top">
+            <label class="lit-check" :title="t('search.batchMax', { max: MAX_BATCH_IMPORT })">
+              <input
+                type="checkbox"
+                :checked="isLitSelected(item, i)"
+                :disabled="batchBusy"
+                @change="toggleLitSelect(item, i)"
+              />
+            </label>
             <button
               class="lit-title"
               :title="t('search.readInApp')"
               @click="openSearchItem(item)"
             >{{ item.title }}</button>
+            <span
+              v-if="batchStates[litItemKey(item, i)]"
+              class="lit-batch-tag"
+              :class="`st-${batchStates[litItemKey(item, i)]}`"
+              :title="batchErrors[litItemKey(item, i)] || ''"
+            >
+              <template v-if="batchStates[litItemKey(item, i)] === 'importing'">{{ t('search.importing') }}</template>
+              <template v-else-if="batchStates[litItemKey(item, i)] === 'done'">✓ {{ t('search.imported') }}</template>
+              <template v-else-if="batchStates[litItemKey(item, i)] === 'error'">✕ {{ batchErrors[litItemKey(item, i)] || t('search.importFail') }}</template>
+              <template v-else>…</template>
+            </span>
             <span v-if="item.year" class="lit-year">{{ item.year }}</span>
           </div>
           <p v-if="item.authors || item.venue" class="lit-meta">
@@ -1248,7 +1445,7 @@ onMounted(async () => {
   height: 100%;
   width: 100%;
   border-left: 1px solid var(--line);
-  background: var(--bg);
+  background: var(--bg-void);
   overflow: hidden;
 }
 
@@ -1390,7 +1587,7 @@ onMounted(async () => {
 .clear-all {
   background: transparent;
   border: 1px solid rgba(255, 138, 138, 0.35);
-  color: #ff8a8a;
+  color: var(--danger);
   border-radius: 6px;
   padding: 3px 9px;
   font-size: 10.5px;
@@ -1484,7 +1681,7 @@ onMounted(async () => {
 }
 
 .del:hover {
-  color: #ff8a8a;
+  color: var(--danger);
 }
 
 .hint {
@@ -1776,23 +1973,23 @@ onMounted(async () => {
 }
 
 .lit-badge.peer {
-  color: #7ee787;
-  border-color: color-mix(in srgb, #7ee787 40%, transparent);
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
 }
 
 .lit-badge.preprint {
-  color: #f6c85f;
-  border-color: color-mix(in srgb, #f6c85f 40%, transparent);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
 }
 
 .lit-badge.retracted {
-  color: #ff8a8a;
-  border-color: color-mix(in srgb, #ff8a8a 45%, transparent);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
 }
 
 .lit-badge.oa {
-  color: #7ee787;
-  border-color: color-mix(in srgb, #7ee787 40%, transparent);
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
 }
 
 .lit-abstract {
@@ -1834,9 +2031,9 @@ onMounted(async () => {
 }
 
 .lit-pdf.free {
-  background: color-mix(in srgb, #7ee787 10%, transparent);
-  border-color: color-mix(in srgb, #7ee787 45%, transparent);
-  color: #7ee787;
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  color: var(--success);
 }
 
 .lit-pdf:disabled {
@@ -1865,8 +2062,96 @@ onMounted(async () => {
 }
 
 .lit-warn {
-  color: #ffd166;
+  color: var(--warn);
   font-size: 11px;
+}
+
+.lit-batch-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+}
+
+.lit-batch-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.lit-batch-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.lit-batch-btn:hover:not(:disabled) {
+  color: var(--cyan);
+  border-color: var(--line-bright);
+}
+.lit-batch-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lit-batch-compare {
+  padding: 3px 11px;
+  font-size: 11px;
+}
+
+.lit-item.is-picked {
+  border-color: color-mix(in srgb, var(--cyan) 48%, var(--line));
+  background: color-mix(in srgb, var(--cyan) 5%, var(--bg-card));
+}
+
+.lit-check {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding-top: 2px;
+}
+.lit-check input {
+  accent-color: var(--cyan);
+  cursor: pointer;
+}
+
+.lit-batch-tag {
+  flex: none;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.lit-batch-tag.st-importing {
+  color: var(--cyan);
+  border-color: color-mix(in srgb, var(--cyan) 45%, var(--line));
+}
+.lit-batch-tag.st-done {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+}
+.lit-batch-tag.st-error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 600px) {
+  .lit-batch-btn {
+    margin-left: 0;
+  }
 }
 
 .mode-row {
@@ -2085,12 +2370,12 @@ onMounted(async () => {
 }
 
 .hist-action:hover {
-  color: #ff8a8a;
+  color: var(--danger);
   border-color: #ff8a8a66;
 }
 
 .hist-action.danger {
-  color: #ff8a8a;
+  color: var(--danger);
   border-color: rgba(255, 138, 138, 0.55);
   background: rgba(255, 138, 138, 0.1);
 }
@@ -2102,7 +2387,7 @@ onMounted(async () => {
   z-index: 45;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background: var(--bg-void);
   border-left: 1px solid var(--line);
   overflow-y: auto;
 }

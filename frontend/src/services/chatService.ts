@@ -35,6 +35,10 @@ export interface ChatMeta {
   diagrams?: boolean
   /** 图谱知识点讲解:会话级上下文,追问仍携带 */
   pointId?: string
+  /** 双区定制深度/范式预设 */
+  profile?: string
+  /** 科研区显式开启独立双角色低温复核 */
+  verify?: boolean
 }
 
 function authHeaders(): Record<string, string> {
@@ -166,6 +170,8 @@ export function streamReply(prompt: string, cb: StreamCallbacks, meta?: ChatMeta
     tableRegression: meta?.tableRegression,
     diagrams: meta?.diagrams,
     pointId: meta?.pointId,
+    profile: meta?.profile,
+    verify: meta?.verify,
   }
 
   postSSE(

@@ -102,3 +102,80 @@ _INTUITION_SYSTEM_EN = (
     "3) map the analogy to the math explicitly; 4) state its limits; "
     "5) stay under 150 words, do not repeat the original derivation, keep at most one formula."
 )
+
+# 双区定制深度/范式预设白名单(空或 standard 表示沿用默认风格,零额外开销)
+_LEARN_PROFILES = frozenset({"standard", "rigorous", "drill"})
+_RESEARCH_PROFILES = frozenset({"standard", "verify", "reviewer", "compare"})
+
+_PROFILE_PROMPTS_ZH: dict[tuple[str, str], str] = {
+    ("learn", "rigorous"): (
+        "\n\n【深度预设·严格公理化】请以高标准数学证明口径作答:"
+        "先明确给出相关定义、适用条件与量词范围;推导过程逐步给出每一步所依据的定理或性质,"
+        "不得跳步或含糊带过;最后简要点出边界条件或常见反例。"
+    ),
+    ("learn", "drill"): (
+        "\n\n【深度预设·专题攻坚】请按高标准解题训练口径作答:"
+        "① 先提炼本题的核心切入点与题型特征;② 给出清晰完整的标准解答;"
+        "③ 指出最常见的 1~2 个易错陷阱;④ 文末附 1 道同构变式自测题(仅给思路提示,不直接剧透最终答案)。"
+    ),
+    ("research", "verify"): (
+        "\n\n【科研视角·推导核验】请以严格同行核验口径作答:"
+        "逐条审视核心结论的成立前提、隐藏假设、收敛/边界条件与符号一致性;"
+        "凡依据现有资料无法确认或存在跳跃的步骤,必须明确标注「需人工核对」,不得自行补全未给出的条件。"
+    ),
+    ("research", "reviewer"): (
+        "\n\n【科研视角·审稿人评审】请按顶会/顶刊审稿口径结构化作答:"
+        "依次给出「核心贡献」「方法与证明严谨性」「主要局限与薄弱点」「可验证的改进方向」;"
+        "每条评价均须锚定上方资料编号,不得脱离资料泛泛而谈。"
+    ),
+    ("research", "compare"): (
+        "\n\n【科研视角·横向对比】请围绕不同文献的异同展开:"
+        "重点对比各方法的核心假设、数学机制/算法设计、适用边界与主要结果差异,"
+        "并在结尾提炼当前尚未被充分解决的研究缺口(全部结论须标注资料编号)。"
+    ),
+}
+
+_PROFILE_PROMPTS_EN: dict[tuple[str, str], str] = {
+    ("learn", "rigorous"): (
+        "\n\n[Depth Profile: Rigorous Proof] Answer at rigorous mathematical proof standard: "
+        "state exact definitions, hypotheses, and quantifiers upfront; justify every deduction step "
+        "explicitly without skipping; close with key boundary conditions or a counterexample."
+    ),
+    ("learn", "drill"): (
+        "\n\n[Depth Profile: Problem-Solving Drill] Structure your answer for mastery: "
+        "1) identify the key insight/pattern; 2) give a clean full solution; "
+        "3) highlight 1–2 common pitfalls; 4) end with one isomorphic practice variant plus a short hint (without spoiling the final answer)."
+    ),
+    ("research", "verify"): (
+        "\n\n[Research Mode: Derivation Verification] Scrutinize premises, hidden assumptions, "
+        "convergence/boundary conditions, and notation consistency strictly from the provided sources; "
+        "explicitly flag any step not substantiated by the sources as requiring manual verification."
+    ),
+    ("research", "reviewer"): (
+        "\n\n[Research Mode: Peer Reviewer] Provide a structured referee-style assessment covering: "
+        "Core Contributions, Rigor & Methodological Soundness, Limitations & Weaknesses, and Actionable Improvements; "
+        "ground every critique in the cited sources."
+    ),
+    ("research", "compare"): (
+        "\n\n[Research Mode: Comparative Synthesis] Focus on comparing assumptions, mathematical mechanisms, "
+        "boundaries, and empirical/theoretical outcomes across the cited works, ending with open research gaps."
+    ),
+}
+
+
+def clean_profile(raw: object, workspace: str) -> str:
+    """规范化双区深度/范式预设:非法或默认返回空串,不污染缓存键与提示词。"""
+    val = str(raw or "").strip().lower()
+    allowed = _RESEARCH_PROFILES if workspace == "research" else _LEARN_PROFILES
+    if not val or val == "standard" or val not in allowed:
+        return ""
+    return val
+
+
+def profile_instruction(profile: str, workspace: str, zh: bool) -> str:
+    """返回预设对应的系统提示补充段;默认预设返回空串。"""
+    key = (workspace, clean_profile(profile, workspace))
+    if not key[1]:
+        return ""
+    table = _PROFILE_PROMPTS_ZH if zh else _PROFILE_PROMPTS_EN
+    return table.get(key, "")

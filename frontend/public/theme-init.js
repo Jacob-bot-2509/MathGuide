@@ -3,7 +3,7 @@
 try {
   var t = JSON.parse(localStorage.getItem('mg-settings') || '{}').theme === 'light' ? 'light' : 'dark'
   document.documentElement.dataset.theme = t
-  document.documentElement.style.background = t === 'light' ? '#f5f7fa' : '#05060a'
+  document.documentElement.style.background = t === 'light' ? '#f6f5f0' : '#0b0e14'
 } catch (e) {
-  document.documentElement.style.background = '#05060a'
+  document.documentElement.style.background = '#0b0e14'
 }

@@ -252,7 +252,7 @@ onMounted(load)
 }
 
 .ana-hint.error {
-  color: var(--red, #ff6b6b);
+  color: var(--danger);
 }
 
 .ana-quality {

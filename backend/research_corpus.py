@@ -77,7 +77,7 @@ SUMMARY_CHARS = 220                    # 节点摘要长度
 SNIPPET_CHARS = 320
 
 # 上传与检索都触发磁盘/embedding 开销,按用户限流(聊天另有自己的限流器)
-_upload_limiter = SlidingWindowLimiter(4, 300)    # 5 分钟最多 4 篇
+_upload_limiter = SlidingWindowLimiter(12, 300)   # 5 分钟最多 12 篇(支持单批 5 篇外部/本地并发导入与重试)
 _search_limiter = SlidingWindowLimiter(30, 60)    # 1 分钟最多 30 次检索
 _insights_limiter = SlidingWindowLimiter(6, 3600)  # 结构生成每小时最多 6 次
 

@@ -579,7 +579,7 @@ onBeforeRouteLeave(() => confirmClose())
 }
 
 .mini.danger {
-  color: #ff8a8a;
+  color: var(--danger);
   border-color: rgba(255, 138, 138, 0.4);
 }
 

@@ -79,12 +79,21 @@ export interface ChatMsg {
   }
 }
 
+export interface SessionOrigin {
+  workspace: Workspace
+  sessionId: number
+  docId?: string
+  label?: string
+}
+
 export interface ChatSession {
   id: number
   cat?: { key: string; label: string; color: string }
   messages: ChatMsg[]
   /** 图谱知识点讲解会话:后续每条消息都携带该 id */
   pointId?: string
+  /** 跨工作区桥接来源(仅只读引用,用于一键返回原会话,不共享消息数组) */
+  origin?: SessionOrigin
 }
 
 export interface SessionsState {
@@ -116,7 +125,13 @@ interface PersistedMsg {
 }
 
 interface Persisted {
-  sessions: Array<{ id: number; cat?: ChatSession['cat']; pointId?: string; messages: PersistedMsg[] }>
+  sessions: Array<{
+    id: number
+    cat?: ChatSession['cat']
+    pointId?: string
+    origin?: SessionOrigin
+    messages: PersistedMsg[]
+  }>
   activeId: number
   msgId: number
   sessionId: number
@@ -153,6 +168,7 @@ function load(key: string): Persisted {
             .map((s) => ({
               ...s,
               pointId: typeof s.pointId === 'string' ? s.pointId.slice(0, 64) : undefined,
+              origin: sanitizeOrigin(s.origin),
               messages: s.messages
                 .filter((m) => m && typeof m === 'object')
                 .map((m) => ({
@@ -170,6 +186,18 @@ function load(key: string): Persisted {
     /* 数据损坏时重置 */
   }
   return { sessions: [], activeId: 0, msgId: 0, sessionId: 0 }
+}
+
+/** 恢复时重新校验桥接来源元信息 */
+function sanitizeOrigin(raw: unknown): SessionOrigin | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  const ws = obj.workspace === 'research' || obj.workspace === 'learn' ? obj.workspace : null
+  const sid = typeof obj.sessionId === 'number' && Number.isFinite(obj.sessionId) ? obj.sessionId : -1
+  if (!ws || sid < 0) return undefined
+  const docId = typeof obj.docId === 'string' && obj.docId.trim() ? obj.docId.trim().slice(0, 80) : undefined
+  const label = typeof obj.label === 'string' && obj.label.trim() ? obj.label.trim().slice(0, 100) : undefined
+  return { workspace: ws, sessionId: sid, docId, label }
 }
 
 /** 恢复时重新校验:旧版本/手改/半截图解不能直接进渲染器。 */
@@ -205,6 +233,7 @@ function createSessionStore(workspace: Workspace): SessionStore {
           id: s.id,
           cat: s.cat,
           pointId: s.pointId,
+          origin: s.origin,
           messages: s.messages
             .filter((m) => m && typeof m === 'object')
             .map((m) => ({

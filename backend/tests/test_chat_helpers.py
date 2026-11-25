@@ -911,3 +911,42 @@ def test_learning_analysis_intent_includes_forgetting_terms():
     assert chat._is_learning_analysis_request("我的遗忘曲线怎么样")
     assert chat._is_learning_analysis_request("我的复习优先级")
     assert chat._is_learning_analysis_request("我的艾宾浩斯记忆保持率")
+
+
+def test_clean_profile_enforces_workspace_whitelist():
+    assert chat.clean_profile("standard", "learn") == ""
+    assert chat.clean_profile("rigorous", "learn") == "rigorous"
+    assert chat.clean_profile("drill", "learn") == "drill"
+    assert chat.clean_profile("reviewer", "learn") == ""
+    assert chat.clean_profile("reviewer", "research") == "reviewer"
+    assert chat.clean_profile("verify", "research") == "verify"
+    assert chat.clean_profile("compare", "research") == "compare"
+    assert chat.clean_profile("rigorous", "research") == ""
+    assert chat.clean_profile("unknown", "research") == ""
+
+
+def test_profile_instruction_supports_zh_and_en():
+    assert "严格公理化" in chat.profile_instruction("rigorous", "learn", True)
+    assert "Rigorous Proof" in chat.profile_instruction("rigorous", "learn", False)
+    assert "审稿人" in chat.profile_instruction("reviewer", "research", True)
+    assert "Peer Reviewer" in chat.profile_instruction("reviewer", "research", False)
+    assert chat.profile_instruction("standard", "learn", True) == ""
+
+
+def test_gen_research_runs_independent_verifier_when_requested(monkeypatch):
+    async def fake_synth(question, hits, zh, role="main", fallback=True, extra=""):
+        yield "综述正文"
+
+    async def fake_verify(question, answer, role, zh=True):
+        assert role == "main"
+        assert "综述正文" in answer
+        return {"verdict": "correct", "issue": "引用与推导一致", "correction": ""}
+
+    monkeypatch.setattr(chat.rag.research.synthesize, "synthesize_stream", fake_synth)
+    monkeypatch.setattr(chat.rag.research.synthesize, "citations_block", lambda hits, zh: "")
+    monkeypatch.setattr(chat, "_verify_answer", fake_verify)
+    outcome = chat.rag.research.SearchOutcome(question="测试问题", hits=[], sources={})
+    frames = asyncio.run(_collect(chat._sse(chat._gen_research("测试问题", outcome, True, verify=True))))
+    joined = "".join(frames)
+    assert "综述正文" in joined
+    assert "复核(main):正确" in joined

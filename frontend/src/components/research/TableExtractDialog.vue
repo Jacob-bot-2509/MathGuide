@@ -256,7 +256,7 @@ async function save(): Promise<void> {
 
 .te-warn {
   margin: 8px 16px 0;
-  color: #f6c85f;
+  color: var(--warn);
   font-size: 11.5px;
   line-height: 1.6;
 }
@@ -276,7 +276,7 @@ async function save(): Promise<void> {
   padding: 8px 10px;
   border: 1px solid rgba(255, 209, 102, 0.45);
   border-radius: 7px;
-  background: color-mix(in srgb, #ffd166 9%, transparent);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
   color: var(--text);
   font-size: 12px;
   line-height: 1.55;
@@ -289,7 +289,7 @@ async function save(): Promise<void> {
 }
 
 .te-handwriting em {
-  color: #ffd166;
+  color: var(--warn);
   font-style: normal;
 }
 
@@ -366,7 +366,7 @@ async function save(): Promise<void> {
 }
 
 .te-cell.te-hand-cell {
-  background: color-mix(in srgb, #ffd166 13%, var(--bg-card));
+  background: color-mix(in srgb, var(--warn) 13%, var(--bg-card));
   box-shadow: inset 0 0 0 1px rgba(255, 209, 102, 0.35);
 }
 

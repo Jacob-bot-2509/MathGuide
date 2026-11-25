@@ -164,7 +164,7 @@ const paperDiagram = computed(() => props.structure
 }
 
 .pi-state.error {
-  color: #ff8a8a;
+  color: var(--danger);
   flex-direction: column;
   align-items: flex-start;
 }
@@ -185,7 +185,7 @@ const paperDiagram = computed(() => props.structure
 .pi-retry {
   background: transparent;
   border: 1px solid rgba(255, 138, 138, 0.45);
-  color: #ff8a8a;
+  color: var(--danger);
   border-radius: 5px;
   font-size: 11px;
   padding: 3px 8px;
