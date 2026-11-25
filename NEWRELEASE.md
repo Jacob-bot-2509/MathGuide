@@ -1,78 +1,63 @@
-# MathGuide v1.31.0 — 全设备移动端底座、图谱滑动窗口与后端语音转写
+# MathGuide v1.32.0 — AI for Science 科研工作台、5 篇并发导入与科学发现闭环
 
-发布日期：2026-11-22
-发布类型：功能版本（移动端适配 + 知识图谱交互 + 语音输入兜底）
-代码快照：`70b66ad`
-基线版本：`v1.30.0`
+发布日期：2026-11-26
+发布类型：重大功能与设计体系升级（AI for Science 工作台 + 5 篇批量导入与横向对比 + 确定性复核与复现闭环）
+代码快照：`ad6524c`
+基线版本：`v1.31.0`
 
-本版本把前三台真机踩出来的特例收敛为全站移动端规则；手机知识图谱的推荐/详情改成图谱下方的横向滑动窗口；语音输入不再只依赖浏览器 Web Speech，新增后端 ASR 兜底，国产浏览器和 Android 语音服务不可达时仍可用。桌面端既有接口与布局保持兼容。
+本版本将 MathGuide 从早期深黑科幻风格全面升级为面向高标准学习与科学研究的 **AI for Science 精密工作台**；在严格保持学习区与科研区数据隔离的前提下，围绕「纯对话模型做不到的确定性科学能力」构建了**多篇外部文献并发导入 → 结构化横向对比 → 研究缺口挖掘 → 独立双角色低温复核 → 定量回归回写 PDF 批注 → 课题级报告沉淀**的完整闭环，并同步完成桌面、平板与手机端响应式适配。
 
-## 一、全设备移动端底座
+## 一、AI for Science 视觉底座与设计工程化
 
-- **视口与安全区**：`viewport-fit=cover` + `interactive-widget=resizes-content`；刘海/圆角/Home 指示条使用 `env(safe-area-inset-*)`；页面高度改用 `100dvh`，Safari 工具栏不再切底部输入条。
-- **横竖屏与键盘**：Android 键盘弹出时收缩内容而不是盖住输入框；聊天输入条、设置页、科研检索/表格、图谱页、阅读器补底部安全区。
-- **窄屏重排**：科研表格侧栏置顶；论文工作台改上下布局，结构/导图在手机上覆盖阅读器；阅读器放大改全屏；首页导航收缩；账号头像格自动减列；设置行允许换行。
-- **输入与文本**：iOS 窄屏表单字号 16px，聚焦不自动放大；全局长英文名/URL 换行；触屏去掉双击缩放延迟。
-- **弹层**：所有 `max-height` 补 `dvh` 兜底；弹窗宽度从 `100vw` 扣除左右安全区；小红书式贴边面板不再伸出屏幕。
-- **护栏**：新增 `frontend/scripts/responsive-audit-test.mjs`，纳入 `npm test`，也可 `npm run check:responsive`；挡回退 `100vh` 无 `dvh`、`100vw`、无效 `ddvh`、缺 `viewport-fit=cover`。
+- **双科研主题令牌体系**：重构 `frontend/src/styles/tokens.css`，建立 **Observatory Slate（深色天文台 `#0b0e14`）** 与 **Archival Preprint（浅色暖纸预印本 `#f6f5f0`）** 双主题，10/10 WCAG 2.1 对比度全部达标（浅色强调色由 `3.68:1` 提升至 `7.16:1`），100% 保留旧变量别名向后兼容。
+- **去除高干扰科幻视觉**：移除全站 CRT 扫描线、强晕影与强模糊过场，将 260 颗动态星空替换为零 GPU 消耗的精密坐标网格底纹；重构 `HomeView`（实时静默指标 + 双工作区卡片）、`IntroView`（2.2s SVG 描边徽标与经典数学公式）与 `LoginView`。
+- **工程化设计工具链**：新增 3 个零依赖 Node 脚本（`ui-design-audit.mjs`、`migrate-science-tokens.mjs`、`build-science-ui-preview.mjs`）及离线交互预览页 `docs/design/ai-for-science-preview.html`，修复 11 处未定义 CSS 变量并收敛 62 处硬编码语义色。
 
-## 二、手机知识图谱：推荐与详情合并
+## 二、三栏科研工作台、多子窗演示台与全局跳转
 
-- 图谱区与面板区改为上下布局，「推荐下一步」不再浮在图谱上方。
-- 推荐与知识点详情放进同一个横向滚动窗口：
-  - 默认显示推荐页；
-  - 点知识点自动滑到详情页；
-  - 详情页右滑原生回到推荐页；
-  - 关闭按钮先回推荐页再取消选中。
-- 使用原生 `scroll-snap`，保留惯性滑动与边界回弹；桌面端仍是原浮层布局，只对 ≤760px 生效。
-- 英文知识点名节点框自适应：120–220px、按完整名称换行、不省略；边端点随框宽调整。
+- **左侧可折叠仪器栏**：收敛学习与科研核心工具，去除冗余按钮与重复人设模式条（图谱统一由「学习分析」内进入，科研侧栏精简为课题透镜 + 核心科研工具），持久化折叠状态（`mg-rail-open`）。
+- **右侧多子窗口科研演示台**：支持 **单窗 / 双窗分屏 / 三窗堆叠**（`single` / `split` / `stack`）与可拖拽水平分割条，承载「交互图表 / 文件与资料 / 文献检索与阅读」三个独立可折叠、可最大化子窗口（CSS Flex 排布确保阅读器切换布局时不卸载、不丢页码）。
+- **演示台内嵌论文结构与思维导图**：在阅读器子窗口顶栏直接集成 `PaperInsights`，支持就地展开、缓存与强制刷新。
+- **全局快速跳转面板（`Ctrl/⌘ + K`）**：新增 `CommandPalette.vue`（移动端配顶栏 `⌘K` 入口），按当前板块严格隔离上下文——学习辅助内只搜索学习会话与图谱，科研板块内才搜索科研会话、已入库论文（带真实标题）与研究数据表，杜绝跨区混入。
+- **全端移动端适配**：≤960px 自动切单栏抽屉与横向滑动标签，≤600px 全宽安全区适配；52 个样式源文件全部通过 `responsive-audit-test.mjs` 护栏。
 
-## 三、双语图谱与学习分析
+## 三、上限 5 篇多文献并发导入与横向对比闭环
 
-- 图谱接口补齐 `nameEn`、`chapterEn`、`summaryEn`、`keyPointsEn`、`chaptersEn`；图谱导出支持 `?lang=en`。
-- 学习分析面板优先显示 `nameEn`；后端快照、章节名、系统提示与回退报告同步英文。
-- 英文欢迎语不再复用会话里的中文；英文界面切换后聊天、学习分析、图谱保持全英文。
-- 80 个英文知识点名与注释按学术英语审计：修正 8 个非标准术语，统一美式拼写，修复 `L'Hôpital`、`Newton–Leibniz`、`Cauchy–Schwarz` 编码。
+- **外部文献批量并发导入（上限 5 篇）**：在 `ResearchSearchView`「全网文献」模式新增多选勾选与批量操作条，新增并发导入引擎 `frontend/src/utils/batchPaperImport.ts`（并发度 3，单次上限 5 篇）：
+  - 已入库论文直接复用 `docId`；
+  - 直链 PDF 走 `createTempPaper` → 正式入库；
+  - 无直链时按 DOI/标题自动调用 `/api/research/fulltext` 解析合法开放获取 PDF 或落地页；
+  - 单篇闭源失败仅标记原因，不阻断同批其余论文。
+- **本地多文件并发上传**：支持文件选择器一次多选最多 5 篇本地论文并发上传并自动选中。
+- **后端限流适配**：将 `backend/research_corpus.py` 上传限流由 `4 / 5min` 调整为 `12 / 5min`，保障单批 5 篇并发入库与失败重试不误触 429。
+- **全科研区统一 5 篇待对比篮**：新增共享状态 `frontend/src/stores/compareQueue.ts`，同步打通外部批量导入、本地论文库、演示台阅读器与三栏独立精读台 `PaperWorkspace`，一键调用既有 `/api/research/literature/compare` 生成带页码溯源的多文献横向对比表。
 
-## 四、语音：HTTPS 前提 + 后端 ASR
+## 四、AI for Science 确定性闭环与双区协同
 
-- **HTTPS 回归修复**：Vite 只有同时设置 `MG_HTTPS_CERT` / `MG_HTTPS_KEY` 才启用 HTTPS；只加 `--host 0.0.0.0` 会退回 HTTP。`useSpeechInput` 增加 `window.isSecureContext` 检查，HTTP 下明确提示，不再静默失败。
-- **Web Speech 优先**：有 `SpeechRecognition` 且安全上下文正常时，仍走浏览器本地识别。
-- **自动兜底**：没有 Web Speech 或报 `network` 时，切 `MediaRecorder` 录音 → 重采样 16kHz 单声道 WAV → base64 → `POST /api/speech/transcribe`。
-- **后端 ASR**：
-  - 默认智谱 `glm-asr-2512`（当前实测可达）；
-  - `MG_ASR_PROVIDER=qwen` 时优先 Qwen Omni `qwen3.8-omni-flash` 音频输入，失败自动回退智谱；
-  - 音频 ≤30 秒、≤25 MB；前端 29 秒自动停止，WAV 约 960KB，低于 2MB 请求体上限。
-- **点击反馈**：点麦克风立刻点亮并提示「正在听」；`getUserMedia` 8 秒超时；超时后迟到的音频流立即关闭。
-- 新增自检页 `frontend/public/mic-check.html`，显示安全上下文、`getUserMedia`、`MediaRecorder`、Web Speech、AudioContext 与 5 秒麦克风电平。
+- **对比表 → 挖掘研究缺口**：完整保留 `ResearchTablesView` 既有 `onChat()` 自动保存与回归透传，针对多文献对比表新增 **「挖掘研究缺口」** 按钮，自动携带表格上下文进入 `/research` 提炼尚未解决的 Research Gaps 与可验证假设。
+- **科研区独立双角色低温复核**：在科研输入卡片顶栏提供 **「✓ 双角色复核」** 与 **「◈ 综述配图」** 两个 AI4S 系统工具开关；开启复核后，后端 `chat.py` 在论文精读（`_gen_paper_llm`）与五学术源综合（`_gen_research`）完成后，由独立第二角色以 `temperature=0` 运行 `_verify_answer` 核查推理与引用一致性（并纳入研究缓存键，严守 `analysis_worker` 安全沙箱，不执行任意代码）。
+- **定量复现回写 PDF 批注**：在 `ResearchTablesView` 为带原文来源（`table.source.docId` + `page`）的数据表及 OLS/多项式回归结果新增 **「回写论文批注」**，一键将回归方程、`R²`、`p` 值或统计摘要写回原论文对应页。
+- **课题上下文透镜与一键报告**：新增 `frontend/src/stores/researchProject.ts`，同步科研侧栏、文献检索与数据表的当前课题选择，并在科研侧栏提供一键 **「导出课题报告 (DOCX)」**。
+- **带现场还原锚点的科研待办**：向后兼容扩展 `TodoTask.anchor`（严守 `:research` 独立分桶），科研回复与 `PaperWorkspace` 均支持一键 **「Pin 到待办」**，在待办面板点「↗ 还原现场」直达对应论文页、数据表或会话。
+- **Study ⇄ Research 双向协同**：
+  - 学以致研：`GraphView` 知识点详情卡新增 **「查前沿论文」**，携带中英文术语直入科研区检索；
+  - 以研促学：科研对话与 `PaperWorkspace` 回复新增 **「夯实前置理论」**，在学习区开启独立教学拆解（不污染原科研上下文），并在学习区顶部展示 **「← 返回原科研会话」** 一键回跳；
+  - 保留并修补既有设置：`personalized` 关闭时真实拦截学习分析提示，`researchSearchMode='page'` 不再静默丢弃宽屏模型高亮批注动作。
 
-## 五、真机记录与部署文档
+## 五、验证
 
-- 新增 `deploy/REAL-DEVICE-MATRIX.md`：三台设备矩阵、F-01~F-14 修补记录、验证基线、回归清单。
-- 设备：
-  - D1 REDMI Pad 2 Pro / Android 16 / 浏览器 20.6.1061104
-  - D2 iPad Air 11-inch (M3) / A3266 / iPadOS 26.6.2 / Safari
-  - D3 HONOR 500 Pro / MEP-AN00 / Android 16 / 百度 15.84.0.10
-- 记录本地 HTTPS、mkcert 根证书安装与 HyperOS CA 菜单排查；生产环境不需要装 CA，公网证书自动受信任。
+- **后端**：`pytest tests/test_chat_helpers.py tests/test_chat_routing_branches.py tests/test_chat_stream_e2e.py tests/test_research_workspace.py -q` → **174 passed**；`ruff check` 全部通过。
+- **前端**：`npm test` → **60 个测试文件 / 1086 个用例全部通过**（含新增批量导入、双角色复核与以研促学往返桥接单测；中英双语词条 `1030` 项完全对齐）；`npm run lint`、`vue-tsc --noEmit`、`npm run build` 通过；`check:build` **8 / 8** 通过。
+- **设计 & 移动端护栏**：`ui-design-audit.mjs --strict` 通过（0 未定义变量，0 CRT/强闪残留，WCAG 10/10 达标）；`responsive-audit-test.mjs` 通过（52 个样式源文件全绿）。
 
-## 六、验证
+## 六、升级与部署注意
 
-- 后端：`pytest -q` → `1661 passed`；`ruff check .` 通过。
-- 前端：`npm test` → 59 个测试文件 / 1079 个用例全部通过；`npm run lint`、`vue-tsc --noEmit`、`npm run build` 通过；`check:build` 8/8。
-- 端到端 ASR：生成的 WAV 经 HTTPS `POST /api/speech/transcribe` 转写得到「艾克斯平方加一」，provider `zhipu`，model `glm-asr-2512`。
-- 真机状态：D1 证书/访问已通，三台设备功能仍待 9 项清单复测；D1/D3 的 CA 安装与麦克风自检受设备浏览器限制，未完成最终确认。
+- 前端版本号升至 `1.32.0`（「设置 → 关于 MG」同步）。
+- 没有数据库结构变更，旧库与现有本地缓存直接向后兼容。
+- 生产环境部署与密钥安全规范沿用 `v1.31.0`（公网 HTTPS、`MG_DEMO_MODE=0`）。
+- 发布附件：完整源码快照 `MathGuide-v1.32.0-source.tar.gz`、相对 `v1.31.0` 的完整补丁 `v1.32.0.patch`、改动前代码包 `MathGuide-v1.32.0-before-code.tar.gz`、`MANIFEST.sha256`、`SHA256SUMS`、`README.md` 与 `verify_manifest.py`。
 
-## 七、升级与部署注意
+## 七、合并记录
 
-- 前端版本号升至 `1.31.0`（「设置 → 关于 MG」同步）。
-- 没有数据库结构变更，旧库直接可用。
-- 生产必须使用公网 HTTPS；`MG_HTTPS_CERT/MG_HTTPS_KEY` 只用于本地调试。
-- 生产必须关闭演示模式：`MG_DEMO_MODE=0`，使用邀请码/密码登录。
-- 语音转写需配置智谱 Key（默认复用 `MG_ZHIPU_*`）；用 Qwen 时确保服务器能访问 DashScope，并设 `MG_ASR_PROVIDER=qwen`。
-- 如果设备浏览器没有 `getUserMedia` / `MediaRecorder`，后端 ASR 也无法兜底，需要换 Chrome 或系统输入法语音键。
-- 发布附件：源码快照、相对 `v1.30.0` 的完整补丁、改动前代码包、`MANIFEST.sha256` 与 `SHA256SUMS`。
-
-## 八、合并记录
-
-- `70b66ad` feat: 移动端适配底座、图谱滑动窗口与后端语音转写
-- 发布提交：v1.31.0 发布说明与完整源码 / 补丁 / 改动前代码 / 校验清单
+- `ad6524c` feat: AI for Science 工作台升级、5篇并发导入与双区协同闭环
+- 发布提交：`v1.32.0` 发布说明与完整源码 / 补丁 / 改动前代码 / 校验清单
