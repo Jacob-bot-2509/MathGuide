@@ -1,63 +1,88 @@
-# MathGuide v1.32.0 — AI for Science 科研工作台、5 篇并发导入与科学发现闭环
+# MathGuide v1.33.0 — 图解数学审计、全曲线曲面与网格传输优化
 
-发布日期：2026-11-26
-发布类型：重大功能与设计体系升级（AI for Science 工作台 + 5 篇批量导入与横向对比 + 确定性复核与复现闭环）
-代码快照：`ad6524c`
-基线版本：`v1.31.0`
+发布日期：2026-11-29
+发布类型：功能与质量版本（图解数学正确性 + 曲线曲面覆盖 + 网格传输/显示上限）
+代码快照：`541ebc6`
+基线版本：`v1.32.0`
 
-本版本将 MathGuide 从早期深黑科幻风格全面升级为面向高标准学习与科学研究的 **AI for Science 精密工作台**；在严格保持学习区与科研区数据隔离的前提下，围绕「纯对话模型做不到的确定性科学能力」构建了**多篇外部文献并发导入 → 结构化横向对比 → 研究缺口挖掘 → 独立双角色低温复核 → 定量回归回写 PDF 批注 → 课题级报告沉淀**的完整闭环，并同步完成桌面、平板与手机端响应式适配。
+本版本对图解链路做了一次数学审计：不只修切线，而是把 2D/3D 曲线曲面、隐式对象、参数对象、圆/椭圆与线性代数图解统一到同一套几何校正和回归测试；同时把隐式网格改为二进制传输，抬高桌面端显示上限，触屏端按低标准降级。
 
-## 一、AI for Science 视觉底座与设计工程化
+## 一、全曲线曲面覆盖
 
-- **双科研主题令牌体系**：重构 `frontend/src/styles/tokens.css`，建立 **Observatory Slate（深色天文台 `#0b0e14`）** 与 **Archival Preprint（浅色暖纸预印本 `#f6f5f0`）** 双主题，10/10 WCAG 2.1 对比度全部达标（浅色强调色由 `3.68:1` 提升至 `7.16:1`），100% 保留旧变量别名向后兼容。
-- **去除高干扰科幻视觉**：移除全站 CRT 扫描线、强晕影与强模糊过场，将 260 颗动态星空替换为零 GPU 消耗的精密坐标网格底纹；重构 `HomeView`（实时静默指标 + 双工作区卡片）、`IntroView`（2.2s SVG 描边徽标与经典数学公式）与 `LoginView`。
-- **工程化设计工具链**：新增 3 个零依赖 Node 脚本（`ui-design-audit.mjs`、`migrate-science-tokens.mjs`、`build-science-ui-preview.mjs`）及离线交互预览页 `docs/design/ai-for-science-preview.html`，修复 11 处未定义 CSS 变量并收敛 62 处硬编码语义色。
+- 新增 2D 隐式曲线 `implicit_curve`：`expr + 4 元 domain`，marching squares 生成线段，切向垂直于 `∇F`。
+- 新增 3D 隐式交线 `implicit_curve3d`：先求 `F=0` 网格，再用 `G=0` 切出交线。
+- 新增参数曲线 `parametric_curve`：`xexpr / yexpr / zexpr / domain / samples`，2D/3D 通用；圆、椭圆、螺线、极坐标曲线都可表达。
+- 新增参数曲面 `parametric_surface`：`xexpr / yexpr / zexpr / domain / rows / cols`；法向按 `r_u × r_v`，切平面同步。
+- 新增隐式曲面 `implicit_surface`：`expr + 6 元 domain + resolution`，marching tetrahedra 生成网格。
+- 新增 3D 椭圆：`normal + rotation + rx/ry`，在指定平面内绘制并按参数求切向。
+- 3D 圆/椭圆支持 `normal` 指定平面，不再强制水平。
+- 参数曲面支持 `fieldexpr`：标量场梯度先求 `∇f`，再投影到切平面。
 
-## 二、三栏科研工作台、多子窗演示台与全局跳转
+## 二、切线统一管线
 
-- **左侧可折叠仪器栏**：收敛学习与科研核心工具，去除冗余按钮与重复人设模式条（图谱统一由「学习分析」内进入，科研侧栏精简为课题透镜 + 核心科研工具），持久化折叠状态（`mg-rail-open`）。
-- **右侧多子窗口科研演示台**：支持 **单窗 / 双窗分屏 / 三窗堆叠**（`single` / `split` / `stack`）与可拖拽水平分割条，承载「交互图表 / 文件与资料 / 文献检索与阅读」三个独立可折叠、可最大化子窗口（CSS Flex 排布确保阅读器切换布局时不卸载、不丢页码）。
-- **演示台内嵌论文结构与思维导图**：在阅读器子窗口顶栏直接集成 `PaperInsights`，支持就地展开、缓存与强制刷新。
-- **全局快速跳转面板（`Ctrl/⌘ + K`）**：新增 `CommandPalette.vue`（移动端配顶栏 `⌘K` 入口），按当前板块严格隔离上下文——学习辅助内只搜索学习会话与图谱，科研板块内才搜索科研会话、已入库论文（带真实标题）与研究数据表，杜绝跨区混入。
-- **全端移动端适配**：≤960px 自动切单栏抽屉与横向滑动标签，≤600px 全宽安全区适配；52 个样式源文件全部通过 `responsive-audit-test.mjs` 护栏。
+- 切点按「到切线几何距离 + 到切线中点距离 + 是否落在曲线上」选择，原点 O 不再抢切点；无关键点时用切线自身中点。
+- 同图多条函数/参数曲线时，切线跟随切点所在曲线，不再总用第一条。
+- 参数曲线按点列顺序求局部切线，不按 x 排序；竖直切线单独处理。
+- 尖点/跳跃处左右导数不一致时删除假切线，不画不存在的切线。
+- 陡峭切线按纵向跨度截短；竖直切线单独画。
+- 圆、椭圆、3D 圆/椭圆、3D 参数曲线、3D 隐式交线都有对应切向计算。
+- 切线语义对象：`kind=tangent + from/to` 直接落段；`kind=tangent + curve + x` 自动按目标曲线求切点；圆/椭圆再加 `y`。
+- 表达式归一化：`y=`/`f(x)=`、LaTeX `\frac`/`\sqrt`/三角函数、Unicode ²³、隐式乘法。
+- 幂运算限制只约束指数与结果量级，`e^x`、`x^10` 不再被误杀。
+- 切线不再把所有直线都当切线：同图割线、渐近线不会被误改。
 
-## 三、上限 5 篇多文献并发导入与横向对比闭环
+## 三、3D 与线性代数数学修复
 
-- **外部文献批量并发导入（上限 5 篇）**：在 `ResearchSearchView`「全网文献」模式新增多选勾选与批量操作条，新增并发导入引擎 `frontend/src/utils/batchPaperImport.ts`（并发度 3，单次上限 5 篇）：
-  - 已入库论文直接复用 `docId`；
-  - 直链 PDF 走 `createTempPaper` → 正式入库；
-  - 无直链时按 DOI/标题自动调用 `/api/research/fulltext` 解析合法开放获取 PDF 或落地页；
-  - 单篇闭源失败仅标记原因，不阻断同批其余论文。
-- **本地多文件并发上传**：支持文件选择器一次多选最多 5 篇本地论文并发上传并自动选中。
-- **后端限流适配**：将 `backend/research_corpus.py` 上传限流由 `4 / 5min` 调整为 `12 / 5min`，保障单批 5 篇并发入库与失败重试不误触 429。
-- **全科研区统一 5 篇待对比篮**：新增共享状态 `frontend/src/stores/compareQueue.ts`，同步打通外部批量导入、本地论文库、演示台阅读器与三栏独立精读台 `PaperWorkspace`，一键调用既有 `/api/research/literature/compare` 生成带页码溯源的多文献横向对比表。
+- 3D 坐标映射统一为 `(x,y,z) → (x,z,-y)`；曲面顶点、点、线、向量共用同一映射，曲面不再镜像。
+- 3D 曲面三角形按逆时针生成，法向朝数学 +z。
+- 3D 多点曲线按 `segments` 分段绘制，不跨渐近线。
+- 3D 法向量起点投到球面/平面/圆柱表面；圆柱上下底面用 ±z，侧面用径向；多个几何体取最近。
+- 倾斜平面缺中心坐标时不再强行填 `z=c`，宁可丢弃也不画错位置。
+- 坐标轴过滤修正 `pair` 判反，平行线不再误删。
+- 平行六面体只连 12 条真实棱，不再连面对角线。
+- 负定二次型在正 level 下是空集，改为绘制并标注负水平集。
+- 射影“无穷远线”不再伪装成有限坐标点。
 
-## 四、AI for Science 确定性闭环与双区协同
+## 四、网格与显示上限
 
-- **对比表 → 挖掘研究缺口**：完整保留 `ResearchTablesView` 既有 `onChat()` 自动保存与回归透传，针对多文献对比表新增 **「挖掘研究缺口」** 按钮，自动携带表格上下文进入 `/research` 提炼尚未解决的 Research Gaps 与可验证假设。
-- **科研区独立双角色低温复核**：在科研输入卡片顶栏提供 **「✓ 双角色复核」** 与 **「◈ 综述配图」** 两个 AI4S 系统工具开关；开启复核后，后端 `chat.py` 在论文精读（`_gen_paper_llm`）与五学术源综合（`_gen_research`）完成后，由独立第二角色以 `temperature=0` 运行 `_verify_answer` 核查推理与引用一致性（并纳入研究缓存键，严守 `analysis_worker` 安全沙箱，不执行任意代码）。
-- **定量复现回写 PDF 批注**：在 `ResearchTablesView` 为带原文来源（`table.source.docId` + `page`）的数据表及 OLS/多项式回归结果新增 **「回写论文批注」**，一键将回归方程、`R²`、`p` 值或统计摘要写回原论文对应页。
-- **课题上下文透镜与一键报告**：新增 `frontend/src/stores/researchProject.ts`，同步科研侧栏、文献检索与数据表的当前课题选择，并在科研侧栏提供一键 **「导出课题报告 (DOCX)」**。
-- **带现场还原锚点的科研待办**：向后兼容扩展 `TodoTask.anchor`（严守 `:research` 独立分桶），科研回复与 `PaperWorkspace` 均支持一键 **「Pin 到待办」**，在待办面板点「↗ 还原现场」直达对应论文页、数据表或会话。
-- **Study ⇄ Research 双向协同**：
-  - 学以致研：`GraphView` 知识点详情卡新增 **「查前沿论文」**，携带中英文术语直入科研区检索；
-  - 以研促学：科研对话与 `PaperWorkspace` 回复新增 **「夯实前置理论」**，在学习区开启独立教学拆解（不污染原科研上下文），并在学习区顶部展示 **「← 返回原科研会话」** 一键回跳；
-  - 保留并修补既有设置：`personalized` 关闭时真实拦截学习分析提示，`researchSearchMode='page'` 不再静默丢弃宽屏模型高亮批注动作。
+- 隐式网格改为二进制传输：Float32 positions + Uint16/Uint32 indices + base64；64 分辨率球面由约 3.84 MB 降至约 1.78 MB。
+- marching tetra 顶点按 5 位量化并去重。
+- 桌面端：
+  - 隐式曲面默认分辨率 24，最高 76；
+  - 曲面网格最高 101×101；
+  - 曲线默认 1600 点，最高 3000；
+  - 参数曲线最高 2400 点；
+  - 单条回答图解预算 4 MB / 30000 点。
+- 触屏端：索引超过 9 万时降级为点云，保留形状与法向，降低 GPU/内存压力。
 
-## 五、验证
+## 五、误差指标
 
-- **后端**：`pytest tests/test_chat_helpers.py tests/test_chat_routing_branches.py tests/test_chat_stream_e2e.py tests/test_research_workspace.py -q` → **174 passed**；`ruff check` 全部通过。
-- **前端**：`npm test` → **60 个测试文件 / 1086 个用例全部通过**（含新增批量导入、双角色复核与以研促学往返桥接单测；中英双语词条 `1030` 项完全对齐）；`npm run lint`、`vue-tsc --noEmit`、`npm run build` 通过；`check:build` **8 / 8** 通过。
-- **设计 & 移动端护栏**：`ui-design-audit.mjs --strict` 通过（0 未定义变量，0 CRT/强闪残留，WCAG 10/10 达标）；`responsive-audit-test.mjs` 通过（52 个样式源文件全绿）。
+新增 `backend/tools/diagram_mesh_metrics.py`，输出三角形数、二进制体积、最大弦高与法向偏差：
 
-## 六、升级与部署注意
+- 球面/抛物面：44 分辨率弦高已到 1e-3 量级，继续加密收益递减。
+- 圆环/双球窄缝：64 分辨率最大弦高仍约 6e-3–9e-3，是球面的 8–12 倍。
+- 体积随分辨率约 O(n²)；64 分辨率圆环约 1.24 MB，双球约 1.39 MB。
+- 法向偏差在高分辨率出现非单调尖峰，说明均匀网格在薄特征附近不稳定；自适应/双轮廓留待后续评估。
 
-- 前端版本号升至 `1.32.0`（「设置 → 关于 MG」同步）。
-- 没有数据库结构变更，旧库与现有本地缓存直接向后兼容。
-- 生产环境部署与密钥安全规范沿用 `v1.31.0`（公网 HTTPS、`MG_DEMO_MODE=0`）。
-- 发布附件：完整源码快照 `MathGuide-v1.32.0-source.tar.gz`、相对 `v1.31.0` 的完整补丁 `v1.32.0.patch`、改动前代码包 `MathGuide-v1.32.0-before-code.tar.gz`、`MANIFEST.sha256`、`SHA256SUMS`、`README.md` 与 `verify_manifest.py`。
+报告：`docs/reports/diagram-mesh-metrics.md`；数据：`docs/reports/diagram-mesh-metrics.json`。
 
-## 七、合并记录
+## 六、验证
 
-- `ad6524c` feat: AI for Science 工作台升级、5篇并发导入与双区协同闭环
-- 发布提交：`v1.32.0` 发布说明与完整源码 / 补丁 / 改动前代码 / 校验清单
+- 后端：`1715 passed, 5 skipped`；`ruff` 通过。
+- 前端：`62` 个测试文件 / `1093` 测试通过；`vue-tsc`、`npm run build` 通过。
+- 新增测试覆盖：
+  - 2D 隐式曲线、3D 隐式交线
+  - 参数曲线 2D/3D
+  - 参数曲面法向、切平面、标量场梯度
+  - 3D 椭圆、倾斜平面圆切线
+  - 隐式曲面 40+ 分辨率完整球面、二进制解码
+  - 切线语义对象、圆/椭圆自动目标
+  - 网格误差工具与前端二进制解码
+
+## 七、升级注意
+
+- 前端版本号升至 `1.33.0`（「设置 → 关于 MG」同步）。
+- 图解 schema 扩展了 `ellipse`、`parametric_curve`、`implicit_curve`、`implicit_curve3d`、`parametric_surface`、`implicit_surface`、`tangent`；旧图仍可渲染。
+- 旧消息里的图解已落盘，不会自动更新；需要重新生成。
+- 发布附件：完整源码快照 `MathGuide-v1.33.0-source.tar.gz`、相对 `v1.32.0` 的完整补丁 `v1.33.0.patch`、改动前代码包 `MathGuide-v1.33.0-before-code.tar.gz`、`MANIFEST.sha256`、`SHA256SUMS`、`README.md` 与 `verify_manifest.py`。
+- 发布提交：`v1.33.0` 发布说明与完整源码 / 补丁 / 改动前代码 / 校验清单。
