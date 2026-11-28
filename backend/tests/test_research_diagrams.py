@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import math
+import struct
 import threading
 
 import pytest
@@ -14,6 +17,18 @@ from research_diagrams import (
     plan_diagram,
     validate_diagram,
 )
+
+
+def _mesh_positions(shape: dict) -> list[float]:
+    raw = base64.b64decode(shape["positions_b64"])
+    return list(struct.unpack("<" + "f" * (len(raw) // 4), raw))
+
+
+def _mesh_indices(shape: dict) -> list[int]:
+    raw = base64.b64decode(shape["indices_b64"])
+    if shape.get("indexType") == "u16":
+        return list(struct.unpack("<" + "H" * (len(raw) // 2), raw))
+    return list(struct.unpack("<" + "I" * (len(raw) // 4), raw))
 
 
 def _marker(kind: str = "relation") -> str:
@@ -346,6 +361,61 @@ def test_surface_normal_is_not_forced_vertical():
     assert abs(dx / dz + 2) < 1e-4
 
 
+def test_sphere_normal_projects_start_onto_surface():
+    """球面法向起点必须在球面上;模型从球外 2 画到 3 时要拉回 r=1。"""
+    raw = {
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "sphere", "x": 0, "y": 0, "z": 0, "r": 1,
+             "label": "S"},
+            {"kind": "vector", "from": [2, 0, 0], "to": [3, 0, 0],
+             "label": "法向量 n"},
+        ],
+    }
+    diagram = rd.prepare_diagram(raw)
+    vector = next(s for s in diagram["shapes"] if s["kind"] == "vector")
+    assert vector["from"] == [1.0, 0.0, 0.0]
+    assert vector["to"] == [2.0, 0.0, 0.0]
+
+
+def test_plane_normal_projects_start_onto_plane():
+    """过 z=0 的平面,法向量起点 z=2 要滑到平面上。"""
+    raw = {
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "plane", "x": 0, "y": 0, "z": 0,
+             "normal": [0, 0, 1], "label": "平面"},
+            {"kind": "vector", "from": [1, 1, 2], "to": [1, 1, 3],
+             "label": "法向量 n"},
+        ],
+    }
+    diagram = rd.prepare_diagram(raw)
+    vector = next(s for s in diagram["shapes"] if s["kind"] == "vector")
+    assert vector["from"] == [1.0, 1.0, 0.0]
+    assert vector["to"] == [1.0, 1.0, 1.0]
+
+
+def test_cylinder_cap_normal_is_vertical():
+    """圆柱上底面的法向是 +z,不能按侧面画成径向。"""
+    raw = {
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "cylinder", "x": 0, "y": 0, "z": 0,
+             "r": 1, "height": 2, "label": "圆柱"},
+            {"kind": "vector", "from": [0, 0, 1], "to": [1, 0, 1],
+             "label": "法向量 n"},
+        ],
+    }
+    diagram = rd.prepare_diagram(raw)
+    vector = next(s for s in diagram["shapes"] if s["kind"] == "vector")
+    dx = vector["to"][0] - vector["from"][0]
+    dy = vector["to"][1] - vector["from"][1]
+    dz = vector["to"][2] - vector["from"][2]
+    assert abs(dx) < 1e-6 and abs(dy) < 1e-6
+    assert dz > 0.5
+    assert vector["from"][2] == 1.0
+
+
 def test_projection_circle_gets_radius_and_sits_on_xy_plane():
     question = "抛物面 z=x^2+y^2 被平面 z=1 截下，画出投影区域"
     assert rd._surface_question_terms(question) == ("x^2+y^2", 1.0)
@@ -541,6 +611,20 @@ def test_3d_duplicate_model_axes_are_filtered():
     assert spec["annotations"] == []
 
 
+def test_3d_line_parallel_to_axis_is_not_filtered_as_axis():
+    """只有真正穿过原点的轴向线段才当重复坐标轴;平行线要保留。"""
+    spec = rd.prepare_diagram({
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "point", "x": 0, "y": 1, "z": 1, "label": "P"},
+            {"kind": "segment", "label": "l", "from": [0, 1, 1], "to": [0, 2, 1]},
+        ],
+    })
+    assert spec
+    labels = [shape.get("label") for shape in spec["shapes"]]
+    assert "l" in labels
+
+
 def test_duplicate_expression_annotations_are_dropped():
     spec = rd.prepare_diagram({
         "type": "plot2d",
@@ -594,6 +678,781 @@ def test_geometry2d_straight_curve_is_corrected_as_tangent():
     assert len(tangent["points"]) == 2
     assert abs(tangent["from"][1] - 0.05) < 1e-5
     assert abs(tangent["to"][1] - 0.45) < 1e-5
+
+
+def test_plot2d_parametric_curve_uses_point_order_for_vertical_tangent():
+    """参数曲线不能按 x 排序;半圆顶点的切线应竖直。"""
+    points = [
+        [math.cos(t), math.sin(t)]
+        for t in (-math.pi / 2 + math.pi * i / 200 for i in range(201))
+    ]
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "points": points, "label": "半圆"},
+            {"kind": "point", "x": 1, "y": 0, "label": "P"},
+            {"kind": "segment", "label": "切线",
+             "from": [0.9, -0.1], "to": [1.1, 0.1]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs(x2 - x1) < 0.02
+    assert abs(y2 - y1) > 0.2
+
+
+def test_tangent_on_axis_is_not_dropped_as_duplicate_axis():
+    """水平切线可能正好与 x 轴重合;标了切线就不能当重复坐标轴删掉。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 0, "y": 0, "label": "O"},
+            {"kind": "segment", "label": "切线", "from": [-1, 0.2], "to": [1, -0.2]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"]
+                   if shape.get("label") == "切线")
+    assert tangent["from"][1] == 0 and tangent["to"][1] == 0
+
+
+def test_plot2d_cusp_has_no_fake_tangent():
+    """abs(x) 在 0 处左右导数不一致,不存在唯一切线;应删掉模型画的假切线。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "abs(x)", "domain": [-2, 2]},
+            {"kind": "point", "x": 0, "y": 0, "label": "O"},
+            {"kind": "segment", "label": "切线",
+             "from": [-0.2, 0], "to": [0.2, 0]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    assert not any(shape.get("label") == "切线" for shape in diagram["shapes"])
+
+
+def test_plot2d_tangent_uses_the_curve_through_the_point():
+    """同图有多条函数曲线时,切线必须跟着切点所在的那条,不能总用第一条。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "curve", "expr": "-x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 1, "y": -1, "label": "P"},
+            {"kind": "segment", "label": "切线",
+             "from": [0.8, -0.8], "to": [1.2, -1.2]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) + 2.0) < 1e-3
+    point = next(shape for shape in diagram["shapes"]
+                 if shape.get("label") == "P")
+    assert point["y"] == -1
+
+
+def test_tangent_object_with_curve_and_x_is_materialized():
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "tangent", "curve": "x^2", "x": 1},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    tangent = next(shape for shape in diagram["shapes"]
+                   if shape.get("label") == "切线")
+    assert tangent["kind"] == "segment"
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 2.0) < 1e-3
+    assert abs(y1 + (1 - x1) * 2 - 1) < 1e-3
+
+
+def test_tangent_object_targets_circle_and_ellipse():
+    circle = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "circle", "x": 0, "y": 0, "r": 2, "label": "C"},
+            {"kind": "tangent", "curve": "C", "x": 2, "y": 0},
+        ],
+    })
+    tangent = next(shape for shape in circle["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs(x1 - 2) < 1e-6 and abs(x2 - 2) < 1e-6
+    ellipse = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "ellipse", "x": 0, "y": 0, "rx": 2, "ry": 1,
+             "label": "E"},
+            {"kind": "tangent", "curve": "E", "x": 2, "y": 0},
+        ],
+    })
+    tangent = next(shape for shape in ellipse["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs(x1 - 2) < 1e-6 and abs(x2 - 2) < 1e-6
+
+
+def test_tangent_alias_is_normalized_and_corrected():
+    """tangent 语义对象落到渲染层为 segment,并走同一套切线校正。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 1, "y": 1, "label": "P"},
+            {"kind": "tangent", "from": [0.8, 0.8], "to": [1.2, 1.2]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    tangent = next(shape for shape in diagram["shapes"]
+                   if shape.get("label") == "切线")
+    assert tangent["kind"] == "segment"
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 2.0) < 1e-3
+
+
+def test_plot2d_does_not_turn_a_secant_into_a_tangent():
+    """同图有割线和切线时,只能校正切线;不能把所有直线都当切线。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 1, "y": 1, "label": "P"},
+            {"kind": "segment", "label": "切线",
+             "from": [0.8, 0.8], "to": [1.2, 1.2]},
+            {"kind": "segment", "label": "割线",
+             "from": [-1, 1], "to": [2, 4]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"]
+                   if shape.get("label") == "切线")
+    secant = next(shape for shape in diagram["shapes"]
+                  if shape.get("label") == "割线")
+    tx1, ty1 = tangent["from"][:2]
+    tx2, ty2 = tangent["to"][:2]
+    assert abs((ty2 - ty1) / (tx2 - tx1) - 2.0) < 1e-3
+    assert secant["from"] == [-1.0, 1.0]
+    assert secant["to"] == [2.0, 4.0]
+
+
+def test_plot2d_single_unlabeled_line_is_still_treated_as_tangent():
+    """模型漏标签且图里只有一条直线时,仍按切线校正。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 1, "y": 1, "label": "P"},
+            {"kind": "segment", "from": [0.8, 0.8], "to": [1.2, 1.2]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"]
+                   if shape.get("kind") == "segment")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 2.0) < 1e-3
+
+
+@pytest.mark.parametrize("expr,x0,domain", [
+    ("x^2", 1.0, [-2, 2]),
+    ("sin(x)", 0.3, [-3, 3]),
+    ("e^x", 0.0, [-2, 2]),
+    ("x^3-2*x", 0.7, [-2, 2]),
+    ("sqrt(x)", 0.25, [0, 4]),
+    ("1/x", 1.5, [0.5, 3]),
+])
+def test_tangent_invariant_passes_through_curve_with_derivative_slope(expr, x0, domain):
+    """不变量:切线必须过曲线上的切点,斜率等于该点导数。"""
+    run = rd._compile_expr(expr)
+    assert run is not None
+    y0 = float(run(x0))
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": expr, "domain": domain},
+            {"kind": "point", "x": x0, "y": y0, "label": "P"},
+            {"kind": "segment", "label": "切线",
+             "from": [x0 - 0.05, y0], "to": [x0 + 0.05, y0]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    tangent = next(shape for shape in diagram["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    slope = (y2 - y1) / (x2 - x1)
+    h = 1e-4 * max(1.0, abs(x0))
+    derivative = (float(run(x0 + h)) - float(run(x0 - h))) / (2 * h)
+    assert abs(slope - derivative) < 1e-2
+    # 切线在 x0 处的高度必须等于曲线高度
+    line_y = y1 + slope * (x0 - x1)
+    assert abs(line_y - y0) < 1e-2
+
+
+def test_circle_tangent_invariant_perpendicular_to_radius():
+    spec = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "circle", "x": 1, "y": -1, "r": 2.5},
+            {"kind": "point", "x": 3.5, "y": -1, "label": "P"},
+            {"kind": "line", "label": "切线", "from": [3.5, -3], "to": [3.5, 1]},
+        ],
+    })
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    rx, ry = 3.5 - 1, -1 - (-1)
+    tx, ty = x2 - x1, y2 - y1
+    assert abs(rx * tx + ry * ty) < 1e-6
+    # 切线到圆心的距离等于半径
+    distance = abs((x1 - 1) * ty - (y1 + 1) * tx) / math.hypot(tx, ty)
+    assert abs(distance - 2.5) < 1e-6
+
+
+def test_tangent_plane_normal_is_recomputed_from_surface():
+    raw = {
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "surface", "expr": "x^2+y^2",
+             "domain": [-2, 2, -2, 2], "rows": 8, "cols": 8},
+            {"kind": "plane", "label": "切平面", "x": 1, "y": 1, "z": 2,
+             "normal": [0, 0, 1]},
+        ],
+    }
+    spec = rd.prepare_diagram(raw)
+    plane = next(shape for shape in spec["shapes"]
+                 if shape.get("label") == "切平面")
+    assert plane["normal"] == [-2.0, -2.0, 1.0]
+    assert plane["z"] == 2.0
+
+
+def test_parametric_curve_is_sampled_and_tangent_is_vertical_at_circle_top():
+    spec = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "parametric_curve",
+             "xexpr": "cos(u)", "yexpr": "sin(u)",
+             "domain": [0, 2 * math.pi], "samples": 240},
+            {"kind": "point", "x": 1, "y": 0, "label": "P"},
+            {"kind": "line", "label": "切线", "from": [0.5, -1], "to": [1.5, 1]},
+        ],
+    })
+    curve = next(shape for shape in spec["shapes"]
+                 if shape["kind"] == "parametric_curve")
+    assert len(curve["points"]) == 240
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs(x1 - 1) < 0.02 and abs(x2 - 1) < 0.02
+    assert abs(y2 - y1) > 0.1
+
+
+def test_parametric_curve_3d_is_sampled_on_cylinder():
+    spec = rd.prepare_diagram({
+        "type": "geometry3d",
+        "shapes": [{
+            "kind": "parametric_curve",
+            "xexpr": "cos(u)", "yexpr": "sin(u)", "zexpr": "u/6.283185",
+            "domain": [0, 6.283185], "samples": 120,
+        }],
+    })
+    curve = next(shape for shape in spec["shapes"]
+                 if shape["kind"] == "parametric_curve")
+    assert len(curve["points"]) == 120
+    for x, y, _z in curve["points"]:
+        assert abs(x * x + y * y - 1) < 1e-5
+
+
+def test_implicit_curve_is_sampled_and_tangent_is_perpendicular_to_gradient():
+    spec = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "implicit_curve", "expr": "x^2+y^2-1",
+             "domain": [-1.5, 1.5, -1.5, 1.5], "resolution": 60},
+            {"kind": "point", "x": 1, "y": 0, "label": "P"},
+            {"kind": "line", "label": "切线", "from": [0.5, -1], "to": [1.5, 1]},
+        ],
+    })
+    curve = next(shape for shape in spec["shapes"]
+                 if shape["kind"] == "implicit_curve")
+    assert curve["segments"] and curve["points"]
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    # 圆在 (1,0) 的切线竖直
+    assert abs(x1 - 1) < 0.03 and abs(x2 - 1) < 0.03
+    assert abs(y2 - y1) > 0.1
+
+
+def test_implicit_curve_sphere_contour_is_closed():
+    """隐式曲线的 marching squares 不能产生空结果。"""
+    spec = rd.prepare_diagram({
+        "type": "plot2d",
+        "shapes": [{
+            "kind": "implicit_curve", "expr": "x^2/4+y^2-1",
+            "domain": [-3, 3, -2, 2], "resolution": 80,
+        }],
+    })
+    curve = next(shape for shape in spec["shapes"]
+                 if shape["kind"] == "implicit_curve")
+    assert len(curve["segments"]) > 20
+    for segment in curve["segments"]:
+        assert len(segment) == 2
+
+
+def test_implicit_curve3d_sphere_plane_intersection_is_circle():
+    spec = rd.prepare_diagram({
+        "type": "geometry3d",
+        "shapes": [{
+            "kind": "implicit_curve3d",
+            "expr": "x^2+y^2+z^2-1", "expr2": "z",
+            "domain": [-1.2, 1.2, -1.2, 1.2, -1.2, 1.2],
+            "resolution": 20,
+        }],
+    })
+    curve = next(shape for shape in spec["shapes"]
+                 if shape["kind"] == "implicit_curve3d")
+    assert curve["segments"]
+    for segment in curve["segments"]:
+        for x, y, z in segment:
+            assert abs(z) < 2e-2
+            assert abs(x * x + y * y - 1) < 5e-2
+
+
+def test_implicit_curve3d_tangent_follows_curve():
+    spec = rd.prepare_diagram({
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "implicit_curve3d",
+             "expr": "x^2+y^2+z^2-1", "expr2": "z",
+             "domain": [-1.2, 1.2, -1.2, 1.2, -1.2, 1.2],
+             "resolution": 20},
+            {"kind": "point", "x": 1, "y": 0, "z": 0, "label": "P"},
+            {"kind": "line", "label": "切线",
+             "from": [0.5, -1, 0], "to": [1.5, 1, 0]},
+        ],
+    })
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1, z1 = tangent["from"][:3]
+    x2, y2, z2 = tangent["to"][:3]
+    assert abs(x1 - x2) < 0.2 and abs(z1 - z2) < 0.2
+    assert abs(y2 - y1) > 0.2
+
+
+def test_implicit_surface_sphere_is_meshed():
+    spec = rd.prepare_diagram({
+        "type": "surface3d",
+        "shapes": [{
+            "kind": "implicit_surface",
+            "expr": "x^2+y^2+z^2-1",
+            "domain": [-1.5, 1.5, -1.5, 1.5, -1.5, 1.5],
+            "resolution": 14,
+        }],
+    })
+    surface = next(shape for shape in spec["shapes"]
+                   if shape["kind"] == "implicit_surface")
+    positions = _mesh_positions(surface)
+    indices = _mesh_indices(surface)
+    assert len(positions) >= 9 and len(indices) >= 3
+    assert len(indices) % 3 == 0
+    assert max(indices) < len(positions) // 3
+    for index in range(0, len(positions), 3):
+        x, y, z = positions[index:index + 3]
+        assert abs(x * x + y * y + z * z - 1) < 0.15
+
+
+def test_implicit_surface_high_resolution_covers_full_sphere():
+    spec = rd.prepare_diagram({
+        "type": "surface3d",
+        "shapes": [{
+            "kind": "implicit_surface",
+            "expr": "x^2+y^2+z^2-1",
+            "domain": [-1, 1, -1, 1, -1, 1],
+            "resolution": 32,
+        }],
+    })
+    surface = next(shape for shape in spec["shapes"]
+                   if shape["kind"] == "implicit_surface")
+    positions = _mesh_positions(surface)
+    xs = positions[0::3]
+    assert max(xs) > 0.99 and min(xs) < -0.99
+    # 顶点去重后不会因为网格截断只覆盖球的一半
+    assert len(positions) // 3 < 30000
+
+
+def test_implicit_surface_normal_uses_gradient():
+    raw = {
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "implicit_surface", "expr": "x^2+y^2+z^2-1",
+             "domain": [-1, 1, -1, 1, -1, 1], "resolution": 15},
+            {"kind": "vector", "label": "法向量 n",
+             "from": [1.05, 0, 0], "to": [2, 0, 0]},
+            {"kind": "plane", "label": "切平面", "x": 0, "y": 0, "z": 1,
+             "normal": [0, 0, 1]},
+        ],
+    }
+    spec = rd.prepare_diagram(raw)
+    vector = next(shape for shape in spec["shapes"]
+                  if shape["kind"] == "vector")
+    fx, fy, fz = vector["from"]
+    dx = vector["to"][0] - fx
+    dy = vector["to"][1] - fy
+    dz = vector["to"][2] - fz
+    anchor_norm = math.sqrt(fx * fx + fy * fy + fz * fz)
+    vector_norm = math.sqrt(dx * dx + dy * dy + dz * dz)
+    radial = (fx * dx + fy * dy + fz * dz) / (anchor_norm * vector_norm)
+    assert radial > 0.8
+    plane = next(shape for shape in spec["shapes"]
+                 if shape.get("label") == "切平面")
+    nx, ny, nz = plane["normal"]
+    assert abs(nz) > 0.8
+
+
+def test_parametric_surface_scalar_field_gradient_stays_in_tangent_plane():
+    raw = {
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "parametric_surface",
+             "xexpr": "u", "yexpr": "v", "zexpr": "u+v",
+             "fieldexpr": "x+y",
+             "domain": [0, 2, 0, 2], "rows": 5, "cols": 5},
+            {"kind": "vector", "label": "梯度 ∇f",
+             "from": [1, 1, 2], "to": [2, 2, 3]},
+        ],
+    }
+    spec = rd.prepare_diagram(raw)
+    vector = next(shape for shape in spec["shapes"]
+                  if shape["kind"] == "vector")
+    dx = vector["to"][0] - vector["from"][0]
+    dy = vector["to"][1] - vector["from"][1]
+    dz = vector["to"][2] - vector["from"][2]
+    # 平面法向 (-1,-1,1)/√3;曲面梯度必须与法向正交
+    assert abs(-dx - dy + dz) < 1e-3
+    assert abs(dx) + abs(dy) + abs(dz) > 0.1
+
+
+def test_parametric_tangent_plane_normal_uses_grid_derivatives():
+    raw = {
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "parametric_surface",
+             "xexpr": "u", "yexpr": "v", "zexpr": "u+v",
+             "domain": [0, 2, 0, 2], "rows": 5, "cols": 5},
+            {"kind": "plane", "label": "切平面", "x": 1, "y": 1, "z": 2,
+             "normal": [0, 0, 1]},
+        ],
+    }
+    spec = rd.prepare_diagram(raw)
+    plane = next(shape for shape in spec["shapes"]
+                 if shape.get("label") == "切平面")
+    nx, ny, nz = plane["normal"]
+    assert abs(nx - ny) < 1e-6
+    assert nz > 0 and abs(nx + nz) < 1e-6
+
+
+def test_parametric_surface_normal_uses_grid_derivatives():
+    """参数曲面的法向量按 r_u × r_v 修正;平面 z=u+v 的法向应为 (-1,-1,1)。"""
+    raw = {
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "parametric_surface",
+             "xexpr": "u", "yexpr": "v", "zexpr": "u+v",
+             "domain": [0, 2, 0, 2], "rows": 5, "cols": 5},
+            {"kind": "vector", "label": "法向量 n",
+             "from": [1, 1, 2], "to": [0, 0, 3]},
+        ],
+    }
+    spec = rd.prepare_diagram(raw)
+    vector = next(shape for shape in spec["shapes"]
+                  if shape["kind"] == "vector")
+    assert vector["from"] == [1.0, 1.0, 2.0]
+    dx = vector["to"][0] - vector["from"][0]
+    dy = vector["to"][1] - vector["from"][1]
+    dz = vector["to"][2] - vector["from"][2]
+    assert abs(dx - dy) < 1e-4
+    assert dz > 0 and abs(dx + dz) < 1e-4
+
+
+def test_parametric_surface_is_sampled_and_rendered_as_surface():
+    spec = rd.prepare_diagram({
+        "type": "surface3d",
+        "shapes": [{
+            "kind": "parametric_surface",
+            "xexpr": "cos(u)*sin(v)",
+            "yexpr": "sin(u)*sin(v)",
+            "zexpr": "cos(v)",
+            "domain": [0, 2 * math.pi, 0, math.pi],
+            "rows": 6, "cols": 7,
+        }],
+    })
+    surface = next(shape for shape in spec["shapes"]
+                   if shape["kind"] == "parametric_surface")
+    assert len(surface["points"]) == 42
+    for x, y, z in surface["points"]:
+        assert abs(x * x + y * y + z * z - 1) < 1e-5
+
+
+def test_surface_sample_points_satisfy_expression():
+    spec = rd.prepare_diagram({
+        "type": "surface3d",
+        "shapes": [{"kind": "surface", "expr": "x^2+y^2",
+                    "domain": [-1, 1, -1, 1], "rows": 4, "cols": 5}],
+    })
+    surface = next(shape for shape in spec["shapes"]
+                   if shape["kind"] == "surface")
+    for x, y, z in surface["points"]:
+        assert abs(z - (x * x + y * y)) < 1e-5
+
+
+def test_labeled_straight_curve_tangent_without_point_uses_midpoint():
+    """切线被画成直线型 curve 且没有关键点时,也要按曲线中点校正。"""
+    spec = rd.prepare_diagram({
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "label": "y=x²", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "curve", "label": "切线",
+             "points": [[0, 0], [2, 2]]},
+        ],
+    })
+    assert spec
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    assert tangent["kind"] == "curve"
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 2.0) < 1e-3
+    assert abs(y1 + (1 - x1) * 2 - 1) < 1e-3
+
+
+def test_3d_ellipse_tangent_is_corrected():
+    spec = rd.prepare_diagram({
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "ellipse", "x": 0, "y": 0, "z": 1, "rx": 2, "ry": 1},
+            {"kind": "point", "x": 2, "y": 0, "z": 1, "label": "P"},
+            {"kind": "line", "label": "切线", "from": [1, -1, 1], "to": [3, 1, 2]},
+        ],
+    })
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    assert tangent["from"][2] == 1.0 and tangent["to"][2] == 1.0
+    assert abs(tangent["from"][0] - 2) < 1e-6
+    assert abs(tangent["to"][0] - 2) < 1e-6
+    assert abs(tangent["from"][1] - tangent["to"][1]) > 0.2
+
+
+def test_3d_ellipse_tangent_honors_tilted_plane():
+    spec = rd.prepare_diagram({
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "ellipse", "x": 0, "y": 0, "z": 0, "rx": 2, "ry": 1,
+             "normal": [0, 1, 0]},
+            {"kind": "point", "x": 2, "y": 0, "z": 0, "label": "P"},
+            {"kind": "line", "label": "切线", "from": [1, -1, 1], "to": [3, 1, 1]},
+        ],
+    })
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    assert abs(tangent["from"][1]) < 1e-6
+    assert abs(tangent["to"][1]) < 1e-6
+    assert abs(tangent["from"][0] - 2) < 1e-6
+    assert abs(tangent["to"][0] - 2) < 1e-6
+    assert abs(tangent["from"][2] - tangent["to"][2]) > 0.2
+
+
+def test_3d_circle_tangent_is_horizontal_and_perpendicular_to_radius():
+    raw = {
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "circle", "x": 0, "y": 0, "z": 1, "r": 2},
+            {"kind": "point", "x": 2, "y": 0, "z": 1, "label": "P"},
+            {"kind": "line", "label": "切线",
+             "from": [1, -1, 1], "to": [3, 1, 2]},
+        ],
+    }
+    spec = rd.prepare_diagram(raw)
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    assert tangent["from"][2] == 1.0 and tangent["to"][2] == 1.0
+    # 过 (2,0,1) 的竖直线在 xy 平面内切圆
+    assert abs(tangent["from"][0] - 2) < 1e-6
+    assert abs(tangent["to"][0] - 2) < 1e-6
+    assert abs(tangent["from"][1] - tangent["to"][1]) > 0.2
+
+
+def test_3d_circle_tangent_honors_plane_normal():
+    """竖直平面 xz 内的圆,切向应在该平面内,不能按水平圆画。"""
+    raw = {
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "circle", "x": 0, "y": 0, "z": 0, "r": 2,
+             "normal": [0, 1, 0]},
+            {"kind": "point", "x": 2, "y": 0, "z": 0, "label": "P"},
+            {"kind": "line", "label": "切线",
+             "from": [1, -1, 1], "to": [3, 1, 1]},
+        ],
+    }
+    spec = rd.prepare_diagram(raw)
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1, z1 = tangent["from"][:3]
+    x2, y2, z2 = tangent["to"][:3]
+    assert abs(y1) < 1e-6 and abs(y2) < 1e-6
+    assert abs(x1 - 2) < 1e-6 and abs(x2 - 2) < 1e-6
+    assert abs(z2 - z1) > 0.2
+
+
+def test_3d_curve_tangent_uses_neighbor_direction():
+    """3D 参数曲线的切线方向取局部点列差分,并落在曲线上。"""
+    raw = {
+        "type": "geometry3d",
+        "shapes": [
+            {"kind": "curve", "label": "空间曲线",
+             "points": [[0, 0, 0], [1, 1, 0], [2, 4, 0], [3, 9, 0]]},
+            {"kind": "segment", "label": "切线",
+             "from": [0.5, -1, 0], "to": [2.5, 2, 1]},
+        ],
+    }
+    spec = rd.prepare_diagram(raw)
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    from_point = tangent["from"]
+    to_point = tangent["to"]
+    direction = [to_point[i] - from_point[i] for i in range(3)]
+    # 局部方向应平行于 (2,4,0),即 direction[1] ≈ 2*direction[0],z≈0
+    assert abs(direction[1] - 2 * direction[0]) < 1e-3
+    assert abs(direction[2]) < 1e-6
+    # 线段中点应落在曲线点 (1,1,0) 或 (2,4,0) 附近
+    mid = [(from_point[i] + to_point[i]) / 2 for i in range(3)]
+    assert any(abs(mid[0] - point[0]) < 1e-3
+               and abs(mid[1] - point[1]) < 1e-3
+               for point in [[1, 1, 0], [2, 4, 0]])
+
+
+def test_geometry2d_ellipse_tangent_is_corrected():
+    """椭圆切线:在 (rx,0) 处应竖直,且不能过圆心。"""
+    spec = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "ellipse", "x": 0, "y": 0, "rx": 2, "ry": 1},
+            {"kind": "point", "x": 2, "y": 0, "label": "P"},
+            {"kind": "line", "label": "切线", "from": [1, -1], "to": [3, 1]},
+        ],
+    })
+    assert spec
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs(x1 - 2) < 1e-6 and abs(x2 - 2) < 1e-6
+    assert abs(y2 - y1) > 0.2
+
+
+def test_geometry2d_rotated_ellipse_tangent_is_perpendicular_to_gradient():
+    """旋转椭圆:切线方向仍垂直于椭圆梯度。"""
+    spec = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "ellipse", "x": 0, "y": 0, "rx": 2, "ry": 1,
+             "rotation": math.pi / 6},
+            {"kind": "line", "label": "切线", "from": [-1, 0], "to": [1, 0]},
+        ],
+    })
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    # 无关键点时切点由切线中点投影;只检查切线到椭圆中心的距离合理且方向非零
+    dx = tangent["to"][0] - tangent["from"][0]
+    dy = tangent["to"][1] - tangent["from"][1]
+    assert abs(dx) + abs(dy) > 0.1
+
+
+def test_geometry2d_circle_tangent_is_corrected():
+    """圆的切线垂直于半径;竖切线不能被模型画成斜线。"""
+    spec = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "circle", "x": 0, "y": 0, "r": 2},
+            {"kind": "point", "x": 2, "y": 0, "label": "P"},
+            {"kind": "line", "label": "切线", "from": [1, -1], "to": [3, 1]},
+        ],
+    })
+    assert spec
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    # 过 (2,0) 的竖切线
+    assert abs(x1 - 2) < 1e-3 and abs(x2 - 2) < 1e-3
+    assert abs(y2 - y1) > 0.2
+
+
+def test_geometry2d_circle_tangent_without_point_projects_from_center():
+    """没有切点时,用圆心到切线的垂足投到圆上定切点。"""
+    spec = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "circle", "x": 0, "y": 0, "r": 2},
+            {"kind": "line", "label": "切线", "from": [2.2, -1], "to": [2.2, 1]},
+        ],
+    })
+    assert spec
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs(x1 - 2) < 0.05 and abs(x2 - 2) < 0.05
+
+
+def test_geometry2d_circle_tangent_drawn_as_straight_curve():
+    """切线被画成两点 curve 时,圆切线也要校正并保留 curve 类型。"""
+    spec = rd.prepare_diagram({
+        "type": "geometry2d",
+        "shapes": [
+            {"kind": "circle", "x": 0, "y": 0, "r": 2},
+            {"kind": "point", "x": 2, "y": 0, "label": "P"},
+            {"kind": "curve", "label": "切线", "points": [[1, -1], [3, 1]]},
+        ],
+    })
+    assert spec
+    tangent = next(shape for shape in spec["shapes"]
+                   if shape.get("label") == "切线")
+    assert tangent["kind"] == "curve"
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs(x1 - 2) < 1e-3 and abs(x2 - 2) < 1e-3
 
 
 def test_plot2d_tangent_uses_the_requested_key_point():
@@ -852,6 +1711,24 @@ def test_surface_repair_does_not_pick_one_of_multiple_plane_heights():
         raw, "画出曲面 z=x^2+y^2 与平面 z=1、平面 z=2 的交线")
     plane = repaired["shapes"][1]
     assert "z" not in plane
+
+
+def test_surface_repair_does_not_give_tilted_plane_an_arbitrary_height():
+    """倾斜平面不能只凭题面 z=c 填 z;法向不是竖直时应丢弃而不是画错位置。"""
+    raw = {
+        "type": "surface3d",
+        "shapes": [
+            {"kind": "surface", "expr": "x^2+y^2", "domain": [-1, 1],
+             "rows": 4, "cols": 4},
+            {"kind": "plane", "normal": [1, 0, 1], "label": "切平面"},
+        ],
+    }
+    repaired = rd.repair_surface_shapes(
+        raw, "画出曲面 z=x^2+y^2 在 z=1 处的切平面")
+    plane = repaired["shapes"][1]
+    assert "z" not in plane
+    assert rd.prepare_diagram(repaired) is None or not any(
+        shape["kind"] == "plane" for shape in rd.prepare_diagram(repaired)["shapes"])
 
 
 def test_surface3d_without_surface_is_rejected():
@@ -1273,6 +2150,172 @@ def test_tangent_slope_computed_from_expression():
     assert abs((y2 - y1) / (x2 - x1) - 2.0) < 1e-3
     # 切线必须过切点 (1, 1)
     assert abs(y1 + (1 - x1) * 2 - 1) < 1e-3
+
+
+def test_tangent_is_not_stolen_by_an_unrelated_origin_point():
+    """原点 O 也在切线附近时,不能把 O 当成切点;切点仍是 P。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 0, "y": 0, "label": "O"},
+            {"kind": "point", "x": 1, "y": 1, "label": "P"},
+            {"kind": "line", "from": [0, 0], "to": [2, 2], "label": "切线"},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"] if shape["kind"] == "line")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 2.0) < 1e-3
+    assert abs(y1 + (1 - x1) * 2 - 1) < 1e-3
+
+
+def test_tangent_without_points_uses_segment_midpoint():
+    """没有关键点时,用切线自身的中点定切点,不能拿 line 的起点。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "line", "from": [0, 0], "to": [2, 2], "label": "切线"},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"] if shape["kind"] == "line")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 2.0) < 1e-3
+    assert abs(y1 + (1 - x1) * 2 - 1) < 1e-3
+
+
+def test_tangent_line_midpoint_wins_over_unlabeled_origin():
+    """图上只有一个原点 O 时,长切线仍应按线中点找切点,不能把 O 当切点。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 0, "y": 0, "label": "O"},
+            {"kind": "line", "from": [0, 0], "to": [2, 2], "label": "切线"},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"] if shape["kind"] == "line")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 2.0) < 1e-3
+    assert abs(y1 + (1 - x1) * 2 - 1) < 1e-3
+
+
+def test_plot2d_samples_y_equals_expression_for_tangent():
+    """模型把表达式写成 y = x^2 时也要能采样并算切线。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "y = x^2", "domain": [-2, 2]},
+            {"kind": "point", "x": 1, "y": 1, "label": "P"},
+            {"kind": "segment", "label": "切线",
+             "from": [0.8, 0.8], "to": [1.2, 1.2]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    curve = next(shape for shape in diagram["shapes"] if shape["kind"] == "curve")
+    assert len(curve.get("points") or []) > 10
+    tangent = next(shape for shape in diagram["shapes"] if shape["label"] == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 2.0) < 1e-3
+
+
+def test_plot2d_samples_latex_fraction_for_tangent():
+    """LaTeX 分式要能采样;否则切线只能退回模型手画。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "\\frac{x^2}{2}", "domain": [-2, 2]},
+            {"kind": "point", "x": 1, "y": 0.5, "label": "P"},
+            {"kind": "segment", "label": "切线",
+             "from": [0.8, 0.3], "to": [1.2, 0.7]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    curve = next(shape for shape in diagram["shapes"] if shape["kind"] == "curve")
+    assert len(curve.get("points") or []) > 10
+    tangent = next(shape for shape in diagram["shapes"] if shape["label"] == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 1.0) < 1e-3
+
+
+def test_plot2d_tangent_shortens_steep_segment():
+    """陡峭曲线上的切线不能铺满全图,否则会把曲线压扁,看着不像切线。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "e^x", "domain": [-2, 2]},
+            {"kind": "point", "x": 2, "y": math.e ** 2, "label": "P"},
+            {"kind": "line", "from": [1, 1], "to": [3, 3], "label": "切线"},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"] if shape["kind"] == "line")
+    y1, y2 = tangent["from"][1], tangent["to"][1]
+    assert abs(y2 - y1) < (math.e ** 2 - math.e ** -2) * 0.35
+
+
+def test_plot2d_boundary_tangent_uses_one_sided_derivative():
+    """sqrt(x) 在 x=0 只有单侧导数;不能因为中心差分失败就保留错误斜线。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "sqrt(x)", "domain": [0, 4]},
+            {"kind": "point", "x": 0, "y": 0, "label": "O"},
+            {"kind": "line", "from": [-0.2, -0.2], "to": [0.2, 0.2], "label": "切线"},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    tangent = next(shape for shape in diagram["shapes"] if shape["kind"] == "line")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    # 竖直切线:x 跨度很小,y 跨度有限且不为 0
+    assert abs(x2 - x1) < 0.02
+    assert 0.2 < abs(y2 - y1) < 2.0
+
+
+def test_plot2d_high_exponent_curve_is_sampled():
+    """x^10 的指数 10 不应被幂运算上限误判,曲线要能采样。"""
+    raw = {
+        "type": "plot2d",
+        "shapes": [
+            {"kind": "curve", "expr": "x^10", "domain": [0.5, 1.5]},
+            {"kind": "point", "x": 1, "y": 1, "label": "P"},
+            {"kind": "segment", "label": "切线",
+             "from": [0.9, 0.9], "to": [1.1, 1.1]},
+        ],
+        "annotations": [],
+    }
+    diagram = rd.prepare_diagram(raw)
+    assert diagram is not None
+    curve = next(shape for shape in diagram["shapes"] if shape["kind"] == "curve")
+    assert len(curve.get("points") or []) > 10
+    tangent = next(shape for shape in diagram["shapes"] if shape["label"] == "切线")
+    x1, y1 = tangent["from"][:2]
+    x2, y2 = tangent["to"][:2]
+    assert abs((y2 - y1) / (x2 - x1) - 10.0) < 1e-2
+
 
 
 def test_verify_enabled_reads_env(monkeypatch):

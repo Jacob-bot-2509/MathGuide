@@ -2,6 +2,8 @@
 /** 3D 静态图解:Three.js 场景,可旋转/缩放,不自动播放动画。 */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { DiagramShape, DiagramSpec } from '@/utils/diagramSpec'
+import { mathToThree, surfaceIndices, surfacePositions } from '@/utils/diagram3d'
+import { shapeMesh } from '@/utils/meshBinary'
 import { t } from '@/utils/i18n'
 import {
   placeScreenLabels,
@@ -51,8 +53,7 @@ function triple(value: unknown): [number, number, number] {
 
 /** 数学坐标 (x, y, z) → Three.js (x, z, -y),z 轴朝上且保持右手系。 */
 function vec3(value: unknown, THREE: typeof import('three')): import('three').Vector3 {
-  const [x, y, z] = triple(value)
-  return new THREE.Vector3(x, z, -y)
+  return new THREE.Vector3(...mathToThree(triple(value)))
 }
 
 function points(value: unknown): Array<[number, number, number]> {
@@ -171,7 +172,8 @@ function shapeColor(shape: DiagramShape, kind: string): number {
   if (/梯度|∇|gradient/i.test(label)) return 0xff8a3d
   if (/方向|direction|^e|^u|l\b/i.test(label)) return 0x67e8a5
   if (/路径|path|轨迹/i.test(label)) return 0xffd166
-  if (kind === 'surface') return 0x3aa8d8
+  if (kind === 'surface' || kind === 'parametric_surface'
+    || kind === 'implicit_surface') return 0x3aa8d8
   if (kind === 'point') return 0xffd166
   if (kind === 'axis') return 0x94a3b8
   if (kind === 'plane') return 0xa78bfa
@@ -190,7 +192,19 @@ function rememberBaseScale(sprite: import('three').Sprite): void {
 function sceneUnit(shapes: DiagramShape[]): number {
   let span = 0
   for (const shape of shapes) {
-    if (shape.kind === 'surface' && Array.isArray(shape.points)) {
+    if (shape.kind === 'implicit_surface') {
+      const mesh = shapeMesh(shape)
+      if (mesh) {
+        for (let index = 0; index + 2 < mesh.positions.length; index += 3) {
+          span = Math.max(span, Math.abs(mesh.positions[index]),
+            Math.abs(mesh.positions[index + 1]),
+            Math.abs(mesh.positions[index + 2]))
+        }
+      }
+      continue
+    }
+    if ((shape.kind === 'surface' || shape.kind === 'parametric_surface')
+      && Array.isArray(shape.points)) {
       const xs: number[] = []
       const ys: number[] = []
       const zs: number[] = []
@@ -280,22 +294,10 @@ function addSurface(
   const rows = Math.trunc(num(shape.rows))
   const cols = Math.trunc(num(shape.cols))
   if (rows >= 2 && cols >= 2 && pts.length >= rows * cols) {
-    const positions = new Float32Array(rows * cols * 3)
-    for (let index = 0; index < rows * cols; index += 1) {
-      positions[index * 3] = pts[index][0]
-      positions[index * 3 + 1] = pts[index][2]
-      positions[index * 3 + 2] = pts[index][1]
-    }
-    const indices: number[] = []
-    for (let row = 0; row < rows - 1; row += 1) {
-      for (let col = 0; col < cols - 1; col += 1) {
-        const a = row * cols + col
-        const b = a + 1
-        const c = a + cols
-        const d = c + 1
-        indices.push(a, c, b, b, c, d)
-      }
-    }
+    // 曲面顶点必须与点/线/向量共用 (x,y,z)→(x,z,-y);旧实现漏了 -y,
+    // 曲面会被镜像,点和法向量看起来脱离曲面。
+    const positions = surfacePositions(pts.slice(0, rows * cols))
+    const indices = surfaceIndices(rows, cols)
     const geometry = new THREE.BufferGeometry()
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     geometry.setIndex(indices)
@@ -466,17 +468,67 @@ function addShape(
     }
     if (projection) mesh.renderOrder = 3
     root.add(mesh)
+  } else if (kind === 'ellipse') {
+    // 3D 椭圆:由 normal 决定所在平面,rotation 绕法向旋转半轴。
+    const center = vec3([x, y, z], THREE)
+    const rawNormal = Array.isArray(shape.normal) && shape.normal.length >= 3
+      ? shape.normal
+      : [0, 0, 1]
+    const candidateNormal = vec3(rawNormal, THREE)
+    const normal = candidateNormal.lengthSq() > 1e-9
+      ? candidateNormal.normalize()
+      : new THREE.Vector3(0, 1, 0)
+    const helper = Math.abs(normal.x) < 0.9
+      ? new THREE.Vector3(1, 0, 0)
+      : new THREE.Vector3(0, 1, 0)
+    const axisU = helper.clone()
+      .addScaledVector(normal, -helper.dot(normal))
+      .normalize()
+    const axisV = new THREE.Vector3().crossVectors(normal, axisU).normalize()
+    const rotation = num(shape.rotation)
+    const u = axisU.clone().multiplyScalar(Math.cos(rotation))
+      .addScaledVector(axisV, Math.sin(rotation))
+    const v = axisU.clone().multiplyScalar(-Math.sin(rotation))
+      .addScaledVector(axisV, Math.cos(rotation))
+    const rx = Math.abs(num(shape.rx) || 1)
+    const ry = Math.abs(num(shape.ry) || 1)
+    const ring: import('three').Vector3[] = []
+    for (let i = 0; i < 96; i += 1) {
+      const angle = (Math.PI * 2 * i) / 96
+      ring.push(center.clone()
+        .addScaledVector(u, rx * Math.cos(angle))
+        .addScaledVector(v, ry * Math.sin(angle)))
+    }
+    const ellipse = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(ring), overlayLine,
+    )
+    ellipse.renderOrder = 5
+    root.add(ellipse)
   } else if (kind === 'circle') {
     // 圆在 3D 里是轮廓注记,不画实心圆盘,避免原点出现“盘子”。
     const radius = Math.abs(num(shape.r) || num(shape.radius) || 1)
+    const center = vec3([x, y, z], THREE)
+    const rawNormal = Array.isArray(shape.normal) && shape.normal.length >= 3
+      ? shape.normal
+      : [0, 0, 1]
+    // 投影圆永远落在水平面;普通圆用法向量决定所在平面。
+    const candidateNormal = vec3(rawNormal, THREE)
+    const normal = projection
+      ? new THREE.Vector3(0, 1, 0)
+      : (candidateNormal.lengthSq() > 1e-9
+        ? candidateNormal.normalize()
+        : new THREE.Vector3(0, 1, 0))
+    const helper = Math.abs(normal.x) < 0.9
+      ? new THREE.Vector3(1, 0, 0)
+      : new THREE.Vector3(0, 1, 0)
+    const axisU = new THREE.Vector3().crossVectors(helper, normal).normalize()
+    const axisV = new THREE.Vector3().crossVectors(normal, axisU).normalize()
     const ring: import('three').Vector3[] = []
     for (let i = 0; i < 64; i += 1) {
       const angle = (Math.PI * 2 * i) / 64
-      ring.push(vec3([
-        x + radius * Math.cos(angle),
-        y + radius * Math.sin(angle),
-        z,
-      ], THREE))
+      ring.push(center.clone()
+        .addScaledVector(axisU, radius * Math.cos(angle))
+        .addScaledVector(axisV, radius * Math.sin(angle)))
     }
     const circle = new THREE.LineLoop(
       new THREE.BufferGeometry().setFromPoints(ring), overlayLine,
@@ -496,8 +548,10 @@ function addShape(
           depthWrite: false,
         }),
       )
-      disk.position.copy(vec3([x, y, z], THREE))
-      disk.rotation.x = -Math.PI / 2
+      disk.position.copy(center)
+      disk.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 0, 1), normal,
+      )
       disk.renderOrder = 4
       root.add(disk)
     }
@@ -511,9 +565,15 @@ function addShape(
       if (projection) line.renderOrder = 6
       root.add(line)
     }
-  } else if (kind === 'curve') {
-    const pts = points(shape.points)
-    if (pts.length) {
+  } else if (kind === 'curve' || kind === 'parametric_curve'
+    || kind === 'implicit_curve3d') {
+    // 多段曲线(1/x、tan)按段绘制,不能跨渐近线连成一条实线。
+    const segments = Array.isArray(shape.segments)
+      ? (shape.segments as unknown[][])
+      : [shape.points]
+    for (const segment of segments) {
+      const pts = points(segment)
+      if (pts.length < 2) continue
       const geometry = new THREE.BufferGeometry().setFromPoints(
         pts.map((item) => vec3(item, THREE)),
       )
@@ -521,7 +581,45 @@ function addShape(
       if (projection) line.renderOrder = 6
       root.add(line)
     }
-  } else if (kind === 'surface') {
+  } else if (kind === 'implicit_surface') {
+    const decoded = shapeMesh(shape)
+    if (decoded) {
+      const positions = decoded.positions
+      const mapped = new Float32Array(positions.length)
+      for (let index = 0; index < positions.length; index += 3) {
+        const point = mathToThree([
+          positions[index], positions[index + 1], positions[index + 2],
+        ])
+        mapped[index] = point[0]
+        mapped[index + 1] = point[1]
+        mapped[index + 2] = point[2]
+      }
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute(
+        'position', new THREE.BufferAttribute(mapped, 3),
+      )
+      // 触屏设备遇到超大网格降级为点云:桌面端保持完整三角网格。
+      const coarsePointer = typeof window !== 'undefined'
+        && typeof window.matchMedia === 'function'
+        && window.matchMedia('(pointer: coarse)').matches
+      if (coarsePointer && decoded.indices.length > 90_000) {
+        root.add(new THREE.Points(
+          geometry,
+          new THREE.PointsMaterial({
+            color,
+            size: Math.max(unit * 0.6, 0.004),
+            sizeAttenuation: true,
+            transparent: true,
+            opacity: 0.82,
+          }),
+        ))
+      } else {
+        geometry.setIndex(new THREE.BufferAttribute(decoded.indices, 1))
+        geometry.computeVertexNormals()
+        root.add(new THREE.Mesh(geometry, material))
+      }
+    }
+  } else if (kind === 'surface' || kind === 'parametric_surface') {
     addSurface(shape, THREE, root, color)
   }
   if (shape.label) {
@@ -532,13 +630,21 @@ function addShape(
     if (sprite) {
       const to = triple(shape.to)
       const hasLine = ['segment', 'line', 'vector', 'axis'].includes(kind)
-      const surfacePoint = kind === 'surface' && Array.isArray(shape.points)
+      const surfacePoint = (kind === 'surface' || kind === 'parametric_surface')
+        && Array.isArray(shape.points)
         && shape.points.length
         ? shape.points[Math.floor(shape.points.length * 0.5)]
         : null
-      const curvePoint = kind === 'curve' && Array.isArray(shape.points)
+      const curvePoint = (kind === 'curve' || kind === 'parametric_curve'
+        || kind === 'implicit_curve3d')
+        && Array.isArray(shape.points)
         && shape.points.length
         ? shape.points[Math.floor(shape.points.length * 0.5)]
+        : null
+      const implicitMesh = kind === 'implicit_surface' ? shapeMesh(shape) : null
+      const implicitPoint = implicitMesh && implicitMesh.positions.length >= 3
+        ? [implicitMesh.positions[0], implicitMesh.positions[1],
+          implicitMesh.positions[2]]
         : null
       const anchor = hasLine
         ? vec3(to, THREE)
@@ -546,7 +652,9 @@ function addShape(
           ? vec3(surfacePoint, THREE)
           : curvePoint
             ? vec3(curvePoint, THREE)
-            : vec3([x, y, z], THREE)
+            : implicitPoint
+              ? vec3(implicitPoint, THREE)
+              : vec3([x, y, z], THREE)
       anchor.y += hasLine ? unit * 0.18 : unit * 0.25
       sprite.position.copy(anchor)
       root.add(sprite)

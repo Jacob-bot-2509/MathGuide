@@ -551,6 +551,8 @@ def test_chat_total_points_budget_skips_extra_diagrams(monkeypatch):
 
     monkeypatch.setattr(chat.rag.llm, "stream_chat", fake_stream)
     monkeypatch.setattr(chat.research_diagrams, "plan_diagram", fake_plan)
+    # 固定预算,避免显示上限调整后这条“超预算跳过”的语义变化。
+    monkeypatch.setattr(chat.research_diagrams, "MAX_TOTAL_POINTS", 8000)
     frames = asyncio.run(_collect_gen(chat._gen_llm(
         "曲面", None, [], diagram_mode=True, diagram_request_id="r-budget")))
     events = [json.loads(frame[6:].strip()) for frame in frames

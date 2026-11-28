@@ -986,9 +986,14 @@ def _build_determinant(linear: dict) -> tuple[str, list[dict], list[dict]]:
             [0.0, 0.0, 0.0], u, v, w,
             _add(u, v), _add(u, w), _add(v, w), _add(_add(u, v), w),
         ]
+        # 平行六面体的 12 条棱:每个方向 4 条;顶点编号按二进制位
+        # 0=0, 1=u, 2=v, 3=w, 4=u+v, 5=u+w, 6=v+w, 7=u+v+w。
         edges = [
-            (0, 1), (0, 2), (0, 4), (1, 3), (1, 5),
-            (2, 3), (2, 6), (4, 5), (4, 6), (3, 7), (5, 7), (6, 7),
+            (0, 1), (0, 2), (0, 3),
+            (1, 4), (1, 5),
+            (2, 4), (2, 6),
+            (3, 5), (3, 6),
+            (4, 7), (5, 7), (6, 7),
         ]
         for start, end in edges:
             shapes.append(_segment(corners[start], corners[end]))
@@ -1108,11 +1113,15 @@ def _build_quadratic(linear: dict) -> tuple[str, list[dict], list[dict]] | None:
     ambient = linear["ambient"]
     matrix = linear["matrix"]
     level = linear.get("level", 1.0)
+    positive, negative, zero = _signature(matrix)
+    # 负定二次型在正 level 下是空集;要画非空水平集必须取负 level。
+    # 标签与曲面用同一个 level,不能画出 -1 的椭球却标成 =1。
+    if positive == 0 and negative > 0:
+        level = -abs(level)
     shapes = _quadratic_shapes(matrix, level, ambient)
     if not shapes:
         return None
     shapes.insert(0, _point([0.0] * ambient, "O"))
-    positive, negative, zero = _signature(matrix)
     notes = [_annotation(
         [0.8] * ambient,
         f"signature = ({positive}, {negative}, {zero})",
@@ -1410,11 +1419,14 @@ def _build_projective(linear: dict) -> tuple[str, list[dict], list[dict]] | None
     shapes: list[dict] = []
     notes: list[dict] = []
     if operation == "line_at_infinity":
-        shapes.append(_segment([-2.4, 2.0], [2.4, 2.0], "无穷远线"))
+        # 无穷远点不是有限平面内的一个普通点;这里画成"方向汇聚"的示意图,
+        # 不再把某个有限坐标 (0,2) 标成 ∞,避免数学上误导。
         shapes.append(_segment([-2.4, 0.0], [2.4, 0.0]))
         shapes.append(_segment([-2.4, 1.0], [2.4, 1.0]))
-        shapes.append(_point([0.0, 2.0], "∞"))
-        notes.append(_annotation([0.5, 2.25], "平行线在无穷远点相交"))
+        shapes.append(_segment([2.8, -0.4], [2.8, 1.4], "无穷远线(示意)"))
+        shapes.append(_vector([2.0, 0.5], [2.7, 0.5]))
+        notes.append(_annotation([0.2, 1.35],
+                                 "平行线共享无穷远点 [1:0:0];它不在有限平面内"))
     elif operation == "cross_ratio":
         points = linear["points"]
         shapes.append(_point(points[0], "P1"))

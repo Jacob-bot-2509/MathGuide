@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import base64
 import json
 import math
 import os
 import re
+import sys
 import time
+from array import array
 from dataclasses import dataclass
 
 from starlette.exceptions import HTTPException
@@ -29,8 +32,8 @@ from rate_limit import SlidingWindowLimiter
 PREFIX = "[[MG_DIAGRAM:"
 _MARKER_RE = re.compile(r"\[\[MG_DIAGRAM:(?:type=)?([a-z0-9_]+)\]\]")
 MAX_DIAGRAMS = 2  # 单条回答最多两张图:图解是论据,不是配图册
-_MAX_SURFACE_GRID = 41
-_CURVE_SAMPLES = 400
+_MAX_SURFACE_GRID = 101
+_CURVE_SAMPLES = 1600
 _TYPES = {"tree", "relation", "flow", "geometry2d", "plot2d",
           "geometry3d", "surface3d"}
 
@@ -111,16 +114,18 @@ def validate_geogebra(raw: object) -> dict | None:
         result["title"] = title
     return result
 DIAGRAM_SCHEMA_VERSION = 1
-_SHAPES = {"point", "segment", "line", "vector", "circle", "polygon",
-           "curve", "axis", "plane", "sphere", "box", "cone", "cylinder",
-           "surface"}
+_SHAPES = {"point", "segment", "line", "vector", "circle", "ellipse",
+           "polygon", "curve", "axis", "plane", "sphere", "box", "cone",
+           "cylinder", "surface", "parametric_surface", "implicit_surface",
+           "implicit_curve", "implicit_curve3d", "parametric_curve",
+           "tangent"}
 _MAX_NODES = 40
 _MAX_EDGES = 80
 _MAX_SHAPES = 100
 _MAX_ANNOTATIONS = 40
 _MAX_COORD = 1e4
-MAX_TOTAL_POINTS = 8000
-MAX_TOTAL_BYTES = 200_000
+MAX_TOTAL_POINTS = 30000
+MAX_TOTAL_BYTES = 4_000_000  # 隐式曲面网格带 positions/indices,预算比纯点列高
 _PLANNER_CONCURRENCY = 3
 _PLANNER_BREAKER_THRESHOLD = 5
 _PLANNER_BREAKER_COOLDOWN = 30.0
@@ -733,9 +738,17 @@ def _eval_expr(node: ast.AST, env: dict[str, float]) -> float:
         if isinstance(node.op, ast.Div):
             return left / right
         if isinstance(node.op, ast.Pow):
-            if abs(right) > 8:
+            # 限制的是指数大小与结果量级,不是底数:旧实现把 e^x 在 x>8 时
+            # 误判成非法幂,导致曲线/tangent 采样整段失败。
+            if abs(right) > 64:
                 raise ValueError("pow")
-            return left ** right
+            try:
+                value = left ** right
+            except (OverflowError, ValueError, TypeError):
+                raise ValueError("pow")
+            if isinstance(value, complex) or not math.isfinite(value) or abs(value) > 1e12:
+                raise ValueError("pow")
+            return value
         if isinstance(node.op, ast.Mod):
             return left % right
         raise ValueError("op")
@@ -749,10 +762,87 @@ def _eval_expr(node: ast.AST, env: dict[str, float]) -> float:
     raise ValueError("expr")
 
 
+def _normalize_expr(expr: str) -> str:
+    """把模型常写的 y=x^2 / LaTeX / Unicode 写法收成可安全求值的表达式。
+    只做语法归一,不改变数学含义;无法识别的部分留给 AST 白名单拒绝。"""
+    source = str(expr or "").strip().strip("$").strip()
+    source = re.sub(
+        r"^\s*(?:y|z|f\s*\(\s*x\s*(?:,\s*y\s*)?\))\s*=\s*",
+        "", source, flags=re.IGNORECASE)
+    source = (source.replace("π", "pi").replace("−", "-").replace("–", "-")
+              .replace("×", "*").replace("·", "*").replace("⋅", "*")
+              .replace("²", "^2").replace("³", "^3"))
+    source = source.replace("\\cdot", "*").replace("\\times", "*")
+    source = re.sub(r"\\(left|right|,|!|;|quad|qquad)", "", source)
+    for name in ("arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
+                 "sin", "cos", "tan", "exp", "ln", "log", "sqrt"):
+        source = re.sub(rf"\\{name}\b", name, source)
+    # \frac{A}{B} 可能嵌套:逐层替换,最多 4 层
+    for _ in range(4):
+        replaced = re.sub(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}",
+                          r"((\1)/(\2))", source)
+        if replaced == source:
+            break
+        source = replaced
+    source = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"sqrt(\1)", source)
+    source = re.sub(r"\\mathrm\s*\{([^{}]*)\}", r"\1", source)
+    source = source.replace("{", "(").replace("}", ")").replace("\\", "")
+    # 隐式乘法只收窄到明确无歧义的形态:2x、2(x+1)、)(。
+    source = re.sub(r"(?<=[0-9)])\s*(?=[A-Za-z(])", "*", source)
+    source = source.replace("^", "**")
+    return source.strip()
+
+
+def _compile_xyz_expr(expr: object):
+    """隐式曲面 F(x,y,z)=0:三变量白名单求值。"""
+    if not isinstance(expr, str):
+        return None
+    source = _normalize_expr(expr)
+    if not source or len(source) > 200:
+        return None
+    try:
+        tree = ast.parse(source, mode="eval")
+    except SyntaxError:
+        return None
+    if sum(1 for _ in ast.walk(tree)) > 80:
+        return None
+
+    def run(x: float, y: float, z: float) -> float:
+        value = _eval_expr(tree, {"x": x, "y": y, "z": z})
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError("non-finite")
+        return float(value)
+
+    return run
+
+
+def _compile_uv_expr(expr: object):
+    """参数曲面分量:变量名为 u/v,仍走同一 AST 白名单。"""
+    if not isinstance(expr, str):
+        return None
+    source = _normalize_expr(expr)
+    if not source or len(source) > 200:
+        return None
+    try:
+        tree = ast.parse(source, mode="eval")
+    except SyntaxError:
+        return None
+    if sum(1 for _ in ast.walk(tree)) > 80:
+        return None
+
+    def run(u: float, v: float) -> float:
+        value = _eval_expr(tree, {"u": u, "v": v, "x": u, "y": v})
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError("non-finite")
+        return float(value)
+
+    return run
+
+
 def _compile_expr(expr: object, allow_y: bool = True):
     if not isinstance(expr, str):
         return None
-    source = expr.replace("π", "pi").replace("^", "**").strip()
+    source = _normalize_expr(expr)
     if not source or len(source) > 200:
         return None
     try:
@@ -865,11 +955,371 @@ def _sample_curve(run, x0: float, x1: float, samples: int):
     return points, segments, narrowed
 
 
+_TETRA_EDGES = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+_TETRA_CELLS = (
+    (0, 1, 3, 7), (0, 1, 5, 7), (0, 2, 3, 7),
+    (0, 2, 6, 7), (0, 4, 5, 7), (0, 4, 6, 7),
+)
+
+
+def _encode_mesh(positions: list[float], indices: list[int]) -> dict:
+    """隐式网格二进制传输:Float32 positions + Uint32 indices + base64。"""
+    pos = array("f", (round(float(value), 5) for value in positions))
+    index_type = "u16" if (not indices or max(indices) < 65536) else "u32"
+    idx = array("H" if index_type == "u16" else "I",
+                (int(value) for value in indices))
+    if sys.byteorder != "little":
+        pos.byteswap()
+        idx.byteswap()
+    return {
+        "positions_b64": base64.b64encode(pos.tobytes()).decode("ascii"),
+        "indices_b64": base64.b64encode(idx.tobytes()).decode("ascii"),
+        "vertexCount": len(positions) // 3,
+        "indexCount": len(indices),
+        "indexType": index_type,
+        "encoding": f"f32le/{index_type}le",
+    }
+
+
+def _compact_meshes(shapes: list[dict]) -> None:
+    """把内部 positions/indices 压缩成二进制字段,减少 SSE 体积。"""
+    for shape in shapes:
+        if (shape.get("kind") == "implicit_surface"
+                and isinstance(shape.get("positions"), list)
+                and isinstance(shape.get("indices"), list)):
+            shape.update(_encode_mesh(shape["positions"], shape["indices"]))
+            shape.pop("positions", None)
+            shape.pop("indices", None)
+
+
+def _marching_squares(values: list[float], origin: tuple[float, float],
+                      step: tuple[float, float], nx: int, ny: int
+                      ) -> list[list[list[float]]]:
+    """隐式曲线 F(x,y)=0 的 marching squares;输出线段列表。"""
+    segments: list[list[list[float]]] = []
+
+    def point(i: int, j: int) -> tuple[float, float]:
+        return origin[0] + i * step[0], origin[1] + j * step[1]
+
+    def cross(a: tuple[int, int], b: tuple[int, int]) -> list[float]:
+        ia = a[1] * nx + a[0]
+        ib = b[1] * nx + b[0]
+        va, vb = values[ia], values[ib]
+        if abs(va - vb) < 1e-12:
+            return [*point(*a)]
+        t = va / (va - vb)
+        pa, pb = point(*a), point(*b)
+        return [pa[0] + t * (pb[0] - pa[0]),
+                pa[1] + t * (pb[1] - pa[1])]
+
+    for i in range(nx - 1):
+        for j in range(ny - 1):
+            corners = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)]
+            states = [values[j * nx + i] <= 0 for i, j in corners]
+            case = sum(1 << index for index, state in enumerate(states) if state)
+            if case in (0, 15):
+                continue
+            e0 = lambda: cross(corners[0], corners[1])  # noqa: E731
+            e1 = lambda: cross(corners[1], corners[2])  # noqa: E731
+            e2 = lambda: cross(corners[2], corners[3])  # noqa: E731
+            e3 = lambda: cross(corners[3], corners[0])  # noqa: E731
+            if case == 5 or case == 10:
+                center = (values[j * nx + i] + values[j * nx + i + 1]
+                          + values[(j + 1) * nx + i]
+                          + values[(j + 1) * nx + i + 1]) / 4
+                if (center <= 0) == (case == 5):
+                    segments.extend([[e3(), e2()], [e0(), e1()]])
+                else:
+                    segments.extend([[e3(), e0()], [e1(), e2()]])
+                continue
+            pairs = {
+                1: (e3, e0), 2: (e0, e1), 3: (e3, e1), 4: (e1, e2),
+                6: (e0, e2), 7: (e2, e3), 8: (e2, e3), 9: (e0, e2),
+                11: (e1, e2), 12: (e1, e3), 13: (e0, e1), 14: (e3, e0),
+            }[case]
+            segments.append([pairs[0](), pairs[1]()])
+    return segments
+
+
+def _marching_tetra(values: list[float], origin: tuple[float, float, float],
+                    step: tuple[float, float, float], shape: str
+                    ) -> tuple[list[float], list[int]]:
+    """隐式曲面 F=0 的 marching tetrahedra;输出扁平 positions + indices。"""
+    nx, ny, nz = shape
+    positions: list[float] = []
+    indices: list[int] = []
+    vertex_cache: dict[tuple[float, float, float], int] = {}
+
+    def add_vertex(point: tuple[float, float, float]) -> int:
+        key = (round(point[0], 5), round(point[1], 5), round(point[2], 5))
+        cached = vertex_cache.get(key)
+        if cached is not None:
+            return cached
+        if len(positions) >= 300000:
+            return -1
+        index = len(positions) // 3
+        positions.extend(key)
+        vertex_cache[key] = index
+        return index
+
+    def vertex(i: int, j: int, k: int) -> tuple[float, float, float]:
+        return (origin[0] + i * step[0],
+                origin[1] + j * step[1],
+                origin[2] + k * step[2])
+
+    def inside(index: int) -> bool:
+        return values[index] <= 0.0
+
+    for i in range(nx - 1):
+        for j in range(ny - 1):
+            for k in range(nz - 1):
+                corners = [
+                    (i, j, k), (i + 1, j, k), (i, j + 1, k), (i + 1, j + 1, k),
+                    (i, j, k + 1), (i + 1, j, k + 1), (i, j + 1, k + 1),
+                    (i + 1, j + 1, k + 1),
+                ]
+                corner_index = [
+                    (cell[0]) * ny * nz + (cell[1]) * nz + (cell[2])
+                    for cell in corners
+                ]
+                for tetra in _TETRA_CELLS:
+                    ids = [corner_index[index] for index in tetra]
+                    states = [inside(item) for item in ids]
+                    count = sum(states)
+                    if count in (0, 4):
+                        continue
+
+                    def cross(index_a: int, index_b: int) -> int:
+                        va, vb = values[index_a], values[index_b]
+                        if abs(va - vb) < 1e-12:
+                            return -1
+                        t = va / (va - vb)
+                        ca = corners[tetra[ids.index(index_a)]]
+                        cb = corners[tetra[ids.index(index_b)]]
+                        point = vertex(
+                            ca[0] + t * (cb[0] - ca[0]),
+                            ca[1] + t * (cb[1] - ca[1]),
+                            ca[2] + t * (cb[2] - ca[2]),
+                        )
+                        return add_vertex(point)
+
+                    inside_ids = [ids[index] for index in range(4) if states[index]]
+                    outside_ids = [ids[index] for index in range(4) if not states[index]]
+                    if count == 1:
+                        a = inside_ids[0]
+                        points = [cross(a, b) for b in outside_ids]
+                        if min(points) >= 0:
+                            indices.extend([points[0], points[1], points[2]])
+                    elif count == 3:
+                        a = outside_ids[0]
+                        points = [cross(a, b) for b in inside_ids]
+                        if min(points) >= 0:
+                            indices.extend([points[0], points[2], points[1]])
+                    else:
+                        a, b = inside_ids
+                        c, d = outside_ids
+                        points = [cross(a, c), cross(a, d),
+                                  cross(b, d), cross(b, c)]
+                        if min(points) >= 0:
+                            indices.extend([points[0], points[1], points[2],
+                                            points[0], points[2], points[3]])
+    return positions, indices
+
+
 def _sample_shape(shape: dict) -> bool:
     """服务端按表达式采样曲面/曲线,避免模型手写大量坐标出错。
     返回 False 表示这个形状没有可画数据,应丢弃。"""
     kind = shape.get("kind")
-    if kind not in ("surface", "curve"):
+    if kind not in ("surface", "parametric_surface", "implicit_surface",
+                    "implicit_curve", "implicit_curve3d", "parametric_curve",
+                    "curve"):
+        return True
+    if kind == "implicit_curve3d":
+        frun = _compile_xyz_expr(shape.get("expr"))
+        grun = _compile_xyz_expr(shape.get("expr2"))
+        raw_domain = shape.get("domain")
+        if (frun is None or grun is None
+                or not isinstance(raw_domain, (list, tuple))
+                or len(raw_domain) != 6):
+            return False
+        parsed_domain = [_num(item) for item in raw_domain]
+        if any(item is None for item in parsed_domain):
+            return False
+        x0, x1, y0, y1, z0, z1 = (float(item) for item in parsed_domain)
+        if not (x0 < x1 and y0 < y1 and z0 < z1):
+            return False
+        resolution = _int(shape.get("resolution"), 24, 8, 76)
+        step = ((x1 - x0) / (resolution - 1),
+                (y1 - y0) / (resolution - 1),
+                (z1 - z0) / (resolution - 1))
+        values: list[float] = []
+        try:
+            for i in range(resolution):
+                x = x0 + i * step[0]
+                for j in range(resolution):
+                    y = y0 + j * step[1]
+                    for k in range(resolution):
+                        z = z0 + k * step[2]
+                        values.append(frun(x, y, z))
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            return False
+        positions, indices = _marching_tetra(
+            values, (x0, y0, z0), step, (resolution, resolution, resolution))
+        if not indices:
+            return False
+        segments: list[list[list[float]]] = []
+        for triangle in range(0, len(indices) - 2, 3):
+            try:
+                points = [
+                    (positions[indices[triangle + offset] * 3],
+                     positions[indices[triangle + offset] * 3 + 1],
+                     positions[indices[triangle + offset] * 3 + 2])
+                    for offset in range(3)
+                ]
+                gvals = [grun(*point) for point in points]
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError,
+                    IndexError):
+                continue
+            if all(value > 0 for value in gvals) or all(value < 0 for value in gvals):
+                continue
+            intersections = []
+            for a, b in ((0, 1), (1, 2), (2, 0)):
+                ga, gb = gvals[a], gvals[b]
+                if abs(ga) < 1e-9:
+                    intersections.append(points[a])
+                if ga * gb < 0:
+                    t = ga / (ga - gb)
+                    intersections.append(tuple(
+                        points[a][axis] + t * (points[b][axis] - points[a][axis])
+                        for axis in range(3)))
+            unique = []
+            for point in intersections:
+                if not any(sum((point[index] - other[index]) ** 2
+                               for index in range(3)) < 1e-12 for other in unique):
+                    unique.append(point)
+            if len(unique) >= 2:
+                segments.append([list(unique[0]), list(unique[1])])
+        if not segments:
+            return False
+        shape["segments"] = segments
+        shape["points"] = [point for segment in segments for point in segment]
+        shape["resolution"] = resolution
+        return True
+    if kind == "parametric_curve":
+        xrun = _compile_uv_expr(shape.get("xexpr"))
+        yrun = _compile_uv_expr(shape.get("yexpr"))
+        zrun = _compile_uv_expr(shape.get("zexpr"))
+        domain = _domain(shape)
+        if xrun is None or yrun is None or domain is None:
+            return False
+        u0, u1 = domain[0], domain[1]
+        if not u0 < u1:
+            return False
+        samples = _int(shape.get("samples"), 240, 8, 2400)
+        points: list[list[float]] = []
+        try:
+            for index in range(samples):
+                u = u0 + (u1 - u0) * index / (samples - 1)
+                point = [round(float(xrun(u, 0.0)), 6),
+                         round(float(yrun(u, 0.0)), 6)]
+                if zrun is not None:
+                    point.append(round(float(zrun(u, 0.0)), 6))
+                points.append(point)
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            return False
+        shape["points"] = points
+        return True
+    if kind == "implicit_curve":
+        run = _compile_expr(shape.get("expr"), allow_y=True)
+        domain = _domain(shape)
+        if run is None or domain is None:
+            return False
+        x0, x1, y0, y1 = domain
+        if not (x0 < x1 and y0 < y1):
+            return False
+        resolution = _int(shape.get("resolution"), 100, 20, 240)
+        step_x = (x1 - x0) / (resolution - 1)
+        step_y = (y1 - y0) / (resolution - 1)
+        values: list[float] = []
+        try:
+            for j in range(resolution):
+                y = y0 + j * step_y
+                for i in range(resolution):
+                    x = x0 + i * step_x
+                    values.append(run(x, y))
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            return False
+        segments = _marching_squares(
+            values, (x0, y0), (step_x, step_y), resolution, resolution)
+        if not segments:
+            return False
+        shape["segments"] = segments
+        shape["points"] = [point for segment in segments for point in segment]
+        shape["resolution"] = resolution
+        return True
+    if kind == "implicit_surface":
+        run = _compile_xyz_expr(shape.get("expr"))
+        raw_domain = shape.get("domain")
+        if run is None or not (isinstance(raw_domain, (list, tuple))
+                               and len(raw_domain) == 6):
+            return False
+        parsed_domain = [_num(item) for item in raw_domain]
+        if any(item is None for item in parsed_domain):
+            return False
+        x0, x1, y0, y1, z0, z1 = (float(item) for item in parsed_domain)
+        if not (x0 < x1 and y0 < y1 and z0 < z1):
+            return False
+        resolution = _int(shape.get("resolution"), 24, 8, 76)
+        step = ((x1 - x0) / (resolution - 1),
+                (y1 - y0) / (resolution - 1),
+                (z1 - z0) / (resolution - 1))
+        values: list[float] = []
+        try:
+            for i in range(resolution):
+                x = x0 + i * step[0]
+                for j in range(resolution):
+                    y = y0 + j * step[1]
+                    for k in range(resolution):
+                        z = z0 + k * step[2]
+                        values.append(run(x, y, z))
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            return False
+        positions, indices = _marching_tetra(
+            values, (x0, y0, z0), step, (resolution, resolution, resolution))
+        if not indices:
+            return False
+        shape["positions"] = positions
+        shape["indices"] = indices
+        shape["resolution"] = resolution
+        return True
+    if kind == "parametric_surface":
+        xrun = _compile_uv_expr(shape.get("xexpr"))
+        yrun = _compile_uv_expr(shape.get("yexpr"))
+        zrun = _compile_uv_expr(shape.get("zexpr"))
+        domain = _domain(shape)
+        if xrun is None or yrun is None or zrun is None or domain is None:
+            return False
+        u0, u1, v0, v1 = domain
+        if not (u0 < u1 and v0 < v1):
+            return False
+        rows = _int(shape.get("rows"), 25, 2, _MAX_SURFACE_GRID)
+        cols = _int(shape.get("cols"), 25, 2, _MAX_SURFACE_GRID)
+        sampled: list[list[float]] = []
+        try:
+            for i in range(rows):
+                u = u0 + (u1 - u0) * i / (rows - 1)
+                for j in range(cols):
+                    v = v0 + (v1 - v0) * j / (cols - 1)
+                    sampled.append([
+                        round(float(xrun(u, v)), 6),
+                        round(float(yrun(u, v)), 6),
+                        round(float(zrun(u, v)), 6),
+                    ])
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            return False
+        shape["points"] = sampled
+        shape["rows"] = rows
+        shape["cols"] = cols
         return True
     points = shape.get("points")
     if isinstance(points, (int, float)):
@@ -904,7 +1354,7 @@ def _sample_shape(shape: dict) -> bool:
         shape["rows"] = rows
         shape["cols"] = cols
         return True
-    samples = _int(shape.get("samples"), _CURVE_SAMPLES, 8, 400)
+    samples = _int(shape.get("samples"), _CURVE_SAMPLES, 8, 3000)
     points, segments, narrowed = _sample_curve(run, x0, x1, samples)
     if len(points) < 2:
         return False
@@ -987,26 +1437,98 @@ def _refine_gradient(shapes: list[dict]) -> None:
 
 
 def _refine_normal_from_solid(shapes: list[dict], normal_re: re.Pattern) -> None:
-    """没有 z=f(x,y) 曲面时,用平面法向量/球面径向修正“法向量”箭头。"""
-    plane = next((
+    """没有 z=f(x,y) 曲面时,用平面/球面/圆柱的几何法向修正“法向量”箭头。
+
+    同时把箭头起点投到对应几何体表面:起点不在球面/平面上时,方向对也算错图。
+    """
+    planes = [
         shape for shape in shapes
         if shape.get("kind") == "plane"
         and isinstance(shape.get("normal"), list) and len(shape["normal"]) >= 3
-    ), None)
-    sphere = next((
+    ]
+    spheres = [
         shape for shape in shapes
         if shape.get("kind") == "sphere"
         and all(isinstance(shape.get(key), (int, float))
                 for key in ("x", "y", "z"))
-    ), None)
-    cylinder = next((
+        and float(shape.get("r", shape.get("radius", 0)) or 0) > 1e-9
+    ]
+    cylinders = [
         shape for shape in shapes
         if shape.get("kind") == "cylinder"
         and all(isinstance(shape.get(key), (int, float))
                 for key in ("x", "y", "z"))
-    ), None)
-    if plane is None and sphere is None and cylinder is None:
+        and float(shape.get("r", shape.get("radius", 0)) or 0) > 1e-9
+    ]
+    solids = planes + spheres + cylinders
+    if not solids:
         return
+
+    def normal_at(solid: dict, x0: float, y0: float, z0: float):
+        kind = solid.get("kind")
+        if kind == "plane":
+            nx, ny, nz = (float(solid["normal"][0]), float(solid["normal"][1]),
+                          float(solid["normal"][2]))
+            norm = math.sqrt(nx * nx + ny * ny + nz * nz)
+            if norm < 1e-9:
+                return None
+            nx, ny, nz = nx / norm, ny / norm, nz / norm
+            # 有显式中心时把起点滑到平面上;没有中心时只改方向。
+            if all(isinstance(solid.get(key), (int, float)) for key in ("x", "y", "z")):
+                cx, cy, cz = float(solid["x"]), float(solid["y"]), float(solid["z"])
+                distance = (x0 - cx) * nx + (y0 - cy) * ny + (z0 - cz) * nz
+                return (nx, ny, nz), (x0 - distance * nx,
+                                      y0 - distance * ny,
+                                      z0 - distance * nz)
+            return (nx, ny, nz), (x0, y0, z0)
+        if kind == "sphere":
+            cx, cy, cz = float(solid["x"]), float(solid["y"]), float(solid["z"])
+            radius = float(solid.get("r", solid.get("radius", 0)))
+            rx, ry, rz = x0 - cx, y0 - cy, z0 - cz
+            norm = math.sqrt(rx * rx + ry * ry + rz * rz)
+            if norm < 1e-9:
+                return None
+            nx, ny, nz = rx / norm, ry / norm, rz / norm
+            return (nx, ny, nz), (cx + nx * radius, cy + ny * radius, cz + nz * radius)
+        # 竖直圆柱:侧面法向径向,上下底面法向 ±z;起点投到最近表面。
+        cx, cy, cz = float(solid["x"]), float(solid["y"]), float(solid["z"])
+        radius = float(solid.get("r", solid.get("radius", 0)))
+        height = float(solid.get("height", 1.5) or 1.5)
+        top, bottom = cz + height / 2, cz - height / 2
+        cap_tol = max(0.05, height * 0.08)
+        if abs(z0 - top) <= cap_tol:
+            return (0.0, 0.0, 1.0), (x0, y0, top)
+        if abs(z0 - bottom) <= cap_tol:
+            return (0.0, 0.0, -1.0), (x0, y0, bottom)
+        rx, ry = x0 - cx, y0 - cy
+        norm = math.hypot(rx, ry)
+        if norm < 1e-9:
+            return None
+        nx, ny = rx / norm, ry / norm
+        clamped_z = min(max(z0, bottom), top)
+        return (nx, ny, 0.0), (cx + nx * radius, cy + ny * radius, clamped_z)
+
+    def solid_distance(solid: dict, x0: float, y0: float, z0: float) -> float:
+        kind = solid.get("kind")
+        if kind == "plane":
+            nx, ny, nz = (float(solid["normal"][0]), float(solid["normal"][1]),
+                          float(solid["normal"][2]))
+            norm = math.sqrt(nx * nx + ny * ny + nz * nz)
+            if norm < 1e-9 or not all(isinstance(solid.get(key), (int, float))
+                                      for key in ("x", "y", "z")):
+                return 0.0
+            cx, cy, cz = float(solid["x"]), float(solid["y"]), float(solid["z"])
+            return abs(((x0 - cx) * nx + (y0 - cy) * ny + (z0 - cz) * nz) / norm)
+        cx, cy, cz = float(solid["x"]), float(solid["y"]), float(solid["z"])
+        if kind == "sphere":
+            radius = float(solid.get("r", solid.get("radius", 0)))
+            return abs(math.sqrt((x0 - cx) ** 2 + (y0 - cy) ** 2 + (z0 - cz) ** 2) - radius)
+        radius = float(solid.get("r", solid.get("radius", 0)))
+        height = float(solid.get("height", 1.5) or 1.5)
+        top, bottom = cz + height / 2, cz - height / 2
+        return min(abs(math.hypot(x0 - cx, y0 - cy) - radius),
+                   abs(z0 - top), abs(z0 - bottom))
+
     for shape in shapes:
         if shape.get("kind") != "vector":
             continue
@@ -1020,35 +1542,335 @@ def _refine_normal_from_solid(shapes: list[dict], normal_re: re.Pattern) -> None
             continue
         try:
             x0, y0, z0 = float(start[0]), float(start[1]), float(start[2])
-            if plane is not None:
-                nx, ny, nz = (float(plane["normal"][0]), float(plane["normal"][1]),
-                              float(plane["normal"][2]))
-            elif sphere is not None:
-                nx, ny, nz = (x0 - float(sphere["x"]), y0 - float(sphere["y"]),
-                              z0 - float(sphere["z"]))
-            else:
-                # 竖直圆柱:法向在 xy 平面内、从轴线指向该点
-                nx, ny, nz = (x0 - float(cylinder["x"]),
-                              y0 - float(cylinder["y"]), 0.0)
-            dx, dy, dz = (float(end[0]) - x0, float(end[1]) - y0,
-                          float(end[2]) - z0)
-        except (TypeError, ValueError, IndexError):
+            length = math.sqrt((float(end[0]) - x0) ** 2
+                               + (float(end[1]) - y0) ** 2
+                               + (float(end[2]) - z0) ** 2)
+        except (TypeError, ValueError):
             continue
+        solid = min(solids, key=lambda item: solid_distance(item, x0, y0, z0))
+        normal = normal_at(solid, x0, y0, z0)
+        if normal is None:
+            continue
+        (nx, ny, nz), (px, py, pz) = normal
+        try:
+            dx, dy, dz = float(end[0]) - x0, float(end[1]) - y0, float(end[2]) - z0
+        except (TypeError, ValueError):
+            continue
+        dot = dx * nx + dy * ny + dz * nz
+        if dot < -1e-6 or (abs(dot) <= 1e-6 and nz < 0):
+            nx, ny, nz = -nx, -ny, -nz
+        if length < 1e-6:
+            length = 1.0
+        shape["from"] = [round(px, 6), round(py, 6), round(pz, 6)]
+        shape["to"] = [
+            round(px + nx * length, 6),
+            round(py + ny * length, 6),
+            round(pz + nz * length, 6),
+        ]
+
+
+def _refine_param_surface_normal(shapes: list[dict], normal_re: re.Pattern) -> bool:
+    """参数曲面法向:用相邻采样点的 r_u × r_v 计算,不采用模型手估方向。"""
+    surface = next((
+        shape for shape in shapes
+        if shape.get("kind") == "parametric_surface"
+        and isinstance(shape.get("points"), list)
+        and shape.get("rows") and shape.get("cols")
+    ), None)
+    if surface is None:
+        return False
+    rows, cols = int(surface["rows"]), int(surface["cols"])
+    points = [
+        (float(point[0]), float(point[1]), float(point[2]))
+        for point in surface["points"]
+        if isinstance(point, list) and len(point) >= 3
+    ]
+    if len(points) < rows * cols:
+        return False
+    field = _compile_xyz_expr(surface.get("fieldexpr"))
+    changed = False
+    plane = next((
+        shape for shape in shapes
+        if shape.get("kind") == "plane"
+        and re.search(r"切平面|tangent\s*plane",
+                      str(shape.get("label") or ""), re.IGNORECASE)
+        and all(isinstance(shape.get(key), (int, float))
+                for key in ("x", "y", "z"))
+    ), None)
+    if plane is not None:
+        try:
+            px, py, pz = float(plane["x"]), float(plane["y"]), float(plane["z"])
+        except (TypeError, ValueError):
+            px = py = pz = None
+        if px is not None:
+            index = min(range(rows * cols), key=lambda item: (
+                (points[item][0] - px) ** 2 + (points[item][1] - py) ** 2
+                + (points[item][2] - pz) ** 2))
+            row, col = divmod(index, cols)
+            row0, row1 = max(row - 1, 0), min(row + 1, rows - 1)
+            col0, col1 = max(col - 1, 0), min(col + 1, cols - 1)
+            if row0 != row1 and col0 != col1:
+                anchor = points[index]
+                du = tuple(points[row1 * cols + col][axis]
+                           - points[row0 * cols + col][axis] for axis in range(3))
+                dv = tuple(points[row * cols + col1][axis]
+                           - points[row * cols + col0][axis] for axis in range(3))
+                nx = du[1] * dv[2] - du[2] * dv[1]
+                ny = du[2] * dv[0] - du[0] * dv[2]
+                nz = du[0] * dv[1] - du[1] * dv[0]
+                norm = math.sqrt(nx * nx + ny * ny + nz * nz)
+                if norm >= 1e-9:
+                    plane["x"], plane["y"], plane["z"] = anchor
+                    plane["normal"] = [round(nx / norm, 6),
+                                       round(ny / norm, 6),
+                                       round(nz / norm, 6)]
+                    changed = True
+    for vector in shapes:
+        if vector.get("kind") != "vector":
+            continue
+        label = str(vector.get("label") or "")
+        # 参数曲面上的标量场梯度:先求 ∇f,再投到切平面(去掉法向分量)。
+        if field is not None and re.search(r"梯度|gradient", label, re.IGNORECASE):
+            start, end = vector.get("from"), vector.get("to")
+            if not (isinstance(start, list) and len(start) >= 3
+                    and isinstance(end, list) and len(end) >= 3):
+                continue
+            try:
+                x0, y0, z0 = (float(start[0]), float(start[1]), float(start[2]))
+            except (TypeError, ValueError):
+                continue
+            index = min(range(rows * cols), key=lambda item: (
+                (points[item][0] - x0) ** 2 + (points[item][1] - y0) ** 2
+                + (points[item][2] - z0) ** 2))
+            row, col = divmod(index, cols)
+            row0, row1 = max(row - 1, 0), min(row + 1, rows - 1)
+            col0, col1 = max(col - 1, 0), min(col + 1, cols - 1)
+            if row0 == row1 or col0 == col1:
+                continue
+            anchor = points[index]
+            du = tuple(points[row1 * cols + col][axis]
+                       - points[row0 * cols + col][axis] for axis in range(3))
+            dv = tuple(points[row * cols + col1][axis]
+                       - points[row * cols + col0][axis] for axis in range(3))
+            nx = du[1] * dv[2] - du[2] * dv[1]
+            ny = du[2] * dv[0] - du[0] * dv[2]
+            nz = du[0] * dv[1] - du[1] * dv[0]
+            nnorm = math.sqrt(nx * nx + ny * ny + nz * nz)
+            if nnorm < 1e-9:
+                continue
+            nx, ny, nz = nx / nnorm, ny / nnorm, nz / nnorm
+            h = 1e-4 * max(1.0, abs(anchor[0]), abs(anchor[1]), abs(anchor[2]))
+            try:
+                gx = (field(anchor[0] + h, anchor[1], anchor[2])
+                      - field(anchor[0] - h, anchor[1], anchor[2])) / (2 * h)
+                gy = (field(anchor[0], anchor[1] + h, anchor[2])
+                      - field(anchor[0], anchor[1] - h, anchor[2])) / (2 * h)
+                gz = (field(anchor[0], anchor[1], anchor[2] + h)
+                      - field(anchor[0], anchor[1], anchor[2] - h)) / (2 * h)
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+                continue
+            along = gx * nx + gy * ny + gz * nz
+            sx, sy, sz = gx - along * nx, gy - along * ny, gz - along * nz
+            snorm = math.sqrt(sx * sx + sy * sy + sz * sz)
+            if snorm < 1e-9:
+                continue
+            sx, sy, sz = sx / snorm, sy / snorm, sz / snorm
+            try:
+                length = math.sqrt((float(end[0]) - x0) ** 2
+                                   + (float(end[1]) - y0) ** 2
+                                   + (float(end[2]) - z0) ** 2)
+            except (TypeError, ValueError):
+                length = 1.0
+            if length < 1e-6:
+                length = 1.0
+            if sx * (float(end[0]) - x0) + sy * (float(end[1]) - y0) + sz * (float(end[2]) - z0) < 0:
+                sx, sy, sz = -sx, -sy, -sz
+            vector["from"] = [round(anchor[0], 6), round(anchor[1], 6),
+                              round(anchor[2], 6)]
+            vector["to"] = [
+                round(anchor[0] + sx * length, 6),
+                round(anchor[1] + sy * length, 6),
+                round(anchor[2] + sz * length, 6),
+            ]
+            changed = True
+            continue
+        if not normal_re.search(label) and "∇F" not in label:
+            continue
+        start, end = vector.get("from"), vector.get("to")
+        if not (isinstance(start, list) and len(start) >= 3
+                and isinstance(end, list) and len(end) >= 3):
+            continue
+        try:
+            x0, y0, z0 = float(start[0]), float(start[1]), float(start[2])
+        except (TypeError, ValueError):
+            continue
+        index = min(range(rows * cols), key=lambda item: (
+            (points[item][0] - x0) ** 2 + (points[item][1] - y0) ** 2
+            + (points[item][2] - z0) ** 2))
+        row, col = divmod(index, cols)
+        row0, row1 = max(row - 1, 0), min(row + 1, rows - 1)
+        col0, col1 = max(col - 1, 0), min(col + 1, cols - 1)
+        if row0 == row1 or col0 == col1:
+            continue
+        anchor = points[index]
+        # 边界点用单侧差分,不能因为落在网格第一行/列就放弃。
+        du = tuple(points[row1 * cols + col][axis]
+                   - points[row0 * cols + col][axis] for axis in range(3))
+        dv = tuple(points[row * cols + col1][axis]
+                   - points[row * cols + col0][axis] for axis in range(3))
+        nx = du[1] * dv[2] - du[2] * dv[1]
+        ny = du[2] * dv[0] - du[0] * dv[2]
+        nz = du[0] * dv[1] - du[1] * dv[0]
         norm = math.sqrt(nx * nx + ny * ny + nz * nz)
-        if not math.isfinite(norm) or norm < 1e-9:
+        if norm < 1e-9:
             continue
         nx, ny, nz = nx / norm, ny / norm, nz / norm
+        try:
+            dx, dy, dz = (float(end[0]) - x0, float(end[1]) - y0,
+                          float(end[2]) - z0)
+        except (TypeError, ValueError):
+            continue
         dot = dx * nx + dy * ny + dz * nz
         if dot < -1e-6 or (abs(dot) <= 1e-6 and nz < 0):
             nx, ny, nz = -nx, -ny, -nz
         length = math.sqrt(dx * dx + dy * dy + dz * dz)
         if length < 1e-6:
             length = 1.0
-        shape["to"] = [
-            round(x0 + nx * length, 6),
-            round(y0 + ny * length, 6),
-            round(z0 + nz * length, 6),
+        vector["from"] = [round(anchor[0], 6), round(anchor[1], 6),
+                          round(anchor[2], 6)]
+        vector["to"] = [
+            round(anchor[0] + nx * length, 6),
+            round(anchor[1] + ny * length, 6),
+            round(anchor[2] + nz * length, 6),
         ]
+        changed = True
+    return changed
+
+
+def _refine_implicit_surface_normal(shapes: list[dict], normal_re: re.Pattern) -> bool:
+    """隐式曲面 F=0 的法向 = ∇F;箭头起点投到最近的网格顶点。"""
+    surface = next((
+        shape for shape in shapes
+        if shape.get("kind") == "implicit_surface" and shape.get("expr")
+        and isinstance(shape.get("positions"), list)
+    ), None)
+    if surface is None:
+        return False
+    run = _compile_xyz_expr(surface.get("expr"))
+    if run is None:
+        return False
+    flat = [float(value) for value in surface["positions"]]
+    vertices = [
+        (flat[index], flat[index + 1], flat[index + 2])
+        for index in range(0, len(flat) - 2, 3)
+    ]
+    if not vertices:
+        return False
+    changed = False
+
+    def value_gradient(point) -> tuple[float, tuple[float, float, float]] | None:
+        x, y, z = point
+        h = 1e-4 * max(1.0, abs(x), abs(y), abs(z))
+        try:
+            value = run(x, y, z)
+            gx = (run(x + h, y, z) - run(x - h, y, z)) / (2 * h)
+            gy = (run(x, y + h, z) - run(x, y - h, z)) / (2 * h)
+            gz = (run(x, y, z + h) - run(x, y, z - h)) / (2 * h)
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            return None
+        if not all(math.isfinite(item) for item in (value, gx, gy, gz)):
+            return None
+        return float(value), (gx, gy, gz)
+
+    def project(point):
+        """牛顿步把起点拉回 F=0,避免网格被截断时投到错误一侧。"""
+        current = point
+        for _ in range(3):
+            result = value_gradient(current)
+            if result is None:
+                break
+            value, gradient = result
+            denominator = sum(item * item for item in gradient)
+            if denominator < 1e-12:
+                break
+            current = tuple(
+                current[index] - value * gradient[index] / denominator
+                for index in range(3))
+            if abs(value) < 1e-7:
+                break
+        return current
+
+    def unit_normal(point):
+        result = value_gradient(point)
+        if result is None:
+            return None
+        _value, gradient = result
+        norm = math.sqrt(sum(item * item for item in gradient))
+        if norm < 1e-9:
+            return None
+        return tuple(item / norm for item in gradient)
+
+    plane = next((
+        shape for shape in shapes
+        if shape.get("kind") == "plane"
+        and re.search(r"切平面|tangent\s*plane",
+                      str(shape.get("label") or ""), re.IGNORECASE)
+        and all(isinstance(shape.get(key), (int, float))
+                for key in ("x", "y", "z"))
+    ), None)
+    if plane is not None:
+        anchor = project((float(plane["x"]), float(plane["y"]),
+                          float(plane["z"])))
+        normal = unit_normal(anchor)
+        if normal is None:
+            anchor = min(vertices, key=lambda item: (
+                (item[0] - float(plane["x"])) ** 2
+                + (item[1] - float(plane["y"])) ** 2
+                + (item[2] - float(plane["z"])) ** 2))
+            normal = unit_normal(anchor)
+        if normal is not None:
+            plane["x"], plane["y"], plane["z"] = anchor
+            plane["normal"] = [round(value, 6) for value in normal]
+            changed = True
+
+    for vector in shapes:
+        if vector.get("kind") != "vector":
+            continue
+        label = str(vector.get("label") or "")
+        if not normal_re.search(label) and "∇F" not in label:
+            continue
+        start, end = vector.get("from"), vector.get("to")
+        if not (isinstance(start, list) and len(start) >= 3
+                and isinstance(end, list) and len(end) >= 3):
+            continue
+        try:
+            probe = (float(start[0]), float(start[1]), float(start[2]))
+            end_point = (float(end[0]), float(end[1]), float(end[2]))
+        except (TypeError, ValueError):
+            continue
+        anchor = project(probe)
+        normal = unit_normal(anchor)
+        if normal is None:
+            anchor = min(vertices, key=lambda item: sum(
+                (item[index] - probe[index]) ** 2 for index in range(3)))
+            normal = unit_normal(anchor)
+        if normal is None:
+            continue
+        direction = tuple(end_point[index] - probe[index] for index in range(3))
+        length = math.sqrt(sum(value * value for value in direction))
+        dot = sum(direction[index] * normal[index] for index in range(3))
+        if dot < -1e-6:
+            normal = tuple(-value for value in normal)
+        if length < 1e-6:
+            length = 1.0
+        vector["from"] = [round(anchor[0], 6), round(anchor[1], 6),
+                          round(anchor[2], 6)]
+        vector["to"] = [
+            round(anchor[index] + normal[index] * length, 6)
+            for index in range(3)
+        ]
+        changed = True
+    return changed
 
 
 def _refine_surface_normal(shapes: list[dict]) -> None:
@@ -1073,6 +1895,14 @@ def _refine_surface_normal(shapes: list[dict]) -> None:
         r"upward|downward|outward|inward|\bnormal\b|^n(?:\s|=|$)",
         re.IGNORECASE)
     if surface is None:
+        if _refine_param_surface_normal(shapes, normal_re):
+            return
+        if any(shape.get("kind") == "parametric_surface" for shape in shapes):
+            # 参数曲面存在但法向无法计算时,不要拿无关的平面/球面去冒充。
+            return
+        if any(shape.get("kind") == "implicit_surface" for shape in shapes):
+            _refine_implicit_surface_normal(shapes, normal_re)
+            return
         _refine_normal_from_solid(shapes, normal_re)
         return
     expr = str(surface.get("expr") or "").strip()
@@ -1081,6 +1911,27 @@ def _refine_surface_normal(shapes: list[dict]) -> None:
     if run is None:
         _refine_normal_from_solid(shapes, normal_re)
         return
+    # 切平面即使没有法向量箭头也要按曲面偏导修正法向。
+    plane = next((
+        shape for shape in shapes
+        if shape.get("kind") == "plane"
+        and re.search(r"切平面|tangent\s*plane",
+                      str(shape.get("label") or ""), re.IGNORECASE)
+        and all(isinstance(shape.get(key), (int, float))
+                for key in ("x", "y", "z"))
+    ), None)
+    if plane is not None:
+        try:
+            px, py = float(plane["x"]), float(plane["y"])
+            h = 1e-4 * max(1.0, abs(px), abs(py))
+            fx = (run(px + h, py) - run(px - h, py)) / (2 * h)
+            fy = (run(px, py + h) - run(px, py - h)) / (2 * h)
+            pz = run(px, py)
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            fx = fy = pz = None
+        if fx is not None and all(math.isfinite(value) for value in (fx, fy, pz)):
+            plane["z"] = round(float(pz), 6)
+            plane["normal"] = [round(-float(fx), 6), round(-float(fy), 6), 1.0]
     for shape in shapes:
         if shape.get("kind") != "vector":
             continue
@@ -1126,10 +1977,588 @@ def _refine_surface_normal(shapes: list[dict]) -> None:
         ]
 
 
+def _refine_ellipse3d_tangents(shapes: list[dict]) -> None:
+    """3D 椭圆切线:在椭圆平面内按参数点求切向,法向决定平面。"""
+    ellipses = [
+        shape for shape in shapes
+        if shape.get("kind") == "ellipse"
+        and all(isinstance(shape.get(key), (int, float))
+                for key in ("x", "y", "z"))
+        and float(shape.get("rx", 0) or 0) > 1e-9
+        and float(shape.get("ry", 0) or 0) > 1e-9
+    ]
+    tangents = [
+        shape for shape in shapes
+        if shape.get("kind") in ("segment", "line")
+        and re.search(r"切线|tangent", str(shape.get("label") or ""), re.IGNORECASE)
+    ]
+    if not ellipses or not tangents:
+        return
+    points = [
+        shape for shape in shapes
+        if shape.get("kind") == "point"
+        and all(isinstance(shape.get(key), (int, float))
+                for key in ("x", "y", "z"))
+    ]
+
+    def dot(a, b):
+        return sum(a[index] * b[index] for index in range(3))
+
+    def cross(a, b):
+        return (a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0])
+
+    def unit(vector):
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm < 1e-9:
+            return None
+        return tuple(value / norm for value in vector)
+
+    def add(*vectors):
+        return tuple(sum(vector[index] for vector in vectors) for index in range(3))
+
+    def scale(vector, factor):
+        return tuple(value * factor for value in vector)
+
+    for tangent in tangents:
+        start, end = tangent.get("from"), tangent.get("to")
+        if not (isinstance(start, list) and len(start) >= 3
+                and isinstance(end, list) and len(end) >= 3):
+            continue
+        try:
+            mid = tuple((float(start[index]) + float(end[index])) / 2
+                        for index in range(3))
+            mid_x = (float(start[0]) + float(end[0])) / 2
+            mid_y = (float(start[1]) + float(end[1])) / 2
+        except (TypeError, ValueError):
+            continue
+        ellipse = min(
+            ellipses,
+            key=lambda item: (float(item["x"]) - mid_x) ** 2
+            + (float(item["y"]) - mid_y) ** 2,
+        )
+        try:
+            center = (float(ellipse["x"]), float(ellipse["y"]),
+                      float(ellipse["z"]))
+            rx, ry = float(ellipse["rx"]), float(ellipse["ry"])
+            rotation = float(ellipse.get("rotation", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        raw_normal = ellipse.get("normal")
+        normal = None
+        if isinstance(raw_normal, (list, tuple)) and len(raw_normal) >= 3:
+            try:
+                normal = unit(tuple(float(value) for value in raw_normal[:3]))
+            except (TypeError, ValueError):
+                normal = None
+        if normal is None:
+            normal = (0.0, 0.0, 1.0)
+        helper = (1.0, 0.0, 0.0) if abs(normal[0]) < 0.9 else (0.0, 1.0, 0.0)
+        projected = tuple(helper[index] - normal[index] * dot(helper, normal)
+                          for index in range(3))
+        axis_u = unit(projected)
+        axis_v = unit(cross(normal, axis_u)) if axis_u else None
+        if axis_u is None or axis_v is None:
+            continue
+        cos_r, sin_r = math.cos(rotation), math.sin(rotation)
+        u = add(scale(axis_u, cos_r), scale(axis_v, sin_r))
+        v = add(scale(axis_u, -sin_r), scale(axis_v, cos_r))
+
+        def local(relative):
+            return dot(relative, u), dot(relative, v)
+
+        candidates = []
+        for point in points:
+            try:
+                relative = tuple(float(point[key]) - center[index]
+                                 for index, key in enumerate(("x", "y", "z")))
+            except (TypeError, ValueError):
+                continue
+            if abs(dot(relative, normal)) > max(0.05, max(rx, ry) * 0.1):
+                continue
+            lx, ly = local(relative)
+            error = abs((lx / rx) ** 2 + (ly / ry) ** 2 - 1)
+            if error <= 0.35:
+                candidates.append((
+                    error * 5 + math.sqrt(sum(
+                        (float(point[key]) - mid[index]) ** 2
+                        for index, key in enumerate(("x", "y", "z")))),
+                    point,
+                ))
+        point = min(candidates, key=lambda item: item[0])[1] if candidates else None
+        if point is not None:
+            try:
+                relative = tuple(float(point[key]) - center[index]
+                                 for index, key in enumerate(("x", "y", "z")))
+            except (TypeError, ValueError):
+                continue
+        else:
+            relative = tuple(mid[index] - center[index] for index in range(3))
+            along = dot(relative, normal)
+            relative = tuple(relative[index] - normal[index] * along
+                             for index in range(3))
+        lx, ly = local(relative)
+        if abs(math.hypot(lx / rx, ly / ry) - 1) > 0.5 and point is None:
+            continue
+        angle = math.atan2(ly / ry, lx / rx)
+        anchor_local = (rx * math.cos(angle) * u[0] + ry * math.sin(angle) * v[0],
+                        rx * math.cos(angle) * u[1] + ry * math.sin(angle) * v[1],
+                        rx * math.cos(angle) * u[2] + ry * math.sin(angle) * v[2])
+        anchor = tuple(center[index] + anchor_local[index] for index in range(3))
+        tangent_local = (-rx * math.sin(angle) * u[0] + ry * math.cos(angle) * v[0],
+                         -rx * math.sin(angle) * u[1] + ry * math.cos(angle) * v[1],
+                         -rx * math.sin(angle) * u[2] + ry * math.cos(angle) * v[2])
+        direction = unit(tangent_local)
+        if direction is None:
+            continue
+        half = max(0.2, max(rx, ry) * 0.35)
+        tangent["from"] = [round(anchor[index] - direction[index] * half, 6)
+                           for index in range(3)]
+        tangent["to"] = [round(anchor[index] + direction[index] * half, 6)
+                         for index in range(3)]
+        if point is not None:
+            point["x"], point["y"], point["z"] = (
+                round(anchor[0], 6), round(anchor[1], 6), round(anchor[2], 6),
+            )
+
+
+def _refine_circle3d_tangents(shapes: list[dict]) -> None:
+    """3D 圆的切线:在圆所在平面内,方向 = 法向 × 半径。"""
+    circles = [
+        shape for shape in shapes
+        if shape.get("kind") == "circle"
+        and all(isinstance(shape.get(key), (int, float))
+                for key in ("x", "y", "z"))
+        and float(shape.get("r", shape.get("radius", 0)) or 0) > 1e-9
+    ]
+    tangents = [
+        shape for shape in shapes
+        if shape.get("kind") in ("segment", "line")
+        and re.search(r"切线|tangent", str(shape.get("label") or ""), re.IGNORECASE)
+    ]
+    if not circles or not tangents:
+        return
+    points = [
+        shape for shape in shapes
+        if shape.get("kind") == "point"
+        and all(isinstance(shape.get(key), (int, float)) for key in ("x", "y", "z"))
+    ]
+
+    def dot(a, b):
+        return sum(a[index] * b[index] for index in range(3))
+
+    def cross(a, b):
+        return (a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0])
+
+    def unit(vector):
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm < 1e-9:
+            return None
+        return tuple(value / norm for value in vector)
+
+    for tangent in tangents:
+        start, end = tangent.get("from"), tangent.get("to")
+        if not (isinstance(start, list) and len(start) >= 3
+                and isinstance(end, list) and len(end) >= 3):
+            continue
+        try:
+            mid = tuple((float(start[index]) + float(end[index])) / 2
+                        for index in range(3))
+        except (TypeError, ValueError):
+            continue
+        circle = min(
+            circles,
+            key=lambda item: sum(
+                (float(item[key]) - mid[index]) ** 2
+                for index, key in enumerate(("x", "y", "z"))),
+        )
+        try:
+            center = (float(circle["x"]), float(circle["y"]), float(circle["z"]))
+            radius = float(circle.get("r", circle.get("radius", 0)))
+        except (TypeError, ValueError):
+            continue
+        raw_normal = circle.get("normal")
+        if isinstance(raw_normal, (list, tuple)) and len(raw_normal) >= 3:
+            try:
+                normal = unit(tuple(float(value) for value in raw_normal[:3]))
+            except (TypeError, ValueError):
+                normal = None
+        else:
+            normal = None
+        if normal is None:
+            normal = (0.0, 0.0, 1.0)
+        on_circle = []
+        for point in points:
+            try:
+                relative = tuple(float(point[key]) - center[index]
+                                 for index, key in enumerate(("x", "y", "z")))
+            except (TypeError, ValueError):
+                continue
+            if (abs(dot(relative, normal)) <= max(0.05, radius * 0.1)
+                    and abs(math.sqrt(sum(value * value for value in relative)) - radius)
+                    <= max(0.08 * radius, 0.05)):
+                on_circle.append(point)
+        point = min(
+            on_circle,
+            key=lambda item: sum(
+                (float(item[key]) - mid[index]) ** 2
+                for index, key in enumerate(("x", "y", "z"))),
+        ) if on_circle else None
+        if point is not None:
+            relative = tuple(float(point[key]) - center[index]
+                             for index, key in enumerate(("x", "y", "z")))
+        else:
+            relative = tuple(mid[index] - center[index] for index in range(3))
+            along = dot(relative, normal)
+            relative = tuple(relative[index] - normal[index] * along
+                             for index in range(3))
+        radial = unit(relative)
+        if radial is None:
+            continue
+        direction = unit(cross(normal, radial))
+        if direction is None:
+            continue
+        half = max(0.2, radius * 0.35)
+        anchor = tuple(center[index] + radial[index] * radius
+                       for index in range(3))
+        tangent["from"] = [round(anchor[index] - direction[index] * half, 6)
+                           for index in range(3)]
+        tangent["to"] = [round(anchor[index] + direction[index] * half, 6)
+                         for index in range(3)]
+        if point is not None:
+            point["x"], point["y"], point["z"] = (
+                round(anchor[0], 6), round(anchor[1], 6), round(anchor[2], 6),
+            )
+
+
+def _refine_curve3d_tangents(shapes: list[dict]) -> None:
+    """3D 参数曲线的手画切线按相邻点方向校正。
+
+    3D 曲线没有 y=f(x) 的表达式,切线方向取曲线点列的局部中心差分;
+    起点落在曲线上离切线中点最近的点。
+    """
+    curves = [
+        shape for shape in shapes
+        if shape.get("kind") in ("curve", "parametric_curve", "implicit_curve3d")
+        and isinstance(shape.get("points"), list)
+        and len(shape["points"]) >= 2
+    ]
+    tangents = [
+        shape for shape in shapes
+        if shape.get("kind") in ("segment", "line")
+        and re.search(r"切线|tangent", str(shape.get("label") or ""), re.IGNORECASE)
+    ]
+    if not curves or not tangents:
+        return
+    for tangent in tangents:
+        start, end = tangent.get("from"), tangent.get("to")
+        if not (isinstance(start, list) and len(start) >= 3
+                and isinstance(end, list) and len(end) >= 3):
+            continue
+        try:
+            sx, sy, sz = (float(start[0]), float(start[1]), float(start[2]))
+            ex, ey, ez = (float(end[0]), float(end[1]), float(end[2]))
+        except (TypeError, ValueError):
+            continue
+        mid = ((sx + ex) / 2, (sy + ey) / 2, (sz + ez) / 2)
+        model = (ex - sx, ey - sy, ez - sz)
+        model_len = math.sqrt(sum(value * value for value in model))
+        if model_len < 1e-9:
+            continue
+        curve = min(
+            curves,
+            key=lambda item: min(
+                sum((float(point[axis]) - mid[axis]) ** 2 for axis in range(3))
+                for point in item["points"]),
+        )
+        pts = [
+            (float(point[0]), float(point[1]), float(point[2]))
+            for point in curve["points"]
+        ]
+        index = min(range(len(pts)), key=lambda item: sum(
+            (pts[item][axis] - mid[axis]) ** 2 for axis in range(3)))
+        if index == 0:
+            first, second = pts[0], pts[1]
+        elif index == len(pts) - 1:
+            first, second = pts[-2], pts[-1]
+        else:
+            first, second = pts[index - 1], pts[index + 1]
+        direction = tuple(second[axis] - first[axis] for axis in range(3))
+        norm = math.sqrt(sum(value * value for value in direction))
+        if norm < 1e-9:
+            continue
+        # 保留模型画的朝向;只改方向与位置。
+        dot = sum(model[axis] * direction[axis] for axis in range(3))
+        if dot < 0:
+            direction = tuple(-value for value in direction)
+            norm = math.sqrt(sum(value * value for value in direction))
+        unit = tuple(value / norm for value in direction)
+        anchor = pts[index]
+        half = max(0.1, model_len / 2)
+        tangent["from"] = [round(anchor[axis] - unit[axis] * half, 6)
+                           for axis in range(3)]
+        tangent["to"] = [round(anchor[axis] + unit[axis] * half, 6)
+                         for axis in range(3)]
+
+
+def _refine_implicit_curve_tangents(shapes: list[dict]) -> None:
+    """隐式曲线 F(x,y)=0 的切线方向 = (F_y, -F_x),垂直于 ∇F。"""
+    curves = [
+        shape for shape in shapes
+        if shape.get("kind") == "implicit_curve" and shape.get("expr")
+        and isinstance(shape.get("points"), list) and shape["points"]
+    ]
+    tangents = [
+        shape for shape in shapes
+        if shape.get("kind") in ("segment", "line")
+        and re.search(r"切线|tangent", str(shape.get("label") or ""), re.IGNORECASE)
+    ]
+    if not curves or not tangents:
+        return
+    for tangent in tangents:
+        start, end = tangent.get("from"), tangent.get("to")
+        if not (isinstance(start, list) and len(start) >= 2
+                and isinstance(end, list) and len(end) >= 2):
+            continue
+        try:
+            mid_x = (float(start[0]) + float(end[0])) / 2
+            mid_y = (float(start[1]) + float(end[1])) / 2
+        except (TypeError, ValueError):
+            continue
+        curve = min(
+            curves,
+            key=lambda item: min(
+                (float(point[0]) - mid_x) ** 2
+                + (float(point[1]) - mid_y) ** 2
+                for point in item["points"]),
+        )
+        anchor = min(
+            ((float(point[0]), float(point[1])) for point in curve["points"]),
+            key=lambda point: (point[0] - mid_x) ** 2 + (point[1] - mid_y) ** 2,
+        )
+        run = _compile_expr(curve.get("expr"), allow_y=True)
+        if run is None:
+            continue
+        h = 1e-4 * max(1.0, abs(anchor[0]), abs(anchor[1]))
+        try:
+            gx = (run(anchor[0] + h, anchor[1])
+                  - run(anchor[0] - h, anchor[1])) / (2 * h)
+            gy = (run(anchor[0], anchor[1] + h)
+                  - run(anchor[0], anchor[1] - h)) / (2 * h)
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            continue
+        norm = math.hypot(gx, gy)
+        if norm < 1e-9:
+            continue
+        tx, ty = gy / norm, -gx / norm
+        domain = _domain(curve)
+        span = (domain[1] - domain[0]) if domain else 2.0
+        half = max(0.2, span * 0.05)
+        tangent["from"] = [round(anchor[0] - tx * half, 6),
+                           round(anchor[1] - ty * half, 6)]
+        tangent["to"] = [round(anchor[0] + tx * half, 6),
+                         round(anchor[1] + ty * half, 6)]
+        tangent["_implicit_tangent"] = True
+
+
+def _refine_ellipse_tangents(shapes: list[dict]) -> None:
+    """2D 椭圆切线:按参数点投影,方向 (-rx sin t, ry cos t) 旋转后使用。"""
+    ellipses = [
+        shape for shape in shapes
+        if shape.get("kind") == "ellipse"
+        and all(isinstance(shape.get(key), (int, float)) for key in ("x", "y"))
+        and float(shape.get("rx", 0) or 0) > 1e-9
+        and float(shape.get("ry", 0) or 0) > 1e-9
+    ]
+    if not ellipses:
+        return
+    tangents = [
+        shape for shape in shapes
+        if shape.get("kind") in ("segment", "line")
+        and re.search(r"切线|tangent", str(shape.get("label") or ""), re.IGNORECASE)
+    ]
+    if not tangents:
+        return
+    points = [
+        shape for shape in shapes
+        if shape.get("kind") == "point" and "x" in shape and "y" in shape
+    ]
+    for tangent in tangents:
+        start, end = tangent.get("from"), tangent.get("to")
+        if not (isinstance(start, list) and len(start) >= 2
+                and isinstance(end, list) and len(end) >= 2):
+            continue
+        try:
+            mid_x = (float(start[0]) + float(end[0])) / 2
+            mid_y = (float(start[1]) + float(end[1])) / 2
+        except (TypeError, ValueError):
+            continue
+        ellipse = min(
+            ellipses,
+            key=lambda item: (float(item["x"]) - mid_x) ** 2
+            + (float(item["y"]) - mid_y) ** 2,
+        )
+        try:
+            cx, cy = float(ellipse["x"]), float(ellipse["y"])
+            rx, ry = float(ellipse["rx"]), float(ellipse["ry"])
+            rotation = float(ellipse.get("rotation", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        cos_r, sin_r = math.cos(rotation), math.sin(rotation)
+
+        def local(px: float, py: float) -> tuple[float, float]:
+            dx, dy = px - cx, py - cy
+            return dx * cos_r + dy * sin_r, -dx * sin_r + dy * cos_r
+
+        candidates = []
+        for point in points:
+            try:
+                px, py = float(point["x"]), float(point["y"])
+            except (TypeError, ValueError):
+                continue
+            lx, ly = local(px, py)
+            error = abs((lx / rx) ** 2 + (ly / ry) ** 2 - 1)
+            if error <= 0.35:
+                candidates.append((
+                    error * 5 + math.hypot(px - mid_x, py - mid_y), point,
+                ))
+        point = min(candidates, key=lambda item: item[0])[1] if candidates else None
+        if point is not None:
+            lx, ly = local(float(point["x"]), float(point["y"]))
+        else:
+            lx, ly = local(mid_x, mid_y)
+            if abs(lx) < 1e-12 and abs(ly) < 1e-12:
+                continue
+            if abs(math.hypot(lx / rx, ly / ry) - 1) > 0.5:
+                continue
+        angle = math.atan2(ly / ry, lx / rx)
+        # 参数点 + 切线方向
+        ex, ey = rx * math.cos(angle), ry * math.sin(angle)
+        gx = cx + ex * cos_r - ey * sin_r
+        gy = cy + ex * sin_r + ey * cos_r
+        tx = -rx * math.sin(angle)
+        ty = ry * math.cos(angle)
+        wx = tx * cos_r - ty * sin_r
+        wy = tx * sin_r + ty * cos_r
+        norm = math.hypot(wx, wy)
+        if norm < 1e-9:
+            continue
+        wx, wy = wx / norm, wy / norm
+        half = max(0.2, max(rx, ry) * 0.35)
+        tangent["from"] = [round(gx - wx * half, 6), round(gy - wy * half, 6)]
+        tangent["to"] = [round(gx + wx * half, 6), round(gy + wy * half, 6)]
+        tangent["_conic_tangent"] = True
+        if point is not None:
+            point["x"] = round(gx, 6)
+            point["y"] = round(gy, 6)
+
+
+def _refine_circle_tangents(shapes: list[dict]) -> None:
+    """圆的切线垂直于半径;模型手画的斜线按切点/圆心垂足校正。"""
+    circles = [
+        shape for shape in shapes
+        if shape.get("kind") == "circle"
+        and all(isinstance(shape.get(key), (int, float)) for key in ("x", "y"))
+        and float(shape.get("r", shape.get("radius", 0)) or 0) > 1e-9
+    ]
+    if not circles:
+        return
+    tangents = [
+        shape for shape in shapes
+        if (shape.get("kind") in ("segment", "line")
+            or (shape.get("kind") == "curve" and _is_straight_curve(shape)))
+        and re.search(r"切线|tangent", str(shape.get("label") or ""), re.IGNORECASE)
+    ]
+    if not tangents:
+        return
+    points = [
+        shape for shape in shapes
+        if shape.get("kind") == "point" and "x" in shape and "y" in shape
+    ]
+    for tangent in tangents:
+        start, end = tangent.get("from"), tangent.get("to")
+        curve_points = tangent.get("points")
+        if not (isinstance(start, (list, tuple)) and len(start) >= 2):
+            if isinstance(curve_points, list) and curve_points:
+                start = curve_points[0]
+        if not (isinstance(end, (list, tuple)) and len(end) >= 2):
+            if isinstance(curve_points, list) and curve_points:
+                end = curve_points[-1]
+        if not (isinstance(start, (list, tuple)) and len(start) >= 2
+                and isinstance(end, (list, tuple)) and len(end) >= 2):
+            continue
+        try:
+            x1, y1 = float(start[0]), float(start[1])
+            x2, y2 = float(end[0]), float(end[1])
+        except (TypeError, ValueError):
+            continue
+        mid_x, mid_y = (x1 + x2) / 2, (y1 + y2) / 2
+        circle = min(
+            circles,
+            key=lambda item: abs(
+                math.hypot(mid_x - float(item["x"]), mid_y - float(item["y"]))
+                - float(item.get("r", item.get("radius", 0)))),
+        )
+        try:
+            cx, cy = float(circle["x"]), float(circle["y"])
+            radius = float(circle.get("r", circle.get("radius", 0)))
+        except (TypeError, ValueError):
+            continue
+        vx, vy = x2 - x1, y2 - y1
+        length = math.hypot(vx, vy)
+        if length < 1e-9 or radius < 1e-9:
+            continue
+        on_circle = []
+        for point in points:
+            try:
+                px, py = float(point["x"]), float(point["y"])
+            except (TypeError, ValueError):
+                continue
+            if abs(math.hypot(px - cx, py - cy) - radius) <= max(0.08 * radius, 0.05):
+                on_circle.append(point)
+        point = min(
+            on_circle,
+            key=lambda item: math.hypot(float(item["x"]) - mid_x,
+                                       float(item["y"]) - mid_y),
+        ) if on_circle else None
+        if point is not None:
+            px, py = float(point["x"]) - cx, float(point["y"]) - cy
+        else:
+            # 圆心到切线的垂足;线离圆太远时不动,避免把普通直线改成切线。
+            t = ((cx - x1) * vx + (cy - y1) * vy) / (length * length)
+            foot_x, foot_y = x1 + t * vx, y1 + t * vy
+            fx, fy = foot_x - cx, foot_y - cy
+            distance = math.hypot(fx, fy)
+            if distance < 1e-9 or abs(distance - radius) > max(0.15 * radius, 0.1):
+                continue
+            px, py = fx, fy
+        norm = math.hypot(px, py)
+        if norm < 1e-9:
+            continue
+        nx, ny = px / norm, py / norm
+        tx, ty = -ny, nx
+        half = max(0.2, radius * 0.35)
+        tangent["from"] = [round(cx + nx * radius - tx * half, 6),
+                           round(cy + ny * radius - ty * half, 6)]
+        tangent["to"] = [round(cx + nx * radius + tx * half, 6),
+                         round(cy + ny * radius + ty * half, 6)]
+        tangent["_conic_tangent"] = True
+        if tangent.get("kind") == "curve":
+            tangent["points"] = [tangent["from"], tangent["to"]]
+        if point is not None:
+            point["x"] = round(cx + nx * radius, 6)
+            point["y"] = round(cy + ny * radius, 6)
+
+
 def _is_straight_curve(shape: dict) -> bool:
     points = shape.get("points")
-    if not isinstance(points, list) or len(points) < 3:
+    if not isinstance(points, list) or len(points) < 2:
         return False
+    if len(points) == 2:
+        return True
     try:
         x0, y0 = float(points[0][0]), float(points[0][1])
         x1, y1 = float(points[-1][0]), float(points[-1][1])
@@ -1144,8 +2573,147 @@ def _is_straight_curve(shape: dict) -> bool:
 
 
 def _pretty_expr(expr: str) -> str:
-    return (str(expr).replace("**", "^").replace("^2", "²")
+    text = re.sub(
+        r"^\s*(?:y|z|f\s*\(\s*x\s*(?:,\s*y\s*)?\))\s*=\s*",
+        "", str(expr).strip(), flags=re.IGNORECASE)
+    return (text.replace("**", "^").replace("^2", "²")
             .replace("^3", "³").replace("*", "·"))
+
+
+def _materialize_tangent_objects(shapes: list[dict]) -> None:
+    """把 tangent + curve + x 的语义对象落成 segment(切点由目标曲线求)。"""
+    targets = [
+        shape for shape in shapes
+        if shape.get("kind") in ("curve", "parametric_curve", "implicit_curve",
+                                 "circle", "ellipse")
+        and (isinstance(shape.get("points"), list) and shape["points"]
+             or shape.get("kind") in ("circle", "ellipse"))
+    ]
+    for shape in shapes:
+        if shape.get("kind") != "tangent":
+            continue
+        name = str(shape.get("curve") or "").strip()
+        x0 = _num(shape.get("x"))
+        if not name or x0 is None:
+            continue
+
+        def norm(value: object) -> str:
+            return re.sub(r"\s+", "", str(value or "")).lower()
+
+        target = next((
+            item for item in targets
+            if norm(item.get("expr")) == norm(name)
+            or norm(item.get("label")) == norm(name)
+        ), None)
+        if target is None:
+            continue
+        try:
+            target_x = float(x0)
+        except (TypeError, ValueError):
+            continue
+        if (target.get("kind") == "circle"
+                and "z" not in target
+                and ("r" in target or "radius" in target)):
+            try:
+                cx, cy = float(target["x"]), float(target["y"])
+                radius = float(target.get("r", target.get("radius", 0)))
+            except (KeyError, TypeError, ValueError):
+                continue
+            hint_y = _num(shape.get("y"))
+            if radius <= 1e-9 or hint_y is None:
+                continue
+            rel_x, rel_y = target_x - cx, float(hint_y) - cy
+            norm = math.hypot(rel_x, rel_y)
+            if norm < 1e-9:
+                continue
+            ux, uy = rel_x / norm, rel_y / norm
+            tx, ty = -uy, ux
+            anchor = (cx + ux * radius, cy + uy * radius)
+            half = max(0.2, radius * 0.35)
+            shape["kind"] = "segment"
+            shape.pop("curve", None)
+            shape["label"] = shape.get("label") or "切线"
+            shape["from"] = [round(anchor[0] - tx * half, 6),
+                             round(anchor[1] - ty * half, 6)]
+            shape["to"] = [round(anchor[0] + tx * half, 6),
+                           round(anchor[1] + ty * half, 6)]
+            continue
+        if (target.get("kind") == "ellipse" and "z" not in target):
+            try:
+                cx, cy = float(target["x"]), float(target["y"])
+                rx, ry = float(target["rx"]), float(target["ry"])
+                rotation = float(target.get("rotation", 0.0) or 0.0)
+            except (KeyError, TypeError, ValueError):
+                continue
+            hint_y = _num(shape.get("y"))
+            if hint_y is None or rx <= 1e-9 or ry <= 1e-9:
+                continue
+            cos_r, sin_r = math.cos(rotation), math.sin(rotation)
+            dx, dy = target_x - cx, float(hint_y) - cy
+            lx, ly = dx * cos_r + dy * sin_r, -dx * sin_r + dy * cos_r
+            angle = math.atan2(ly / ry, lx / rx)
+            ex, ey = rx * math.cos(angle), ry * math.sin(angle)
+            anchor = (cx + ex * cos_r - ey * sin_r,
+                      cy + ex * sin_r + ey * cos_r)
+            tx, ty = -rx * math.sin(angle), ry * math.cos(angle)
+            wx, wy = tx * cos_r - ty * sin_r, tx * sin_r + ty * cos_r
+            norm = math.hypot(wx, wy)
+            if norm < 1e-9:
+                continue
+            wx, wy = wx / norm, wy / norm
+            half = max(0.2, max(rx, ry) * 0.35)
+            shape["kind"] = "segment"
+            shape.pop("curve", None)
+            shape["label"] = shape.get("label") or "切线"
+            shape["from"] = [round(anchor[0] - wx * half, 6),
+                             round(anchor[1] - wy * half, 6)]
+            shape["to"] = [round(anchor[0] + wx * half, 6),
+                           round(anchor[1] + wy * half, 6)]
+            continue
+        run = _compile_expr(target.get("expr"), allow_y=False)
+        if run is not None:
+            h = 1e-4 * max(1.0, abs(target_x))
+            try:
+                y0 = float(run(target_x))
+                slope = (run(target_x + h) - run(target_x - h)) / (2 * h)
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+                continue
+            half = 0.2
+            shape["kind"] = "segment"
+            shape.pop("curve", None)
+            shape["label"] = shape.get("label") or "切线"
+            shape["from"] = [round(target_x - half, 6),
+                             round(y0 - slope * half, 6)]
+            shape["to"] = [round(target_x + half, 6),
+                           round(y0 + slope * half, 6)]
+            continue
+        ordered = [(float(point[0]), float(point[1]))
+                   for point in target["points"]]
+        index = min(range(len(ordered)),
+                    key=lambda item: abs(ordered[item][0] - target_x))
+        if index == 0:
+            first, second = ordered[0], ordered[1]
+        elif index == len(ordered) - 1:
+            first, second = ordered[-2], ordered[-1]
+        else:
+            first, second = ordered[index - 1], ordered[index + 1]
+        dx, dy = second[0] - first[0], second[1] - first[1]
+        norm_d = math.hypot(dx, dy)
+        if norm_d < 1e-9:
+            continue
+        tx, ty = dx / norm_d, dy / norm_d
+        anchor = ordered[index]
+        half = 0.2
+        shape["kind"] = "segment"
+        shape.pop("curve", None)
+        shape["label"] = shape.get("label") or "切线"
+        shape["from"] = [round(anchor[0] - tx * half, 6),
+                         round(anchor[1] - ty * half, 6)]
+        shape["to"] = [round(anchor[0] + tx * half, 6),
+                       round(anchor[1] + ty * half, 6)]
+    # 目标无法解析的 tangent 不留在图里冒充可渲染对象。
+    shapes[:] = [shape for shape in shapes
+                 if shape.get("kind") != "tangent"]
 
 
 def _refine_plot2d(shapes: list[dict], plot_type: bool = True) -> None:
@@ -1155,7 +2723,8 @@ def _refine_plot2d(shapes: list[dict], plot_type: bool = True) -> None:
     derivative_re = re.compile(r"导函数|导数|derivative|y'|f'", re.IGNORECASE)
     curves = [
         shape for shape in shapes
-        if shape.get("kind") == "curve" and shape.get("points")
+        if shape.get("kind") in ("curve", "parametric_curve", "implicit_curve3d")
+        and shape.get("points")
     ]
     primary = next((
         shape for shape in curves
@@ -1176,45 +2745,156 @@ def _refine_plot2d(shapes: list[dict], plot_type: bool = True) -> None:
                 and derivative_re.search(str(shape.get("label") or ""))
             )
         ]
-    tangents = [
+    tangent_label = re.compile(r"切线|tangent", re.IGNORECASE)
+    equation_label = re.compile(r"^\s*(?:y|f\s*\(\s*x\s*\))\s*=", re.IGNORECASE)
+    line_shapes = [
         shape for shape in shapes
         if shape.get("kind") in ("segment", "line")
-        and (plot_type or re.search(
-            r"切线|tangent", str(shape.get("label") or ""), re.IGNORECASE))
+        # 明确标了切线的线即使与坐标轴重合也要保留并校正;
+        # 只有未标注/只标 x/y 的轴向线段才当作重复坐标轴过滤。
+        and not shape.get("_conic_tangent")
+        and not shape.get("_implicit_tangent")
+        and (tangent_label.search(str(shape.get("label") or ""))
+             or not _axis_aligned_segment(shape))
     ]
+    if plot_type:
+        labeled = [
+            shape for shape in line_shapes
+            if tangent_label.search(str(shape.get("label") or ""))
+            or equation_label.search(str(shape.get("label") or ""))
+        ]
+        # 有明确标签时只校正明确对象;同图有割线/渐近线/多条辅助线时不能全改。
+        # 模型漏标签且图里只有一条直线时,仍按切线处理。
+        tangents = labeled if labeled else (
+            line_shapes if len(line_shapes) == 1 else [])
+    else:
+        tangents = [
+            shape for shape in line_shapes
+            if tangent_label.search(str(shape.get("label") or ""))
+        ]
     # 模型有时把切线画成一条“直线型 curve”(如 y=x),也要校正。
     # 只在一个非线性主曲线 + 关键点同时存在时这样做,避免误改普通直线几何图。
     has_point = any(
         shape.get("kind") == "point" and "x" in shape and "y" in shape
         for shape in shapes
     )
-    if primary is not None and not _is_straight_curve(primary) and has_point:
+    if primary is not None and not _is_straight_curve(primary):
         tangents.extend(shape for shape in curves
                         if shape is not primary and shape not in tangents
                         and not derivative_re.search(str(shape.get("label") or ""))
-                        and _is_straight_curve(shape))
+                        and _is_straight_curve(shape)
+                        and (has_point or re.search(
+                            r"切线|tangent", str(shape.get("label") or ""),
+                            re.IGNORECASE)))
     points = [
         shape for shape in shapes
         if shape.get("kind") == "point" and "x" in shape and "y" in shape
     ]
     if primary is None or not tangents:
         return
-    values = sorted(
-        ((float(item[0]), float(item[1])) for item in primary["points"]),
-        key=lambda item: item[0],
-    )
-    if not values:
+    function_curves = [
+        shape for shape in shapes
+        if shape.get("kind") in ("curve", "parametric_curve", "implicit_curve3d")
+        and shape.get("points")
+        and not derivative_re.search(str(shape.get("label") or ""))
+        and not _is_straight_curve(shape)
+    ]
+    if not function_curves or not tangents:
         return
-    span = values[-1][0] - values[0][0]
-    dx = max(0.2, span * 0.04)
 
-    def tangent_at(x0: float) -> tuple[float, float] | None:
-        run = _compile_expr(primary.get("expr"), allow_y=False)
+    value_cache: dict[int, list[tuple[float, float]]] = {}
+
+    def curve_values(curve: dict) -> list[tuple[float, float]]:
+        key = id(curve)
+        if key not in value_cache:
+            value_cache[key] = sorted(
+                ((float(item[0]), float(item[1])) for item in curve["points"]),
+                key=lambda item: item[0],
+            )
+        return value_cache[key]
+
+    ordered_cache: dict[int, list[tuple[float, float]]] = {}
+
+    def curve_ordered(curve: dict) -> list[tuple[float, float]]:
+        key = id(curve)
+        if key not in ordered_cache:
+            ordered_cache[key] = [
+                (float(item[0]), float(item[1])) for item in curve["points"]
+            ]
+        return ordered_cache[key]
+
+    def is_function_curve(curve: dict) -> bool:
+        points = curve_ordered(curve)
+        return all(points[index + 1][0] >= points[index][0] - 1e-9
+                   for index in range(len(points) - 1))
+
+    def nearest_curve_point(curve: dict, px: float, py: float) -> tuple[float, float]:
+        return min(curve_ordered(curve),
+                   key=lambda point: (point[0] - px) ** 2 + (point[1] - py) ** 2)
+
+    def tangent_at(curve: dict, x0: float, y_hint: float | None = None) -> tuple[float, float] | None:
+        values = curve_values(curve)
+        if not values:
+            return None
+        run = _compile_expr(curve.get("expr"), allow_y=False)
+        if run is not None:
+            h = 1e-4 * max(1.0, abs(x0))
+            try:
+                y0 = float(run(x0))
+            except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                y0 = None
+            if y0 is not None:
+                # Richardson 外推:两项中心差分消掉 h² 项,斜率比单次差分更稳。
+                try:
+                    d1 = (run(x0 + h) - run(x0 - h)) / (2 * h)
+                    d2 = (run(x0 + h / 2) - run(x0 - h / 2)) / h
+                    # 左右导数不一致(尖点/跳跃)时不存在唯一切线,宁可不画。
+                    left = (y0 - run(x0 - h)) / h
+                    right = (run(x0 + h) - y0) / h
+                    scale = max(1.0, abs(left), abs(right))
+                    if abs(left - right) > 0.2 * scale:
+                        return None
+                    return (4 * d2 - d1) / 3, y0
+                except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                    # 定义域边界只有单侧导数(sqrt 在 0):先试前向,再试后向。
+                    try:
+                        return (run(x0 + h) - y0) / h, y0
+                    except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                        try:
+                            return (y0 - run(x0 - h)) / h, y0
+                        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                            pass
+        ordered = curve_ordered(curve)
+        if not is_function_curve(curve) and len(ordered) >= 2:
+            # 参数曲线(半圆、椭圆分支)不能按 x 排序;按点列顺序取相邻点。
+            hint = y_hint if y_hint is not None else ordered[0][1]
+            index = min(range(len(ordered)),
+                        key=lambda item: (ordered[item][0] - x0) ** 2
+                        + (ordered[item][1] - hint) ** 2)
+            if index == 0:
+                first, second = ordered[0], ordered[1]
+            elif index == len(ordered) - 1:
+                first, second = ordered[-2], ordered[-1]
+            else:
+                first, second = ordered[index - 1], ordered[index + 1]
+            dx, dy = second[0] - first[0], second[1] - first[1]
+            if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+                return None
+            if abs(dx) < 1e-9:
+                return 1e12, ordered[index][1]
+            return dy / dx, ordered[index][1]
+        # 无表达式或求值失败:用采样点做五点差分;不足五点退化为左右割线。
+        nearest = min(range(len(values)), key=lambda index: abs(values[index][0] - x0))
+        if len(values) >= 5 and 2 <= nearest < len(values) - 2:
+            step = (values[nearest + 2][0] - values[nearest - 2][0]) / 4
+            if step > 1e-9:
+                slope = (
+                    values[nearest - 2][1] - 8 * values[nearest - 1][1]
+                    + 8 * values[nearest + 1][1] - values[nearest + 2][1]
+                ) / (12 * step)
+                base = values[nearest]
+                return slope, base[1] + slope * (x0 - base[0])
         try:
-            if run is not None:
-                h = 1e-4 * max(1.0, abs(x0))
-                return ((run(x0 + h) - run(x0 - h)) / (2 * h),
-                        float(run(x0)))
             left = max((item for item in values if item[0] <= x0),
                        key=lambda item: item[0], default=values[0])
             right = min((item for item in values if item[0] >= x0),
@@ -1226,6 +2906,33 @@ def _refine_plot2d(shapes: list[dict], plot_type: bool = True) -> None:
         except (TypeError, ValueError, ZeroDivisionError):
             return None
 
+    def best_curve(px: float, py: float) -> dict:
+        """切点落在哪条曲线上:多个分支(y=±√、上下半圆)时不能总用第一条。"""
+        best = function_curves[0]
+        best_error = float("inf")
+        for curve in function_curves:
+            error = None
+            run = _compile_expr(curve.get("expr"), allow_y=False)
+            if run is not None:
+                try:
+                    error = abs(float(run(px)) - py)
+                except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                    error = None
+            if error is None:
+                values = curve_values(curve)
+                if values:
+                    error = min(math.hypot(px - x, py - y) for x, y in values)
+            if error is not None and error < best_error:
+                best, best_error = curve, error
+        return best
+
+    # 选点阈值用最大横向跨度,避免多分支时某一支过短导致阈值失效。
+    span_ref = 0.0
+    for curve in function_curves:
+        values = curve_values(curve)
+        if len(values) >= 2:
+            span_ref = max(span_ref, values[-1][0] - values[0][0])
+
     used: set[int] = set()
     for tangent in tangents:
         start = tangent.get("from")
@@ -1233,30 +2940,113 @@ def _refine_plot2d(shapes: list[dict], plot_type: bool = True) -> None:
             curve_points = tangent.get("points")
             if isinstance(curve_points, list) and curve_points:
                 start = curve_points[0]
+        end = tangent.get("to")
+        if not (isinstance(end, (list, tuple)) and len(end) >= 2):
+            curve_points = tangent.get("points")
+            if isinstance(curve_points, list) and curve_points:
+                end = curve_points[-1]
+        if not (isinstance(end, (list, tuple)) and len(end) >= 2):
+            end = start
         if not (isinstance(start, (list, tuple)) and len(start) >= 2):
             continue
-        candidates = [point for point in points if id(point) not in used]
+        try:
+            x1, y1 = float(start[0]), float(start[1])
+            x2, y2 = float(end[0]), float(end[1])
+        except (TypeError, ValueError):
+            continue
+        vx, vy = x2 - x1, y2 - y1
+        length = math.hypot(vx, vy)
+        mid_x, mid_y = (x1 + x2) / 2, (y1 + y2) / 2
 
-        def distance(point: dict) -> float:
+        def line_distance(point: dict) -> float:
+            """点到切线本身的距离。line 是无限直线,segment 按线段投影。"""
             try:
-                return ((float(point["x"]) - float(start[0])) ** 2
-                        + (float(point["y"]) - float(start[1])) ** 2)
+                px, py = float(point["x"]), float(point["y"])
             except (TypeError, ValueError):
                 return float("inf")
+            if length < 1e-9:
+                return math.hypot(px - x1, py - y1)
+            if tangent.get("kind") == "line":
+                return abs((px - x1) * vy - (py - y1) * vx) / length
+            t = ((px - x1) * vx + (py - y1) * vy) / (length * length)
+            t = max(0.0, min(1.0, t))
+            return math.hypot(px - (x1 + t * vx), py - (y1 + t * vy))
 
-        point = min(candidates, key=distance) if candidates else None
-        point_x = float(point["x"]) if point is not None else None
-        # 有明确关键点时以关键点为准;没有点时用切线自身起点。
-        x0 = point_x if point_x is not None else float(start[0])
-        result = tangent_at(x0)
+        def score(point: dict) -> float:
+            try:
+                px, py = float(point["x"]), float(point["y"])
+            except (TypeError, ValueError):
+                return float("inf")
+            curve = best_curve(px, py)
+            result = tangent_at(curve, px, py)
+            curve_error = abs(py - result[1]) if result is not None else 0.0
+            label = str(point.get("label") or "").strip()
+            # 切点标签的优先级只做轻微加权,不能压过几何位置。
+            boost = -0.5 if re.search(r"切点|tangent point|^P$", label, re.IGNORECASE) else 0.0
+            return (line_distance(point) * 2
+                    + math.hypot(px - mid_x, py - mid_y) * 0.25
+                    + curve_error * 3 + boost)
+
+        candidates = [point for point in points if id(point) not in used]
+        point = min(candidates, key=score) if candidates else None
+        if point is not None:
+            label = str(point.get("label") or "").strip()
+            trusted = bool(re.search(r"切点|tangent point|^P$", label, re.IGNORECASE))
+            # 图上只有原点 O 时,长切线的中点通常才是真正切点;不要被 O 抢走。
+            # 明确标了 P/切点的点优先,不受这条规则影响。
+            if (not trusted
+                    and abs(float(point["x"]) - mid_x) > max(0.1, span_ref * 0.15)):
+                point = None
+        if point is not None:
+            probe_x, probe_y = float(point["x"]), float(point["y"])
+        else:
+            probe_x, probe_y = mid_x, mid_y
+        curve = best_curve(probe_x, probe_y)
+        values = curve_values(curve)
+        if not values:
+            continue
+        span = values[-1][0] - values[0][0]
+        span_y = max(value[1] for value in values) - min(value[1] for value in values)
+        dx = max(0.2, span * 0.04)
+        if point is not None:
+            if not is_function_curve(curve):
+                px, py = nearest_curve_point(
+                    curve, float(point["x"]), float(point["y"]))
+                point["x"] = round(px, 6)
+                point["y"] = round(py, 6)
+            x0 = float(point["x"])
+            y_hint = float(point["y"])
+        else:
+            if not is_function_curve(curve):
+                x0, y_hint = nearest_curve_point(curve, mid_x, mid_y)
+            else:
+                x0 = min(max(mid_x, values[0][0]), values[-1][0])
+                y_hint = mid_y
+        result = tangent_at(curve, x0, y_hint)
         if result is None:
+            # 表达式求值失败或尖点处无唯一切线:删掉模型手画的假切线。
+            if tangent in shapes:
+                shapes.remove(tangent)
             continue
         slope, y0 = result
+        if not math.isfinite(slope) or not math.isfinite(y0):
+            continue
         if point is not None:
             point["y"] = round(y0, 6)
             used.add(id(point))
-        tangent["from"] = [round(x0 - dx, 6), round(y0 - slope * dx, 6)]
-        tangent["to"] = [round(x0 + dx, 6), round(y0 + slope * dx, 6)]
+        if abs(slope) > 1e6:
+            # 竖直切线:不要用巨大斜率把端点甩出图外。
+            dy = max(0.2, span_y * 0.12)
+            tangent["from"] = [round(x0, 6), round(y0 - dy, 6)]
+            tangent["to"] = [round(x0, 6), round(y0 + dy, 6)]
+        else:
+            # 陡峭曲线的切线缩短到纵向跨度的 15% 以内,避免压扁主体曲线。
+            half = dx
+            if abs(slope) > 1e-9:
+                half = min(half, max(0.05, span_y * 0.15) / abs(slope))
+            half = max(half, 1e-4)
+            tangent["from"] = [round(x0 - half, 6), round(y0 - slope * half, 6)]
+            tangent["to"] = [round(x0 + half, 6), round(y0 + slope * half, 6)]
         if tangent.get("kind") == "curve":
             tangent["points"] = [tangent["from"], tangent["to"]]
             if not re.search(r"切线|tangent",
@@ -1269,6 +3059,7 @@ def _axis_aligned_segment(shape: dict) -> bool:
     if shape.get("kind") not in ("segment", "line"):
         return False
     label = str(shape.get("label") or "").strip().lower()
+    label = re.sub(r"\s*(?:轴|axis)$", "", label, flags=re.IGNORECASE)
     if label and label not in {"x", "y", "z"}:
         return False
     start = _point(shape.get("from"))
@@ -1281,13 +3072,15 @@ def _axis_aligned_segment(shape: dict) -> bool:
         end.append(0.0)
     pairs = [(1, 2), (0, 2), (0, 1)]
     for pair in pairs:
-        if not (all(abs(value) < 1e-6 for index, value in enumerate(start)
-                    if index not in pair)
-                and all(abs(value) < 1e-6 for index, value in enumerate(end)
-                        if index not in pair)):
+        # pair 里是必须恒为 0 的两个坐标;剩下那个坐标才是线段的方向。
+        if not (all(abs(start[index]) < 1e-6 and abs(end[index]) < 1e-6
+                    for index in pair)):
             continue
         varying = next(index for index in range(3) if index not in pair)
         a, b = start[varying], end[varying]
+        # 两个端点在该轴上都没有变化(例如 2D 线段 z=0→0),不是坐标轴。
+        if abs(a) < 1e-9 and abs(b) < 1e-9:
+            continue
         if a == 0 or b == 0 or a * b < 0:
             return True
     return False
@@ -1438,7 +3231,9 @@ def _snap_annotations(shapes: list[dict], raw: dict) -> dict:
             continue
         distance, actual = best
         span = max(1.0, runners[0][3])
-        tolerance = max(1e-6, span * 0.02)
+        # 1/x、tan 的极端值会把整幅跨度撑大;吸附容差必须封顶,
+        # 否则离曲线很远的说明文字会被硬拽到曲线附近。
+        tolerance = min(max(1e-6, span * 0.02), 0.5)
         if distance <= tolerance:
             kept.append({**note, "y": round(actual, 6)})
         elif strict and distance > max(tolerance * 3, span * 0.25):
@@ -1494,7 +3289,9 @@ def repair_surface_shapes(raw: dict, question: str) -> dict:
         _add_projection_shape(shapes, question)
         return {**raw, "shapes": shapes}
     if expr and not any(
-            isinstance(shape, dict) and shape.get("kind") == "surface"
+            isinstance(shape, dict)
+            and shape.get("kind") in ("surface", "parametric_surface",
+                                      "implicit_surface")
             for shape in shapes):
         shapes.insert(0, {
             "kind": "surface", "expr": expr,
@@ -1517,6 +3314,17 @@ def repair_surface_shapes(raw: dict, question: str) -> dict:
             if kind == "plane":
                 if not fill_planes:
                     continue
+                normal = shape.get("normal")
+                # 只有水平平面(法向 z 轴,或模型没给法向)才能由 z=c 唯一定位。
+                # 倾斜平面缺中心坐标时,填 z=c 会把它画到错误位置,宁可丢弃。
+                if isinstance(normal, (list, tuple)) and len(normal) >= 3:
+                    try:
+                        nx, ny, nz = (float(normal[0]), float(normal[1]),
+                                      float(normal[2]))
+                    except (TypeError, ValueError):
+                        continue
+                    if math.hypot(nx, ny) > 1e-6 or abs(nz) < 1e-9:
+                        continue
                 shape.setdefault("x", 0.0)
                 shape.setdefault("y", 0.0)
                 shape.setdefault("z", plane_z)
@@ -1604,17 +3412,26 @@ def _add_projection_shape(shapes: list[dict], question: str) -> None:
 
     # 3) 只有曲面采样点 → 用 xy 范围补矩形投影
     surface = next((shape for shape in shapes
-                    if shape.get("kind") == "surface"
+                    if shape.get("kind") in ("surface", "parametric_surface")
                     and isinstance(shape.get("points"), list)
                     and len(shape["points"]) >= 2), None)
     if surface is None:
-        return
-    xs, ys = [], []
-    for item in surface["points"]:
-        point = _point(item)
-        if point and len(point) >= 2:
-            xs.append(point[0])
-            ys.append(point[1])
+        implicit = next((shape for shape in shapes
+                         if shape.get("kind") == "implicit_surface"
+                         and isinstance(shape.get("positions"), list)
+                         and len(shape["positions"]) >= 6), None)
+        if implicit is None:
+            return
+        flat = implicit["positions"]
+        xs = [float(flat[index]) for index in range(0, len(flat) - 2, 3)]
+        ys = [float(flat[index]) for index in range(1, len(flat) - 1, 3)]
+    else:
+        xs, ys = [], []
+        for item in surface["points"]:
+            point = _point(item)
+            if point and len(point) >= 2:
+                xs.append(point[0])
+                ys.append(point[1])
     if not xs or not ys:
         return
     x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
@@ -1644,19 +3461,30 @@ def prepare_diagram(raw: object) -> dict | None:
             clean = _shape(shape)
             if clean is not None:
                 dict_shapes.append(clean)
+        _materialize_tangent_objects(dict_shapes)
         _refine_gradient(dict_shapes)
         _refine_surface_normal(dict_shapes)
         for shape in dict_shapes:
             if (shape.get("kind") == "surface" and shape.get("expr")
                     and not shape.get("label")):
                 shape["label"] = f"z={_pretty_expr(shape['expr'])}"
+            elif shape.get("kind") == "parametric_surface" and not shape.get("label"):
+                shape["label"] = "参数曲面"
+            elif shape.get("kind") == "implicit_surface" and not shape.get("label"):
+                shape["label"] = "隐式曲面"
         if raw.get("type") in ("plot2d", "geometry2d"):
+            _refine_implicit_curve_tangents(dict_shapes)
+            _refine_ellipse_tangents(dict_shapes)
+            _refine_circle_tangents(dict_shapes)
             _refine_plot2d(dict_shapes, raw.get("type") == "plot2d")
             normalize_2d_axes(dict_shapes)
             if raw.get("type") == "plot2d":
                 raw = _snap_annotations(dict_shapes, raw)
         if (raw.get("type") in ("geometry3d", "surface3d")
                 and not isinstance(raw.get("linear"), dict)):
+            _refine_ellipse3d_tangents(dict_shapes)
+            _refine_circle3d_tangents(dict_shapes)
+            _refine_curve3d_tangents(dict_shapes)
             dict_shapes = [shape for shape in dict_shapes
                            if shape.get("kind") != "axis"
                            and not _axis_aligned_segment(shape)]
@@ -1670,6 +3498,7 @@ def prepare_diagram(raw: object) -> dict | None:
                                 _text(note.get("text"), 20).strip(),
                                 re.IGNORECASE))
                 ]}
+        _compact_meshes(dict_shapes)
         raw = {**raw, "shapes": dict_shapes}
         labels = {
             _norm_label(shape.get("label"))
@@ -1755,18 +3584,33 @@ def _shape(raw: object) -> dict | None:
     kind = _text(raw.get("kind"), 40)
     if kind not in _SHAPES:
         return None
+    # 切线的语义对象:落到渲染层仍是 segment;没有起止点就无法画。
+    tangent_alias = kind == "tangent"
+    if tangent_alias:
+        has_segment = (isinstance(raw.get("from"), (list, tuple))
+                       and isinstance(raw.get("to"), (list, tuple)))
+        has_target = (isinstance(raw.get("curve"), str)
+                      and raw.get("curve").strip()
+                      and _num(raw.get("x")) is not None)
+        if not (has_segment or has_target):
+            return None
+        if has_segment:
+            kind = "segment"
     out: dict = {"kind": kind}
-    for key in ("x", "y", "z", "r", "radius", "width", "height", "depth"):
+    for key in ("x", "y", "z", "r", "radius", "width", "height", "depth",
+                "rx", "ry", "rotation"):
         if key in raw:
             parsed = _num(raw[key])
             if parsed is not None:
                 out[key] = parsed
-    for key in ("rows", "cols"):
+    for key in ("rows", "cols", "samples"):
         if key in raw:
             parsed = _num(raw[key])
             if parsed is not None and parsed.is_integer():
-                out[key] = max(2, min(_MAX_SURFACE_GRID, int(parsed)))
-    for key in ("label", "expr", "color"):
+                cap = 3000 if key == "samples" else _MAX_SURFACE_GRID
+                out[key] = max(2, min(cap, int(parsed)))
+    for key in ("label", "expr", "expr2", "curve", "color", "xexpr",
+                "yexpr", "zexpr", "fieldexpr"):
         if key in raw:
             value = _text(raw[key], 200)
             if key == "label" and value.lower() in {"djj"}:
@@ -1774,12 +3618,18 @@ def _shape(raw: object) -> dict | None:
                 value = ""
             if value:
                 out[key] = value
+    if tangent_alias and not out.get("label"):
+        out["label"] = "切线"
     if "domain" in raw:
         domain = raw["domain"]
-        if isinstance(domain, (list, tuple)) and len(domain) in (2, 4):
+        if isinstance(domain, (list, tuple)) and len(domain) in (2, 4, 6):
             parsed = [_num(item) for item in domain]
             if all(item is not None for item in parsed):
                 out["domain"] = parsed
+    if "resolution" in raw:
+        parsed = _num(raw["resolution"])
+        if parsed is not None:
+            out["resolution"] = max(8, min(76, int(parsed)))
     if "points" in raw:
         points = raw["points"]
         if isinstance(points, list):
@@ -1790,6 +3640,43 @@ def _shape(raw: object) -> dict | None:
                     cleaned.append(point)
             if cleaned:
                 out["points"] = cleaned
+    for key in ("positions_b64", "indices_b64"):
+        if isinstance(raw.get(key), str) and raw[key]:
+            out[key] = raw[key][:12_000_000]
+    for key in ("vertexCount", "indexCount"):
+        if key in raw:
+            try:
+                parsed = int(raw[key])
+            except (TypeError, ValueError, OverflowError):
+                parsed = None
+            if parsed is not None and parsed >= 0:
+                out[key] = parsed
+    if isinstance(raw.get("encoding"), str) and raw["encoding"]:
+        out["encoding"] = _text(raw["encoding"], 40)
+    if isinstance(raw.get("indexType"), str) and raw["indexType"] in ("u16", "u32"):
+        out["indexType"] = raw["indexType"]
+    if "positions" in raw:
+        raw_positions = raw["positions"]
+        if isinstance(raw_positions, list):
+            cleaned_positions = [_num(item) for item in raw_positions[:300000]]
+            if all(item is not None for item in cleaned_positions):
+                out["positions"] = [float(item) for item in cleaned_positions]
+    if "indices" in raw:
+        raw_indices = raw["indices"]
+        if isinstance(raw_indices, list):
+            cleaned_indices = []
+            for item in raw_indices[:300000]:
+                value = _num(item)
+                if value is not None and value >= 0:
+                    cleaned_indices.append(int(value))
+            if cleaned_indices:
+                max_vertex = len(out.get("positions", [])) // 3
+                cleaned_indices = [item for item in cleaned_indices
+                                   if item < max_vertex]
+                cleaned_indices = cleaned_indices[
+                    :len(cleaned_indices) // 3 * 3]
+                if cleaned_indices:
+                    out["indices"] = cleaned_indices
     if "segments" in raw:
         # 多段曲线:每段至少 2 点,总点数与 points 共用同一预算。
         raw_segments = raw["segments"]
@@ -1830,8 +3717,27 @@ def _renderable_shape(shape: dict, diagram_type: str = "") -> bool:
     spatial = diagram_type in ("geometry3d", "surface3d")
     if kind == "axis":
         return False
-    if kind in ("curve", "polygon", "surface"):
+    if kind in ("curve", "polygon", "surface", "parametric_surface",
+                "parametric_curve"):
         return bool(shape.get("points"))
+    if kind in ("implicit_curve", "implicit_curve3d"):
+        return bool(shape.get("segments") or shape.get("points"))
+    if kind == "implicit_surface":
+        if (isinstance(shape.get("positions_b64"), str)
+                and isinstance(shape.get("indices_b64"), str)):
+            return (int(shape.get("vertexCount", 0)) >= 3
+                    and int(shape.get("indexCount", 0)) >= 3)
+        return (isinstance(shape.get("positions"), list)
+                and len(shape["positions"]) >= 9
+                and isinstance(shape.get("indices"), list)
+                and len(shape["indices"]) >= 3)
+    if kind == "ellipse":
+        if not ("x" in shape and "y" in shape
+                and float(shape.get("rx", 0) or 0) > 1e-9
+                and float(shape.get("ry", 0) or 0) > 1e-9):
+            return False
+        # 3D 椭圆必须有 z;所在平面由 normal 决定(缺省为水平面)。
+        return (not spatial) or "z" in shape
     if kind in ("segment", "line", "vector"):
         start, end = shape.get("from"), shape.get("to")
         if not (isinstance(start, list) and isinstance(end, list)
@@ -1849,8 +3755,6 @@ def _renderable_shape(shape: dict, diagram_type: str = "") -> bool:
             # 三维圆的中心缺 z 会被渲染器当成 0;宁可丢弃,也不画错位置。
             return all(key in shape for key in ("x", "y", "z"))
         return "x" in shape and "y" in shape
-    if kind in ("segment", "line", "vector"):
-        return "from" in shape and "to" in shape
     if kind == "plane":
         # 平面只给了法向量时,渲染器会把位置默认成原点;这不是“过原点的平面”,
         # 而是未知位置。必须要求显式中心坐标。
@@ -1964,7 +3868,8 @@ def validate_diagram(raw: object) -> dict | None:
     elif not shapes or not any(_renderable_shape(shape, kind) for shape in shapes):
         return None
     if kind == "surface3d" and not any(
-            shape.get("kind") == "surface" for shape in shapes):
+            shape.get("kind") in ("surface", "parametric_surface", "implicit_surface")
+            for shape in shapes):
         # surface3d 没有曲面只剩平面/点,是模型漏掉主体后的残图;不拿它冒充曲面图。
         return None
     result: dict = {
@@ -2127,15 +4032,21 @@ _PLAN_SYSTEM = (
     "各类型结构:\n"
     '- flow/tree/relation:{"nodes":[{"id":"a","label":"概念"}],'
     '"edges":[{"from":"a","to":"b","label":"推出"}]}\n'
-    '- geometry2d/plot2d:{"shapes":[{"kind":"point|segment|vector|circle|'
-    'polygon|curve|axis","x":0,"y":0,"from":[0,0],"to":[1,1],'
-    '"points":[[x,y]],"label":"A"}],"annotations":[{"x":0,"y":0,"text":"说明"}]}\n'
+    '- geometry2d/plot2d:{"shapes":[{"kind":"point|segment|vector|circle|ellipse|'
+    'polygon|curve|implicit_curve|parametric_curve|axis","x":0,"y":0,"from":[0,0],"to":[1,1],'
+    '"points":[[x,y]],"rx":2,"ry":1,"rotation":0,"label":"A"}],'
+    '"annotations":[{"x":0,"y":0,"text":"说明"}]}\n'
     '- geometry3d:{"shapes":[{"kind":"point|segment|vector|plane|sphere|box|'
-    'cone|cylinder","x":0,"y":0,"z":0,"from":[0,0,0],"to":[1,1,1],'
+    'cone|cylinder|circle|ellipse|parametric_curve|implicit_curve3d","x":0,"y":0,"z":0,"from":[0,0,0],"to":[1,1,1],'
     '"normal":[0,0,1],"label":"A"}],"annotations":[{"x":0,"y":0,"z":0,'
     '"text":"说明"}]}\n'
     '- surface3d:用 {"kind":"surface","expr":"x^2+y^2","domain":[-3,3],'
-    '"rows":25,"cols":25} 表示曲面,服务端会按行优先采样;'
+    '"rows":25,"cols":25} 表示显式曲面;参数曲面用 '
+    '{"kind":"parametric_surface","xexpr":"cos(u)*sin(v)",'
+    '"yexpr":"sin(u)*sin(v)","zexpr":"cos(v)",'
+    '"domain":[0,6.283,0,3.142],"rows":25,"cols":25};'
+    '隐式曲面用 {"kind":"implicit_surface","expr":"x^2+y^2+z^2-1",'
+    '"domain":[-1.5,1.5,-1.5,1.5,-1.5,1.5],"resolution":24};'
     '用 {"kind":"vector","from":[x,y,z],"to":[x,y,z]} 表示方向;'
     '用 {"kind":"point","x":x,"y":y,"z":z} 标出关键点。\n'
     "规则:\n"
@@ -2147,7 +4058,7 @@ _PLAN_SYSTEM = (
     "山坡上最陡的上坡方向、把概率密度想成沙堆高度),再把它画成具体图形;"
     "不要只把抽象名词连成关系网。2D 还是 3D 按哪种更能表现该意象来选。\n"
     "5. 一张教学图只保留这一步的关键对象,关系图/流程图节点一般 3–8 个;"
-    "硬上限:节点 40、边 80、形状 100、曲面网格 41×41。\n"
+    "硬上限:节点 40、边 80、形状 100、曲面网格 101×101。\n"
     "6. 坐标用可读的数学坐标;给出 title,关键对象给 label。\n"
     "7. 不要输出 HTML、脚本、图片或任意 SVG 代码。\n"
     "8. 曲线优先用 expr+domain 让服务端采样;确实需要时再手写 points。\n"
@@ -2183,6 +4094,12 @@ _PLAN_SYSTEM = (
     "label 写“A 是 B 的充分条件”;若 A 需要 B,仍按推出方向 A→B,"
     "label 写“B 是 A 的必要条件”。箭头方向表示推出方向,label 表示充分/必要,"
     "不要反向,也不要用无向连线代替。\n"
+    "21. 椭圆用 kind=ellipse 并给 rx/ry/rotation(弧度);3D 圆/椭圆用 normal "
+    "指定所在平面,不要假设水平;参数曲面用 parametric_surface 的三个分量表达式,"
+    "不要把它硬写成 z=f(x,y);参数曲线用 parametric_curve+xexpr/yexpr(+zexpr)/domain;"
+    "隐式曲线用 implicit_curve+expr+4 元 domain,3D 交线用 implicit_curve3d+expr+expr2+6 元 domain,隐式曲面用 implicit_surface+expr+6 元 domain;"
+    "参数曲面上画标量场梯度时给 fieldexpr,梯度会投到切平面。"
+    "切线可用 kind=tangent+curve+x(圆/椭圆再加 y),或直接给 from/to。\n"
 )
 
 

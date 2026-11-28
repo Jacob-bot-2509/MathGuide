@@ -99,8 +99,14 @@ def test_determinant_builds_parallelogram_and_volume():
         "vectors": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
     })
     assert volume is not None
-    assert len([shape for shape in volume["shapes"]
-                if shape["kind"] == "segment"]) >= 12
+    segments = [shape for shape in volume["shapes"]
+                if shape["kind"] == "segment"]
+    assert len(segments) == 12
+    # 每个线段必须连接只差一个坐标的顶点;面对角线不是棱。
+    for segment in segments:
+        start, end = segment["from"], segment["to"]
+        diff = sum(1 for a, b in zip(start, end) if abs(a - b) > 1e-6)
+        assert diff == 1
 
 
 def test_eigen_symmetric_builds_real_axes():
@@ -224,6 +230,20 @@ def test_quadratic_form_three_dimensional_surface():
                    if shape["kind"] == "surface")
     assert surface["rows"] == 31 and surface["cols"] == 31
     assert len(surface["points"]) == 31 * 31
+
+
+def test_negative_definite_quadratic_uses_negative_level():
+    """负定二次型在 level=1 时是空集;应画 xᵀAx = -1,不能标成 =1。"""
+    diagram = _build({
+        "visual": "quadratic_form", "domain": "real", "ambient": 2,
+        "matrix": [[-1, 0], [0, -1]], "level": 1,
+    })
+    assert diagram is not None
+    curve = next(shape for shape in diagram["shapes"]
+                 if shape["kind"] == "curve")
+    assert "= -1" in curve["label"]
+    assert any("signature = (0, 2, 0)" in note["text"]
+               for note in diagram["annotations"])
 
 
 def test_quadratic_form_rejects_asymmetric_matrix():
@@ -430,8 +450,11 @@ def test_projective_line_at_infinity():
         "domain": "real", "ambient": 2,
     })
     assert diagram is not None
-    assert any(shape.get("label") == "无穷远线" for shape in diagram["shapes"])
-    assert any(shape.get("label") == "∞" for shape in diagram["shapes"])
+    assert any("无穷远线" in str(shape.get("label"))
+               for shape in diagram["shapes"])
+    # 无穷远点不能伪装成有限点
+    assert not any(shape.get("label") == "∞" for shape in diagram["shapes"])
+    assert any("[1:0:0]" in note["text"] for note in diagram["annotations"])
 
 
 def test_projective_transform_and_cross_ratio():

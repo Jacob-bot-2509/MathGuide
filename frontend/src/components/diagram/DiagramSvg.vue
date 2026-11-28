@@ -87,6 +87,14 @@ function boundsOfShapes(
       const r = Math.abs(num(shape.r, num(shape.radius)))
       xs.push(num(shape.x) - r, num(shape.x) + r)
       ys.push(num(shape.y) - r, num(shape.y) + r)
+    } else if (shape.kind === 'ellipse') {
+      const rx = Math.abs(num(shape.rx, 1))
+      const ry = Math.abs(num(shape.ry, 1))
+      const rotation = num(shape.rotation)
+      const halfW = Math.hypot(rx * Math.cos(rotation), ry * Math.sin(rotation))
+      const halfH = Math.hypot(rx * Math.sin(rotation), ry * Math.cos(rotation))
+      xs.push(num(shape.x) - halfW, num(shape.x) + halfW)
+      ys.push(num(shape.y) - halfH, num(shape.y) + halfH)
     } else if (shape.kind === 'segment' || shape.kind === 'line'
       || shape.kind === 'vector' || shape.kind === 'axis') {
       const [x1, y1] = pair(shape.from)
@@ -97,7 +105,9 @@ function boundsOfShapes(
         const [x, y] = pair(item)
         xs.push(x); ys.push(y)
       }
-    } else if (shape.kind === 'curve' && Array.isArray(shape.points)) {
+    } else if ((shape.kind === 'curve' || shape.kind === 'implicit_curve'
+      || shape.kind === 'parametric_curve')
+      && Array.isArray(shape.points)) {
       const segments = Array.isArray(shape.segments) ? shape.segments : null
       if (segments && segments.length > 1) {
         // 间断曲线(1/x、tan):极端值只出现在渐近线附近,按 1%/99% 分位定范围,
@@ -647,6 +657,14 @@ resetView()
                 ? 'diagram-tangent' : 'diagram-shape-line')"
             :marker-end="shape.kind === 'axis' ? `url(#${axisArrowId})` : undefined"
           />
+          <ellipse
+            v-else-if="shape.kind === 'ellipse'"
+            :cx="num(shape.x)" :cy="num(shape.y)"
+            :rx="Math.abs(num(shape.rx, 1))"
+            :ry="Math.abs(num(shape.ry, 1))"
+            :transform="`rotate(${(num(shape.rotation) * 180) / Math.PI} ${num(shape.x)} ${num(shape.y)})`"
+            class="diagram-shape-line"
+          />
           <circle
             v-else-if="shape.kind === 'circle'"
             :cx="num(shape.x)" :cy="num(shape.y)"
@@ -658,7 +676,8 @@ resetView()
             :points="shape.points.map((p) => pair(p).join(',')).join(' ')"
             class="diagram-shape-fill"
           />
-          <g v-else-if="shape.kind === 'curve'">
+          <g v-else-if="shape.kind === 'curve' || shape.kind === 'implicit_curve'
+            || shape.kind === 'parametric_curve'">
             <polyline
               v-for="(segment, si) in curveSegments(shape)"
               :key="si"
